@@ -26,6 +26,10 @@ void SocketDescriptor::write_to_file(const std::string& path) const {
     j["device_id"] = device_id;
     j["core_x"] = core_x;
     j["core_y"] = core_y;
+    j["virtual_core_x"] = virtual_core_x;
+    j["virtual_core_y"] = virtual_core_y;
+    j["pcie_alignment"] = pcie_alignment;
+    j["bytes_acked_device_offset"] = bytes_acked_device_offset;
 
     std::ofstream ofs(path);
     TT_FATAL(ofs.is_open(), "Failed to open descriptor file for writing: {}", path);
@@ -56,6 +60,10 @@ SocketDescriptor SocketDescriptor::read_from_file(const std::string& path) {
     desc.device_id = j.at("device_id").get<uint32_t>();
     desc.core_x = j.at("core_x").get<uint32_t>();
     desc.core_y = j.at("core_y").get<uint32_t>();
+    desc.virtual_core_x = j.value("virtual_core_x", uint32_t{0});
+    desc.virtual_core_y = j.value("virtual_core_y", uint32_t{0});
+    desc.pcie_alignment = j.value("pcie_alignment", uint32_t{0});
+    desc.bytes_acked_device_offset = j.value("bytes_acked_device_offset", uint32_t{0});
 
     return desc;
 }

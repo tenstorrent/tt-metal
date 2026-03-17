@@ -68,12 +68,14 @@ void interface_loopback_workload(
     const std::string& h2d_socket_id,
     const std::string& d2h_socket_id,
     uint32_t num_iterations) {
+    std::cout << "Creating H2D Socket" << std::endl;
     auto h2d_socket = H2DSocket::connect(h2d_socket_id);
+    std::cout << "Creating D2H Socket" << std::endl;
     auto d2h_socket = D2HSocket::connect(d2h_socket_id);
-
+    std::cout << "Setting Page Size" << std::endl;
     h2d_socket->set_page_size(page_size);
     d2h_socket->set_page_size(page_size);
-
+    std::cout << "Setting Page Size Done" << std::endl;
     uint32_t page_size_words = page_size / sizeof(uint32_t);
     uint32_t data_size_words = data_size / sizeof(uint32_t);
     uint32_t num_txns = data_size / page_size;
@@ -82,6 +84,7 @@ void interface_loopback_workload(
     std::vector<uint32_t> dst_vec(data_size_words * num_iterations, 0);
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
+    std::cout << "Issue Transactions" << std::endl;
     std::thread write_thread([&]() {
         for (uint32_t i = 0; i < num_iterations; i++) {
             for (uint32_t j = 0; j < num_txns; j++) {

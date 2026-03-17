@@ -40,7 +40,7 @@ NamedShm NamedShm::create(const std::string& name, size_t size) {
     TT_FATAL(!name.empty() && name[0] == '/', "POSIX shm name must start with '/': {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
 
-    int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+    int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
     TT_FATAL(
         fd != -1,
         "shm_open(create) failed for '{}': {}. If a stale shm object exists, remove it with shm_unlink or delete "
@@ -73,7 +73,7 @@ NamedShm NamedShm::open(const std::string& name, size_t size) {
     TT_FATAL(!name.empty() && name[0] == '/', "POSIX shm name must start with '/': {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
 
-    int fd = shm_open(name.c_str(), O_RDWR, 0666);
+    int fd = shm_open(name.c_str(), O_RDWR, 0600);
     TT_FATAL(fd != -1, "shm_open(open) failed for '{}': {}", name, std::strerror(errno));
 
     void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);

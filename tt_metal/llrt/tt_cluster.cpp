@@ -231,10 +231,8 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
-    if (std::getenv("TT_METAL_SKIP_DRIVER_START") == nullptr) {
-        if (this->target_type_ != tt::TargetDevice::Mock) {
-            this->assert_risc_reset();
-        }
+    if (this->target_type_ != tt::TargetDevice::Mock) {
+        this->assert_risc_reset();
     }
 }
 
@@ -322,12 +320,7 @@ void Cluster::initialize_device_drivers() {
     }
 
     umd::DeviceParams default_params;
-    bool start_driver = std::getenv("TT_METAL_SKIP_DRIVER_START") == nullptr;
-    if (start_driver) {
-        this->start_driver(default_params);
-    } else {
-        log_info(tt::LogDevice, "Skipping driver start");
-    }
+    this->start_driver(default_params);
 
     // Cache IOMMU status (expensive to query repeatedly)
     this->iommu_enabled_ = false;

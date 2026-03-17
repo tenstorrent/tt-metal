@@ -45,6 +45,12 @@ struct SocketDescriptor {
     uint32_t core_x = 0;     // Logical core coordinate X
     uint32_t core_y = 0;     // Logical core coordinate Y
 
+    // --- Pre-resolved transport info (connector uses these to bypass MetalContext) ---
+    uint32_t virtual_core_x = 0;             // Virtual (translated) core coordinate X
+    uint32_t virtual_core_y = 0;             // Virtual (translated) core coordinate Y
+    uint32_t pcie_alignment = 0;             // PCIe page alignment in bytes (e.g. 64 for Blackhole)
+    uint32_t bytes_acked_device_offset = 0;  // D2H: L1 offset of bytes_acked within config buffer
+
     /**
      * @brief Serialize this descriptor to a JSON file.
      * @param path File path to write (e.g. "/dev/shm/tt_socket_<id>.json").

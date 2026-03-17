@@ -6,6 +6,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/socket_descriptor.hpp"
+#include "tt_metal/distributed/umd_device_access.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -149,7 +150,8 @@ D2HSocket::D2HSocket(
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
-    const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    pcie_alignment_ = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
     std::string shm_name = generate_d2h_shm_name("d2h");
@@ -166,6 +168,8 @@ D2HSocket::D2HSocket(
     init_sender_tlb(mesh_device);
 
     config_buffer_address_ = config_buffer_->address();
+    const SocketSenderSize sender_size;
+    bytes_acked_device_offset_ = sender_size.md_size_bytes;
 }
 
 D2HSocket::~D2HSocket() noexcept {
@@ -184,8 +188,8 @@ D2HSocket::~D2HSocket() noexcept {
 }
 
 void D2HSocket::set_page_size(uint32_t page_size) {
-    const auto pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    TT_FATAL(page_size % pcie_alignment == 0, "Page size must be PCIE-aligned.");
+    TT_FATAL(pcie_alignment_ > 0, "PCIe alignment not initialized.");
+    TT_FATAL(page_size % pcie_alignment_ == 0, "Page size must be PCIE-aligned.");
     TT_FATAL(page_size <= fifo_size_, "Page size must be less than or equal to the FIFO size.");
 
     uint32_t next_fifo_rd_ptr = align(read_ptr_, page_size);
@@ -233,8 +237,7 @@ void D2HSocket::pop_bytes(uint32_t num_bytes) {
 }
 
 void D2HSocket::notify_sender() {
-    const SocketSenderSize sender_size;
-    uint32_t bytes_acked_addr = config_buffer_address_ + sender_size.md_size_bytes;
+    uint32_t bytes_acked_addr = config_buffer_address_ + bytes_acked_device_offset_;
     pcie_writer_(&bytes_acked_, sizeof(bytes_acked_), bytes_acked_addr);
     tt_driver_atomics::sfence();
 }
@@ -303,6 +306,12 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     desc.core_x = sender_core_.core_coord.x;
     desc.core_y = sender_core_.core_coord.y;
 
+    auto virtual_core = mesh_device_->worker_core_from_logical_core(sender_core_.core_coord);
+    desc.virtual_core_x = virtual_core.x;
+    desc.virtual_core_y = virtual_core.y;
+    desc.pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    desc.bytes_acked_device_offset = bytes_acked_device_offset_;
+
     descriptor_path_ = fmt::format("/dev/shm/tt_d2h_{}.json", socket_id);
     desc.write_to_file(descriptor_path_);
     exported_ = true;
@@ -330,12 +339,15 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id) {
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->sender_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
+    socket->pcie_alignment_ = desc.pcie_alignment;
+    socket->bytes_acked_device_offset_ = desc.bytes_acked_device_offset;
 
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
     socket->host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(socket->shm_->ptr()), [](uint32_t*) {});
     socket->bytes_sent_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr()) + (desc.bytes_sent_offset / sizeof(uint32_t));
 
-    socket->init_sender_tlb(nullptr, desc.device_id);
+    socket->umd_access_ = std::make_unique<UmdDeviceAccess>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
+    socket->pcie_writer_ = socket->umd_access_->get_pcie_writer();
 
     return socket;
 }
