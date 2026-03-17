@@ -281,6 +281,7 @@ def golden_grid_sample(
     padding_mode: str = "zeros",
     align_corners: bool = False,
     batch_output_channels: bool = False,
+    grid_batching_factor: int = None,
     **_,
 ):
     """
@@ -295,34 +296,43 @@ def golden_grid_sample(
         padding_mode: Padding mode ("zeros", "border", or "reflection")
         align_corners: Whether to align corners
         batch_output_channels: Controls how grid batching factor K affects output dimensions.
-            When False (default): extend W dimension - output shape (N, H_out, W_out*K, C).
-            When True: batch output channels - output shape (N, H_out, W_out, C*K).
+            When False (default): extend W dimension - output shape (N, H_out, total_W // K, C).
+            When True: batch output channels - output shape (N, H_out, total_W // K, C*K).
+        grid_batching_factor: Explicit grid batching factor K. When provided, overrides the K
+            derived from the grid's last dimension. This is needed when the grid is passed in
+            un-batched form (last_dim=2, K=1) but the TTNN op uses a higher batching factor.
 
     Returns:
-        Output tensor in (N, H_out, W_out*K, C) if batch_output_channels=False,
-        or (N, H_out, W_out, C*K) if batch_output_channels=True.
+        Output tensor in (N, H_out, total_W // K, C) if batch_output_channels=False,
+        or (N, H_out, total_W // K, C*K) if batch_output_channels=True,
+        where total_W = W_out * K_grid (total sample points per row).
     """
     import torch
-    from tests.ttnn.nightly.unit_tests.operations.pool.test_grid_sample import prepare_grid_batching_expected_output
+    from tests.sweep_framework.sweep_utils.pool2d_common import prepare_grid_batching_expected_output
 
     N, H_grid, W_grid, last_dim = grid.shape
-    K = last_dim // 2
+    K_grid = last_dim // 2
 
     input_nchw = input_tensor.permute(0, 3, 1, 2)
     C = input_nchw.shape[1]
 
-    # Unpack K coordinate sets from last dim into the W dimension: (N, H_grid, W_grid, 2*K) -> (N, H_grid, W_grid*K, 2)
-    grid_unpacked = grid.reshape(N, H_grid, W_grid * K, 2)
+    # Unpack K_grid coordinate sets from last dim into the W dimension:
+    # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
+    total_W = W_grid * K_grid
+    grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
 
     output_nchw = torch.nn.functional.grid_sample(
         input_nchw.float(), grid_unpacked.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
     )
 
-    # Convert to NHWC: (N, C, H_grid, W_grid*K) -> (N, H_grid, W_grid*K, C)
+    # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
     output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
 
+    # Use explicit grid_batching_factor if provided, otherwise use K_grid from grid shape
+    effective_K = grid_batching_factor if grid_batching_factor is not None else K_grid
+
     expected_shape, output_nhwc = prepare_grid_batching_expected_output(
-        output_nhwc, N, H_grid, W_grid, C, K, batch_output_channels
+        output_nhwc, N, H_grid, total_W, C, effective_K, batch_output_channels
     )
 
     return output_nhwc.reshape(expected_shape)

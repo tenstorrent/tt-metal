@@ -81,6 +81,42 @@ def compute_output_shape(
     return out_h, out_w, ceil_mode_out_shape_adj
 
 
+def prepare_grid_batching_expected_output(
+    torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
+):
+    """
+    Prepare expected PyTorch output for grid batching scenarios.
+
+    Args:
+        torch_output_nhwc: Original PyTorch output in NHWC format
+        batch_size: Batch size
+        grid_h: Grid height
+        grid_w: Grid width (will be divided by grid_batching_factor)
+        channels: Number of channels
+        grid_batching_factor: Factor by which grid is batched
+        batch_output_channels: Whether to batch channels or width dimension
+
+    Returns:
+        tuple: (expected_shape, torch_expected_nhwc)
+    """
+    new_grid_w = grid_w // grid_batching_factor
+
+    if batch_output_channels:
+        # batch_output_channels=True: output shape (N, H, W, C*K) - channels batched
+        expected_shape = (batch_size, grid_h, new_grid_w, channels * grid_batching_factor)
+        torch_expected_nhwc = (
+            torch_output_nhwc.view(batch_size, grid_h, new_grid_w, grid_batching_factor, channels)
+            .contiguous()
+            .view(batch_size, grid_h, new_grid_w, channels * grid_batching_factor)
+        )
+    else:
+        # batch_output_channels=False: output shape (N, H, W*K, C) - W dimension extended
+        expected_shape = (batch_size, grid_h, new_grid_w * grid_batching_factor, channels)
+        torch_expected_nhwc = torch_output_nhwc.view(batch_size, grid_h, new_grid_w * grid_batching_factor, channels)
+
+    return expected_shape, torch_expected_nhwc
+
+
 def prepare_torch_pool_input(input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value):
     """
     Shared input preparation for pool2d golden functions.

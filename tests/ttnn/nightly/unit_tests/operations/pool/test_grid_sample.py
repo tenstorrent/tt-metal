@@ -87,42 +87,6 @@ def align_to_boundary(value, alignment):
     return div_up(value, alignment) * alignment
 
 
-def prepare_grid_batching_expected_output(
-    torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
-):
-    """
-    Prepare expected PyTorch output for grid batching scenarios.
-
-    Args:
-        torch_output_nhwc: Original PyTorch output in NHWC format
-        batch_size: Batch size
-        grid_h: Grid height
-        grid_w: Grid width (will be divided by grid_batching_factor)
-        channels: Number of channels
-        grid_batching_factor: Factor by which grid is batched
-        batch_output_channels: Whether to batch channels or width dimension
-
-    Returns:
-        tuple: (expected_shape, torch_expected_nhwc)
-    """
-    new_grid_w = grid_w // grid_batching_factor
-
-    if batch_output_channels:
-        # batch_output_channels=True: output shape (N, H, W, C*K) - channels batched
-        expected_shape = (batch_size, grid_h, new_grid_w, channels * grid_batching_factor)
-        torch_expected_nhwc = (
-            torch_output_nhwc.view(batch_size, grid_h, new_grid_w, grid_batching_factor, channels)
-            .contiguous()
-            .view(batch_size, grid_h, new_grid_w, channels * grid_batching_factor)
-        )
-    else:
-        # batch_output_channels=False: output shape (N, H, W*K, C) - W dimension extended
-        expected_shape = (batch_size, grid_h, new_grid_w * grid_batching_factor, channels)
-        torch_expected_nhwc = torch_output_nhwc.view(batch_size, grid_h, new_grid_w * grid_batching_factor, channels)
-
-    return expected_shape, torch_expected_nhwc
-
-
 def _prepare_grid_tensor_host(
     torch_grid,
     use_precomputed_grid,
@@ -470,7 +434,13 @@ def test_grid_sample_batch_output_channels_flag(
     grid_tensor = torch.rand(batch_size, grid_h, grid_w, 2, dtype=torch.float32) * 2.0 - 1.0
 
     torch_output_nhwc = golden_grid_sample(
-        torch_input_nhwc, grid_tensor, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nhwc,
+        grid_tensor,
+        mode="bilinear",
+        padding_mode="zeros",
+        align_corners=False,
+        batch_output_channels=batch_output_channels,
+        grid_batching_factor=grid_batching_factor,
     )
 
     ttnn_input = ttnn.from_torch(
@@ -499,12 +469,8 @@ def test_grid_sample_batch_output_channels_flag(
     )
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    expected_shape, torch_expected_nhwc = prepare_grid_batching_expected_output(
-        torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
-    )
-
     validate_grid_sample_output(
-        torch_expected_nhwc,
+        torch_output_nhwc,
         ttnn_output_torch,
         use_precomputed_grid=use_precomputed_grid,
         grid_dtype=grid_dtype,
@@ -660,6 +626,8 @@ def test_grid_sample_sharded_batched(
         mode=mode,
         padding_mode="zeros",
         align_corners=align_corners,
+        batch_output_channels=batch_output_channels,
+        grid_batching_factor=grid_batching_factor,
     )
 
     ttnn_input = ttnn.from_torch(
@@ -688,12 +656,8 @@ def test_grid_sample_sharded_batched(
     )
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    expected_shape, torch_expected_nhwc = prepare_grid_batching_expected_output(
-        torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
-    )
-
     validate_grid_sample_output(
-        torch_expected_nhwc,
+        torch_output_nhwc,
         ttnn_output_torch,
         use_precomputed_grid=use_precomputed_grid,
         grid_dtype=grid_dtype,
@@ -764,9 +728,7 @@ def test_grid_sample_oft(
     torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
     torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch_io_dtype)
 
-    # Create torch grid and split into slices
     torch_grid = torch.randn(grid_shape, dtype=torch.float32) * 2 - 1
-    torch_grid_slices = torch.split(torch_grid, torch_grid.shape[1] // num_slices, dim=1)
 
     # Prepare TTNN input and grid slices
     ttnn_input = ttnn.from_torch(
@@ -792,17 +754,27 @@ def test_grid_sample_oft(
     if use_signpost:
         signpost(header=f"Starting OFT grid_sample with {num_slices} slices and input shape {input_shape}")
 
-    for slice_idx in range(num_slices):
-        torch_output_nhwc = golden_grid_sample(
-            torch_input_nhwc, torch_grid_slices[slice_idx], mode="nearest", padding_mode="zeros", align_corners=True
-        )
+    # Compute golden output on the full grid with batch_output_channels=True to match TTNN's output layout.
+    # grid_batching_factor is passed explicitly since the grid is in un-batched form (last_dim=2, K=1).
+    torch_output_nhwc = golden_grid_sample(
+        torch_input_nhwc,
+        torch_grid,
+        mode="nearest",
+        padding_mode="zeros",
+        align_corners=True,
+        batch_output_channels=True,
+        grid_batching_factor=grid_batching_factor,
+    )
 
-        ttnn_grid_device = ttnn_grid_device_slices[slice_idx]
-        ttnn_grid_device = ttnn.to_memory_config(ttnn_grid_device, ttnn.DRAM_MEMORY_CONFIG)
+    # Run grid_sample on each slice and collect outputs
+    ttnn_output_slices = []
+    for slice_idx in range(num_slices):
+        ttnn_grid_slice = ttnn_grid_device_slices[slice_idx]
+        ttnn_grid_slice = ttnn.to_memory_config(ttnn_grid_slice, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn_output = ttnn.grid_sample(
             ttnn_input,
-            ttnn_grid_device,
+            ttnn_grid_slice,
             use_precomputed_grid=use_precomputed_grid,
             batch_output_channels=True,
             mode="nearest",
@@ -810,18 +782,18 @@ def test_grid_sample_oft(
         )
 
         ttnn_output_torch = ttnn.to_torch(ttnn_output).reshape(1, ttnn_output.shape[2], 1, ttnn_output.shape[3])
+        ttnn_output_slices.append(ttnn_output_torch)
 
-        expected_shape, torch_expected_nhwc = prepare_grid_batching_expected_output(
-            torch_output_nhwc, batch_size, grid_h // num_slices, grid_w, channels, grid_batching_factor, True
-        )
+    # Concatenate all slice outputs and validate against the full golden output
+    ttnn_output_full = torch.cat(ttnn_output_slices, dim=1)
 
-        validate_grid_sample_output(
-            torch_expected_nhwc,
-            ttnn_output_torch,
-            use_precomputed_grid=use_precomputed_grid,
-            grid_dtype=grid_dtype,
-            mode="nearest",
-        )
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn_output_full,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=grid_dtype,
+        mode="nearest",
+    )
 
     if use_signpost:
         signpost(header="Completed OFT grid_sample test")
