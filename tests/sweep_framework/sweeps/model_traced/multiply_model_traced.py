@@ -15,21 +15,15 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 
-# Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
-# Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
-# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-# Default: Run exact traced configs from real models with all parameter values in vectors
 model_traced_params = loader.get_suite_parameters("multiply")
 
-# Parameters provided to the test vector generator are defined here.
 parameters = {
-    # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
         "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
@@ -40,37 +34,46 @@ parameters = {
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
-# Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def _parse_activations(activations_list):
+    """Parse a list of UnaryOpType dicts into ttnn.UnaryOpType enum values."""
+    if not activations_list:
+        return None
+    parsed = []
+    for item in activations_list:
+        if isinstance(item, dict) and item.get("type") == "UnaryOpType":
+            op_name = item["repr"].split(".")[-1]
+            op_type = getattr(ttnn.UnaryOpType, op_name, None)
+            if op_type is not None:
+                parsed.append(op_type)
+        else:
+            parsed.append(item)
+    return parsed if parsed else None
+
+
 def mesh_device_fixture():
-    """
-    Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
-    """
     mesh_shape = get_mesh_shape()
 
     if mesh_shape:
-        # Create mesh device based on env var
         try:
             device = create_mesh_device(mesh_shape)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
         except Exception as e:
-            print(f"⚠️ Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
             device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        # Single device (default)
         device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
@@ -89,26 +92,37 @@ def run(
     input_b_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
-    arg1=None,  # May contain scalar value or second input
-    use_legacy=None,  # Legacy mode flag
-    memory_config=None,  # Alternative memory_config parameter
-    dtype=None,  # Output dtype
+    arg1=None,
+    use_legacy=None,
+    memory_config=None,
+    dtype=None,
+    input_tensor_a_activations=None,
     *,
     device,
-    **kwargs,  # Accept scalar, placements, traced_source, traced_machine_info, etc.
+    **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    # Extract kwargs
     scalar = kwargs.get("scalar", None)
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
 
-    # Check if device is a mesh device (from fixture)
-    is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
-    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"}, output_memory_config=output_memory_config)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    op_kwargs = build_op_kwargs(kwargs, exclude={"scalar"})
 
-    # V2 format provides separate shapes for each input
+    # Conditionally add memory_config (build_op_kwargs excludes it by default)
+    if memory_config is not None:
+        op_kwargs["memory_config"] = parse_dict_value("memory_config", memory_config)
+
+    # Conditionally add dtype
+    if dtype is not None:
+        op_kwargs["dtype"] = parse_dict_value("dtype", dtype)
+
+    # Conditionally add input_tensor_a_activations
+    parsed_activations = _parse_activations(input_tensor_a_activations)
+    if parsed_activations is not None:
+        op_kwargs["input_tensor_a_activations"] = parsed_activations
+
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else input_b_shape
 
@@ -116,28 +130,28 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
-    # Check if this is a scalar multiply operation (shape_b is None or scalar is provided)
-    if shape_b is None or scalar is not None:
-        # Tensor-scalar multiply: use the scalar value directly
-        # If scalar is None but shape_b is None, default to scalar=2.0
-        scalar_value = scalar if scalar is not None else 2.0
-        torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
+    # Apply fused activation to golden if present (e.g., SiLU fused with multiply)
+    torch_golden_a = torch_input_tensor_a
+    if parsed_activations:
+        for act in parsed_activations:
+            if hasattr(ttnn.UnaryOpType, "SILU") and act == ttnn.UnaryOpType.SILU:
+                torch_golden_a = torch.nn.functional.silu(torch_golden_a)
+
+    if shape_b is None:
+        scalar_value = arg1 if arg1 is not None else (scalar if scalar is not None else 2.0)
+        torch_output_tensor = torch.mul(torch_golden_a, scalar_value)
         is_scalar_multiply = True
     else:
-        # Tensor-tensor multiply: generate second tensor
         torch_input_tensor_b = gen_func_with_cast_tt(
             partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(shape_b)
-        torch_output_tensor = torch.mul(torch_input_tensor_a, torch_input_tensor_b)
+        torch_output_tensor = torch.mul(torch_golden_a, torch_input_tensor_b)
         is_scalar_multiply = False
 
-    # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Create first tensor (with mesh support if device is mesh)
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
-            # Use mesh with placement
             input_tensor_a = create_tensor_on_mesh(
                 torch_input_tensor_a,
                 device,
@@ -147,7 +161,6 @@ def run(
                 input_a_tensor_placement,
             )
         else:
-            # Regular single-device tensor
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -156,20 +169,16 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        # Host storage
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
 
     if is_scalar_multiply:
-        # Tensor-scalar multiply: pass scalar directly
-        scalar_value = scalar if scalar is not None else 2.0
+        scalar_value = arg1 if arg1 is not None else (scalar if scalar is not None else 2.0)
         output_tensor = ttnn.multiply(input_tensor_a, scalar_value, **op_kwargs)
     else:
-        # Tensor-tensor multiply: convert second tensor and multiply
         if not is_host:
             if is_mesh_device and input_b_tensor_placement:
-                # Use mesh with placement for second tensor
                 input_tensor_b = create_tensor_on_mesh(
                     torch_input_tensor_b,
                     device,
@@ -179,7 +188,6 @@ def run(
                     input_b_tensor_placement,
                 )
             else:
-                # Regular single-device tensor
                 input_tensor_b = ttnn.from_torch(
                     torch_input_tensor_b,
                     dtype=input_b_dtype,
@@ -188,7 +196,6 @@ def run(
                     memory_config=input_b_memory_config,
                 )
         else:
-            # Host storage
             input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
 
         output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b, **op_kwargs)
@@ -196,7 +203,6 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]
