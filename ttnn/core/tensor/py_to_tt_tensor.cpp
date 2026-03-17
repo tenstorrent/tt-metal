@@ -73,31 +73,38 @@ Tensor create_tt_tensor_from_host_data(
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
+
+        if (dst_dtype != DataType::BFLOAT4_B) {
+            // typecast to bfloat4_b is expected to lose precision, see
+            // https://github.com/tenstorrent/tt-metal/issues/35048
+            // user can choose to use fast_approx=True to get the best performance, but the precision will be lost.
+            fast_approx = true;
+        }
+
+        // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
+        // buffer, the sharding spec may require padding, including cases where the shard dimension is larger than the
+        // shape dimension.
+        // TODO: Remove preserve_nan_values check after
+        // https://github.com/tenstorrent/tt-metal/issues/31406
+        const bool construct_on_device =
+            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) && !memory_config.is_sharded() &&
+            can_construct_on_device(device, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
+            fast_approx && !preserve_nan_values;
+
         if (mesh_mapper != nullptr) {
-            const bool must_construct_on_host =
-                device == nullptr || !fast_approx || preserve_nan_values || memory_config.is_sharded();
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
                 host_buffer.pin(),
-                must_construct_on_host ? dst_tensor_layout : src_tensor_layout,
+                construct_on_device ? src_tensor_layout : dst_tensor_layout,
                 *mesh_mapper,
                 device != nullptr ? std::make_optional(std::ref(*device)) : std::nullopt,
                 cq_id,
                 static_cast<T>(pad_value));
         }
 
-        // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
-        // buffer, the sharding spec may require padding, including cases where the shard dimension is larger than the
-        // shape dimension.
-        const bool construct_on_device =
-            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) && !memory_config.is_sharded() &&
-            can_construct_on_device(device, optional_tile, TensorSpec(tensor_shape, src_tensor_layout));
-
         // Borrow the Python buffer directly when possible, otherwise copy via from_span.
-        // TODO: Remove preserve_nan_values check after https://github.com/tenstorrent/tt-metal/issues/31406
-        const bool can_borrow =
-            src_dtype == convert_to_data_type<T>() && fast_approx && !preserve_nan_values && construct_on_device;
+        const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device;
 
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
