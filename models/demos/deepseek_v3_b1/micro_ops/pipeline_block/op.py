@@ -57,6 +57,8 @@ class PipelineBlock:
         exit_node_upstream=None,
         embedding_tensor=None,
         initialize_loopback=True,
+        exit_upstream_core_coords=None,
+        exit_upstream_page_size=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -85,6 +87,8 @@ class PipelineBlock:
         self.d2h_socket = None
         self.entry_socket_interface = None
         self.exit_socket_interface = None
+        self.exit_upstream_core_coords = exit_upstream_core_coords
+        self.exit_upstream_page_size = exit_upstream_page_size
 
         token_size_bytes = 64
 
@@ -127,6 +131,8 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 entry_node_downstream,
                 exit_node_upstream,
+                exit_upstream_core_coords,
+                exit_upstream_page_size,
             )
 
     def _init_first_stage(
@@ -272,6 +278,8 @@ class PipelineBlock:
         downstream_d2d_socket_page_size,
         entry_node_downstream,
         exit_node_upstream,
+        exit_upstream_core_coords=None,
+        exit_upstream_page_size=None,
     ):
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
@@ -287,17 +295,33 @@ class PipelineBlock:
         )
 
         next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
-        self.exit_socket_interface = SocketInterface(
-            downstream_d2d_socket_page_size,
-            downstream_d2d_socket_fifo_size,
-            downstream_d2d_socket_page_size,
-            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
-            ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
-            upstream_core_coord=exit_node_upstream,
-            upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
-        )
+        use_multi_upstream = exit_upstream_core_coords is not None
+        print("use multi-upstream exit socket:", use_multi_upstream)
+
+        if use_multi_upstream:
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+                upstream_core_coords=exit_upstream_core_coords,
+                upstream_page_size=exit_upstream_page_size,
+            )
+        else:
+            self.exit_socket_interface = SocketInterface(
+                downstream_d2d_socket_page_size,
+                downstream_d2d_socket_fifo_size,
+                downstream_d2d_socket_page_size,
+                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
+                upstream_core_coord=exit_node_upstream,
+                upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
+                sender_mesh=MeshWrapper(mesh_device),
+                receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
+            )
 
     def run(self):
         if self.is_pipeline_start:
@@ -346,6 +370,10 @@ class PipelineBlock:
             return self.exit_socket_interface.get_upstream_socket()
         elif hasattr(self, "host_io"):
             return self.host_io.get_upstream_socket()
+
+    def get_upstream_sockets(self):
+        """Return list of sender sockets for multi-upstream exit SocketInterface."""
+        return self.exit_socket_interface.get_upstream_sockets()
 
     def get_downstream_socket(self):
         return self.entry_socket_interface.get_downstream_socket()
