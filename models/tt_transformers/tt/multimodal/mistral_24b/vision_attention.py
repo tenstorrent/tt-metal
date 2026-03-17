@@ -6,6 +6,8 @@ This is the modified version of the vision_attention for the Mistral-Small-3.1-2
 We introduced the `apply_rotary_pos_emb_vision_tt` function to llama_image_attention to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
 
 """
+import math
+
 import torch
 
 import ttnn
@@ -223,21 +225,63 @@ class TtMistralImageAttention(LightweightModule):
         )
         ttnn.deallocate(attn_output_1QSD)
 
-        # reshaping long sequence to matmul fit on device
-        if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+        # The output projection maps from (n_heads * head_dim / n_devices) to vision_dim.
+        # With large sequences (e.g. 12128 tokens from 1540x1540 images), the per-core tile
+        # allocation for the matmul can exceed L1 on an (8,8) grid when per_core_N >= 4
+        # (vision_dim >= 1024). Split the sequence into two halves to keep per_core_M safe.
+        TILE_SIZE = 32
+        GRID_Y = 8
+        MAX_SAFE_PER_CORE_M = 44
+        safe_out_seq = MAX_SAFE_PER_CORE_M * TILE_SIZE * GRID_Y
 
-        output_11SH = ttnn.linear(
-            attn_output_11SH,
-            self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
-        )
-        if seq_len > MAX_MM_SEQ_LEN:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
-        ttnn.deallocate(attn_output_11SH)
+        effective_m = min(seq_len, MAX_MM_SEQ_LEN)
+        if effective_m > safe_out_seq:
+            mid = math.ceil(seq_len / 2 / TILE_SIZE) * TILE_SIZE
+            remainder = seq_len - mid
+            hidden = attn_output_11SH.shape[-1]
+
+            first_half = ttnn.slice(attn_output_11SH, (0, 0, 0, 0), (1, 1, mid, hidden))
+            second_half = ttnn.slice(attn_output_11SH, (0, 0, mid, 0), (1, 1, seq_len, hidden))
+            ttnn.deallocate(attn_output_11SH)
+
+            out_first = ttnn.linear(
+                first_half,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](mid, mid),
+            )
+            ttnn.deallocate(first_half)
+
+            out_second = ttnn.linear(
+                second_half,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](remainder, remainder),
+            )
+            ttnn.deallocate(second_half)
+
+            output_11SH = ttnn.concat([out_first, out_second], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out_first)
+            ttnn.deallocate(out_second)
+        else:
+            if seq_len > MAX_MM_SEQ_LEN:
+                attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+
+            output_11SH = ttnn.linear(
+                attn_output_11SH,
+                self.wo,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=self.model_config["IMAGE_ATTN_OUT_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            )
+            if seq_len > MAX_MM_SEQ_LEN:
+                output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            ttnn.deallocate(attn_output_11SH)
 
         # All reduce
         if self.num_devices > 1:  # replace with reduce_scatter and all_gather
