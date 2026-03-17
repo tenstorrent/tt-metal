@@ -7,13 +7,24 @@
 Automated sweep trace validation against model trace.
 
 Implements the logic from validate-sweep-trace.mdc and diagnose-config-hash-mismatch.mdc
-as a single script that processes all operations in one pass.
+as a single script that processes all operations in one pass, or a single operation.
 
-Usage:
+Usage (all operations):
     python tests/sweep_framework/validate_all_traces.py \
         --model-trace-split model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed_split \
         --sweep-traces-dir model_tracer/traced_operations \
         --output-report validation_report.txt
+
+Usage (single operation):
+    python tests/sweep_framework/validate_all_traces.py \
+        --model-trace-split model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed_split \
+        --sweep-traces-dir model_tracer/traced_operations \
+        --operation ttnn_add
+
+    python tests/sweep_framework/validate_all_traces.py \
+        --model-trace-split model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed_split \
+        --sweep-trace model_tracer/traced_operations/sweep_trace_add_model_traced_split \
+        --operation ttnn.add
 """
 
 from __future__ import annotations
@@ -507,38 +518,78 @@ def diagnose_hash_pair(
 # ---------------------------------------------------------------------------
 
 
+def _normalize_op_name(name: str) -> str:
+    """Normalize an operation name to the directory form (underscores).
+
+    Accepts either dotted (``ttnn.add``) or underscored (``ttnn_add``) forms.
+    """
+    return name.replace(".", "_")
+
+
 def discover_sweep_traces(
     model_split_dir: Path,
     sweep_traces_dir: Path,
+    *,
+    operation: str | None = None,
+    sweep_trace_dir: Path | None = None,
 ) -> dict[str, tuple[Path, Path]]:
     """
-    Returns {op_name: (model_json, sweep_json)} for all ops that have both
+    Returns {op_name: (model_json, sweep_json)} for ops that have both
     a model trace split and a sweep trace split.
+
+    Parameters
+    ----------
+    operation : str, optional
+        Restrict to a single operation.  Accepts either the directory form
+        (``ttnn_add``) or the dotted form (``ttnn.add``).
+    sweep_trace_dir : Path, optional
+        A specific sweep trace split directory to use instead of
+        scanning *sweep_traces_dir* for all ``sweep_trace_*_split/`` dirs.
     """
     pairs: dict[str, tuple[Path, Path]] = {}
 
-    model_op_dirs = {}
-    if model_split_dir.is_dir():
-        for d in model_split_dir.iterdir():
-            if d.is_dir():
-                model_json = d / "ttnn_operations_master.json"
-                if model_json.is_file():
-                    model_op_dirs[d.name] = model_json
+    op_filter = _normalize_op_name(operation) if operation else None
 
-    sweep_split_dirs = sorted(
-        d for d in sweep_traces_dir.iterdir() if d.is_dir() and "sweep_trace" in d.name and d.name.endswith("_split")
-    )
+    model_op_dirs: dict[str, Path] = {}
+    if model_split_dir.is_dir():
+        if op_filter:
+            candidate = model_split_dir / op_filter
+            model_json = candidate / "ttnn_operations_master.json"
+            if candidate.is_dir() and model_json.is_file():
+                model_op_dirs[op_filter] = model_json
+        else:
+            for d in model_split_dir.iterdir():
+                if d.is_dir():
+                    model_json = d / "ttnn_operations_master.json"
+                    if model_json.is_file():
+                        model_op_dirs[d.name] = model_json
+
+    if sweep_trace_dir is not None:
+        sweep_split_dirs = [sweep_trace_dir] if sweep_trace_dir.is_dir() else []
+    else:
+        sweep_split_dirs = sorted(
+            d
+            for d in sweep_traces_dir.iterdir()
+            if d.is_dir() and "sweep_trace" in d.name and d.name.endswith("_split")
+        )
 
     for ssd in sweep_split_dirs:
-        for op_dir in ssd.iterdir():
-            if not op_dir.is_dir():
-                continue
-            sweep_json = op_dir / "ttnn_operations_master.json"
-            if not sweep_json.is_file():
-                continue
-            op_dir_name = op_dir.name
-            if op_dir_name in model_op_dirs and op_dir_name not in pairs:
-                pairs[op_dir_name] = (model_op_dirs[op_dir_name], sweep_json)
+        if op_filter:
+            op_dir = ssd / op_filter
+            if op_dir.is_dir():
+                sweep_json = op_dir / "ttnn_operations_master.json"
+                if sweep_json.is_file() and op_filter in model_op_dirs and op_filter not in pairs:
+                    pairs[op_filter] = (model_op_dirs[op_filter], sweep_json)
+        else:
+            for op_dir in ssd.iterdir():
+                if not op_dir.is_dir():
+                    continue
+                sweep_json = op_dir / "ttnn_operations_master.json"
+                if not sweep_json.is_file():
+                    continue
+                op_dir_name = op_dir.name
+                if op_dir_name in model_op_dirs and op_dir_name not in pairs:
+                    pairs[op_dir_name] = (model_op_dirs[op_dir_name], sweep_json)
 
     return pairs
 
@@ -722,8 +773,16 @@ def _find_config_by_id(
 def run_validation(
     model_split_dir: Path,
     sweep_traces_dir: Path,
+    *,
+    operation: str | None = None,
+    sweep_trace_dir: Path | None = None,
 ) -> list[OpResult]:
-    pairs = discover_sweep_traces(model_split_dir, sweep_traces_dir)
+    pairs = discover_sweep_traces(
+        model_split_dir,
+        sweep_traces_dir,
+        operation=operation,
+        sweep_trace_dir=sweep_trace_dir,
+    )
 
     if not pairs:
         print("WARNING: No matching operation pairs found.", file=sys.stderr)
@@ -778,7 +837,7 @@ def run_validation(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Validate sweep traces against model traces for all operations.",
+        description="Validate sweep traces against model traces for all operations, or a single operation.",
     )
     parser.add_argument(
         "--model-trace-split",
@@ -788,9 +847,24 @@ def main() -> int:
     )
     parser.add_argument(
         "--sweep-traces-dir",
-        required=True,
         type=str,
-        help="Path to the directory containing sweep_trace_*_split/ directories",
+        default=None,
+        help="Path to the directory containing sweep_trace_*_split/ directories (required unless --sweep-trace is given)",
+    )
+    parser.add_argument(
+        "--sweep-trace",
+        type=str,
+        default=None,
+        help="Path to a single sweep trace split directory (e.g. sweep_trace_add_model_traced_split). "
+        "Use instead of --sweep-traces-dir to target one sweep.",
+    )
+    parser.add_argument(
+        "-o",
+        "--operation",
+        type=str,
+        default=None,
+        help="Validate a single operation by name. Accepts either the directory form "
+        "(ttnn_add) or dotted form (ttnn.add).",
     )
     parser.add_argument(
         "--output-report",
@@ -801,22 +875,43 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.sweep_traces_dir is None and args.sweep_trace is None:
+        parser.error("one of --sweep-traces-dir or --sweep-trace is required")
+
     model_split_dir = Path(args.model_trace_split).resolve()
-    sweep_traces_dir = Path(args.sweep_traces_dir).resolve()
+    sweep_trace_dir: Path | None = Path(args.sweep_trace).resolve() if args.sweep_trace else None
+    sweep_traces_dir: Path | None = Path(args.sweep_traces_dir).resolve() if args.sweep_traces_dir else None
 
     if not model_split_dir.is_dir():
         print(f"ERROR: Model trace split directory not found: {model_split_dir}", file=sys.stderr)
         return 1
-    if not sweep_traces_dir.is_dir():
+    if sweep_traces_dir is not None and not sweep_traces_dir.is_dir():
         print(f"ERROR: Sweep traces directory not found: {sweep_traces_dir}", file=sys.stderr)
+        return 1
+    if sweep_trace_dir is not None and not sweep_trace_dir.is_dir():
+        print(f"ERROR: Sweep trace directory not found: {sweep_trace_dir}", file=sys.stderr)
         return 1
 
     print(f"Model trace split: {model_split_dir}", file=sys.stderr)
-    print(f"Sweep traces dir:  {sweep_traces_dir}", file=sys.stderr)
+    if sweep_trace_dir:
+        print(f"Sweep trace dir:   {sweep_trace_dir}", file=sys.stderr)
+    else:
+        print(f"Sweep traces dir:  {sweep_traces_dir}", file=sys.stderr)
+    if args.operation:
+        print(f"Operation filter:  {args.operation}", file=sys.stderr)
 
-    op_results = run_validation(model_split_dir, sweep_traces_dir)
+    # When --sweep-trace is given without --sweep-traces-dir, use its parent
+    # as the sweep_traces_dir so the rest of the pipeline has a valid Path.
+    effective_sweep_traces_dir = sweep_traces_dir or sweep_trace_dir.parent
 
-    report = generate_report(model_split_dir, sweep_traces_dir, op_results)
+    op_results = run_validation(
+        model_split_dir,
+        effective_sweep_traces_dir,
+        operation=args.operation,
+        sweep_trace_dir=sweep_trace_dir,
+    )
+
+    report = generate_report(model_split_dir, effective_sweep_traces_dir, op_results)
 
     if args.output_report:
         output_path = Path(args.output_report)
