@@ -29,6 +29,8 @@ MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topol
     impl(std::make_unique<MeshTensorImpl>(std::move(other.impl)->mesh_buffer(), std::move(spec), std::move(topology))) {
 }
 
+MeshTensor::~MeshTensor() = default;
+
 distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
 distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }

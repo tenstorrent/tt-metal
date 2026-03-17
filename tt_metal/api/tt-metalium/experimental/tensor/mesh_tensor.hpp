@@ -75,7 +75,7 @@ public:
      * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying
      * MeshBuffer.
      */
-    ~MeshTensor() = default;
+    ~MeshTensor();
 
     /**
      * A device tensor is non-copyable as this is the sole owner of the underlying device memory.
