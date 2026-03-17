@@ -14,6 +14,7 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
