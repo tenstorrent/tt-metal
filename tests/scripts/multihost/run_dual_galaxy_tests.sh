@@ -22,7 +22,7 @@ run_dual_galaxy_unit_tests() {
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpirun_args="--host g10glx03,g10glx04 $mpirun_args_base"
-  local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+  local rank_binding="tests/tt_metal/distributed/config/torus_dual_galaxy_rank_bindings.yaml"
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
