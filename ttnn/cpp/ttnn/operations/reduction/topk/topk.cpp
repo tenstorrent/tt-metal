@@ -112,7 +112,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     // OP requires K to be tile-aligned (multiples of 32), but user wants exact K
     // If we had to round up K for op, slice down to the requested K value
     if (adjusted_k != k) {
-        const auto output_shape = result[0].logical_shape();
+        const auto output_shape = result[0].padded_shape();
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
