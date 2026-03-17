@@ -224,10 +224,13 @@ void kernel_main() {
         uint32_t l1_read_addr_ex_remote = cb_ex_obj.get_read_ptr();
         cb_ex_global_obj.reserve_back(block_h * num_tiles_scaler);
         uint32_t gather_write_offset = 0;
+        // Account for num_tiles_scaler (2 for Welford, 1 otherwise) when checking
+        // if the gather read fits in a single NOC packet.
+        constexpr uint32_t gather_tiles_scaler = use_welford ? 2 : 1;
         for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
             uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes
                                                                                        : num_tiles_per_worker_bytes;
-            if constexpr (num_tiles_per_worker_bytes <= NOC_MAX_BURST_SIZE) {
+            if constexpr (num_tiles_per_worker_bytes * gather_tiles_scaler <= NOC_MAX_BURST_SIZE) {
                 noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
                     remote_ep,
                     cb_ex_global_obj,
