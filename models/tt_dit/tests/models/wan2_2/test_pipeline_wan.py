@@ -97,7 +97,7 @@ def test_pipeline_inference(
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
             seed=seed,
-            traced=traced,
+            traced=not dynamic_load,
             vae_traced=traced,
             encoder_traced=traced,
             guidance_scale=4.0,
