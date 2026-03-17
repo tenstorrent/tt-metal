@@ -36,4 +36,6 @@ struct ResetLink {
 
 void send_reset_msg_to_links(const std::vector<ResetLink>& links_to_reset);
 
+void down_links_bh(const std::vector<ResetLink>& links_to_reset);
+
 }  // namespace tt::scaleout_tools
