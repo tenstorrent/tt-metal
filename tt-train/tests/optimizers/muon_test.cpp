@@ -110,7 +110,7 @@ TEST_P(MuonCorrectnessTest, DeviceMatchesCPU) {
 
     serialization::NamedParameters params{{"theta", param}};
     optimizers::MuonConfig config{.lr = tc.lr, .momentum = tc.momentum, .ns_steps = tc.ns_steps};
-    optimizers::Muon optimizer(params, config);
+    optimizers::MuonComposite optimizer(params, config);
 
     for (uint32_t i = 0; i < tc.steps; ++i) {
         optimizer.step();
