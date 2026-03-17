@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.common import (
     compute_constants,
     create_fabric_router_config,
     initialize_predictable_test_inputs,
+    initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -831,7 +832,7 @@ def test_topology_matrix_tracy(mesh_device):
                 cfg["seq_len_per_chip"], n_routed_experts, cfg["num_experts_per_tok"], num_chips, capacity_factor=2
             )
 
-            x, weights, indices = initialize_predictable_test_inputs(
+            x, weights, indices = initialize_test_inputs(
                 num_chips=num_chips,
                 seq_len_per_chip=cfg["seq_len_per_chip"],
                 hidden_dim=cfg["hidden_dim"],
