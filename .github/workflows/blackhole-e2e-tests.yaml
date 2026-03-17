@@ -30,6 +30,14 @@ on:
         required: false
         type: boolean
         default: false
+      model:
+        description: 'Filter multi-card tests by model name'
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - deepseek_prefill
       platform:
         required: false
         type: choice
@@ -76,6 +84,11 @@ on:
         required: false
         type: boolean
         default: false
+      model:
+        description: 'Filter multi-card tests by model name'
+        required: false
+        type: string
+        default: "all"
       platform:
         required: false
         type: string
@@ -151,6 +164,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       runner-label: ${{ matrix.test-group.runner-label }}
       fast-only: false
+      model: ${{ inputs.model || 'all' }}
   blackhole-grid-override-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
     needs: build-artifact
