@@ -139,7 +139,10 @@ FileRenamer::~FileRenamer() {
     }
     if (!tt::filesystem::safe_rename(temp_path_, target_path_)) {
         log_error(
-            tt::LogBuildKernels, "Failed to rename temporary file {} to target file {}", temp_path_, target_path_);
+            tt::LogBuildKernels,
+            "Failed to rename temporary file {} to target file {}",
+            temp_path_.string(),
+            target_path_.string());
     }
 }
 

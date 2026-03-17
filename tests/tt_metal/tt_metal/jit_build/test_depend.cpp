@@ -374,7 +374,7 @@ TEST(JitBuildTests, TelemetryTokenSupportsConcurrentRecord) {
     for (int thread_id = 0; thread_id < kThreadCount; ++thread_id) {
         threads.emplace_back([&token, thread_id] {
             for (int sample = 0; sample < kRecordsPerThread; ++sample) {
-                token.record(static_cast<double>(thread_id * 1000 + sample));
+                token.record(static_cast<double>((thread_id * 1000) + sample));
             }
         });
     }

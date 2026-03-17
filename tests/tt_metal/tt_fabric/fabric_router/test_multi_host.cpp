@@ -119,7 +119,7 @@ std::optional<std::unique_ptr<ControlPlane>> try_make_control_plane(
     if (!var##_opt.has_value()) {                                                                  \
         GTEST_SKIP() << "Skipping: MGD topology doesn't match physical hardware";                  \
     }                                                                                              \
-    auto var = std::move(var##_opt.value())
+    auto(var) = std::move(var##_opt.value())
 
 // 8x8 Grid topology (LINE, LINE) - skips if physical topology doesn't match
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
