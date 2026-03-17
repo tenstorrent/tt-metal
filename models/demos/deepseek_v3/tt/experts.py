@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
-    is_quad_mesh,
+    is_quad_ring,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -47,8 +47,8 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        if is_quad_mesh(mesh_device):
-            return cls._convert_weights_quad(hf_config, state_dicts, output_path, mesh_device)
+        if is_quad_ring(mesh_device):
+            return cls._convert_weights_quad_ring(hf_config, state_dicts, output_path, mesh_device)
         return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
 
     @classmethod
@@ -96,14 +96,48 @@ class Experts(AbstractModule):
         }
 
     @classmethod
-    def _convert_weights_quad(
+    def _convert_weights_quad_ring(
         cls,
         hf_config: PretrainedConfig,
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
+        assert hf_config.n_routed_experts % mesh_device.get_num_devices() == 0, (
+            f"Number of experts ({hf_config.n_routed_experts}) must be divisible by the number of devices "
+            f"({mesh_device.get_num_devices()})"
+        )
+        (state_dict,) = state_dicts
+        assert state_dict is not None
+
+        def _load_expert_weight(hf_name: str) -> torch.Tensor:
+            weight_name = f"{hf_name}.weight"
+            expert_weights: list[torch.Tensor] = []
+            for expert_id in range(hf_config.n_routed_experts):
+                full_weight_name = f"experts.{expert_id}.{weight_name}"
+                expert_weights.append(
+                    get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
+                )
+
+            return torch.stack(expert_weights)
+
+        return {
+            ttnn_name: {
+                "input_tensor_b": shard_and_save(
+                    output_path / f"{ttnn_name}.input_tensor_b",
+                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2),
+                    shard_dims=(1, 1),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            }
+            for hf_name, ttnn_name in [
+                ("gate_proj", "w1_experts"),
+                ("down_proj", "w2_experts"),
+                ("up_proj", "w3_experts"),
+            ]
+        }
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:

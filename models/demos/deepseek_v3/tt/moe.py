@@ -834,10 +834,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(topk_experts_weights_rm_sharded)
 
         # NOTE: we are actively working on fusing moe_compute and selective_reduce_combine
-
-        w0_w1 = ()  # TODO: (GR)
-        w2 = ()  # TODO: (GR)
-        layer_id = 0  # TODO: (GR)
         (
             compute_output_token_counts,
             compute_output_dense_expert_activation,
@@ -849,9 +845,9 @@ class MoE(SharedStateAddOn, AbstractModule):
             dispatch_output_expert_indices,
             dispatch_output_expert_scores,
             cfg["expert_mapping_tensor"],
-            w0_w1,
-            w2,
-            layer_id=layer_id,
+            cfg["moe_experts"]["w0_w1_experts"],
+            cfg["moe_experts"]["w2_experts"],
+            layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
 
