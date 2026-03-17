@@ -90,6 +90,9 @@ class TestParametrized:
         model_config_str,
         mesh_device,
     ):
+        if llm_mode == "prefill" and seq_len == 2048:
+            pytest.skip("Skipping prefill seq 2048 on WH due to perf regression, see #40015")
+
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
                 DeviceSetup.WORMHOLE_B0
