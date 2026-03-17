@@ -195,6 +195,14 @@ SDPA [1,8,32,128] → to_DRAM, ROW_MAJOR
 
 ## Session Log
 
+### 2026-03-17 (session 7) — K-norm L1 HEIGHT_SHARDED (Task 1 of 5 decode opts)
+- **Change**: K-norm now stays in L1 HEIGHT_SHARDED throughout the norm (no DRAM roundtrip). Added `OLMO_K_NORM_SHARDED_MEMCFG`, `OLMO_K_NORM_STATS_MEMCFG`, `OLMO_K_NORM_SHARDED_PROGCFG` configs (8 cores, [32,128] shards, column-wise). Updated `llama_attention.py` to use `program_config` in both `rms_norm_pre_all_gather` and `rms_norm_post_all_gather`.
+- **PCC results (all gates passed)**:
+  - Decode 1L: **0.9997** (gate ≥0.998, baseline 0.9983) ✓
+  - Decode 4L: **0.9961** (gate ≥0.995, baseline 0.9963) ✓
+  - Decode 64L: **0.8151** (gate ≥0.80, baseline 0.8165) ✓
+- **Commit**: `debb80b3ec` — `perf(olmo): K-norm L1 HEIGHT_SHARDED (8 cores, remove DRAM roundtrip)`
+
 ### 2026-03-16 (session 6) — Prefill Q-norm Reshape Fix + RoPE Format Fix
 - **Root cause 1: Q-norm reshape bug in prefill path.** `ttnn.reshape` on Q tensor `[1, n_heads, seq, head_dim]→[1, 1, seq, n_heads*head_dim]` incorrectly mixed heads and sequence positions due to C-contiguous memory layout. Fix: transpose (heads, seq) before flattening and after unflattening.
 - **Root cause 2: RoPE format mismatch in reference model.** Reference `apply_rotary_emb` used GPT-J style complex arithmetic on Neox-style (HF) weights. Fix: switched to `rotate_half` (Neox-style) matching HF OLMo training.
@@ -243,6 +251,15 @@ SDPA [1,8,32,128] → to_DRAM, ROW_MAJOR
 - Added `compute_kernel_config_hifi2` to decode QK-norm calls — did not fix attn_out.
 - Created isolated QK-norm unit test: `tests/ttnn/unit_tests/operations/fused/test_olmo_qk_norm.py`.
 - **Identified relay race violation**: no individual block PCC tests for OLMo-novel components (QK-norm, K-expand RoPE, paged KV cache, wo+all_reduce, padded SDPA).
+
+### 2026-03-17 — Decode Optimization: QK-norm L1 + WO gather L1
+- **Status**: Tasks 1, 2, 4 complete. Task 3 (MLP) cancelled (L1 constraints on reduce_scatter).
+- **K-norm (Task 1)**: Moved K-norm pre/post all_gather tensors from DRAM → L1 INTERLEAVED. Eliminates DRAM roundtrip for small (32×128×2=8KB) tensor. PCC maintained.
+- **Q-norm (Task 2)**: Moved Q-norm pre/post all_gather tensors from DRAM → L1 INTERLEAVED. Same pattern as K-norm. PCC maintained.
+- **WO gather (Task 4)**: Changed `line_all_gather` output in WO decode path from DRAM → L1 INTERLEAVED. Tilize also now done in L1. Note: ring matmul not possible for OLMo WO because K=1024 is not divisible by RING_SIZE=24 × TILE_SIZE=32 (need K multiple of 768; OLMo has 1024).
+- **MLP (Task 3, cancelled)**: `REDUCE_SCATTER_OUT_MEMCFG` (L1, 30 cores) is incompatible with OLMo MLP due to L1 constraints. Segfaults when used. Kept DRAM path.
+- **Decode PCC**: 1L PASS, 4L PASS, 64L PASS (all at existing baselines).
+- **Block Hash**: see git log
 
 ### 2026-03-15 (session 1) — Decode PCC & LM Head Fixes
 - Decode PCC (1L, no prefetcher): 0.9983, token match ✓. `test_decode_pcc_1layer` PASSING.

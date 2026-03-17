@@ -160,7 +160,10 @@ class TtLlamaMLP(LightweightModule):
 
         if not self.model_config["USE_PREFETCHER"]:
             if is_olmo:
-                # OLMo decode: ring matmul outputs 3840-padded, slice to 3456 before reduce_scatter
+                # OLMo decode: ring matmul outputs 3840-padded, slice to 3456 before reduce_scatter.
+                # REDUCE_SCATTER_OUT_MEMCFG (L1) is incompatible with OLMo due to L1 constraints,
+                # so reduce_scatter outputs to DRAM. We avoid the redundant L1→DRAM push by slicing
+                # directly from DRAM after moving the padded ring output to DRAM.
                 unpadded_width = self.args.intermediate_dim_per_tp  # 3456
 
                 w1_out = ttnn.linear(

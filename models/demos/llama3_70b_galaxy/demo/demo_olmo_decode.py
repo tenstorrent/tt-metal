@@ -290,12 +290,6 @@ def run_olmo_demo(
     profiler.end("compile_prefill")
     logger.info("Prefill warmup done.")
 
-    # Reset KV cache after warmup to avoid stale data from compile run
-    for layer in tt_model.layers:
-        k_cache, v_cache = layer.attention.layer_past
-        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
-
     # Step 2: Capture prefill trace
     logger.info("Capturing prefill trace...")
     tt_model.set_enable_trace(True)
@@ -311,12 +305,6 @@ def run_olmo_demo(
     ttnn.end_trace_capture(mesh_device, prefill_trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     logger.info("Prefill trace captured.")
-
-    # Reset KV cache after trace capture to clear stale data
-    for layer in tt_model.layers:
-        k_cache, v_cache = layer.attention.layer_past
-        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
-        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
     # Step 3: Execute trace for each user
     profiler.start("inference_prefill")

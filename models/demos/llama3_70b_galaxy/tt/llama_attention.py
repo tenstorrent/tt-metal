@@ -967,67 +967,37 @@ class TtLlamaAttention(LightweightModule):
         decode_num_heads = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
 
         if self.is_olmo:
-            # OLMo SDPA→WO: slice padded heads, then all_gather batch across col devices.
-            # SDPA output per device: [1, B=8, NH_padded=32, D=128] (batch=8 per col device,
-            #   heads tile-padded from 8→32, head_dim=128).
-            # llama_rs_create_heads did reduce_scatter splitting batch 32→8 across 4 col devices.
-            # We reverse this: slice to 5 real heads, reshape, all_gather → [1, 1, 32, 640].
+            # OLMo WO decode: K=1024 (5 real heads × 128 × 8 devices, padded with zeros for 3 phantom
+            # heads) is not divisible by RING_SIZE=24 × TILE_SIZE=32, so we cannot use the ring matmul.
+            # Use slice→reshape→line_all_gather (batch gather) → DRAM-sharded matmul → line_all_reduce.
+            # The all_gather is over batch dim (col devices), the all_reduce is over K dim (row devices).
             sdpa_dram = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_output_1G4D_sharded)
             sdpa_dram = ttnn.to_layout(sdpa_dram, ttnn.ROW_MAJOR_LAYOUT)
 
-            batch_per_dev = sdpa_dram.shape[1]  # 8 (batch_size_per_device_group)
+            batch_per_dev = sdpa_dram.shape[1]
 
-            # Slice to 5 real Q heads in dim2: [1, 8, 32, 128] → [1, 8, 5, 128]
+            # Slice to n_local_heads real Q heads, reshape to flatten heads into width dim
             sdpa_real = ttnn.slice(sdpa_dram, [0, 0, 0, 0], [1, batch_per_dev, self.n_local_heads, self.head_dim])
             ttnn.deallocate(sdpa_dram)
-
-            # Reshape [1, 8, 5, 128] → [1, 1, 8, 640] (flatten heads*head_dim)
             sdpa_flat = ttnn.reshape(sdpa_real, [1, 1, batch_per_dev, self.n_local_heads * self.head_dim])
             ttnn.deallocate(sdpa_real)
 
-            # All_gather across col devices (cluster_axis=1) in dim2: [1, 1, 8, 640] → [1, 1, 32, 640]
+            # Gather batch across col devices: [1, 1, 8, 640] → [1, 1, 32, 640] in L1
             attn_output_cat = self.tt_ccl.line_all_gather(
                 sdpa_flat,
                 dim=2,
                 cluster_axis=1,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             )
             ttnn.deallocate(sdpa_flat)
             self._debug_check_attn("attn_output_cat", attn_output_cat)
             self._capture_attn("wo_input", attn_output_cat)
-        else:
-            # Standard path for Llama/Qwen - use all_gather_concat
-            attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
-                attn_output_1G4D_sharded,
-                dim=1,
-                cluster_axis=1,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
-                num_heads=decode_num_heads,
-            )
-            ttnn.deallocate(attn_output_1G4D_sharded)
-        # print("done concat heads")
 
-        # Ensure attn_output_cat is tilized for WO matmul
-        if attn_output_cat.get_layout() != ttnn.TILE_LAYOUT:
-            if self.is_olmo:
-                # OLMo: keep in DRAM, just tilize (wo_interleaved is DRAM too)
-                attn_output_cat = ttnn.to_layout(attn_output_cat, ttnn.TILE_LAYOUT)
-            else:
-                # Must convert to interleaved memory before tilizing sharded tensors
-                attn_output_cat = ttnn.to_memory_config(attn_output_cat, ttnn.DRAM_MEMORY_CONFIG)
-                attn_output_cat = ttnn.to_layout(attn_output_cat, ttnn.TILE_LAYOUT)
-                # Convert back to sharded for WO matmul
-                attn_output_cat = ttnn.to_memory_config(
-                    attn_output_cat, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
-                )
+            # Tilize in L1 for matmul
+            attn_output_cat = ttnn.to_layout(attn_output_cat, ttnn.TILE_LAYOUT)
 
-        # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
-        if self.is_olmo:
-            # OLMo: use unpadded wo (640 rows = 5 real heads × 128 per col device)
-            # attn_output_cat is [1, 1, 32, 640] (sliced to 5 real heads only)
             wo_decode = (
                 self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
             )
@@ -1039,9 +1009,6 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
-            # wo weight dims=(2,3): K(5120 heads) over rows(axis 0), N(5120 model) over cols(axis 1).
-            # Each device computes partial_Y = X[32,640_i] @ W[640_i,1280_j].
-            # All-reduce over rows (axis 0) sums partial K contributions → correct output per col.
             dense_out_sharded = ttnn.to_memory_config(
                 dense_out_ttnn, self.model_config["SHARDED_WO_OUT_RING_MEMCFG_OLMO"]
             )
@@ -1055,6 +1022,19 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(dense_out_sharded)
         else:
+            # Standard decode path for Llama/Qwen - use all_gather_concat + ring matmul
+            attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
+                attn_output_1G4D_sharded,
+                dim=1,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
+                num_heads=decode_num_heads,
+            )
+            ttnn.deallocate(attn_output_1G4D_sharded)
+            self._debug_check_attn("attn_output_cat", attn_output_cat)
+            self._capture_attn("wo_input", attn_output_cat)
+
             dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
                 attn_output_cat,
                 self.wo,
@@ -1067,7 +1047,6 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
-            # [1, 1, 32, 2304]
             dense_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 32, 1280]
                 dense_out_ttnn,
                 cluster_axis=0,
