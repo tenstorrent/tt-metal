@@ -25,7 +25,7 @@ namespace experimental::metal2_host_api {
 
     // Experimental Metal 2.0 API for creating a Program from a ProgramSpec (Metal 2.0 host API).
     // This will become a constructor for the Program class.
-    Program MakeProgramFromSpec(const ProgramSpec& spec);
+    Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation);
 }
 
 using ProgramId = std::uint64_t;
@@ -71,7 +71,7 @@ private:
     // Used by experimental::metal2_host_api::MakeProgramFromSpec.
     explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
     friend Program experimental::metal2_host_api::MakeProgramFromSpec(
-        const experimental::metal2_host_api::ProgramSpec& spec);
+        const experimental::metal2_host_api::ProgramSpec& spec, bool skip_validation);
 };
 
 // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.

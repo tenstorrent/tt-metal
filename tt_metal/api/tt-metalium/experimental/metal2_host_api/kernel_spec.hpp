@@ -19,6 +19,42 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+struct ComputeConfiguration {
+    // Tensix hardware resource configuration (configured by compute kernels)
+    // Gen1 and Gen2 configurations are currently identical.
+
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
+    bool bfp8_pack_precise = false;
+    bool math_approx_mode = false;
+
+    // "Unpack to dest" mode must be specified on a per-DFB basis
+    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+    using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
+    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
+};
+
+struct DataMovementConfiguration {
+
+    // The DM configuration is different for Gen1 and Gen2.
+    // You can provide either a Gen1 config, a Gen2 config, or both.
+    // If your host code is intended to be architecture-agnostic, provide both.
+
+    struct Gen1DataMovementConfig {
+        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
+        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
+        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
+    };
+    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
+
+    struct Gen2DataMovementConfig {
+        // Currently, no configuration is needed for Gen2!
+        // Might want to revisit the API if so....
+    };
+    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
+};
+
 using KernelSpecID = uint32_t;
 using KernelSpecName = std::string;
 
@@ -122,45 +158,6 @@ struct KernelSpec {
     using ConfigSpec = std::
         variant<DataMovementConfiguration, ComputeConfiguration>;
     ConfigSpec config_spec;
-};
-
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration (configured by compute kernels)
-    // The configuration for Gen1 and Gen2 is currently identical.
-
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-    bool fp32_dest_acc_en = false;
-    bool dst_full_sync_en = false;
-    bool bfp8_pack_precise = false;
-    bool math_approx_mode = false;
-
-    // "Unpack to dest" mode must be specified on a per-DFB basis
-    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
-};
-
-struct DataMovementConfiguration {
-
-    // The DM configuration is different for Gen1 and Gen2.
-    // You can provide either a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to run on Gen1 or Gen2, you should provide both.
-
-    struct Gen1DataMovementConfig {
-        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
-        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
-        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
-    };
-    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
-
-    struct Gen2DataMovementConfig {
-        // Currently, no configuration is needed for Gen2!
-        // Might want to revisit the API if so....
-    };
-    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
-
-    void validate() const {TT_FATAL(gen1_data_movement_config.has_value() || gen2_data_movement_config.has_value(), 
-        "DataMovementConfiguration must specify at least one of Gen1 and Gen2 configurations");}
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

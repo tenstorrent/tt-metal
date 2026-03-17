@@ -36,12 +36,8 @@ struct WorkerSpec {
 // ProgramSpec describes the immutable properties of a Program
 //   (analogous to a function's signature and body)
 struct ProgramSpec {
-    // Kernels
-    std::vector<DataMovementKernelSpec> data_movement_kernels;
-    std::vector<ComputeKernelSpec> compute_kernels;
-    // Dataflow Buffers
+    std::vector<KernelSpec> kernels;
     std::vector<DataflowBufferSpec> dataflow_buffers;
-    // Semaphores
     std::vector<SemaphoreSpec> semaphores;
 
     // Worker specifications (optional on Gen1, required on Gen2+)
