@@ -937,4 +937,3 @@ def test_upsample_slicing_strategies(input_size, channels, batch_size, upsample_
         .permute(0, 3, 1, 2),
         PCC_THRESHOLD,
     )
-
