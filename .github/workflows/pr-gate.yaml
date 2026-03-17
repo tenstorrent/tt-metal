@@ -135,6 +135,7 @@ jobs:
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
@@ -202,8 +203,8 @@ jobs:
       # name clashes.
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
       build-wheel: true
-      publish-artifact: false
-      skip-tt-train: true
+      publish-artifact: true
+      skip-tt-train: false
       distributed: false
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
       # Pass pre-built docker images to avoid duplicate builds
@@ -213,85 +214,6 @@ jobs:
       basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
-
-  build-tt-train:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    needs: [ build, find-changed-files ]
-    timeout-minutes: 20
-    runs-on: tt-ubuntu-2204-large-stable
-    container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.ci-build-docker-image || 'docker-image-unresolved!' }}
-      volumes:
-        - ${{ github.workspace }}:/work
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: Checkout actions
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions/download-artifact-with-retry
-          sparse-checkout-cone-mode: false
-
-      - uses: ./.github/actions/download-artifact-with-retry
-        timeout-minutes: 15
-        with:
-          name: >-
-            ${{ needs.build.outputs.packages-artifact-name ||
-                'packages artifact unresolved!' }}
-          path: /work/pkgs/
-      - name: Install packages
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-
-          apt update
-          apt install -y \
-            ./pkgs/tt-metalium_*.deb \
-            ./pkgs/tt-metalium-jit_*.deb \
-            ./pkgs/tt-metalium-dev_*.deb \
-            ./pkgs/tt-nn_*.deb \
-            ./pkgs/tt-nn-dev_*.deb
-
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v5
-        with:
-          # submodules: recursive
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
-          fetch-depth: 500
-          fetch-tags: true # Need tags for `git describe`
-          sparse-checkout: |
-            tt-train
-
-      - name: Configure git safe.directory
-        run: git config --global --add safe.directory /work
-
-      - name: Submodules
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          git submodule update --init --recursive tt-train
-
-      - name: Configure tt-train
-        timeout-minutes: 10
-        env:
-          CC: clang-20
-          CXX: clang++-20
-        run: |
-          set -euo pipefail
-
-          cd /work/tt-train
-          mkdir -p .build && cd .build
-          cmake -DCMAKE_BUILD_TYPE=Release -G Ninja ..
-
-      - name: Build tt-train
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-
-          cd /work/tt-train/.build
-          cmake --build .
 
   build-docs:
     if: >-
@@ -514,7 +436,6 @@ jobs:
       - metalium-smoke-tests
       - ttnn-smoke-tests
       - build
-      - build-tt-train
       - metalium-examples
       - ttsim-integration-tests
       - clang-tidy-light
@@ -525,7 +446,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build, build-tt-train"
+          required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             ttsim-integration-tests, model-charts-sync, build-docs

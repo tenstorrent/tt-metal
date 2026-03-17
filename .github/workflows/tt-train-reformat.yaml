@@ -1,4 +1,4 @@
-name: Reformat Code in PR
+name: "[tt-train] Reformat Code"
 
 on:
   workflow_dispatch:
