@@ -110,15 +110,16 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             // Welford's needs transposed input tile
             transpose_wh_tile(cb_interm_pre_add, i, input_dst);
 
+            // Welford over this tile: include only valid elements, never padding.
             if constexpr (is_last_tile_full) {
                 // All tiles can go through the faster call which does 32 rows
                 welford_update<W>(input_dst, sample_idx, reciprocal_lut);
             } else {
-                // If it is the end tile, do it differently
+                // Last tile in width has padding; process only first last_tile_rows rows.
                 if ((block.start() + i) == (Wt - 1)) {
-                    welford_update<W>(input_dst, sample_idx, reciprocal_lut);
-                } else {
                     welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+                } else {
+                    welford_update<W>(input_dst, sample_idx, reciprocal_lut);
                 }
             }
             sample_idx += tile_width;
