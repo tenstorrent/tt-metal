@@ -42,13 +42,13 @@ class TtLlamaClassEmbedding(LightweightModule):
         x = ttnn.concat([class_embedding, x], dim=2)  # Output ROW_MAJOR_LAYOUT
 
         # Pad height to next multiple of 32 required by tilize
-        ntok = x.shape[2]
-        padded_ntok = ((ntok + 31) // 32) * 32
-        if ntok != padded_ntok:
-            output_shape = [x.shape[0], x.shape[1], padded_ntok, x.shape[3]]
-            x = ttnn.tilize_with_val_padding(x, output_tensor_shape=output_shape, pad_value=0)
-        else:
-            x = ttnn.tilize(x)  # Convert back to TILE_LAYOUT
+        # ntok = x.shape[2]
+        # padded_ntok = ((ntok + 31) // 32) * 32
+        # if ntok != padded_ntok:
+        #     output_shape = [x.shape[0], x.shape[1], padded_ntok, x.shape[3]]
+        #     x = ttnn.tilize_with_val_padding(x, output_tensor_shape=output_shape, pad_value=0)
+        # else:
+        #     x = ttnn.tilize(x)  # Convert back to TILE_LAYOUT
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)  # Convert back to TILE_LAYOUT
 
         return x
