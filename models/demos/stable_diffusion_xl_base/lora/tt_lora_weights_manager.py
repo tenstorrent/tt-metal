@@ -94,6 +94,7 @@ class TtLoRAWeightsManager:
         if self._affects_unsupported_ops():
             logger.warning("LoRA weights affect unsupported operations, skipping loading LoRA weights.")
             self._torch_pipeline.unload_lora_weights()
+            return
 
     def fuse_lora(self, lora_scale=1.0):
         if not self.has_lora_adapter():
