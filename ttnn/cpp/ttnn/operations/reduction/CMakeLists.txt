@@ -29,7 +29,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES argmax/argmax.hpp generic/generic_reductions.hpp
+        FILES argmax/argmax.hpp generic/generic_reductions.hpp reduction_common/reduction_common.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

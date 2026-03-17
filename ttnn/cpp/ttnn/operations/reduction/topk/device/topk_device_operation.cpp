@@ -132,6 +132,8 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
         "Input height (combined input_shape[0-3]) {} must be a multiple of 32",
         input_shape[0] * input_shape[1] * input_shape[2]);
 
+    TT_FATAL(args.k != 0, "K must be non-zero");
+
     // Memory configuration validation
     TT_FATAL(args.output_memory_config.is_sharded() == false, "Sharded implementation not supported yet");
 

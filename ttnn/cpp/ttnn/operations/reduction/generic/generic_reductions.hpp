@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 
@@ -13,15 +14,6 @@
 
 namespace ttnn {
 namespace operations::reduction {
-
-enum class ReduceType {
-    Sum,
-    Mean,
-    Max,
-    Min,
-    Std,
-    Var,
-};
 
 // Entry point for pool op, which uses non-standard tensors that cannot be padded.
 [[deprecated]]
@@ -37,7 +29,7 @@ Tensor pool_sum(
 // Generic reductions
 Tensor sum(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -47,7 +39,7 @@ Tensor sum(
 
 Tensor mean(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -57,7 +49,7 @@ Tensor mean(
 
 Tensor max(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -67,7 +59,7 @@ Tensor max(
 
 Tensor min(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -77,7 +69,7 @@ Tensor min(
 
 Tensor std(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
@@ -87,7 +79,7 @@ Tensor std(
 
 Tensor var(
     const Tensor& input_tensor_arg,
-    const std::optional<std::variant<int, SmallVector<int>>>& dim_arg = std::nullopt,
+    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim_arg = std::nullopt,
     bool keepdim = false,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
