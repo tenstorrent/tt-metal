@@ -2805,6 +2805,11 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
+// Note: No termination check is added here intentionally. Both local ERISCs share
+// the same termination signal, so both will see it and exit their respective wait
+// loops naturally. Adding a termination check here would be unsafe — if one ERISC
+// broke out of the sync early and skipped its scratch register write, the other
+// could spin forever waiting for a value that never arrives.
 void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
     constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
