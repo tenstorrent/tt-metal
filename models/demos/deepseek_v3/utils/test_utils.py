@@ -5,6 +5,7 @@
 import inspect
 import itertools
 import os
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
@@ -634,6 +635,11 @@ def get_test_weight_config(
     :func:`get_weight_config` in its internal sub-path, so they are not
     needed here either.
 
+    Random-weight conversions are cached under a local scratch root rather
+    than the shared DeepSeek cache mount. That keeps random-weight tests
+    independent from read-only CI cache mounts and from stale random caches
+    produced by older revisions on other hosts.
+
     When ``test_name`` is ``None`` the function falls back to
     ``PYTEST_CURRENT_TEST`` for backward compatibility.
 
@@ -654,7 +660,16 @@ def get_test_weight_config(
         weight_config_id = "/".join(parts)
     else:
         weight_config_id = os.environ.get("PYTEST_CURRENT_TEST", "unknown_test")
-    per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
+    if real_weights:
+        per_test_weight_cache_path = cache_path / "tests_cache" / weight_config_id
+    else:
+        random_cache_root = os.getenv("DEEPSEEK_V3_RANDOM_TEST_CACHE")
+        if random_cache_root is None:
+            sha_tag = os.getenv("GITHUB_SHA", "local")[:12]
+            random_cache_root = Path(tempfile.gettempdir()) / "tt-metal-deepseek-v3-random-tests-cache" / sha_tag
+        else:
+            random_cache_root = Path(random_cache_root)
+        per_test_weight_cache_path = Path(random_cache_root) / "tests_cache" / weight_config_id
     return get_weight_config(
         ModuleClass, hf_config, state_dicts, per_test_weight_cache_path, mesh_device, force_recalculate
     )
