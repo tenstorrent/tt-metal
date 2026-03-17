@@ -128,6 +128,8 @@ void kernel_main() {
                         scale_fp32,
                         qk_subblock_h,
                         qk_subblock_w,
+                        out_subblock_h,
+                        out_subblock_w,
                         use_padded_mask,
                         cb_q_in,
                         cb_k_in,
