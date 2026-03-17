@@ -154,6 +154,26 @@ private:
         double sync_frequency = 0.0;                    // Device clock frequency in GHz
         uint32_t sync_request_addr = 0;                 // Mailbox address for sync request
         uint32_t sync_host_ts_addr = 0;                 // Mailbox address for sync host timestamp
+        std::atomic<bool> sync_response_received{true};  // false = sync pending, true = no pending sync
+        int64_t sync_host_time_before = 0;               // Host TSC captured before sync trigger write
+
+        RealtimeProfilerDeviceState() = default;
+        RealtimeProfilerDeviceState(RealtimeProfilerDeviceState&& o) noexcept :
+            device(o.device),
+            chip_id(o.chip_id),
+            mesh_coord(o.mesh_coord),
+            realtime_profiler_core(o.realtime_profiler_core),
+            socket(std::move(o.socket)),
+            first_timestamp(o.first_timestamp),
+            sync_host_start(o.sync_host_start),
+            sync_frequency(o.sync_frequency),
+            sync_request_addr(o.sync_request_addr),
+            sync_host_ts_addr(o.sync_host_ts_addr),
+            sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
+            sync_host_time_before(o.sync_host_time_before) {}
+        RealtimeProfilerDeviceState& operator=(RealtimeProfilerDeviceState&&) = delete;
+        RealtimeProfilerDeviceState(const RealtimeProfilerDeviceState&) = delete;
+        RealtimeProfilerDeviceState& operator=(const RealtimeProfilerDeviceState&) = delete;
     };
     std::vector<RealtimeProfilerDeviceState> realtime_profiler_devices_;
 
@@ -286,6 +306,7 @@ public:
     void init_fabric();
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev_state, uint32_t num_samples);
+    void trigger_realtime_profiler_sync_check();
     D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);

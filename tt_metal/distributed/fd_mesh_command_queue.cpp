@@ -576,8 +576,14 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("FDMeshCommandQueue::finish");
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
+
+    {
+        ZoneScopedN("RealtimeProfilerSyncCheck");
+        mesh_device_->impl().trigger_realtime_profiler_sync_check();
+    }
 
     // Barrier across all active hosts of the mesh
     active_distributed_context_->barrier();

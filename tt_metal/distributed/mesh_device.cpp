@@ -1414,6 +1414,62 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
     }
 }
 
+void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
+    if (realtime_profiler_devices_.empty() || !realtime_profiler_tracy_handler_) {
+        return;
+    }
+
+    for (auto& dev_state : realtime_profiler_devices_) {
+        dev_state.sync_response_received.store(false);
+
+        std::vector<uint32_t> sync_req = {1};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.sync_request_addr,
+            sync_req,
+            CoreType::WORKER);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    for (auto& dev_state : realtime_profiler_devices_) {
+        dev_state.sync_host_time_before = TracyGetCpuTime();
+        uint32_t host_time_id = static_cast<uint32_t>(dev_state.sync_host_time_before & 0xFFFFFFFF);
+        std::vector<uint32_t> host_time_data = {host_time_id};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.sync_host_ts_addr,
+            host_time_data,
+            CoreType::WORKER);
+    }
+
+    TracyMessageL("FINISH_SYNC");
+
+    constexpr uint32_t kSyncTimeoutMs = 5000;
+    for (auto& dev_state : realtime_profiler_devices_) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncTimeoutMs);
+        while (!dev_state.sync_response_received.load()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                log_warning(tt::LogMetal, "[Real-time profiler] Sync check timed out for device {}", dev_state.chip_id);
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+
+    for (auto& dev_state : realtime_profiler_devices_) {
+        std::vector<uint32_t> sync_req = {0};
+        tt::tt_metal::detail::WriteToDeviceL1(
+            dev_state.device,
+            dev_state.realtime_profiler_core,
+            dev_state.sync_request_addr,
+            sync_req,
+            CoreType::WORKER);
+    }
+}
+
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
     if (!realtime_profiler_devices_.empty()) {
         return;
@@ -1748,6 +1804,21 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             ZoneScopedN("ProcessPage");
             dev_state.socket->wait_for_pages(1);
             uint32_t* read_ptr = dev_state.socket->get_read_ptr();
+
+            // Check for sync response packets only when a sync is pending
+            uint32_t marker = read_ptr[3];
+            if (!dev_state.sync_response_received.load() && marker == REALTIME_PROFILER_SYNC_MARKER_ID) {
+                uint64_t device_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
+                realtime_profiler_tracy_handler_->CalibrateDevice(
+                    dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
+                realtime_profiler_tracy_handler_->PushSyncCheckMarker(
+                    dev_state.chip_id, device_time, dev_state.sync_frequency);
+                dev_state.socket->pop_pages(1);
+                dev_state.socket->notify_sender();
+                pages_received++;
+                dev_state.sync_response_received.store(true);
+                return true;
+            }
 
             // Extract timestamps: kernel_start (words 0-3), kernel_end (words 4-7)
             // Each realtime_profiler_timestamp_t: time_hi, time_lo, id, header

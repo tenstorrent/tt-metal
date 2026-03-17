@@ -159,4 +159,15 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(uint32_t chip_id, uint64_
 #endif
 }
 
+void RealtimeProfilerTracyHandler::CalibrateDevice(
+    uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency) {
+#if defined(TRACY_ENABLE)
+    TracyTTCtx ctx = GetContext(chip_id);
+    if (!ctx) {
+        return;
+    }
+    TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
+#endif
+}
+
 }  // namespace tt::tt_metal

@@ -36,6 +36,9 @@ public:
     // Used to verify host-device clock sync accuracy in the Tracy GUI.
     void PushSyncCheckMarker(uint32_t chip_id, uint64_t device_timestamp, double frequency);
 
+    // Send a GpuCalibration event to Tracy, updating the host-device clock mapping.
+    void CalibrateDevice(uint32_t chip_id, int64_t host_time, uint64_t device_timestamp, double frequency);
+
 private:
     TracyTTCtx GetContext(uint32_t chip_id);
 
