@@ -42,8 +42,12 @@ namespace tt::tt_fabric {
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
-struct WorkerToFabricEdmSenderImpl {
+template <
+    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
+    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
+    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
+struct WorkerToFabricEdmSenderBase {
+    static_assert(STREAM_ID <= 31, "Stream ID must be in range 0-31");
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -59,10 +63,10 @@ struct WorkerToFabricEdmSenderImpl {
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
     // HACK: Need a way to properly set this up
 
-    WorkerToFabricEdmSenderImpl() = default;
+    WorkerToFabricEdmSenderBase() = default;
 
     template <ProgrammableCoreType my_core_type>
-    static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
+    static WorkerToFabricEdmSenderBase build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
         uint8_t direction;
         uint8_t edm_worker_x;
@@ -115,7 +119,7 @@ struct WorkerToFabricEdmSenderImpl {
             auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
-            worker_free_slots_stream_id = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
+            worker_free_slots_stream_id = STREAM_ID;
         }
 
         // DEAD CODE
@@ -126,7 +130,7 @@ struct WorkerToFabricEdmSenderImpl {
         auto worker_teardown_sem_addr =
             reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
         const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
-        return WorkerToFabricEdmSenderImpl(
+        return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
             edm_worker_y,
@@ -215,7 +219,7 @@ struct WorkerToFabricEdmSenderImpl {
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
-    FORCE_INLINE WorkerToFabricEdmSenderImpl(
+    FORCE_INLINE WorkerToFabricEdmSenderBase(
         bool connected_to_persistent_fabric,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
@@ -597,6 +601,12 @@ private:
         post_send_payload_increment_pointers();
     }
 };
+
+// Type alias preserving the current name for all existing callers.
+// Stream ID 22 (sender_channel_0 free slots) is the default for VC0/VC1 worker connections.
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+using WorkerToFabricEdmSenderImpl =
+    WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>;
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 
