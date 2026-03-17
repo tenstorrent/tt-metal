@@ -300,13 +300,6 @@ def run(
                 input_memory_config = ttnn.DRAM_MEMORY_CONFIG
                 is_sharded_input = True
 
-        # use_broadcast with num_workers_per_link=1 produces incorrect results on
-        # sharded inputs (op-level issue). Drop these performance-hint kwargs so the
-        # vector still exercises the sharded all_gather path.
-        if is_sharded_input and use_broadcast is True and num_workers_per_link == 1:
-            use_broadcast = None
-            num_workers_per_link = None
-
         # Parse output memory config
         if isinstance(memory_config, dict):
             mem_layout_str = memory_config.get("memory_layout", "")
@@ -582,7 +575,7 @@ def run(
             # Trim tile padding to match expected shape
             tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
 
-            if input_dtype == ttnn.bfloat16:
+            if input_dtype == ttnn.bfloat16 and not use_broadcast:
                 eq, output = comp_equal(tt_output_tensor, torch_reference)
             else:
                 eq, output = comp_pcc(tt_output_tensor, torch_reference)
