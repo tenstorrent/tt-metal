@@ -525,7 +525,7 @@ struct WorkerToFabricEdmSenderBase {
 
 private:
     template <bool STATEFUL_NOC>
-    friend void detail::update_credits_and_slots(WorkerToFabricEdmSender*);
+    friend void fabric_detail::update_credits_and_slots(WorkerToFabricEdmSender*);
 
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
@@ -625,20 +625,11 @@ private:
     }
 };
 
-
-namespace fabric_detail {
-    // Definition of setup_credit_update_noc_state
-    // Call this once before using update_edm_buffer_free_slots<true>
-    // Specialized to fabric tests
-    template <bool I, uint8_t E>
-    FORCE_INLINE void setup_credit_update_noc_state(
-        const WorkerToFabricEdmSenderImpl<I, E>& adapter,
-        uint8_t noc) {
-        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        const uint64_t noc_sem_addr =
-            get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
-        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
-            noc_sem_addr, packed_val, 0xf, adapter.sync_noc_cmd_buf, noc);
+namespace fabric_detail{
+    template <bool STATEFUL_NOC>
+    void update_credits_and_slots(WorkerToFabricEdmSender* conn){
+        conn->advance_buffer_slot_write_index();
+        conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
     }
 } // namespace fabric_detail
 
