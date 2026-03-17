@@ -108,6 +108,10 @@ Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tenso
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
+Tensor::Tensor(HostTensor tensor) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(std::make_shared<TensorAttributes>(HostStorage(std::move(tensor)))) {}
+
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
@@ -622,6 +626,12 @@ const HostStorage& Tensor::host_storage() const& {
     const auto* host_storage = std::get_if<HostStorage>(&this->storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
+}
+
+const HostTensor& Tensor::host_tensor() const& {
+    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
+    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    return host_storage->host_tensor();
 }
 
 distributed::MeshDevice* Tensor::device() const {

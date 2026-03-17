@@ -14,6 +14,7 @@ namespace tt::tt_metal {
 
 class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
 public:
+    TensorAttributes(HostStorage storage);
     TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     TensorAttributes(const TensorAttributes&) = default;
     TensorAttributes(TensorAttributes&&) = default;
