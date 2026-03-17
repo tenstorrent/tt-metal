@@ -143,10 +143,44 @@ python3 -m pytest models/demos/glm4_moe_lite_hybrid/tests/test_hybrid_modules.py
 
 This is the **main performance benchmark**. It runs the full model (all 47 layers) through prefill and decode, reporting wall-clock latency and throughput.
 
-#### Script Location
+There are **two scripts** for end-to-end testing:
 
-```
-models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py
+| Script | Implementation | Path |
+|---|---|---|
+| **Hybrid E2E** | Hybrid framework (CompressedKVPECache, HybridGlm4MoERuntimeManager, etc.) | `models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py` |
+| **Agentic E2E** | Agentic Glm4MoeLiteDenseOnlyTT runner | `models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py` |
+
+Both report the same metrics. Use the hybrid script to exercise the hybrid module path; use the agentic script for trace-mode and vLLM-style benchmarking.
+
+#### Hybrid E2E Runs
+
+```bash
+cd /home/ubuntu/agent/agentic/tt-metal
+
+# --- Single device (N150) ---
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --prompt "Explain quantum computing in simple terms." \
+  --max-new-tokens 32 \
+  --mesh-cols 1 \
+  --kv-cache-dtype bf8
+
+# --- 8-device (T3K) ---
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --prompt "Explain quantum computing in simple terms." \
+  --max-new-tokens 64 \
+  --mesh-cols 8 \
+  --kv-cache-dtype bf8
+
+# --- T3K with all optimizations ---
+GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1 \
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 \
+GLM4_MOE_LITE_FUSED_MOE=1 \
+GLM4_MOE_LITE_TP=1 \
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --prompt "Explain quantum computing in simple terms." \
+  --max-new-tokens 64 \
+  --mesh-cols 8 \
+  --kv-cache-dtype bf8
 ```
 
 #### Agentic Baseline Runs
@@ -467,10 +501,18 @@ models/demos/glm4_moe_lite/
 
 ```
 models/demos/glm4_moe_lite_hybrid/
+├── scripts/
+│   └── run_hybrid_e2e.py        # <-- HYBRID END-TO-END GENERATION
 ├── tests/
-│   └── test_hybrid_modules.py   # 23 framework tests (no hardware needed)
+│   ├── test_hybrid_modules.py   # 23 framework tests (no hardware needed)
+│   ├── benchmark_single_device.py   # N150 per-layer benchmark
+│   └── benchmark_tp_communication.py # T3K TP reduce benchmark
 ├── runner.py                    # HybridGlm4Runner (top-level orchestrator)
-└── README.md                    # Architecture + usage docs
+├── README.md                    # Architecture + usage docs
+├── PERF_TESTING_GUIDE.md        # This file
+├── BENCHMARK_RESULTS.md         # N150 benchmark results
+├── HYBRID_ADVANTAGES.md         # Advantages over both originals
+└── TECHNICAL_DEEP_DIVE.md       # CCL, MoE, TP deep dive
 ```
 
 ---
@@ -572,7 +614,7 @@ pytest models/demos/glm4_moe_lite/tests/test_tt_moe_layer1_mesh_optional.py -v
 
 ## The One Test: 3-Way Comparison on T3K
 
-If you can only run one test to compare all three approaches on a T3K (8-chip) system, use `debug_run_full_tt_greedy.py`. It runs the full 47-layer model end-to-end and reports prefill latency, decode tokens/sec, and per-token latency breakdown. Run it three times with different env-var configurations representing each approach.
+If you can only run one test to compare all three approaches on a T3K (8-chip) system, run the model end-to-end three times with different configurations. Runs 1 and 2 use the agentic script (`debug_run_full_tt_greedy.py`); Run 3 uses the **hybrid script** (`run_hybrid_e2e.py`) to exercise the hybrid module path. All three report the same metrics: prefill latency, decode tokens/sec, and per-token latency breakdown.
 
 ### Run 1: tt-symbiote-like Baseline (no agentic optimizations)
 
@@ -609,7 +651,7 @@ python3 models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
 
 ### Run 3: Hybrid (all optimizations combined)
 
-Everything from the agentic run plus fused MoE decode, trace capture/replay (also available in the agentic baseline), fused gate+up, head-parallel kv_b2, Q sharding, BF8 KV cache, and fused MLP+MoE reduce.
+Uses the **hybrid end-to-end script** (`run_hybrid_e2e.py`) which exercises the hybrid's `CompressedKVPECache`, `HybridGlm4MoERuntimeManager`, and `Glm4RuntimeConfig` modules. Enables all agentic optimizations: fused MoE decode, fused KV branch, fused gate+up, DRAM-sharded weights, BF8 KV cache.
 
 ```bash
 GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1 \
@@ -622,12 +664,10 @@ GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1 \
 GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 \
 GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP=1 \
 GLM4_MOE_LITE_KV_CACHE_TT_DTYPE=bf8 \
-python3 models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
   --mesh-cols 8 \
   --prompt "Explain quantum computing in simple terms." \
   --max-new-tokens 64 \
-  --phase both \
-  --enable-trace --trace-mode sampling \
   --kv-cache-dtype bf8
 ```
 
@@ -679,14 +719,14 @@ prefill_s=___  decode_tok_s=___  tok_s=___
 
 - **Run 2 (Agentic Baseline)** enables the key agentic optimizations: fused KV branch for batch-1 attention, sparse MoE, DRAM-sharded weights, and trace capture/replay. This is the current production baseline at peak performance.
 
-- **Run 3 (Hybrid)** layers every additional optimization on top: fused persistent MoE, trace capture/replay (note: also available in Run 2 via `--enable-trace`), fused gate+up for both shared and routed experts, fused MLP+MoE reduce (one all_reduce instead of two), head-parallel kv_b2, Q sharding, BF8 KV cache, and TP. The perf delta vs Run 2 comes from the fused ops and TP improvements, not from tracing (which both have).
+- **Run 3 (Hybrid)** uses `run_hybrid_e2e.py` — the hybrid's own end-to-end script, which exercises the hybrid module path (`CompressedKVPECache`, `HybridGlm4MoERuntimeManager`, `Glm4RuntimeConfig`). It enables all additional optimizations: fused persistent MoE, fused gate+up for both shared and routed experts, fused MLP+MoE reduce (one all_reduce instead of two), head-parallel kv_b2, Q sharding, BF8 KV cache, and TP. Note: trace capture is supported by the agentic script (Run 2) but not yet wired into `run_hybrid_e2e.py` — the perf delta vs Run 2 comes from the fused ops, not tracing.
 
 ### Single-Chip (N150) Variant
 
-For a single-chip system, replace `--mesh-cols 8` with `--mesh-cols 1` and remove TP-specific flags:
+For a single-chip system, use the hybrid script with `--mesh-cols 1` (TP-specific flags are ignored automatically):
 
 ```bash
-# Run 3 adapted for N150
+# Run 3 adapted for N150 (hybrid script)
 GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1 \
 GLM4_MOE_LITE_FUSED_KV_BRANCH=1 \
 GLM4_MOE_LITE_FUSED_MOE=1 \
@@ -694,11 +734,10 @@ GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 \
 GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP=1 \
 GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1 \
 GLM4_MOE_LITE_KV_CACHE_TT_DTYPE=bf8 \
-python3 models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
   --mesh-cols 1 \
   --prompt "Explain quantum computing in simple terms." \
   --max-new-tokens 32 \
-  --phase both \
   --kv-cache-dtype bf8
 ```
 

@@ -209,13 +209,13 @@ python3 models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
   --mesh-cols 8 --prompt "Hello" --max-new-tokens 64 --phase both \
   --enable-trace --trace-mode sampling
 
-# With all hybrid optimizations
+# With all hybrid optimizations (using the hybrid e2e script)
 GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1 \
 GLM4_MOE_LITE_FUSED_KV_BRANCH=1 \
 GLM4_MOE_LITE_FUSED_MOE=1 \
 GLM4_MOE_LITE_TP=1 \
-python3 models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
-  --mesh-cols 8 --prompt "Hello" --max-new-tokens 64 --phase both
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --mesh-cols 8 --prompt "Hello" --max-new-tokens 64 --kv-cache-dtype bf8
 ```
 
 | Behavior | Details |

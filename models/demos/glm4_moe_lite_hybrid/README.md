@@ -19,10 +19,18 @@ glm4_moe_lite_hybrid/
 │   ├── layer_weights.py        # Weight conversion: HF -> TT layouts
 │   ├── decode_trace.py         # Batch-bucketed decode trace state
 │   └── mtp.py                  # Multi-Token Prediction (layer 47)
+├── scripts/
+│   └── run_hybrid_e2e.py       # End-to-end generation script
 ├── runner.py                   # HybridGlm4Runner: top-level orchestrator
 ├── tests/
-│   └── test_hybrid_modules.py  # Unit + integration test suite
-└── README.md
+│   ├── test_hybrid_modules.py  # Unit + integration test suite
+│   ├── benchmark_single_device.py   # N150 per-layer benchmark
+│   └── benchmark_tp_communication.py # T3K TP reduce benchmark
+├── README.md
+├── PERF_TESTING_GUIDE.md       # Full performance testing guide
+├── BENCHMARK_RESULTS.md        # N150 benchmark results
+├── HYBRID_ADVANTAGES.md        # Advantages over both originals
+└── TECHNICAL_DEEP_DIVE.md      # CCL, MoE, and TP technical details
 ```
 
 ## Key Optimizations
@@ -39,8 +47,73 @@ glm4_moe_lite_hybrid/
 | MTP speculative decoding | agentic | ~1.5-2x effective throughput |
 | HF module replacement | tt-symbiote | Drop-in model loading |
 | TTNNModule weight lifecycle | tt-symbiote | Clean weight management |
+| Distributed RMSNorm | tt-symbiote | TP norm efficiency |
+| reduce_scatter_minimal_async | tt-symbiote | ~8% TP linear improvement |
 
-## Usage
+## End-to-End Generation
+
+The primary way to test the hybrid implementation end-to-end:
+
+### Single chip (N150)
+
+```bash
+cd /home/ubuntu/agent/agentic/tt-metal
+
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --mesh-cols 1 \
+  --prompt "Explain quantum computing in simple terms." \
+  --max-new-tokens 32 \
+  --kv-cache-dtype bf8
+```
+
+### T3K (8 chips)
+
+```bash
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --mesh-cols 8 \
+  --prompt "Explain quantum computing in simple terms." \
+  --max-new-tokens 64 \
+  --kv-cache-dtype bf8
+```
+
+### T3K with all optimizations
+
+```bash
+GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1 \
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 \
+GLM4_MOE_LITE_FUSED_MOE=1 \
+GLM4_MOE_LITE_TP=1 \
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --mesh-cols 8 \
+  --prompt "Explain quantum computing in simple terms." \
+  --max-new-tokens 64 \
+  --kv-cache-dtype bf8
+```
+
+### CLI Arguments
+
+| Argument | Default | Description |
+|---|---|---|
+| `--prompt` | "Explain quantum computing..." | Input text |
+| `--max-new-tokens` | 32 | Tokens to generate |
+| `--mesh-cols` | 1 | Number of devices (1=N150, 8=T3K) |
+| `--kv-cache-dtype` | bf8 | KV cache type: `bf8` (2x savings) or `bf16` |
+| `--block-size` | 64 | Paged cache block size |
+| `--device-ids` | auto | Specific device IDs or `auto` |
+
+### Output
+
+The script reports:
+
+```
+  prefill_s=0.847  decode_tok_s=0.0312  tok_s=32.05
+
+  --- Per-token decode latency (ms) ---
+    first token:      45.2 ms
+    subsequent:   mean=  31.2  min=  28.9  max=  38.7
+```
+
+## Programmatic Usage
 
 ### Quick Start
 
@@ -103,12 +176,29 @@ GLM4_MOE_LITE_FUSED_KV_BRANCH=1        # Fused KV branch kernel
 
 ```bash
 # Unit tests (no hardware needed)
-pytest models/demos/glm4_moe_lite_hybrid/tests/ -v
+python3 -m pytest models/demos/glm4_moe_lite_hybrid/tests/test_hybrid_modules.py \
+  -v --noconftest -k "not TTNNIntegration"
 
-# Hardware tests
-TT_ENABLE_HW_TESTS=1 pytest models/demos/glm4_moe_lite_hybrid/tests/ -v
+# Per-layer benchmark (N150, requires hardware + snapshot)
+python3 models/demos/glm4_moe_lite_hybrid/tests/benchmark_single_device.py
 
-# Full model tests (requires snapshot)
-TT_ENABLE_HW_TESTS=1 TT_ENABLE_LARGE_MODEL_TESTS=1 \
-    pytest models/demos/glm4_moe_lite_hybrid/tests/ -v
+# TP communication benchmark (T3K, requires 8 devices)
+python3 models/demos/glm4_moe_lite_hybrid/tests/benchmark_tp_communication.py --mesh-cols 8
+
+# End-to-end generation (N150)
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --mesh-cols 1 --prompt "Hello" --max-new-tokens 16
+
+# End-to-end generation (T3K)
+python3 models/demos/glm4_moe_lite_hybrid/scripts/run_hybrid_e2e.py \
+  --mesh-cols 8 --prompt "Hello" --max-new-tokens 64 --kv-cache-dtype bf8
 ```
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [PERF_TESTING_GUIDE.md](PERF_TESTING_GUIDE.md) | Full test guide: 4 tiers, runtime knobs, 3-way T3K comparison, single-chip vs T3K |
+| [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) | N150 benchmark results with stage breakdowns |
+| [HYBRID_ADVANTAGES.md](HYBRID_ADVANTAGES.md) | Why hybrid is better than both originals |
+| [TECHNICAL_DEEP_DIVE.md](TECHNICAL_DEEP_DIVE.md) | CCL ops, MoE dispatch, TP communication deep dive |
