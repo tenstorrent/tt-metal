@@ -44,6 +44,11 @@ inline void calculate_lgamma_stirling() {
 
         if constexpr (!is_fp32_dest_acc_en) {
             res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, 0));
+        } else {
+            sfpi::vInt exp = sfpi::exexp(in);
+            sfpi::vInt man = sfpi::exman9(in);
+            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_endif;
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
