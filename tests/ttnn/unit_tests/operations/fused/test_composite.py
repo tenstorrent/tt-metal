@@ -667,26 +667,24 @@ def test_composite_program_cache(device):
             torch_weight_right, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        # Create operation descriptors
-        left = descriptors.rms_norm(
-            ttnn_input_left,
-            core_range_set=cores_left,
-            weight=ttnn_weight_left,
-            compute_kernel_config=compute_config,
-        )
-        right = descriptors.rms_norm(
-            ttnn_input_right,
-            core_range_set=cores_right,
-            weight=ttnn_weight_right,
-            compute_kernel_config=compute_config,
-        )
+        with device.cache_entries_counter.measure():
+            # Create operation descriptors
+            left = descriptors.rms_norm(
+                ttnn_input_left,
+                core_range_set=cores_left,
+                weight=ttnn_weight_left,
+                compute_kernel_config=compute_config,
+            )
+            right = descriptors.rms_norm(
+                ttnn_input_right,
+                core_range_set=cores_right,
+                weight=ttnn_weight_right,
+                compute_kernel_config=compute_config,
+            )
 
-        # Launch composite operation
-        outputs = composite.launch([left, right])
-        return outputs
-
-    # Get initial cache count
-    initial_cache_entries = device.num_program_cache_entries()
+            # Launch composite operation
+            outputs = composite.launch([left, right])
+            return outputs
 
     # Run the same composite operation 3 times
     for _ in range(3):
@@ -697,12 +695,9 @@ def test_composite_program_cache(device):
 
     # Check that only 1 new program was cached (the merged program)
     # Each iteration should reuse the same cached merged program
-    final_cache_entries = device.num_program_cache_entries()
-    new_entries = final_cache_entries - initial_cache_entries
-
-    assert new_entries == 1, (
+    assert device.cache_entries_counter.total == 1, (
         f"Expected 1 new program cache entry for the merged program, "
-        f"but got {new_entries} entries (initial: {initial_cache_entries}, final: {final_cache_entries})"
+        f"but got {device.cache_entries_counter.total} entries"
     )
 
 
