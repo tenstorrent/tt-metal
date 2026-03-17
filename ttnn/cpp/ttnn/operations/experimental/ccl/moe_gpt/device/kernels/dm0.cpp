@@ -87,20 +87,13 @@ void kernel_main() {
     constexpr uint32_t w0_w1_txns_per_block = moe_gpt_ring::W0_W1_TXNS_PER_BLOCK;           // 2
     constexpr uint32_t w0_w1_tiles_per_txn = moe_gpt_ring::W0_W1_TILES_PER_TXN;             // 10
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 10 * 2 = 20
-    // 4 * (90 / 10) / 2 = 18
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile =
-        4 * (num_w0_w1_tiles_h / w0_w1_tiles_per_txn) / w0_w1_txns_per_block;  // 18
-    // 18 * 8 / 2 = 72
-    constexpr uint32_t w0_w1_blocks_per_expert =
-        w0_w1_blocks_per_two_elt_tile * moe_gpt_ring::IN2_TILES_PER_STEP_A / 2;  // 72
+    constexpr uint32_t w0_w1_blocks_per_expert = moe_gpt_ring::W0_B0_W1_B1_BLOCKS_PER_EXPERT;
 
     // W2 reading constants
     constexpr uint32_t w2_txns_per_block = moe_gpt_ring::W2_TXNS_PER_BLOCK;                     // 2
     constexpr uint32_t w2_tiles_per_txn = moe_gpt_ring::W2_TILES_PER_TXN;                       // 10
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20
-    constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 90 / 10 = 9
-    constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 9 / 2 = 18
-    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_B2_BLOCKS_PER_EXPERT;            // 36
+    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_B2_BLOCKS_PER_EXPERT;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants

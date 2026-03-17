@@ -93,19 +93,19 @@ def fused_decode_forward(
     # Convert TILE -> ROW_MAJOR and reshape [M, K] -> [M, 1, 1, K] on-device.
     scores_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
     tt_scores_copy = ttnn.reshape(scores_rm, (tokens_per_device, 1, 1, K_sel))
-    ttnn.deallocate(scores_rm)
+    # Note: do NOT deallocate scores_rm - reshape may alias it (same as indices_rm fix)
 
     # Reshape indices for dispatch: [M, K] TILE -> [M, 1, 1, K] ROW_MAJOR DRAM
     indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices)
     topk_expert_indices = ttnn.reshape(indices_rm, (tokens_per_device, 1, 1, K_sel))
-    ttnn.deallocate(indices_rm)
+    # Note: do NOT deallocate indices_rm - reshape may alias it
 
     # Reshape scores for dispatch: same transformation
     scores_dispatch_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_scores)
     topk_expert_scores = ttnn.reshape(scores_dispatch_rm, (tokens_per_device, 1, 1, K_sel))
-    ttnn.deallocate(scores_dispatch_rm)
+    # Note: do NOT deallocate scores_dispatch_rm - reshape may alias it
 
     # ------------------------------------------------------------------
     # Step 1: all_to_all_dispatch_metadata
