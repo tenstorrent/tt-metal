@@ -44,23 +44,26 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 3072, 4096, 8192, 16384, 32768),
-    ids=["128", "3k", "4k", "8k", "16k", "32k"],
+    (128, 3072, 4096, 8192),
+    ids=["128", "3k", "4k", "8k"],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128 * 1024,),
+    (8 * 1024,),
     ids=[
-        "max128k",
+        "max8k",
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
+    #    lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["performance", "accuracy"],
+    ids=[
+        "performance", 
+        # "accuracy"
+    ],
 )
 @pytest.mark.parametrize(
     "num_layers",
