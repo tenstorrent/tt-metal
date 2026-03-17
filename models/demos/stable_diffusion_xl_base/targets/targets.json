@@ -33,11 +33,10 @@
       "target": 3.125
     },
     "accuracy": {
-      "_TODO": "Determine proper ranges for 512x512 resolution",
-      "fid_valid_range_full_dataset": [10.0, 50.0],
-      "clip_valid_range_full_dataset": [20.0, 40.0],
-      "clip_valid_range_100": [20.0, 40.0],
-      "fid_valid_range_100": [100.0, 300.0]
+      "fid_valid_range_full_dataset": [49, 54],
+      "clip_valid_range_full_dataset": [29.38, 31],
+      "clip_valid_range_100": [28.5, 30.8],
+      "fid_valid_range_100": [195, 233]
     },
     "clip_score_thresholds": {
       "error": 19,
@@ -78,11 +77,10 @@
       "target": 3.125
     },
     "accuracy": {
-      "_TODO": "Determine proper ranges for 512x512 resolution",
-      "fid_valid_range_full_dataset": [10.0, 50.0],
-      "clip_valid_range_full_dataset": [20.0, 40.0],
-      "clip_valid_range_100": [20.0, 40.0],
-      "fid_valid_range_100": [100.0, 300.0]
+      "fid_valid_range_full_dataset": [40, 43],
+      "clip_valid_range_full_dataset": [30, 30.5],
+      "clip_valid_range_100": [29.8, 31.4],
+      "fid_valid_range_100": [190, 199]
     },
     "clip_score_thresholds": {
       "error": 19.5,
@@ -117,9 +115,8 @@
       "target": 3.125
     },
     "accuracy": {
-      "_TODO": "Determine proper ranges for 512x512 resolution",
-      "clip_valid_range_full_dataset": [0.05, 0.2],
-      "clip_valid_range_100": [0.05, 0.2]
+      "clip_valid_range_full_dataset": [0.112, 0.122],
+      "clip_valid_range_100": [0.12, 0.14]
     }
   },
   "sdxl-base-refiner-1024": {
@@ -156,11 +153,10 @@
       "target": 3.125
     },
     "accuracy": {
-      "_TODO": "Determine proper ranges for 512x512 resolution",
-      "fid_valid_range_full_dataset": [10.0, 50.0],
-      "clip_valid_range_full_dataset": [20.0, 40.0],
-      "clip_valid_range_100": [20.0, 40.0],
-      "fid_valid_range_100": [100.0, 300.0]
+      "fid_valid_range_full_dataset": [46, 52],
+      "clip_valid_range_full_dataset": [29.2, 30],
+      "clip_valid_range_100": [28.7, 30.5],
+      "fid_valid_range_100": [195, 226]
     },
     "clip_score_thresholds": {
       "error": 19.5,
@@ -201,11 +197,10 @@
       "target": 3.125
     },
     "accuracy": {
-      "_TODO": "Determine proper ranges for 512x512 resolution",
-      "fid_valid_range_full_dataset": [50.0, 200.0],
-      "clip_valid_range_full_dataset": [25.0, 45.0],
-      "clip_valid_range_100": [25.0, 45.0],
-      "fid_valid_range_100": [200.0, 400.0]
+      "fid_valid_range_full_dataset": [155, 165],
+      "clip_valid_range_full_dataset": [32.8, 33.3],
+      "clip_valid_range_100": [33, 34.5],
+      "fid_valid_range_100": [285, 296]
     },
     "clip_score_thresholds": {
       "error": 20,
