@@ -40,6 +40,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 #include <type_traits>
 
 using namespace tt::tt_fabric;
@@ -47,6 +48,18 @@ using namespace tt::tt_fabric;
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
+
+// ============================================================================
+// Per-VC runtime array type aliases
+// These tuple types split flat sender-channel arrays into per-VC scoped arrays.
+// ============================================================================
+using SenderFreeSlotsTuple =
+    std::tuple<std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_VC0>, std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_VC1>>;
+using SenderConnectionEstablishedTuple =
+    std::tuple<std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0>, std::array<bool, MAX_NUM_SENDER_CHANNELS_VC1>>;
+using SenderFromReceiverCreditsTuple = std::tuple<
+    std::array<SenderChannelFromReceiverCredits, MAX_NUM_SENDER_CHANNELS_VC0>,
+    std::array<SenderChannelFromReceiverCredits, MAX_NUM_SENDER_CHANNELS_VC1>>;
 
 /*
 
@@ -1382,15 +1395,38 @@ FORCE_INLINE void establish_edm_connection(
     local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
 
-bool any_sender_channels_active(
-    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+template <
+    size_t VC,
+    size_t NUM_VC_SENDER_CHANNELS,
+    const std::array<size_t, NUM_VC_SENDER_CHANNELS>& VC_SENDER_NUM_BUFFERS>
+bool any_sender_channels_active_vc(
+    const std::array<uint32_t, NUM_VC_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+    for (size_t i = 0; i < NUM_VC_SENDER_CHANNELS; i++) {
         if (get_ptr_val(local_sender_channel_free_slots_stream_ids[i]) !=
-            static_cast<int32_t>(SENDER_NUM_BUFFERS_ARRAY[i])) {
+            static_cast<int32_t>(VC_SENDER_NUM_BUFFERS[i])) {
             return true;
         }
     }
     return false;
+}
+
+// Dispatch across all VCs using a fold expression over index_sequence.
+bool any_sender_channels_active(const SenderFreeSlotsTuple& free_slots_tuple) {
+    return [&]<size_t... VCs>(std::index_sequence<VCs...>) {
+        return (... || [&]<size_t VC>() -> bool {
+            if constexpr (VC == 0) {
+                return any_sender_channels_active_vc<
+                    0,
+                    MAX_NUM_SENDER_CHANNELS_VC0,
+                    tt::tt_fabric::SENDER_NUM_BUFFERS_ARRAY_VC0>(std::get<0>(free_slots_tuple));
+            } else {
+                return any_sender_channels_active_vc<
+                    1,
+                    MAX_NUM_SENDER_CHANNELS_VC1,
+                    tt::tt_fabric::SENDER_NUM_BUFFERS_ARRAY_VC1>(std::get<1>(free_slots_tuple));
+            }
+        }.template operator()<VCs>());
+    }(std::make_index_sequence<MAX_NUM_VCS>{});
 }
 
 /*
@@ -1486,7 +1522,7 @@ void run_coordinated_context_switch_to_base_firmware(
 }
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_telemetry(
-    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
+    const SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids_ordered,
     bool tx_progress,
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
@@ -1512,7 +1548,7 @@ FORCE_INLINE void update_telemetry(
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX) {
         bool receiver_idle = false;
         if (!rx_progress) {
-            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>() == 0);
         }
         if (rx_progress || receiver_idle) {
             volatile RiscTimestampV2* rx_heartbeat_addr =
@@ -1722,6 +1758,9 @@ FORCE_INLINE
     return progress;
 };
 
+// sender_channel_index is now a VC-local index (0-based within VC).
+// VC_RECEIVER_CHANNEL doubles as the VC index (0 = VC0, 1 = VC1).
+// The global sender channel index is vc_sender_channel_start_per_vc[VC_RECEIVER_CHANNEL] + sender_channel_index.
 template <
     uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
@@ -1730,7 +1769,7 @@ template <
     typename EdmChannelWorkerIFs,
     typename RemoteEthReceiverChannels,
     typename ReceiverPointersT,
-    size_t NUM_SENDER_CHANNELS,
+    size_t NUM_VC_SENDER_CHANNELS,
     typename LocalTelemetryT>
 #if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
@@ -1741,23 +1780,26 @@ FORCE_INLINE
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
         ReceiverPointersT& outbound_to_receiver_channel_pointers,
         RemoteEthReceiverChannels& remote_receiver_channels,
-        std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
-        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
-        std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
+        std::array<bool, NUM_VC_SENDER_CHANNELS>& channel_connection_established,
+        std::array<uint32_t, NUM_VC_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
+        std::array<SenderChannelFromReceiverCredits, NUM_VC_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
-    if constexpr (is_sender_channel_serviced[sender_channel_index]) {
+    // Compute global sender channel index from VC-local index
+    constexpr uint8_t global_sender_channel_index =
+        static_cast<uint8_t>(vc_sender_channel_start_per_vc[VC_RECEIVER_CHANNEL]) + sender_channel_index;
+    if constexpr (is_sender_channel_serviced[global_sender_channel_index]) {
         // the cache is invalidated here because the channel will read some
         // L1 locations to see if it can make progress
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
         return run_sender_channel_step_impl<
-            sender_channel_index,
+            global_sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
-            sender_ch_live_check_skip[sender_channel_index],
+            sender_ch_live_check_skip[global_sender_channel_index],
             enable_first_level_ack>(
-            local_sender_channels.template get<sender_channel_index>(),
-            local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
+            local_sender_channels.template get<global_sender_channel_index>(),
+            local_sender_channel_worker_interfaces.template get<global_sender_channel_index>(),
             outbound_to_receiver_channel_pointers,
             remote_receiver_channels.template get<VC_RECEIVER_CHANNEL>(),
             channel_connection_established[sender_channel_index],
@@ -2133,7 +2175,6 @@ template <
     typename DownstreamSenderVC0T,
     typename DownstreamSenderVC1T,
     typename LocalRelayInterfaceT,
-    size_t NUM_SENDER_CHANNELS,
     typename EthSenderChannels,
     typename EthReceiverChannels,
     typename RemoteEthReceiverChannels,
@@ -2158,7 +2199,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
 #endif  // FABRIC_2D_VC1_ACTIVE
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+    SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
@@ -2185,7 +2226,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     auto receiver_channel_pointers = ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make();
     // Workaround the perf regression in RingAsLinear test.
-    auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
+    auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
     receiver_channel_pointers_ch0.reset();
 
 #if defined(FABRIC_2D_VC1_ACTIVE)
@@ -2193,7 +2234,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto outbound_to_receiver_channel_pointer_ch1 =
         outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
 
-    auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
+    auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
     receiver_channel_pointers_ch1.reset();
 #endif  // FABRIC_2D_VC1_ACTIVE
 
@@ -2201,8 +2242,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
     }
 
-    std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
-        initialize_array<NUM_SENDER_CHANNELS, bool, false>();
+    SenderConnectionEstablishedTuple channel_connection_established{
+        initialize_array<MAX_NUM_SENDER_CHANNELS_VC0, bool, false>(),
+        initialize_array<MAX_NUM_SENDER_CHANNELS_VC1, bool, false>()};
 
     PerfTelemetryRecorder inner_loop_perf_telemetry_collector = build_perf_telemetry_recorder<perf_telemetry_mode>();
     auto local_perf_telemetry_buffer =
@@ -2210,8 +2252,20 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     auto receiver_channel_response_credit_senders =
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
-    auto sender_channel_from_receiver_credits =
-        init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
+    // Per-VC sender channel from receiver credits: each VC's array uses global channel indices.
+    // VC0 channels use global indices 0..MAX_NUM_SENDER_CHANNELS_VC0-1.
+    // VC1 channels use global indices vc_sender_channel_start_per_vc[1]..NUM_SENDER_CHANNELS-1.
+    auto sender_channel_from_receiver_credits = [&]() -> SenderFromReceiverCreditsTuple {
+        auto vc0_array = init_sender_channel_from_receiver_credits_flow_controllers<MAX_NUM_SENDER_CHANNELS_VC0>();
+        auto vc1_array = [&]() {
+            std::array<SenderChannelFromReceiverCredits, MAX_NUM_SENDER_CHANNELS_VC1> arr;
+            for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS_VC1; i++) {
+                new (&arr[i]) SenderChannelFromReceiverCredits(vc_sender_channel_start_per_vc[1] + i);
+            }
+            return arr;
+        }();
+        return SenderFromReceiverCreditsTuple{std::move(vc0_array), std::move(vc1_array)};
+    }();
 
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
@@ -2233,7 +2287,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             uint32_t tx_progress = 0;
             uint32_t rx_progress = 0;
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 open_perf_recording_window(inner_loop_perf_telemetry_collector);
             }
 
@@ -2241,22 +2295,22 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
+            if constexpr (super_speedy_mode && is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 auto check_connection_status =
-                    !channel_connection_established[0] ||
+                    !std::get<0>(channel_connection_established)[0] ||
                     local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
                 if (check_connection_status) {
                     check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
                         local_sender_channel_worker_interfaces.template get<0>(),
-                        channel_connection_established[0],
-                        local_sender_channel_free_slots_stream_ids[0]);
+                        std::get<0>(channel_connection_established)[0],
+                        std::get<0>(local_sender_channel_free_slots_stream_ids)[0]);
                 }
             }
             for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
                 if constexpr (super_speedy_mode) {
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-                    if constexpr (is_sender_channel_serviced[0]) {
+                    if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
@@ -2265,46 +2319,46 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_sender_channel_worker_interfaces.template get<0>(),
                             outbound_to_receiver_channel_pointer_ch0,
                             remote_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
-                            channel_connection_established[0],
-                            local_sender_channel_free_slots_stream_ids[0],
-                            sender_channel_from_receiver_credits[0],
+                            std::get<0>(channel_connection_established)[0],
+                            std::get<0>(local_sender_channel_free_slots_stream_ids)[0],
+                            std::get<0>(sender_channel_from_receiver_credits)[0],
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry,
                             local_speedy_sender_state);
                     }
 
-                    if constexpr (is_receiver_channel_serviced[0]) {
+                    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                         rx_progress |= run_receiver_channel_step_speedy<
-                            0,
-                            to_receiver_packets_sent_streams[0],
+                            VC0_RECEIVER_CHANNEL,
+                            to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                             ENABLE_FIRST_LEVEL_ACK_VC0,
                             VC1_DOWNSTREAM_EDM_SIZE,
                             decltype(receiver_channel_0_trid_tracker)>(
-                            local_receiver_channels.template get<0>(),
+                            local_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                             downstream_edm_noc_interfaces_vc1,
                             local_relay_interface,
                             receiver_channel_pointers_ch0,
                             receiver_channel_0_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[0],
+                            receiver_channel_response_credit_senders[VC0_RECEIVER_CHANNEL],
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
 #else
                         rx_progress |= run_receiver_channel_step_speedy<
-                            0,
-                            to_receiver_packets_sent_streams[0],
+                            VC0_RECEIVER_CHANNEL,
+                            to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                             ENABLE_FIRST_LEVEL_ACK_VC0,
                             VC0_DOWNSTREAM_EDM_SIZE,
                             decltype(receiver_channel_0_trid_tracker)>(
-                            local_receiver_channels.template get<0>(),
+                            local_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                             downstream_edm_noc_interfaces_vc0,
                             local_relay_interface,
                             receiver_channel_pointers_ch0,
                             receiver_channel_0_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[0],
+                            receiver_channel_response_credit_senders[VC0_RECEIVER_CHANNEL],
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
@@ -2322,16 +2376,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_sender_channel_worker_interfaces,
                         outbound_to_receiver_channel_pointer_ch0,
                         remote_receiver_channels,
-                        channel_connection_established,
-                        local_sender_channel_free_slots_stream_ids,
-                        sender_channel_from_receiver_credits,
+                        std::get<0>(channel_connection_established),
+                        std::get<0>(local_sender_channel_free_slots_stream_ids),
+                        std::get<0>(sender_channel_from_receiver_credits),
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                     // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
                     // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
                     rx_progress |= run_receiver_channel_step<
-                        0,
+                        VC0_RECEIVER_CHANNEL,
                         ENABLE_FIRST_LEVEL_ACK_VC0,
                         VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
                         DownstreamSenderVC1T,
@@ -2347,7 +2401,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_fabric_telemetry);
 #else
                     rx_progress |= run_receiver_channel_step<
-                        0,
+                        VC0_RECEIVER_CHANNEL,
                         ENABLE_FIRST_LEVEL_ACK_VC0,
                         VC0_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC0 downstream interfaces
                         DownstreamSenderVC0T,
@@ -2367,9 +2421,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_sender_channel_worker_interfaces,
                         outbound_to_receiver_channel_pointer_ch0,
                         remote_receiver_channels,
-                        channel_connection_established,
-                        local_sender_channel_free_slots_stream_ids,
-                        sender_channel_from_receiver_credits,
+                        std::get<0>(channel_connection_established),
+                        std::get<0>(local_sender_channel_free_slots_stream_ids),
+                        std::get<0>(sender_channel_from_receiver_credits),
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
                     if constexpr (is_2d_fabric) {
@@ -2378,9 +2432,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_sender_channel_worker_interfaces,
                             outbound_to_receiver_channel_pointer_ch0,
                             remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
+                            std::get<0>(channel_connection_established),
+                            std::get<0>(local_sender_channel_free_slots_stream_ids),
+                            std::get<0>(sender_channel_from_receiver_credits),
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry);
                         tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
@@ -2388,9 +2442,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_sender_channel_worker_interfaces,
                             outbound_to_receiver_channel_pointer_ch0,
                             remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
+                            std::get<0>(channel_connection_established),
+                            std::get<0>(local_sender_channel_free_slots_stream_ids),
+                            std::get<0>(sender_channel_from_receiver_credits),
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry);
                         if constexpr (ACTUAL_VC0_SENDER_CHANNELS > 4) {
@@ -2399,9 +2453,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                 local_sender_channel_worker_interfaces,
                                 outbound_to_receiver_channel_pointer_ch0,
                                 remote_receiver_channels,
-                                channel_connection_established,
-                                local_sender_channel_free_slots_stream_ids,
-                                sender_channel_from_receiver_credits,
+                                std::get<0>(channel_connection_established),
+                                std::get<0>(local_sender_channel_free_slots_stream_ids),
+                                std::get<0>(sender_channel_from_receiver_credits),
                                 inner_loop_perf_telemetry_collector,
                                 local_fabric_telemetry);
                         }
@@ -2409,62 +2463,50 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 }  // end of if constexpr (super_speedy_mode) else block
                 if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D_VC1_SERVICED)
-                    tx_progress |= run_sender_channel_step<
-                        VC1_RECEIVER_CHANNEL,
-                        ACTUAL_VC0_SENDER_CHANNELS,
-                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                    tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC1>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
                         outbound_to_receiver_channel_pointer_ch1,
                         remote_receiver_channels,
-                        channel_connection_established,
-                        local_sender_channel_free_slots_stream_ids,
-                        sender_channel_from_receiver_credits,
+                        std::get<1>(channel_connection_established),
+                        std::get<1>(local_sender_channel_free_slots_stream_ids),
+                        std::get<1>(sender_channel_from_receiver_credits),
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
-                    tx_progress |= run_sender_channel_step<
-                        VC1_RECEIVER_CHANNEL,
-                        ACTUAL_VC0_SENDER_CHANNELS + 1,
-                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                    tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC1>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
                         outbound_to_receiver_channel_pointer_ch1,
                         remote_receiver_channels,
-                        channel_connection_established,
-                        local_sender_channel_free_slots_stream_ids,
-                        sender_channel_from_receiver_credits,
+                        std::get<1>(channel_connection_established),
+                        std::get<1>(local_sender_channel_free_slots_stream_ids),
+                        std::get<1>(sender_channel_from_receiver_credits),
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
-                    tx_progress |= run_sender_channel_step<
-                        VC1_RECEIVER_CHANNEL,
-                        ACTUAL_VC0_SENDER_CHANNELS + 2,
-                        ENABLE_FIRST_LEVEL_ACK_VC1>(
+                    tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC1>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
                         outbound_to_receiver_channel_pointer_ch1,
                         remote_receiver_channels,
-                        channel_connection_established,
-                        local_sender_channel_free_slots_stream_ids,
-                        sender_channel_from_receiver_credits,
+                        std::get<1>(channel_connection_established),
+                        std::get<1>(local_sender_channel_free_slots_stream_ids),
+                        std::get<1>(sender_channel_from_receiver_credits),
                         inner_loop_perf_telemetry_collector,
                         local_fabric_telemetry);
                     if constexpr (ACTUAL_VC1_SENDER_CHANNELS > 3) {
-                        tx_progress |= run_sender_channel_step<
-                            VC1_RECEIVER_CHANNEL,
-                            ACTUAL_VC0_SENDER_CHANNELS + 3,
-                            ENABLE_FIRST_LEVEL_ACK_VC1>(
+                        tx_progress |= run_sender_channel_step<VC1_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC1>(
                             local_sender_channels,
                             local_sender_channel_worker_interfaces,
                             outbound_to_receiver_channel_pointer_ch1,
                             remote_receiver_channels,
-                            channel_connection_established,
-                            local_sender_channel_free_slots_stream_ids,
-                            sender_channel_from_receiver_credits,
+                            std::get<1>(channel_connection_established),
+                            std::get<1>(local_sender_channel_free_slots_stream_ids),
+                            std::get<1>(sender_channel_from_receiver_credits),
                             inner_loop_perf_telemetry_collector,
                             local_fabric_telemetry);
                     }
                     rx_progress |= run_receiver_channel_step<
-                        1,
+                        VC1_RECEIVER_CHANNEL,
                         ENABLE_FIRST_LEVEL_ACK_VC1,
                         VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
                         DownstreamSenderVC1T,
@@ -2518,7 +2560,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 close_perf_recording_window(inner_loop_perf_telemetry_collector);
                 if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
                     if (captured_an_event(inner_loop_perf_telemetry_collector) ||
@@ -2573,14 +2615,23 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     }
 }
 
-template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
+template <typename EdmChannelWorkerIFs>
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
 #endif
     wait_for_static_connection_to_ready(
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+        SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids) {
+    // Look up the stream ID for a global sender channel index from the per-VC tuple.
+    auto get_free_slots_stream_id = [&](size_t global_idx) -> uint32_t {
+        if (global_idx < MAX_NUM_SENDER_CHANNELS_VC0) {
+            return std::get<0>(local_sender_channel_free_slots_stream_ids)[global_idx];
+        } else {
+            return std::get<1>(
+                local_sender_channel_free_slots_stream_ids)[global_idx - vc_sender_channel_start_per_vc[1]];
+        }
+    };
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
@@ -2588,7 +2639,7 @@ void
         while (!connect_is_requested(*interface.connection_live_semaphore)) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
-        establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        establish_edm_connection(interface, get_free_slots_stream_id(sender_channel_idx));
     };
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(
@@ -2685,13 +2736,20 @@ void
 #endif
 }
 
-// copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
-template <size_t NUM_SENDER_CHANNELS>
+// copy the sender_channel_free_slots_stream_ids (in L1) to per-VC tuple for performance.
+// Each VC's array uses VC-local indices; the global stream ID is read using the VC start offset.
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
-    std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        local_sender_channel_free_slots_stream_ids[i] = sender_channel_free_slots_stream_ids[i];
+    SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids) {
+    constexpr size_t vc0_start = vc_sender_channel_start_per_vc[0];
+    constexpr size_t vc1_start = vc_sender_channel_start_per_vc[1];
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS_VC0; i++) {
+        std::get<0>(local_sender_channel_free_slots_stream_ids)[i] =
+            sender_channel_free_slots_stream_ids[vc0_start + i];
+    }
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS_VC1; i++) {
+        std::get<1>(local_sender_channel_free_slots_stream_ids)[i] =
+            sender_channel_free_slots_stream_ids[vc1_start + i];
     }
 }
 
@@ -2738,11 +2796,11 @@ FORCE_INLINE void teardown(
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-    if constexpr (is_receiver_channel_serviced[0]) {
+    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
         receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1]) {
+    if constexpr (is_receiver_channel_serviced[VC1_RECEIVER_CHANNEL]) {
         receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
     }
 #endif
@@ -2792,10 +2850,17 @@ void initialize_state_for_txq1_active_mode() {
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
 }
 void initialize_state_for_txq1_active_mode_sender_side() {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
-        reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
-    }
+    [&]<size_t... VCs>(std::index_sequence<VCs...>) {
+        (([&]<size_t VC>() {
+             constexpr size_t start = vc_sender_channel_start_per_vc[VC];
+             constexpr size_t count = MAX_NUM_SENDER_CHANNELS_PER_VC[VC];
+             for (size_t i = 0; i < count; i++) {
+                 reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[start + i] = 0;
+                 reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[start + i] = 0;
+             }
+         }.template operator()<VCs>()),
+         ...);
+    }(std::make_index_sequence<MAX_NUM_VCS>{});
 }
 
 // Initialize fabric telemetry structure in L1
@@ -2863,11 +2928,11 @@ void kernel_main() {
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
+        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (is_sender_channel_serviced[0]) {
+        if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
@@ -2881,7 +2946,7 @@ void kernel_main() {
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
-    init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+    init_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>(0);
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
@@ -2901,7 +2966,7 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+        init_ptr_val<to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL]>(0);
         init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
 
@@ -3068,13 +3133,9 @@ void kernel_main() {
     //////////////////////////////
     //////////////////////////////
 
-    // Hack for mux mode until all remaining VC1 logic is removed from fabric
-    // Needed so `downstream_edm_noc_interfaces_vc0` can be initialized properly below
-    // Issue #33360 TODO: Create a new array for downstream receiver stream IDs
-    // so we can remove this hack.
-    std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids;
-    // std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS>
-    // local_sender_channel_free_slots_stream_ids;
+    // Per-VC tuple holding sender channel free-slots stream IDs, split by VC.
+    // Replaces the flat std::array<uint32_t, NUM_SENDER_CHANNELS> for per-VC scoped access.
+    SenderFreeSlotsTuple local_sender_channel_free_slots_stream_ids;
 
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
@@ -3106,11 +3167,12 @@ void kernel_main() {
                 local_sender_channel_7_connection_info_addr,
                 local_sender_channel_8_connection_info_addr});
 
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
-            local_sender_connection_info_addresses[i]);
-        connection_worker_info_ptr->edm_read_counter = 0;
-    }
+    [&]<size_t... Is>(std::index_sequence<Is...>) {
+        ((reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+              local_sender_connection_info_addresses[Is])
+              ->edm_read_counter = 0),
+         ...);
+    }(std::make_index_sequence<NUM_SENDER_CHANNELS>{});
     // create the sender channel worker interfaces with input array of number of buffers
     auto local_sender_channel_worker_interfaces =
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
@@ -3197,8 +3259,8 @@ void kernel_main() {
                         // This is our local stream register for the copy of the downstream router's
                         // free slots
                         receiver_channel_free_slots_stream_id,
-                        receiver_channel_forwarding_data_cmd_buf_ids[0],
-                        receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+                        receiver_channel_forwarding_data_cmd_buf_ids[VC0_RECEIVER_CHANNEL],
+                        receiver_channel_forwarding_sync_cmd_buf_ids[VC0_RECEIVER_CHANNEL]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[compact_index]
@@ -3246,8 +3308,8 @@ void kernel_main() {
                         downstream_vc1_noc_interface_buffer_index_local_addr,
                         get_vc1_downstream_sender_channel_free_slots_stream_id(compact_index),
                         receiver_channel_free_slots_stream_id,
-                        receiver_channel_forwarding_data_cmd_buf_ids[1],
-                        receiver_channel_forwarding_sync_cmd_buf_ids[1]);
+                        receiver_channel_forwarding_data_cmd_buf_ids[VC1_RECEIVER_CHANNEL],
+                        receiver_channel_forwarding_sync_cmd_buf_ids[VC1_RECEIVER_CHANNEL]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc1[compact_index]
@@ -3292,8 +3354,8 @@ void kernel_main() {
                 StreamId{local_tensix_relay_free_slots_stream_id},
                 // Local stream: our copy of relay's free slots - dedicated stream ID for relay
                 StreamId{tensix_relay_local_free_slots_stream_id},
-                receiver_channel_forwarding_data_cmd_buf_ids[0],
-                receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+                receiver_channel_forwarding_data_cmd_buf_ids[VC0_RECEIVER_CHANNEL],
+                receiver_channel_forwarding_sync_cmd_buf_ids[VC0_RECEIVER_CHANNEL]);
 
             // Setup NOC command buffer for relay interface
             if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
@@ -3478,7 +3540,7 @@ void kernel_main() {
         }
     } else {
         // We can check just the first index because all receiver channels are serviced by the same core
-        if constexpr (is_receiver_channel_serviced[0]) {
+        if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
             if (has_downstream_edm_vc0_buffer_connection) {
                 downstream_edm_noc_interfaces_vc0[0]
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
@@ -3495,7 +3557,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
 #endif
-    if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
@@ -3516,7 +3578,7 @@ void kernel_main() {
         }
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (is_receiver_channel_serviced[VC1_RECEIVER_CHANNEL] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the

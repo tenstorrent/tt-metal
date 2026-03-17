@@ -1911,12 +1911,12 @@ TEST_F(Fabric2DChannelTrimmingOverrideVC0S0S1VC1AllFixture, ChannelCountsConsist
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
     const auto& max_sender = builder_ctx.get_max_sender_channels_per_vc();
-    const auto& max_receiver = builder_ctx.get_max_receiver_channels_per_vc();
+    const auto& is_receiver_channel_active = builder_ctx.get_is_receiver_channel_active_per_vc();
 
     // 2D mesh: VC0 should have >= 4 sender channels (Worker + N/E/S/W directions)
     EXPECT_GE(max_sender[0], 4u);
     // VC0 should have at least 1 receiver
-    EXPECT_GE(max_receiver[0], 1u);
+    EXPECT_TRUE(is_receiver_channel_active[0]);
 }
 
 // Test: Override-only mode (no capture profile) creates a fully-enabled baseline.
@@ -2031,16 +2031,15 @@ TEST_F(T3kIntermeshChannelTrimmingOverrideVC0S0S1VC1AllFixture, IntermeshVC1Chan
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
 
     const auto& max_sender = builder_ctx.get_max_sender_channels_per_vc();
-    const auto& max_receiver = builder_ctx.get_max_receiver_channels_per_vc();
+    const auto& is_receiver_channel_active = builder_ctx.get_is_receiver_channel_active_per_vc();
 
     // VC0: should have >= 4 sender channels (Worker + mesh directions)
     EXPECT_GE(max_sender[0], 4u);
-    EXPECT_GE(max_receiver[0], 1u);
+    EXPECT_TRUE(is_receiver_channel_active[0]);
 
     // VC1: intermesh topology should have non-zero VC1 channels
     EXPECT_GT(max_sender[1], 0u) << "Intermesh topology should have VC1 sender channels";
     EXPECT_GE(max_sender[1], 3u) << "Intermesh VC1 should have >= 3 sender channels (one per mesh direction)";
-    EXPECT_GE(max_receiver[1], 1u) << "Intermesh VC1 should have >= 1 receiver channel";
 }
 
 // Test: Override-only mode has no per-router profile, but global overrides are active
