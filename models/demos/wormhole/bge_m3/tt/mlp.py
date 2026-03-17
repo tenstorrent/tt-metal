@@ -111,7 +111,7 @@ class BgeM3MLP(LightweightModule):
         activated = ttnn.gelu(
             intermediate,
             memory_config=self.config.activation_memcfg,
-            fast_and_approximate_mode=True,
+            fast_and_approximate_mode=False,
         )
         ttnn.deallocate(intermediate)
 
