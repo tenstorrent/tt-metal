@@ -136,7 +136,6 @@ jobs:
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
-      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
@@ -281,25 +280,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true
       run-metal-cpp-unit-tests: false
-
-  # A quick check that parses the models charts in README.md and models/README.md
-  # and ensures that models attributes are in sync.
-  model-charts-sync:
-    needs: [find-changed-files]
-    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-    - name: Run model charts sync Python script
-      run: |
-        # Run script that compares the models chart in README.md
-        # with the models chart in models/README.md
-        python .github/scripts/utils/model-charts-sync.py
 
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
   # enough to run during PRs without bringing infra to a grinding halt.

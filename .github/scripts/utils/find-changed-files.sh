@@ -69,12 +69,6 @@ while IFS= read -r FILE; do
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        docs/**|**/*.rst|**/*.md)
-            DOCS_CHANGED=true
-            if [[ "$FILE" == "README.md" || "$FILE" == "models/README.md" ]]; then
-               MODEL_CHARTS_CHANGED=true
-            fi
-            ;;
         models/**)
             MODELS_CHANGED=true
             ANY_CODE_CHANGED=true
@@ -130,7 +124,6 @@ declare -A changes=(
     [submodule-changed]=$SUBMODULE_CHANGED
     [any-code-changed]=$ANY_CODE_CHANGED
     [docs-changed]=$DOCS_CHANGED
-    [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED
     [build-workflows-changed]=$BUILD_WORKFLOWS_CHANGED
 )
