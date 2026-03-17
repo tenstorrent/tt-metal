@@ -83,7 +83,7 @@ jobs:
 
           # Stable set for Blackhole (CIv2)
           STABLE_BH_CIv2='[
-            {"model":"stable_diffusion_xl_base","timeout":75}
+            {"model":"stable_diffusion_xl_base","timeout":120}
           ]'
 
           # Unstable set (explicit commands)
