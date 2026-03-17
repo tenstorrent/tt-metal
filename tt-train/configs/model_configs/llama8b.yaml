@@ -5,7 +5,7 @@ transformer_config:
   embedding_dim: 4096
   dropout_prob: 0.0
   num_blocks: 32
-  vocab_size: 32000
+  vocab_size: 128000
   max_sequence_length: 2048
   runner_type: memory_efficient
-  theta: 10000.0
+  theta: 500000.0

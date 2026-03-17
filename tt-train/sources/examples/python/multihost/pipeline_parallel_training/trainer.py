@@ -11,7 +11,9 @@ from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import PerformanceMeter, no_grad
 
 
-def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
+def get_batch_ttml(
+    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
+):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -35,14 +37,18 @@ def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
+        )
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        tt_y = ttml.autograd.Tensor.from_numpy(
+            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
+        )
     return tt_x, tt_y
 
 
@@ -79,7 +85,9 @@ def train(
     reduce = ttml.ops.ReduceType.MEAN
 
     causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+    tt_mask = ttml.autograd.Tensor.from_numpy(
+        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
+    )
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -92,7 +100,9 @@ def train(
     is_first_stage = rank == 0
     is_final_stage = rank == world_size - 1
 
-    assert world_size > 1, f"Pipeline parallel requires world_size > 1, got {world_size}"
+    assert (
+        world_size > 1
+    ), f"Pipeline parallel requires world_size > 1, got {world_size}"
 
     # Create composer for distributed tensors if using DDP or TP
     composer = None
@@ -112,7 +122,7 @@ def train(
         accum_loss = 0.0
 
         # Gradient accumulation loop
-        for gas in range(cfg.gradient_accumulation_steps):
+        for _ in range(cfg.gradient_accumulation_steps):
             # Generate batch data
             # Note: All ranks generate batches, but only rank 0's input is used.
             # Pipeline model handles activation passing between ranks automatically.
@@ -122,28 +132,22 @@ def train(
             # Only the final stage computes loss, so it needs the correct targets
             if is_first_stage:
                 socket_manager.send(tt_y, distributed_ctx, world_size - 1)
-                print("!!!!!!!!!!!!! Sent from first stage!")
             elif is_final_stage:
                 tt_y = socket_manager.recv(tt_y, distributed_ctx, 0)
-                print("!!!!!!!!!!!!!! received from final stage!")
 
             # Forward and backward pass
             # Pipeline model automatically handles inter-stage communication
-            print(f"rank {rank} calling model impl for GAS {gas} in step {step}")
             logits = model(tt_x, tt_mask)
-            print(f"rank {rank} forward done for GAS {gas} in step {step}")
 
             if is_final_stage:
                 # Only final stage computes loss
                 loss = loss_fn(logits, tt_y, reduce)
-                print(f"loss calculated as {loss}")
 
                 # Scale loss by accumulation steps for proper gradient averaging
                 if cfg.gradient_accumulation_steps > 1:
                     loss = loss * (1.0 / cfg.gradient_accumulation_steps)
 
                 loss.backward(False)
-                print("loss backward done for final stage")
 
                 # Convert loss to numpy for logging
                 loss_numpy = loss.to_numpy(composer=composer)
@@ -151,16 +155,9 @@ def train(
                 accum_loss += train_loss
             else:
                 # Non-final stages only propagate gradients backward
-                print(f"about to loss backward from rank {rank}")
                 logits.backward(False)
             # Reset computation graph after each micro-batch
-            print("resetting computation graph")
             autograd_ctx.reset_graph()
-
-        # Limit runahead to one gradient accumulation step
-        print(f"{rank} reaching barrier for step {step}")
-        # distributed_ctx.barrier()
-        print(f"{rank} post barrier for step {step}")
 
         # Synchronize gradients across data parallel dimension (if enabled)
         if use_ddp:
