@@ -89,10 +89,6 @@ def run(
     else:
         shape = (1, 1, 32, 32)
 
-    # rms_norm_pre_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
-    if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
-        input_a_dtype = ttnn.bfloat16
-
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
         shape
     )
@@ -146,7 +142,7 @@ def run(
                 inplace=bool(int(inp_m.group(1))) if inp_m else False,
             )
         elif "Default" in config_type:
-            pass
+            ttnn_program_config = ttnn.LayerNormDefaultProgramConfig()
         elif "compute_with_storage_grid_size" in program_config:
             compute_grid = program_config.get("compute_with_storage_grid_size", {})
             ttnn_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
