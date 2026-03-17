@@ -80,22 +80,33 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
-    # v2 tracer puts target shape in arg1 or shape; arg2 may hold a
-    # secondary shape (e.g. padded output shape) used by some internal paths
-    tgt_shape = target_shape or shape or kwargs.get("arg1", None)
-    if tgt_shape is None:
-        tgt_shape = (1, 32, 1, 32)  # fallback for sample
+    # The model trace records the target shape under two different argument
+    # names depending on how the model called ttnn.reshape:
+    #   positional  ->  "arg1"   (MasterConfigLoader delivers via kwargs)
+    #   keyword     ->  "shape"  (MasterConfigLoader delivers via the run() param)
+    # We must replicate the exact calling convention so the tracer records the
+    # same argument name and the config_hash matches.
+    arg1_raw = kwargs.get("arg1", None)
+    use_shape_kwarg = shape is not None and arg1_raw is None
 
-    if isinstance(tgt_shape, list):
-        tgt_shape = tuple(tgt_shape)
-    elif isinstance(tgt_shape, dict) and "value" in tgt_shape:
+    if use_shape_kwarg:
+        tgt_shape = shape
+    elif arg1_raw is not None:
+        tgt_shape = arg1_raw
+    elif target_shape is not None:
+        tgt_shape = target_shape
+    else:
+        tgt_shape = (1, 32, 1, 32)
+
+    if isinstance(tgt_shape, dict) and "value" in tgt_shape:
         import re
 
-        m = re.search(r"\[([0-9, ]+)\]", str(tgt_shape["value"]))
+        m = re.search(r"\[([0-9, -]+)\]", str(tgt_shape["value"]))
         if m:
-            tgt_shape = tuple(int(x) for x in m.group(1).split(","))
+            tgt_shape = tuple(int(x.strip()) for x in m.group(1).split(","))
+    if isinstance(tgt_shape, list):
+        tgt_shape = tuple(tgt_shape)
 
-    # arg2 may be a padded output shape; extract if present
     arg2 = kwargs.get("arg2", None)
     if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
         import re
@@ -115,14 +126,22 @@ def run(
     import math
 
     input_numel = math.prod(in_shape)
-    tgt_numel = math.prod(tgt_shape)
+
+    resolved_shape = list(tgt_shape)
+    if -1 in resolved_shape:
+        neg_idx = resolved_shape.index(-1)
+        known_prod = abs(math.prod(s for s in resolved_shape if s != -1))
+        if known_prod > 0:
+            resolved_shape[neg_idx] = input_numel // known_prod
+
+    tgt_numel = math.prod(resolved_shape)
     has_padded_shape = tgt_numel != input_numel and arg2 is not None and math.prod(arg2) == input_numel
     if has_padded_shape:
         torch_output = torch.reshape(torch_input, arg2)
-        slices = tuple(slice(0, s) for s in tgt_shape)
+        slices = tuple(slice(0, s) for s in resolved_shape)
         torch_output = torch_output[slices]
     else:
-        torch_output = torch.reshape(torch_input, tgt_shape)
+        torch_output = torch.reshape(torch_input, resolved_shape)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -148,7 +167,9 @@ def run(
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    if tgt_numel != input_numel and arg2 is not None:
+    if use_shape_kwarg:
+        output_tensor = ttnn.reshape(input_tensor, shape=tgt_shape, **op_kwargs)
+    elif has_padded_shape and arg2 is not None:
         output_tensor = ttnn.reshape(input_tensor, tgt_shape, arg2, **op_kwargs)
     else:
         output_tensor = ttnn.reshape(input_tensor, tgt_shape, **op_kwargs)
