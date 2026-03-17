@@ -61,6 +61,17 @@ class Experts(AbstractModule):
         return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
 
     @classmethod
+    def _load_expert_weight(
+        cls, state_dict: dict[str, torch.Tensor], hf_name: str, n_routed_experts: int
+    ) -> torch.Tensor:
+        weight_name = f"{hf_name}.weight"
+        expert_weights: list[torch.Tensor] = []
+        for expert_id in range(n_routed_experts):
+            full_weight_name = f"experts.{expert_id}.{weight_name}"
+            expert_weights.append(get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE))
+        return torch.stack(expert_weights)
+
+    @classmethod
     def _convert_weights_default(
         cls,
         hf_config: PretrainedConfig,
@@ -75,22 +86,13 @@ class Experts(AbstractModule):
         (state_dict,) = state_dicts
         assert state_dict is not None
 
-        def _load_expert_weight(hf_name: str) -> torch.Tensor:
-            weight_name = f"{hf_name}.weight"
-            expert_weights: list[torch.Tensor] = []
-            for expert_id in range(hf_config.n_routed_experts):
-                full_weight_name = f"experts.{expert_id}.{weight_name}"
-                expert_weights.append(
-                    get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
-                )
-
-            return torch.stack(expert_weights)
-
         return {
             ttnn_name: {
                 "input_tensor_b": shard_and_save(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    _load_expert_weight(hf_name).unsqueeze(0).transpose(-1, -2),
+                    cls._load_expert_weight(state_dict, hf_name, hf_config.n_routed_experts)
+                    .unsqueeze(0)
+                    .transpose(-1, -2),
                     shard_dims=(1, 1),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat8_b if hf_name == "down_proj" else ttnn.bfloat4_b,
@@ -121,40 +123,42 @@ class Experts(AbstractModule):
 
         num_layers = 1
         num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
-        hidden_size = hidden_size = hf_config.hidden_size
-        matmul_N = 2048
+        num_routed_experts = hf_config.n_routed_experts
+
+        w0 = cls._load_expert_weight(state_dict, "gate_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+        w1 = cls._load_expert_weight(state_dict, "up_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+        w2 = cls._load_expert_weight(state_dict, "down_proj", num_routed_experts).unsqueeze(0).transpose(-1, -2)
+
+        hidden_size = hf_config.hidden_size
+        matmul_N = w0.shape[-1]
         ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
-
-        def _load_expert_weight(hf_name: str) -> torch.Tensor:
-            weight_name = f"{hf_name}.weight"
-            expert_weights: list[torch.Tensor] = []
-            for expert_id in range(hf_config.n_routed_experts):
-                full_weight_name = f"experts.{expert_id}.{weight_name}"
-                expert_weights.append(
-                    get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)
-                )
-
-            return torch.stack(expert_weights)
-
-        w0 = _load_expert_weight("gate_proj").unsqueeze(0).transpose(-1, -2)
-        w1 = _load_expert_weight("up_proj").unsqueeze(0).transpose(-1, -2)
-        w2 = _load_expert_weight("down_proj").unsqueeze(0).transpose(-1, -2)
 
         prepared_w0_w1 = []
         prepared_w2 = []
-        for i in range(0, hf_config.n_routed_experts, num_experts_per_device):
+        for i in range(0, num_routed_experts, num_experts_per_device):
             prepared_w0_w1_tensor = prepare_w0_w1_tensor(
-                w0, w1, num_layers, num_experts_per_device, hidden_size, matmul_N, ring2cores
+                w0[:, i : i + num_experts_per_device, :, :],
+                w1[:, i : i + num_experts_per_device, :, :],
+                num_layers,
+                num_experts_per_device,
+                hidden_size,
+                matmul_N,
+                ring2cores,
             )
             prepared_w2_tensor = prepare_w2_tensor(
-                w2, num_layers, num_experts_per_device, matmul_N, hidden_size, ring2cores
+                w2[:, i : i + num_experts_per_device, :, :],
+                num_layers,
+                num_experts_per_device,
+                matmul_N,
+                hidden_size,
+                ring2cores,
             )
 
             prepared_w0_w1.append(prepared_w0_w1_tensor)
             prepared_w2.append(prepared_w2_tensor)
 
-        prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=1)
-        prepared_w2 = torch.cat(prepared_w2, dim=1)
+        prepared_w0_w1 = torch.cat(prepared_w0_w1, dim=2)
+        prepared_w2 = torch.cat(prepared_w2, dim=2)
 
         w0_w1_memory_config = get_w0_w1_memory_config(
             num_layers, num_experts_per_device, hidden_size, compute_matmul_dram_core_range_set
@@ -164,21 +168,21 @@ class Experts(AbstractModule):
         )
 
         return {
-            "w0_w1_experts": {
+            "quad_ring_w0_w1_experts": {
                 "input_tensor_b": shard_and_save(
-                    output_path / "w1_experts.input_tensor_b",
+                    output_path / "quad_ring_w0_w1_experts.input_tensor_b",
                     prepared_w0_w1,
-                    shard_dims=(1, 1),
+                    shard_dims=(2, 2),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat4_b,
                     memory_config=w0_w1_memory_config,
                 )
             },
-            "w2_experts": {
+            "quad_ring_w2_experts": {
                 "input_tensor_b": shard_and_save(
-                    output_path / "w2_experts.input_tensor_b",
+                    output_path / "quad_ring_w2_experts.input_tensor_b",
                     prepared_w2,
-                    shard_dims=(1, 1),
+                    shard_dims=(2, 2),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat4_b,
                     memory_config=w2_memory_config,

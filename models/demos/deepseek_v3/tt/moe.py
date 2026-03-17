@@ -845,8 +845,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             dispatch_output_expert_indices,
             dispatch_output_expert_scores,
             cfg["expert_mapping_tensor"],
-            cfg["moe_experts"]["w0_w1_experts"],
-            cfg["moe_experts"]["w2_experts"],
+            cfg["moe_experts"]["quad_ring_w0_w1_experts"],
+            cfg["moe_experts"]["quad_ring_w2_experts"],
             layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
