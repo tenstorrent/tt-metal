@@ -18,8 +18,10 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 
-_PROFILER_FLUSH_INTERVAL = 10
-_PROFILER_ENABLED = os.environ.get("TT_METAL_DEVICE_PROFILER", "") == "1"
+_SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
+if _SIGNPOST_ENABLED:
+    from tracy import signpost
+
 from models.demos.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_and_positions_tt,
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
@@ -727,8 +729,6 @@ class Glm4MoeLiteDenseOnlyTT:
                         prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
                 ttnn.deallocate(x, force=False)
                 x = x_next
-                if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
-                    ttnn.ReadDeviceProfiler(self.device)
 
             # Logits for the last *real* prompt token only.
             x_last = ttnn.slice(x, [0, 0, prompt_len - 1, 0], [1, 1, prompt_len, hidden])
@@ -901,8 +901,6 @@ class Glm4MoeLiteDenseOnlyTT:
                     prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
             ttnn.deallocate(x, force=False)
             x = x_next
-            if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
-                ttnn.ReadDeviceProfiler(self.device)
 
         # Extract per-request logits from the batched output [1,1,B*S_max,hidden].
         # For each request i, the last real token is at offset i*S_max + prompt_lens[i]-1.
@@ -1175,6 +1173,11 @@ class Glm4MoeLiteDenseOnlyTT:
         if profile_on:
             decode_profile["prep_inputs_s"] = decode_profile.get("prep_inputs_s", 0.0) + (time.perf_counter() - t0)
 
+        if _SIGNPOST_ENABLED:
+            signpost("decode-start")
+
+        if _SIGNPOST_ENABLED:
+            signpost("embed-start")
         t0 = time.perf_counter() if profile_on else 0.0
         x = run_tt_embedding(device=self.device, token_ids=tokens, tt_weight=self.embed_w)
         if x.layout != ttnn.TILE_LAYOUT:
@@ -1195,6 +1198,8 @@ class Glm4MoeLiteDenseOnlyTT:
         x = x_tight
         if profile_on:
             decode_profile["embed_s"] = decode_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
+        if _SIGNPOST_ENABLED:
+            signpost("embed-end")
 
         # Batch-expansion serial cache update: construct masked position tensors
         # so paged_update_cache serializes writes from aliased page_table entries.
@@ -1252,6 +1257,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 use_decode_rope=use_decode_rope,
                 positions_main_tt=positions_main_tt,
                 positions_draft_tt=positions_draft_tt,
+                layer_idx=layer_idx,
+                use_signpost=_SIGNPOST_ENABLED,
             )
             if layer_profile is not None:
                 for key, value in layer_profile.items():
@@ -1259,8 +1266,6 @@ class Glm4MoeLiteDenseOnlyTT:
                     decode_profile[stage_key] = decode_profile.get(stage_key, 0.0) + float(value)
             ttnn.deallocate(x, force=False)
             x = x_next
-            if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
-                ttnn.ReadDeviceProfiler(self.device)
 
         # Preserve hidden state for MTP before final_norm
         mtp_hidden = None
@@ -1273,11 +1278,18 @@ class Glm4MoeLiteDenseOnlyTT:
             ttnn.deallocate(sin_decode, force=False)
             ttnn.deallocate(trans_decode, force=False)
 
+        if _SIGNPOST_ENABLED:
+            signpost("lm_head-start")
         t0 = time.perf_counter() if profile_on else 0.0
         x = self.final_norm(x, mode="decode")
         logits_tt = ttnn.linear(x, self.lm_head_w)  # [1,1,B,vocab]
         if profile_on:
             decode_profile["head_s"] = decode_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
+        if _SIGNPOST_ENABLED:
+            signpost("lm_head-end")
+
+        if _SIGNPOST_ENABLED:
+            signpost("decode-end")
 
         if sampling_params is not None:
             # Basic on-device sampling: greedy (argmax).
@@ -1566,6 +1578,8 @@ class Glm4MoeLiteDenseOnlyTT:
             moe_runtime=self.moe_runtime,
             profile=None,
             use_decode_rope=True,
+            layer_idx=47,
+            use_signpost=_SIGNPOST_ENABLED,
         )
         ttnn.deallocate(proj, force=False)
 
@@ -2267,6 +2281,7 @@ class Glm4MoeLiteDenseOnlyTT:
             moe_runtime=self.moe_runtime,
             profile=None,
             use_decode_rope=True,
+            layer_idx=47,
         )
         ttnn.deallocate(proj, force=False)
 
@@ -2350,14 +2365,10 @@ class Glm4MoeLiteDenseOnlyTT:
                 use_decode_rope=True,
                 positions_main_tt=state.positions_main_tt,
                 positions_draft_tt=state.positions_draft_tt,
+                layer_idx=layer_idx,
             )
             ttnn.deallocate(x, force=False)
             x = x_next
-            if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
-                try:
-                    ttnn.ReadDeviceProfiler(self.device)
-                except RuntimeError:
-                    pass
 
         # Preserve hidden state for MTP before final_norm consumes it.
         # Use ttnn.clone (not ttnn.copy) so the trace graph allocates a fresh
