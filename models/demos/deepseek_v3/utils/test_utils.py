@@ -215,7 +215,27 @@ def run_reference_with_attention(
     Intermediate tensors are explicitly freed between chunks using del.
     Attention weights are not stored by setting output_attentions=False, since they scale quadratically with sequence length.
     """
-    (batch_size,) = position_ids_or_seq_lens.shape
+    activation_batch_size = activation.shape[0]
+    if position_ids_or_seq_lens.ndim != 1:
+        raise ValueError(f"position_ids_or_seq_lens must be 1D, got shape {tuple(position_ids_or_seq_lens.shape)}")
+
+    if mode == "prefill":
+        if position_ids_or_seq_lens.numel() == 1 and activation_batch_size != 1:
+            # Older tests pass a scalar seq_len even when the activation batch is larger.
+            # Expand it here so reference-mask construction follows the true batch size.
+            position_ids_or_seq_lens = position_ids_or_seq_lens.expand(activation_batch_size)
+        elif position_ids_or_seq_lens.shape[0] != activation_batch_size:
+            raise ValueError(
+                "Prefill position_ids_or_seq_lens batch must match activation batch: "
+                f"{position_ids_or_seq_lens.shape[0]} != {activation_batch_size}"
+            )
+    elif position_ids_or_seq_lens.shape[0] != activation_batch_size:
+        raise ValueError(
+            "Decode position_ids_or_seq_lens batch must match activation batch: "
+            f"{position_ids_or_seq_lens.shape[0]} != {activation_batch_size}"
+        )
+
+    batch_size = activation_batch_size
     dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
     num_layers = hf_config.num_hidden_layers
     max_position_id_or_seq_len = position_ids_or_seq_lens.max().item()
