@@ -364,6 +364,8 @@ void py_module(nb::module_& mod) {
             layout (ttnn.Layout): the desired layout, either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
             dtype (ttnn.DataType, optional): the optional output data type.
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the optional sub core grids. Defaults to `None`.
+            pad_value (float, optional): the optional pad value. Defaults to `0.0f`.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
