@@ -25,6 +25,7 @@ Usage:
 """
 
 import argparse
+import glob
 import os
 import subprocess
 import sys
@@ -32,6 +33,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 TRACED_OPS_DIR = REPO_ROOT / "model_tracer" / "traced_operations"
+VECTORS_EXPORT_DIR = REPO_ROOT / "tests" / "sweep_framework" / "vectors_export"
 
 SEPARATOR = "=" * 70
 
@@ -58,6 +60,27 @@ def _run(cmd: list[str], env: dict[str, str] | None = None, dry_run: bool = Fals
 def _module_basename(module_name: str) -> str:
     """Extract the last dotted component: 'model_traced.foo_model_traced' -> 'foo_model_traced'."""
     return module_name.rsplit(".", 1)[-1]
+
+
+def step_clean_vectors(module_name: str, dry_run: bool) -> None:
+    """Remove existing vector files in vectors_export/ that match this sweep's module name."""
+    print(f"\n{SEPARATOR}")
+    print("Step 0: Clean stale sweep vectors")
+    print(SEPARATOR)
+
+    pattern = str(VECTORS_EXPORT_DIR / f"{module_name}__*")
+    matches = sorted(glob.glob(pattern))
+
+    if not matches:
+        print(f"  No existing vector files matching: {module_name}__*")
+        return
+
+    for path in matches:
+        print(f"  Removing: {path}")
+        if not dry_run:
+            os.remove(path)
+
+    print(f"  Removed {len(matches)} file(s)")
 
 
 def step_generate_vectors(
@@ -212,8 +235,7 @@ def step_print_validation_pairs(
         for op_dir_name, model_file, sweep_file in matched:
             op_display = op_dir_name.replace("_", ".")
             chat_input = (
-                f"Use the validate-sweep-trace cursor rule to validate {op_display}. "
-                f"Model: {model_file} Sweep: {sweep_file}"
+                f"Use @validate-sweep-trac.mdc to validate {op_display}. " f"Model: {model_file} Sweep: {sweep_file}"
             )
             print(f"    {op_display}:")
             print(f"      Chat input: {chat_input}")
@@ -319,6 +341,9 @@ def main() -> int:
     print(f"  Model trace split:  {model_trace_split_dir}")
     if args.dry_run:
         print(f"  Mode:               DRY RUN")
+
+    # Step 0: Remove stale vector files for this sweep
+    step_clean_vectors(module_name=args.module_name, dry_run=args.dry_run)
 
     # Step 1: Generate vectors
     step_generate_vectors(
