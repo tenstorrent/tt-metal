@@ -290,7 +290,8 @@ Buffer::Buffer(
     owns_data_(owns_data),
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
-    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
+    buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
+    per_core_shard_sizes_(sharding_args.per_core_shard_sizes()) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
@@ -559,6 +560,16 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
         is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
+}
+
+DeviceAddr Buffer::per_core_address(CoreCoord core) const {
+    auto it = per_core_addresses_.find(core);
+    TT_FATAL(it != per_core_addresses_.end(), "No per-core address for core ({}, {})", core.x, core.y);
+    return it->second;
+}
+
+void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs) {
+    per_core_addresses_ = std::move(addrs);
 }
 
 ShardSpecBuffer Buffer::shard_spec() const {
