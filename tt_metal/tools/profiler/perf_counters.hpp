@@ -149,8 +149,8 @@ enum PerfCounterType : uint8_t {
 union PerfCounter {
     struct {
         uint32_t counter_value;
-        uint32_t ref_cnt : 25;
-        uint32_t counter_type : 7;
+        uint32_t ref_cnt : 24;
+        uint32_t counter_type : 8;
     } __attribute__((packed));
     uint64_t raw_data;
 
