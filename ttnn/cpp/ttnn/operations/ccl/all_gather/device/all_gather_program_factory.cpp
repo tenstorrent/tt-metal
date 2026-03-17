@@ -26,9 +26,11 @@ AllGatherDeviceOperation::AllGatherProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id);
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    const ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
+    const tt::tt_metal::CoreRangeSet subdevice_core_range_set =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
+    const tt::tt_metal::SubDeviceId sd_id = device_ctx.get_effective_sub_device_id(operation_attributes.subdevice_id);
+    auto* mesh_device = device_ctx.raw_mesh_device();
 
     // Create semaphores internally (internalized global semaphores)
     // 2 semaphores used for within op synchronizations (forward and backward links)
@@ -70,7 +72,7 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
-    auto* mesh_device = tensor_args.input_tensor.device();
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
@@ -95,8 +97,8 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     // Get core and subdevice related information
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id);
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    auto subdevice_core_range_set =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }

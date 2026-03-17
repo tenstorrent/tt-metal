@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
 #include <memory>
@@ -54,6 +55,8 @@ class DeviceContext {
 public:
     explicit DeviceContext(tt::tt_metal::IDevice* device);
     explicit DeviceContext(tt::tt_metal::distributed::MeshDevice* device);
+    /** Construct from a tensor; device is obtained from the tensor internally. */
+    explicit DeviceContext(const tt::tt_metal::Tensor& tensor);
 
     tt::tt_metal::CoreCoord get_compute_with_storage_grid_size() const;
     tt::tt_metal::CoreCoord get_grid_size() const;
@@ -63,6 +66,11 @@ public:
     tt::tt_metal::SubDeviceId get_current_sub_device_id() const;
     tt::tt_metal::SubDeviceId get_effective_sub_device_id(
         const std::optional<tt::tt_metal::SubDeviceId>& explicit_id) const;
+
+    /** Worker core range set for the effective sub-device (explicit_id if provided, else context-driven). */
+    tt::tt_metal::CoreRangeSet get_worker_cores(
+        tt::tt_metal::HalProgrammableCoreType core_type,
+        std::optional<tt::tt_metal::SubDeviceId> explicit_sub_device_id = std::nullopt) const;
 
     bool is_mesh_device() const noexcept;
     CurrentSubDeviceGuard set_current_sub_device(tt::tt_metal::SubDeviceId sub_device_id);

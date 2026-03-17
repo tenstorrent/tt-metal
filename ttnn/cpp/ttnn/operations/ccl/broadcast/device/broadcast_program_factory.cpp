@@ -29,11 +29,12 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id =
-        ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.sub_device_id);
-    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
+    const auto available_cores =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id);
+    auto subdevice_id = device_ctx.get_effective_sub_device_id(operation_attributes.sub_device_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    auto* mesh_device = device_ctx.raw_mesh_device();
 
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
@@ -66,7 +67,8 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
 
-    auto* mesh_device = input_tensor.device();
+    ttnn::DeviceContext device_ctx(input_tensor);
+    auto* mesh_device = device_ctx.raw_mesh_device();
 
     uint32_t ring_size = operation_attributes.ring_size;
     uint32_t ring_index =

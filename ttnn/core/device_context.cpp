@@ -104,6 +104,8 @@ DeviceContext::DeviceContext(tt::tt_metal::distributed::MeshDevice* device) : de
     TT_FATAL(device != nullptr, "DeviceContext: device must not be null");
 }
 
+DeviceContext::DeviceContext(const tt::tt_metal::Tensor& tensor) : DeviceContext(tensor.device()) {}
+
 tt::tt_metal::CoreCoord DeviceContext::get_compute_with_storage_grid_size() const {
     if (const auto* m = std::get_if<tt::tt_metal::distributed::MeshDevice*>(&device_)) {
         return get_compute_with_storage_grid_size_mesh(*m);
@@ -142,6 +144,12 @@ tt::tt_metal::SubDeviceId DeviceContext::get_current_sub_device_id() const {
 tt::tt_metal::SubDeviceId DeviceContext::get_effective_sub_device_id(
     const std::optional<tt::tt_metal::SubDeviceId>& explicit_id) const {
     return explicit_id.value_or(get_current_sub_device_id());
+}
+
+tt::tt_metal::CoreRangeSet DeviceContext::get_worker_cores(
+    tt::tt_metal::HalProgrammableCoreType core_type,
+    std::optional<tt::tt_metal::SubDeviceId> explicit_sub_device_id) const {
+    return raw_device()->worker_cores(core_type, get_effective_sub_device_id(explicit_sub_device_id));
 }
 
 bool DeviceContext::is_mesh_device() const noexcept {
