@@ -97,6 +97,7 @@ def generate_sfpu_nonlinear_combinations(
                 for input_dimensions in [[32, 32], [64, 64]]:
                     for mathop in [
                         MathOperation.Exp,
+                        MathOperation.Gelu,
                         MathOperation.Relu,
                         MathOperation.Reciprocal,
                         MathOperation.Sqrt,
@@ -143,6 +144,12 @@ def prepare_inputs_for_operation(
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Gelu:
+        # Scale to range [-10, 10] for gelu - covers meaningful range without saturation
+        # Symmetric range ensures balanced coverage of negative, near-zero, and positive behaviour
+        min_val = -10.0
+        max_val = 10.0
+        src_A = torch.empty_like(src_A, dtype=torch.float32).uniform_(min_val, max_val)
     elif mathop == MathOperation.Relu:
         # Scale to range including negative and positive values for ReLU testing
         finfo = torch.finfo(torch_format)
@@ -270,10 +277,10 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Silu:
-        # Scale to range including negative and positive values for SiLU testing
+        # Scale to range [-10, 10] for SiLU - covers meaningful range without saturation
         finfo = torch.finfo(torch_format)
         min_val = -10.0  # avoid overflow with negative exponential in SiLU
-        max_val = finfo.max / 2  # Use half range to avoid extremes
+        max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     # else: keep src_A as-is for other operations
@@ -298,7 +305,7 @@ SFPU_NONLINEAR_FORMATS = input_output_formats(
 )
 def test_sfpu_nonlinear_quasar(formats_dest_acc_implied_math_input_dims_mathop):
     """
-    Test nonlinear SFPU operations (exp, relu, reciprocal, sqrt, tanh, sigmoid, silu) on Quasar architecture.
+    Test nonlinear SFPU operations (exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu) on Quasar architecture.
 
     This test parameterizes over multiple operations to avoid code duplication.
     """

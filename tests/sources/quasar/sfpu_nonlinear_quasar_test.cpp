@@ -82,6 +82,7 @@ const bool is_int_fpu_en = false;
 
 // Include all necessary SFPU headers
 #include "sfpu/ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
@@ -104,6 +105,20 @@ struct sfpu_op_dispatcher<SfpuType::exponential>
     static void call(int tile_idx, int num_sfpu_iterations)
     {
         _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_exp_<true>, tile_idx, num_sfpu_iterations);
+    }
+};
+
+template <>
+struct sfpu_op_dispatcher<SfpuType::gelu>
+{
+    static void init()
+    {
+        _init_gelu_();
+    }
+
+    static void call(int tile_idx, int num_sfpu_iterations)
+    {
+        _llk_math_eltwise_unary_sfpu_params_<false>(_calculate_gelu_, tile_idx, num_sfpu_iterations);
     }
 };
 
@@ -171,6 +186,9 @@ inline void call_sfpu_operation_quasar(int tile_idx, int num_sfpu_iterations)
         case SfpuType::exponential:
             sfpu_op_dispatcher<SfpuType::exponential>::call(tile_idx, num_sfpu_iterations);
             break;
+        case SfpuType::gelu:
+            sfpu_op_dispatcher<SfpuType::gelu>::call(tile_idx, num_sfpu_iterations);
+            break;
         case SfpuType::relu:
             sfpu_op_dispatcher<SfpuType::relu>::call(tile_idx, num_sfpu_iterations);
             break;
@@ -188,6 +206,19 @@ inline void call_sfpu_operation_quasar(int tile_idx, int num_sfpu_iterations)
             break;
         case SfpuType::silu:
             sfpu_op_dispatcher<SfpuType::silu>::call(tile_idx, num_sfpu_iterations);
+            break;
+        default:
+            break;
+    }
+}
+
+inline void init_sfpu_operation_quasar()
+{
+    constexpr SfpuType op = SFPU_UNARY_OPERATION;
+    switch (op)
+    {
+        case SfpuType::gelu:
+            sfpu_op_dispatcher<SfpuType::gelu>::init();
             break;
         default:
             break;
@@ -231,7 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_unary_sfpu_init_();
-
+    init_sfpu_operation_quasar();
     // Apply SFPU operation to all tiles using compile-time dispatch
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
