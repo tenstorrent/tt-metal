@@ -19,7 +19,11 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     maybe_skip_long_seq,
 )
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    even_int_div,
+    get_activation_sharding_core_counts_for_dram_matmul,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -355,12 +359,23 @@ def _build_reduce_scatter_inputs(
     # Each device (row=r, col=c) gets portion:
     # - Layer: layers[r]
     # - Dim: dim[c * dim/mesh_width : (c+1) * dim/mesh_width]
+    if mode == "decode":
+        # The input to reduce_scatter is the w2 output, which is L1 WIDTH_SHARDED with width=dim.
+        # output_num_cores is derived the same way as in MLP.decode_model_config.
+        max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
+        output_num_cores = max(
+            get_activation_sharding_core_counts_for_dram_matmul(even_int_div(dim, mesh_width), max_num_cores)
+        )
+        input_memory_config = MLP._get_decode_activation_memory_config(dim, output_num_cores, mesh_device)
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
