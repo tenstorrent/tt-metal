@@ -31,7 +31,7 @@
       hf_model: meta-llama/Llama-3.1-8B-Instruct
     bh_p300:
       timeout: 10
-      tt_cache_path: ""
+      tt_cache_path:
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models

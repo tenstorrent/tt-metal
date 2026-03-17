@@ -73,10 +73,8 @@ def substitute_cmd_placeholders(entry):
     """
     cmd = entry.get("cmd")
     if not cmd or not isinstance(cmd, str):
-        return
+        throw ValueError(f"cmd is not a string: {cmd}")
     for key, value in entry.items():
-        if key == "cmd" or value is None:
-            continue
         placeholder = "{" + key + "}"
         if placeholder in cmd:
             entry["cmd"] = entry["cmd"].replace(placeholder, str(value))
