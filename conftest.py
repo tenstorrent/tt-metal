@@ -222,10 +222,16 @@ class CIv2ModelDownloadUtils_:
                     local_path = download_dir / relative_path
                     local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    # aria2c input file format: URL\n  out=filename\n
+                    logger.info(f"Will download {file_url} -> {local_path}")
+
+                    # aria2c input file format: URL\n  option=value\n\n (blank line separates entries)
                     url_file.write(f"{file_url}\n")
                     url_file.write(f"  dir={local_path.parent}\n")
                     url_file.write(f"  out={local_path.name}\n")
+                    url_file.write("\n")  # Blank line to separate entries
+
+            # Log the aria2c input file for debugging
+            logger.debug(f"aria2c input file contents:\n{url_file_path.read_text()}")
 
             try:
                 # Run aria2c with optimal settings for parallel downloads
@@ -244,12 +250,13 @@ class CIv2ModelDownloadUtils_:
                     "--connect-timeout=30",  # Connection establishment timeout
                     "--allow-overwrite=true",  # Overwrite existing files
                     "--auto-file-renaming=false",  # Don't auto-rename files
-                    "--console-log-level=notice",  # Reduce verbosity
+                    "--console-log-level=warn",  # Show warnings and errors
                     "--summary-interval=10",  # Show summary every 10 seconds
                     "--file-allocation=none",  # Faster for networked filesystems
                 ]
 
                 logger.info(f"Starting aria2c download with up to 32 parallel connections...")
+                logger.debug(f"aria2c input file: {url_file_path}")
 
                 result = subprocess.run(
                     aria2c_cmd,
@@ -261,9 +268,37 @@ class CIv2ModelDownloadUtils_:
 
                 logger.info(f"Successfully downloaded all {len(files_to_download)} files")
 
-                # Log aria2c output for debugging if needed
+                # Log aria2c output for debugging
                 if result.stdout:
-                    logger.debug(f"aria2c output: {result.stdout}")
+                    logger.debug(f"aria2c stdout: {result.stdout}")
+                if result.stderr:
+                    logger.debug(f"aria2c stderr: {result.stderr}")
+
+                # Verify files were downloaded successfully
+                missing_files = []
+                for file_url in files_to_download:
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(file_url)
+                    path_parts = parsed.path.strip("/").split("/")
+
+                    if len(path_parts) > base_path_components:
+                        relative_path_parts = path_parts[base_path_components:]
+                        relative_path = "/".join(relative_path_parts)
+                    else:
+                        relative_path = path_parts[-1]
+
+                    local_path = download_dir / relative_path
+                    if not local_path.exists():
+                        missing_files.append((file_url, local_path))
+
+                if missing_files:
+                    error_msg = f"Downloaded completed but {len(missing_files)} files are missing:\n"
+                    for url, path in missing_files[:5]:
+                        error_msg += f"  Expected: {path}\n  From URL: {url}\n"
+                    if len(missing_files) > 5:
+                        error_msg += f"  ... and {len(missing_files) - 5} more\n"
+                    raise RuntimeError(error_msg)
 
             except subprocess.TimeoutExpired as err:
                 logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}")
