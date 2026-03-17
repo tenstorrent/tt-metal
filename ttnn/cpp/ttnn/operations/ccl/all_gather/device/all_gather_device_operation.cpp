@@ -143,8 +143,7 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
 
     ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
-    auto subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
+    auto subdevice_core_range_set = device_ctx.get_worker_cores();
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
@@ -168,7 +167,6 @@ ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,
@@ -183,7 +181,6 @@ ttnn::Tensor all_gather(
             .memory_config = memory_config,
             .dim = dim,
             .cluster_axis = cluster_axis,
-            .subdevice_id = subdevice_id,
             .topology = topology,
             .num_links = num_links,
             .chunks_per_sync = chunks_per_sync,

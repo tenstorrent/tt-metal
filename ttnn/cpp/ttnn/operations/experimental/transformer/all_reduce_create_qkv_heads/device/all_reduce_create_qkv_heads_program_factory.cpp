@@ -55,7 +55,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     const size_t num_workers_preferred = num_workers_per_link * num_links;
     auto available_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        ttnn::DeviceContext(device).get_effective_sub_device_id(sub_device_id));
+        sub_device_id.value_or(ttnn::DeviceContext(device).get_current_sub_device_id()));
     if (reserved_core_range.has_value()) {
         available_cores = available_cores.subtract(*reserved_core_range);
     }

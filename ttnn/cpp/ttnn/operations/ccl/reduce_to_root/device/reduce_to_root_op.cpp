@@ -148,7 +148,7 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     ttnn::DeviceContext device_ctx(tensor_args.input_tensor_l);
-    auto available_cores = device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, std::nullopt);
+    auto available_cores = device_ctx.get_worker_cores();
     auto* mesh_device = device_ctx.raw_mesh_device();
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
     semaphores.reserve(2);

@@ -27,11 +27,9 @@ ttnn::Tensor all_to_all_combine(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<uint32_t>& axis,
     const std::optional<uint32_t>& output_shard_dim,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     ttnn::DeviceContext device_ctx(input_tensor);
-    auto subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    const tt::tt_metal::CoreRangeSet subdevice_core_range_set = device_ctx.get_worker_cores();
     auto* mesh_device = device_ctx.raw_mesh_device();
     uint32_t shard_dim = output_shard_dim.value_or(1);
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));

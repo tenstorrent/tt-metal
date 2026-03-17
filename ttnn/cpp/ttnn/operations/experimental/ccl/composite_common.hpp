@@ -41,7 +41,6 @@ ttnn::Tensor composite_reduce_scatter(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -53,7 +52,6 @@ ttnn::Tensor composite_all_gather(
     int32_t dim,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis);
 // same as above but for vector of mesh
 std::vector<ttnn::Tensor> composite_all_gather(
@@ -61,7 +59,6 @@ std::vector<ttnn::Tensor> composite_all_gather(
     int32_t dim,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis);
 
 ttnn::Tensor composite_all_to_all(
@@ -69,7 +66,6 @@ ttnn::Tensor composite_all_to_all(
     int32_t in_dim,
     int32_t out_dim,
     uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
+    const std::optional<ttnn::MemoryConfig>& memory_config);
 
 }  // namespace composite_common

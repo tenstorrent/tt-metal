@@ -25,8 +25,7 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
         reshaped,
         /*dim=*/0,
         /*cluster_axis=*/cluster_axis,
-        /*subdevice_id=*/std::nullopt,
-        /*memory_config=*/memory_config,
+        /*memory_config=*/std::optional<ttnn::MemoryConfig>{memory_config},
         /*optional_output_tensor=*/std::nullopt,
         /*num_links=*/num_links);
 

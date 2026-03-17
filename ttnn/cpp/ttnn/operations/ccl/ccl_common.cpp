@@ -341,7 +341,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto effective_sub_device_id = ttnn::DeviceContext(device).get_effective_sub_device_id(sub_device_id);
+    auto effective_sub_device_id =
+        sub_device_id.has_value() ? sub_device_id.value() : ttnn::DeviceContext(device).get_current_sub_device_id();
     auto available_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sub_device_id);
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());

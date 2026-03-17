@@ -216,16 +216,15 @@ def test_two_independent_streams_all_gather_and_matmul(mesh_device):
         ]
 
         # Two CQs: matmul on CQ 1, all-gather on CQ 0 so they can run in parallel (no sync between them).
+        # Subdevice for CCL is set via sub_device() context; ops do not take subdevice_id.
         # Use num_workers_per_link=1 so CCL fits on the small subdevice (2 cores).
         ag_kwargs = dict(
             dim=0,
             cluster_axis=CCL_CLUSTER_AXIS,
             topology=ttnn.Topology.Ring,
-            subdevice_id=ccl_sub_device_id,
             num_workers_per_link=1,
             queue_id=CCL_CQ,
         )
-        ag_kwargs_no_sd = {k: v for k, v in ag_kwargs.items() if k != "subdevice_id"}
 
         x = input_tensor
         for i in range(NUM_ITERATIONS):
@@ -237,7 +236,7 @@ def test_two_independent_streams_all_gather_and_matmul(mesh_device):
                 queue_id=MATMUL_CQ,
             )
             with ttnn.sub_device(mesh_device, ccl_sub_device_id):
-                gathered = ttnn.all_gather(sharded_tensors[i % len(sharded_tensors)], **ag_kwargs_no_sd)
+                gathered = ttnn.all_gather(sharded_tensors[i % len(sharded_tensors)], **ag_kwargs)
             ttnn.deallocate(gathered)
         del x
 

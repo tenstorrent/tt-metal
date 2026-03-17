@@ -86,7 +86,7 @@ process_agmm_fusion_program_and_create_override_variables(
     std::vector<CoreRange> non_idle_cores_vec;
     auto subdevice_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        ttnn::DeviceContext(device).get_effective_sub_device_id(sub_device_id));
+        sub_device_id.value_or(ttnn::DeviceContext(device).get_current_sub_device_id()));
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }

@@ -138,8 +138,9 @@ def command_queue(cq_id: int):
 def sub_device(device: "ttnn.MeshDevice", sub_device_id: "ttnn.SubDeviceId | int"):
     """Context manager to set the current sub device for all TTNN operations within this context.
 
-    Operations within this context will use the specified sub_device_id on the given device unless
-    they explicitly provide their own sub_device_id parameter, which takes precedence.
+    Operations within this context will use the specified sub_device_id on the given device.
+    Sub-device is set by infrastructure (this context or the FastOperation decorator); ops do not
+    accept a sub_device_id parameter—same as command queues (queue_id is set by decorator/context).
 
     Args:
         device: The MeshDevice on which to set the sub device context.
@@ -148,7 +149,6 @@ def sub_device(device: "ttnn.MeshDevice", sub_device_id: "ttnn.SubDeviceId | int
     Example:
         with ttnn.sub_device(device, 0):
             result = ttnn.some_operation(tensor)  # Will use sub_device_id 0
-            result2 = ttnn.other_operation(tensor, sub_device_id=1)  # Will use sub_device_id 1 (overrides context)
     """
     if sub_device_id is None:
         raise ValueError("sub_device_id cannot be None in sub_device context")
@@ -489,13 +489,15 @@ class FastOperation:
         cq_id = function_kwargs.pop("queue_id", _sentinel)
         if cq_id is _sentinel:
             cq_id = function_kwargs.pop("cq_id", None)
-        # Do not pop sub_device_id/subdevice_id: set context for ops that only read context, and pass through for ops that take it.
-        # Support both names: many CCL ops (e.g. ttnn.all_gather) expose the keyword as subdevice_id.
-        sub_device_id = function_kwargs.get("sub_device_id", function_kwargs.get("subdevice_id", None))
+        # Pop sub_device_id/subdevice_id (like queue_id): set context only; do not pass to the op.
+        sub_device_id = function_kwargs.pop("sub_device_id", _sentinel)
+        if sub_device_id is _sentinel:
+            sub_device_id = function_kwargs.pop("subdevice_id", None)
+        else:
+            function_kwargs.pop("subdevice_id", None)  # remove alternate name if present
 
         cq_ctx = command_queue(cq_id) if cq_id is not None else nullcontext()
         # Apply sub-device context only when we can infer exactly one mesh device from args/kwargs.
-        # Otherwise the default device may differ from the op's tensors (e.g. multiple devices open).
         devices = get_devices((function_args, function_kwargs))
         mesh_devices = [d for d in devices if hasattr(d, "set_current_sub_device")]
         if sub_device_id is not None and len(mesh_devices) == 1:

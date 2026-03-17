@@ -141,15 +141,8 @@ tt::tt_metal::SubDeviceId DeviceContext::get_current_sub_device_id() const {
     return tt::tt_metal::SubDeviceId{0};
 }
 
-tt::tt_metal::SubDeviceId DeviceContext::get_effective_sub_device_id(
-    const std::optional<tt::tt_metal::SubDeviceId>& explicit_id) const {
-    return explicit_id.value_or(get_current_sub_device_id());
-}
-
-tt::tt_metal::CoreRangeSet DeviceContext::get_worker_cores(
-    tt::tt_metal::HalProgrammableCoreType core_type,
-    std::optional<tt::tt_metal::SubDeviceId> explicit_sub_device_id) const {
-    return raw_device()->worker_cores(core_type, get_effective_sub_device_id(explicit_sub_device_id));
+tt::tt_metal::CoreRangeSet DeviceContext::get_worker_cores() const {
+    return raw_device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, get_current_sub_device_id());
 }
 
 bool DeviceContext::is_mesh_device() const noexcept {

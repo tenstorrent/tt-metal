@@ -51,7 +51,6 @@ ttnn::Tensor reduce_scatter_minimal_async(
             num_links,
             usable_topology,
             memory_config,
-            sub_device_id,
             cluster_axis,
             chunks_per_sync,
             num_workers_per_link,

@@ -146,7 +146,7 @@ ttsl::hash::hash_t ReduceScatterMinimalAsyncDeviceOperation::compute_program_has
 
     auto subdevice_id = operation_attributes.sub_device_id;
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(subdevice_id);
+    auto sd_id = subdevice_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
@@ -292,7 +292,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttnn::experimental::prim::ReduceScatterMinimalAsyncDeviceOperation;
     const auto resolved_sub_device_id =
-        ttnn::DeviceContext(input_tensor.device()).get_effective_sub_device_id(sub_device_id);
+        sub_device_id.value_or(ttnn::DeviceContext(input_tensor.device()).get_current_sub_device_id());
 
     auto operation_attributes = OperationType::operation_attributes_t{
         dim,

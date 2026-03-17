@@ -119,8 +119,8 @@ ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device)
-                     .get_effective_sub_device_id(operation_attributes.all_gather_async_attributes.sub_device_id);
+    auto sd_id = operation_attributes.all_gather_async_attributes.sub_device_id.value_or(
+        ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
         operation_attributes.all_gather_async_attributes.dim,

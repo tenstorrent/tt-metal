@@ -65,7 +65,6 @@ ttnn::Tensor composite_reduce_scatter(
     const uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -139,7 +138,6 @@ ttnn::Tensor composite_reduce_scatter(
                                                       padded_native_rs_input_tensor,
                                                       scatter_dim,
                                                       cluster_axis,
-                                                      subdevice_id,
                                                       native_rs_output_memory_config,
                                                       std::nullopt,  // optional intermediate memory config
                                                       std::nullopt,  // optional output tensor
@@ -332,7 +330,6 @@ ttnn::Tensor composite_all_gather(
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -373,7 +370,7 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
-        input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
+        input_tensor, cluster_axis, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
@@ -395,13 +392,11 @@ std::vector<ttnn::Tensor> composite_all_gather(
     const int32_t dim,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
     std::vector<ttnn::Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
-        output_tensors.push_back(
-            composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis));
+        output_tensors.push_back(composite_all_gather(input_tensor, dim, num_links, memory_config, cluster_axis));
     }
     return output_tensors;
 }
@@ -411,8 +406,7 @@ ttnn::Tensor composite_all_to_all(
     int32_t in_dim,
     int32_t out_dim,
     const uint32_t num_links,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -464,7 +458,6 @@ ttnn::Tensor composite_all_to_all(
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::prim::all_broadcast(
         input_tensor,
         /* cluster_axis */ std::nullopt,
-        subdevice_id,
         interim_memory_config,
         num_links,
         ttnn::ccl::Topology::Linear);

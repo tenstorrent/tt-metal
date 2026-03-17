@@ -221,7 +221,7 @@ ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 
     auto* mesh_device = tensor_args.input.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(args.sub_device_id);
+    auto sd_id = args.sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,

@@ -22,7 +22,6 @@ ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
@@ -47,7 +46,6 @@ ttnn::Tensor all_gather(
                     tensor,
                     dim,
                     axis,
-                    subdevice_id,
                     memory_config,
                     optional_output_tensor,
                     num_links,
@@ -69,14 +67,12 @@ ttnn::Tensor all_gather(
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
     if (composite_common::use_composite_all_gather(input_tensor, dim, memory_config)) {
         TT_FATAL(!sub_core_grid.has_value(), "Composite OP does not currently support sub core grid");
-        return composite_common::composite_all_gather(
-            input_tensor, dim, num_links_, memory_config_, subdevice_id, cluster_axis);
+        return composite_common::composite_all_gather(input_tensor, dim, num_links_, memory_config_, cluster_axis);
     }
     return ttnn::prim::all_gather(
         input_tensor,
         normalized_dim,
         cluster_axis,
-        subdevice_id,
         memory_config_,
         optional_output_tensor,
         num_links_,

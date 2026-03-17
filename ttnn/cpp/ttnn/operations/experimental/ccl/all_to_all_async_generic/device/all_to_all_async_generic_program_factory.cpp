@@ -45,7 +45,7 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
 
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sub_device_id = operation_attributes.sub_device_id;
-    auto subdevice = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(sub_device_id);
+    auto subdevice = sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
     auto subdevices = {subdevice};
 

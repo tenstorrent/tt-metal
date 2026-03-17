@@ -30,9 +30,8 @@ BroadcastProgramFactory::cached_mesh_workload_t BroadcastProgramFactory::create_
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
-    const auto available_cores =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id);
-    auto subdevice_id = device_ctx.get_effective_sub_device_id(operation_attributes.sub_device_id);
+    const auto available_cores = device_ctx.get_worker_cores();
+    auto subdevice_id = device_ctx.get_current_sub_device_id();
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
     auto* mesh_device = device_ctx.raw_mesh_device();
 
@@ -104,7 +103,7 @@ BroadcastProgramFactory::cached_program_t BroadcastProgramFactory::create_at(
         operation_attributes.num_links,
         num_workers_per_link,
         mesh_device,
-        operation_attributes.sub_device_id,
+        std::nullopt,  // sub_device_id: use context
         CoreCoord(0, 0),
         std::nullopt);
 

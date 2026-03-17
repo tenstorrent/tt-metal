@@ -38,6 +38,5 @@ Tensor broadcast(
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     tt::tt_fabric::Topology topology,
-    std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+    std::optional<uint32_t> cluster_axis);
 }  // namespace ttnn::prim

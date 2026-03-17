@@ -111,7 +111,6 @@ TEST_F(MeshDevice1x4Fixture, AllGatherPersistentOutput) {
         /* dim */ 0,
         std::nullopt,
         std::nullopt,
-        std::nullopt,
         aggregated_output_tensor);
 
     // Quiesce parent mesh after all gather
@@ -150,7 +149,6 @@ TEST_F(MeshDevice1x4Fixture, ReduceScatter) {
     auto reduced = ttnn::reduce_scatter(
         aggregated_tensor,
         /* dim */ 3,
-        std::nullopt,
         std::nullopt,
         std::nullopt,
         std::nullopt,

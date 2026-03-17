@@ -25,7 +25,7 @@ void apply_device_delay(
     ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-    SubDeviceId sd = ttnn::DeviceContext(&mesh_device).get_effective_sub_device_id(subdevice_id);
+    SubDeviceId sd = subdevice_id.value_or(ttnn::DeviceContext(&mesh_device).get_current_sub_device_id());
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd);
 
     log_info(tt::LogAlways, "Starting delay primitive");
