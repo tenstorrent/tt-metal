@@ -17,7 +17,9 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
-    is_quad_ring,
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -52,7 +54,7 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        if is_quad_ring(mesh_device):
+        if is_quad_mesh(mesh_device) and is_ring_fabric(get_fabric_config()):
             return cls._convert_weights_quad_ring(hf_config, state_dicts, output_path, mesh_device)
         return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
 
