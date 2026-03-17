@@ -17,7 +17,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 struct DispatchSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    std::vector<CoreCoord> cores = {};
+    std::vector<CoreCoord> cores;
     GlobalSemaphore init_semaphore;          // Initialized in create_at()
     GlobalSemaphore cross_device_semaphore;  // Initialized in create_at()
 };
