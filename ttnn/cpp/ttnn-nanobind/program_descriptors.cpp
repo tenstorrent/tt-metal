@@ -775,6 +775,9 @@ void py_module_types(nb::module_& mod) {
         .def(
             "append_runtime_args_from",
             [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                if (&self == &other) {
+                    throw std::runtime_error("Cannot append a kernel's runtime args from itself");
+                }
                 // Find max args length across all cores in other
                 size_t max_args = 0;
                 for (const auto& [coord, args] : other.runtime_args) {

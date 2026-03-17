@@ -74,7 +74,11 @@ def _read_kernel_source(kernel_desc: "ttnn.KernelDescriptor") -> Tuple[str, Opti
         if os.path.exists(full_path):
             with open(full_path, "r") as f:
                 return f.read(), os.path.dirname(full_path)
-    return "", None
+    raise FileNotFoundError(
+        f"Kernel source file not found: '{kernel_desc.kernel_source}'. "
+        f"Searched paths: {[os.path.join(b, kernel_desc.kernel_source) if b else kernel_desc.kernel_source for b in base_paths]}. "
+        f"Ensure TT_METAL_HOME is set correctly (current: {os.environ.get('TT_METAL_HOME', '<unset>')})."
+    )
 
 
 _KERNEL_MAIN_SEARCH_RE = re.compile(r"\b(?:ALWI\s+)?void\s+kernel_main\s*\(")
