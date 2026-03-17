@@ -19,7 +19,7 @@ Create deterministic CI maintenance tickets for repeated failures on `main` in `
    - For **each** candidate you might create an issue for:
      - Download the job logs for **all three** failing runs (e.g. via `gh run view <run_id> --job <job_id> --log-failed` into `build_ci/ci_ticketing/create_tickets/downloaded_logs`).
      - Read the downloaded logs and confirm the **same** error (or same failure signature) appears in all three runs. If it does not, do not create an issue for that candidate.
-     - Extract the **actual** error excerpt from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception/failure message). Never use a generic placeholder like "Job failed in the last 3 runs" in the issue body.
+     - Extract the **actual** error excerpt from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception/failure message). Never use a generic placeholder like "Job failed in the last 3 runs" in the issue body. Use the **terminal** failure that caused the job to fail (e.g. the last exception or a device timeout), not an earlier TT_FATAL/assertion that may be from a negative test—see the "Error excerpt" section in `.cursor/rules/ci-create-tickets.mdc`.
      - Delete each downloaded log file after you finish using it.
    - Only create as many issues as you have capacity to validate in this way. Do not create issues for candidates you have not validated with downloaded logs.
 
