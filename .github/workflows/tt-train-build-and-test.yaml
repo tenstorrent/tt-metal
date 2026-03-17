@@ -11,6 +11,14 @@ on:
   workflow_dispatch:
   merge_group:
 
+concurrency:
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-docker-image:
     if: ${{ inputs.docker-image == '' }}
@@ -54,7 +62,7 @@ jobs:
 
       - name: Build tt-metal with tt-train
         run: |
-          ./build_metal.sh --build-tt-train -b Release
+          ./build_metal.sh --build-tt-train --release --build-dir build
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
