@@ -64,13 +64,15 @@ def generate_unpack_tilize_combinations(
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
-        if in_fmt != fmt.output_format:
-            continue
 
         if in_fmt.is_32_bit():
             continue  # Tilize 32b data into dest not yet supported
 
-        dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+        dest_acc_modes = (
+            (DestAccumulation.No,)
+            if in_fmt == DataFormat.Int16
+            else (DestAccumulation.No, DestAccumulation.Yes)
+        )
         unpacker_engines = (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
 
         for dest_acc in dest_acc_modes:
@@ -85,7 +87,9 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-    ]
+        DataFormat.Int16,
+    ],
+    same=True,  # Input format and output format are the same
 )
 ALL_UNPACK_TILIZE_COMBINATIONS = generate_unpack_tilize_combinations(
     UNPACK_TILIZE_FORMATS
