@@ -1,0 +1,1223 @@
+=== Sweep Trace Validation Report ===
+Model trace split: /localdev/stevenlee/tt-metal/model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed_split
+Sweep traces dir:  /localdev/stevenlee/tt-metal/model_tracer/traced_operations
+Operations validated: 35
+Total model configs: 323  |  Total sweep configs: 184
+
+--- Operation: ttnn.add ---
+  Model configs: 12 | Sweep configs: 12
+  Exact matches: 10/12
+  Close matches: 2/12 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 5
+      sweep config_id 4    -> model config_id 6
+      sweep config_id 5    -> model config_id 7
+      sweep config_id 7    -> model config_id 1
+      sweep config_id 8    -> model config_id 9
+      sweep config_id 9    -> model config_id 10
+      sweep config_id 10   -> model config_id 11
+      sweep config_id 11   -> model config_id 12
+    Close matches:
+      sweep config_id 6    -> model config_id 8 (85.7% similarity)
+      sweep config_id 12   -> model config_id 2 (85.7% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 10
+    Pairs with different hash: 2
+    Pair: sweep config_id 6 -> model config_id 8
+      Root causes: Category 3, Category 6
+        arguments.arg1.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg1.tensor_placement.placement: model=['PlacementReplicate', 'PlacementReplicate'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 12 -> model config_id 2
+      Root causes: Category 3, Category 6
+        arguments.arg1.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg1.tensor_placement.placement: model=['PlacementReplicate', 'PlacementReplicate'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.concat ---
+  Model configs: 4 | Sweep configs: 4
+  Exact matches: 4/4
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 1
+      sweep config_id 4    -> model config_id 2
+
+  config_hash: all 4 matched pairs have identical hashes
+
+--- Operation: ttnn.div ---
+  Model configs: 4 | Sweep configs: 4
+  Exact matches: 4/4
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 1
+      sweep config_id 4    -> model config_id 2
+
+  config_hash: all 4 matched pairs have identical hashes
+
+--- Operation: ttnn.embedding ---
+  Model configs: 3 | Sweep configs: 3
+  Exact matches: 1/3
+  Unmatched sweep configs: 2
+  Unmatched model configs: 2
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 3    -> model config_id 2
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 3 at 40.0%) -- [1, 1, 128]
+      sweep config_id 2: no model match (best candidate: model config_id 1 at 40.0%) -- [1, 1, 32]
+    Unmatched model configs:
+      model config_id 1: no sweep match -- [1, 1, 32]
+      model config_id 3: no sweep match -- [1, 1, 128]
+
+  config_hash: all 1 matched pairs have identical hashes
+
+--- Operation: ttnn.exp ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 2/2
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+      sweep config_id 2    -> model config_id 2
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.experimental.all_gather_async ---
+  Model configs: 13 | Sweep configs: 13
+  Exact matches: 12/13
+  Close matches: 1/13 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 5
+      sweep config_id 4    -> model config_id 6
+      sweep config_id 5    -> model config_id 7
+      sweep config_id 6    -> model config_id 1
+      sweep config_id 7    -> model config_id 8
+      sweep config_id 9    -> model config_id 10
+      sweep config_id 10   -> model config_id 11
+      sweep config_id 11   -> model config_id 12
+      sweep config_id 12   -> model config_id 13
+      sweep config_id 13   -> model config_id 2
+    Close matches:
+      sweep config_id 8    -> model config_id 9 (85.7% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 12
+    Pairs with different hash: 1
+    Pair: sweep config_id 8 -> model config_id 9
+      Root causes: Category 6
+        arguments.num_workers_per_link: model=1 sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+        arguments.use_broadcast: model=True sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.experimental.fast_reduce_nc ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 1/2
+  Close matches: 1/2 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+    Close matches:
+      sweep config_id 2    -> model config_id 2 (90.0% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 1
+    Pairs with different hash: 1
+    Pair: sweep config_id 2 -> model config_id 2
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.experimental.paged_fill_cache ---
+  Model configs: 128 | Sweep configs: 4
+  Exact matches: 0/4
+  Unmatched sweep configs: 4
+  Unmatched model configs: 128
+
+  Config ID mapping (sweep -> model):
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 4 at 50.0%) -- [256, 1, 32, 576]
+      sweep config_id 2: no model match (best candidate: model config_id 5 at 50.0%) -- [256, 1, 32, 576]
+      sweep config_id 3: no model match (best candidate: model config_id 1 at 50.0%) -- [256, 1, 32, 576]
+      sweep config_id 4: no model match (best candidate: model config_id 3 at 50.0%) -- [256, 1, 32, 576]
+    Unmatched model configs:
+      model config_id 1: no sweep match -- [256, 1, 32, 576]
+      model config_id 2: no sweep match -- [256, 1, 32, 576]
+      model config_id 3: no sweep match -- [256, 1, 32, 576]
+      model config_id 4: no sweep match -- [256, 1, 32, 576]
+      model config_id 5: no sweep match -- [256, 1, 32, 576]
+      model config_id 6: no sweep match -- [256, 1, 32, 576]
+      model config_id 7: no sweep match -- [256, 1, 32, 576]
+      model config_id 8: no sweep match -- [256, 1, 32, 576]
+      model config_id 9: no sweep match -- [256, 1, 32, 576]
+      model config_id 10: no sweep match -- [256, 1, 32, 576]
+      model config_id 11: no sweep match -- [256, 1, 32, 576]
+      model config_id 12: no sweep match -- [256, 1, 32, 576]
+      model config_id 13: no sweep match -- [256, 1, 32, 576]
+      model config_id 14: no sweep match -- [256, 1, 32, 576]
+      model config_id 15: no sweep match -- [256, 1, 32, 576]
+      model config_id 16: no sweep match -- [256, 1, 32, 576]
+      model config_id 17: no sweep match -- [256, 1, 32, 576]
+      model config_id 18: no sweep match -- [256, 1, 32, 576]
+      model config_id 19: no sweep match -- [256, 1, 32, 576]
+      model config_id 20: no sweep match -- [256, 1, 32, 576]
+      model config_id 21: no sweep match -- [256, 1, 32, 576]
+      model config_id 22: no sweep match -- [256, 1, 32, 576]
+      model config_id 23: no sweep match -- [256, 1, 32, 576]
+      model config_id 24: no sweep match -- [256, 1, 32, 576]
+      model config_id 25: no sweep match -- [256, 1, 32, 576]
+      model config_id 26: no sweep match -- [256, 1, 32, 576]
+      model config_id 27: no sweep match -- [256, 1, 32, 576]
+      model config_id 28: no sweep match -- [256, 1, 32, 576]
+      model config_id 29: no sweep match -- [256, 1, 32, 576]
+      model config_id 30: no sweep match -- [256, 1, 32, 576]
+      model config_id 31: no sweep match -- [256, 1, 32, 576]
+      model config_id 32: no sweep match -- [256, 1, 32, 576]
+      model config_id 33: no sweep match -- [256, 1, 32, 576]
+      model config_id 34: no sweep match -- [256, 1, 32, 576]
+      model config_id 35: no sweep match -- [256, 1, 32, 576]
+      model config_id 36: no sweep match -- [256, 1, 32, 576]
+      model config_id 37: no sweep match -- [256, 1, 32, 576]
+      model config_id 38: no sweep match -- [256, 1, 32, 576]
+      model config_id 39: no sweep match -- [256, 1, 32, 576]
+      model config_id 40: no sweep match -- [256, 1, 32, 576]
+      model config_id 41: no sweep match -- [256, 1, 32, 576]
+      model config_id 42: no sweep match -- [256, 1, 32, 576]
+      model config_id 43: no sweep match -- [256, 1, 32, 576]
+      model config_id 44: no sweep match -- [256, 1, 32, 576]
+      model config_id 45: no sweep match -- [256, 1, 32, 576]
+      model config_id 46: no sweep match -- [256, 1, 32, 576]
+      model config_id 47: no sweep match -- [256, 1, 32, 576]
+      model config_id 48: no sweep match -- [256, 1, 32, 576]
+      model config_id 49: no sweep match -- [256, 1, 32, 576]
+      model config_id 50: no sweep match -- [256, 1, 32, 576]
+      model config_id 51: no sweep match -- [256, 1, 32, 576]
+      model config_id 52: no sweep match -- [256, 1, 32, 576]
+      model config_id 53: no sweep match -- [256, 1, 32, 576]
+      model config_id 54: no sweep match -- [256, 1, 32, 576]
+      model config_id 55: no sweep match -- [256, 1, 32, 576]
+      model config_id 56: no sweep match -- [256, 1, 32, 576]
+      model config_id 57: no sweep match -- [256, 1, 32, 576]
+      model config_id 58: no sweep match -- [256, 1, 32, 576]
+      model config_id 59: no sweep match -- [256, 1, 32, 576]
+      model config_id 60: no sweep match -- [256, 1, 32, 576]
+      model config_id 61: no sweep match -- [256, 1, 32, 576]
+      model config_id 62: no sweep match -- [256, 1, 32, 576]
+      model config_id 63: no sweep match -- [256, 1, 32, 576]
+      model config_id 64: no sweep match -- [256, 1, 32, 576]
+      model config_id 65: no sweep match -- [256, 1, 32, 576]
+      model config_id 66: no sweep match -- [256, 1, 32, 576]
+      model config_id 67: no sweep match -- [256, 1, 32, 576]
+      model config_id 68: no sweep match -- [256, 1, 32, 576]
+      model config_id 69: no sweep match -- [256, 1, 32, 576]
+      model config_id 70: no sweep match -- [256, 1, 32, 576]
+      model config_id 71: no sweep match -- [256, 1, 32, 576]
+      model config_id 72: no sweep match -- [256, 1, 32, 576]
+      model config_id 73: no sweep match -- [256, 1, 32, 576]
+      model config_id 74: no sweep match -- [256, 1, 32, 576]
+      model config_id 75: no sweep match -- [256, 1, 32, 576]
+      model config_id 76: no sweep match -- [256, 1, 32, 576]
+      model config_id 77: no sweep match -- [256, 1, 32, 576]
+      model config_id 78: no sweep match -- [256, 1, 32, 576]
+      model config_id 79: no sweep match -- [256, 1, 32, 576]
+      model config_id 80: no sweep match -- [256, 1, 32, 576]
+      model config_id 81: no sweep match -- [256, 1, 32, 576]
+      model config_id 82: no sweep match -- [256, 1, 32, 576]
+      model config_id 83: no sweep match -- [256, 1, 32, 576]
+      model config_id 84: no sweep match -- [256, 1, 32, 576]
+      model config_id 85: no sweep match -- [256, 1, 32, 576]
+      model config_id 86: no sweep match -- [256, 1, 32, 576]
+      model config_id 87: no sweep match -- [256, 1, 32, 576]
+      model config_id 88: no sweep match -- [256, 1, 32, 576]
+      model config_id 89: no sweep match -- [256, 1, 32, 576]
+      model config_id 90: no sweep match -- [256, 1, 32, 576]
+      model config_id 91: no sweep match -- [256, 1, 32, 576]
+      model config_id 92: no sweep match -- [256, 1, 32, 576]
+      model config_id 93: no sweep match -- [256, 1, 32, 576]
+      model config_id 94: no sweep match -- [256, 1, 32, 576]
+      model config_id 95: no sweep match -- [256, 1, 32, 576]
+      model config_id 96: no sweep match -- [256, 1, 32, 576]
+      model config_id 97: no sweep match -- [256, 1, 32, 576]
+      model config_id 98: no sweep match -- [256, 1, 32, 576]
+      model config_id 99: no sweep match -- [256, 1, 32, 576]
+      model config_id 100: no sweep match -- [256, 1, 32, 576]
+      model config_id 101: no sweep match -- [256, 1, 32, 576]
+      model config_id 102: no sweep match -- [256, 1, 32, 576]
+      model config_id 103: no sweep match -- [256, 1, 32, 576]
+      model config_id 104: no sweep match -- [256, 1, 32, 576]
+      model config_id 105: no sweep match -- [256, 1, 32, 576]
+      model config_id 106: no sweep match -- [256, 1, 32, 576]
+      model config_id 107: no sweep match -- [256, 1, 32, 576]
+      model config_id 108: no sweep match -- [256, 1, 32, 576]
+      model config_id 109: no sweep match -- [256, 1, 32, 576]
+      model config_id 110: no sweep match -- [256, 1, 32, 576]
+      model config_id 111: no sweep match -- [256, 1, 32, 576]
+      model config_id 112: no sweep match -- [256, 1, 32, 576]
+      model config_id 113: no sweep match -- [256, 1, 32, 576]
+      model config_id 114: no sweep match -- [256, 1, 32, 576]
+      model config_id 115: no sweep match -- [256, 1, 32, 576]
+      model config_id 116: no sweep match -- [256, 1, 32, 576]
+      model config_id 117: no sweep match -- [256, 1, 32, 576]
+      model config_id 118: no sweep match -- [256, 1, 32, 576]
+      model config_id 119: no sweep match -- [256, 1, 32, 576]
+      model config_id 120: no sweep match -- [256, 1, 32, 576]
+      model config_id 121: no sweep match -- [256, 1, 32, 576]
+      model config_id 122: no sweep match -- [256, 1, 32, 576]
+      model config_id 123: no sweep match -- [256, 1, 32, 576]
+      model config_id 124: no sweep match -- [256, 1, 32, 576]
+      model config_id 125: no sweep match -- [256, 1, 32, 576]
+      model config_id 126: no sweep match -- [256, 1, 32, 576]
+      model config_id 127: no sweep match -- [256, 1, 32, 576]
+      model config_id 128: no sweep match -- [256, 1, 32, 576]
+
+  config_hash: all 0 matched pairs have identical hashes
+
+--- Operation: ttnn.experimental.paged_update_cache ---
+  Model configs: 1 | Sweep configs: 1
+  Exact matches: 0/1
+  Close matches: 1/1 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Close matches:
+      sweep config_id 1    -> model config_id 1 (92.0% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 0
+    Pairs with different hash: 1
+    Pair: sweep config_id 1 -> model config_id 1
+      Root causes: Category 3, Category 6
+        arguments.mesh_coords: model={'type': 'set', 'value': '{MeshCoordinate([1, 0]), MeshCo... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+        arguments.update_idxs_tensor.tensor_placement.placement: model=['PlacementShard(0)'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+
+--- Operation: ttnn.experimental.rotary_embedding_llama ---
+  Model configs: 4 | Sweep configs: 2
+  Exact matches: 0/2
+  Close matches: 2/2 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 2
+
+  Config ID mapping (sweep -> model):
+    Close matches:
+      sweep config_id 4    -> model config_id 4 (88.0% similarity)
+      sweep config_id 5    -> model config_id 3 (88.0% similarity)
+    Unmatched model configs:
+      model config_id 1: no sweep match -- [1, 16, 32, 64]
+      model config_id 2: no sweep match -- [1, 1, 32, 64]
+
+  config_hash diagnostics:
+    Pairs with matching hash: 0
+    Pairs with different hash: 2
+    Pair: sweep config_id 4 -> model config_id 4
+      Root causes: Category 3
+        arguments.arg0.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg0.tensor_placement.placement: model=['PlacementReplicate', 'PlacementShard(-1)'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg1.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg1.tensor_placement.placement: model=['PlacementShard(1)', 'PlacementReplicate'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg2.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg2.tensor_placement.placement: model=['PlacementShard(1)', 'PlacementReplicate'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+    Pair: sweep config_id 5 -> model config_id 3
+      Root causes: Category 3
+        arguments.arg0.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg0.tensor_placement.placement: model=['PlacementShard(2)', 'PlacementShard(1)'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg1.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg1.tensor_placement.placement: model=['PlacementShard(1)', 'PlacementReplicate'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg2.tensor_placement.distribution_shape: model=[4, 8] sweep=[32]
+          Category 3: tensor_placement -- fixable in sweep module
+        arguments.arg2.tensor_placement.placement: model=['PlacementShard(1)', 'PlacementReplicate'] sweep=['PlacementReplicate']
+          Category 3: tensor_placement -- fixable in sweep module
+
+--- Operation: ttnn.interleaved_to_sharded ---
+  Model configs: 1 | Sweep configs: 1
+  Exact matches: 1/1
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+
+  config_hash: all 1 matched pairs have identical hashes
+
+--- Operation: ttnn.linear ---
+  Model configs: 28 | Sweep configs: 18
+  Exact matches: 0/18
+  Unmatched sweep configs: 18
+  Unmatched model configs: 28
+
+  Config ID mapping (sweep -> model):
+    Unmatched sweep configs:
+      sweep config_id 3: no model match (best candidate: model config_id 3 at 39.1%) -- [1, 1, 8, 7168]
+      sweep config_id 5: no model match (best candidate: model config_id 20 at 41.7%) -- [1, 1, 32, 7168]
+      sweep config_id 6: no model match (best candidate: model config_id 27 at 41.7%) -- [1, 1, 32, 256]
+      sweep config_id 7: no model match (best candidate: model config_id 28 at 39.1%) -- [1, 1, 32, 7168]
+      sweep config_id 8: no model match (best candidate: model config_id 4 at 41.7%) -- [1, 1, 32, 896]
+      sweep config_id 12: no model match (best candidate: model config_id 8 at 37.5%) -- [1, 1, 8, 7168]
+      sweep config_id 13: no model match (best candidate: model config_id 9 at 37.5%) -- [1, 1, 8, 256]
+      sweep config_id 14: no model match (best candidate: model config_id 10 at 41.7%) -- [1, 1, 32, 1536]
+      sweep config_id 15: no model match (best candidate: model config_id 12 at 39.1%) -- [1, 1, 8, 7168]
+      sweep config_id 16: no model match (best candidate: model config_id 8 at 37.5%) -- [1, 1, 8, 7168]
+      sweep config_id 17: no model match (best candidate: model config_id 2 at 41.7%) -- [1, 1, 32, 16384]
+      sweep config_id 18: no model match (best candidate: model config_id 14 at 37.5%) -- [1, 1, 8, 2304]
+      sweep config_id 19: no model match (best candidate: model config_id 15 at 41.7%) -- [1, 1, 32, 896]
+      sweep config_id 20: no model match (best candidate: model config_id 16 at 37.5%) -- [1, 1, 32, 1536]
+      sweep config_id 21: no model match (best candidate: model config_id 19 at 41.7%) -- [1, 1, 32, 16384]
+      sweep config_id 22: no model match (best candidate: model config_id 20 at 41.7%) -- [1, 1, 32, 7168]
+      sweep config_id 23: no model match (best candidate: model config_id 21 at 41.7%) -- [1, 1, 32, 2304]
+      sweep config_id 24: no model match (best candidate: model config_id 22 at 39.1%) -- [1, 1, 32, 7168]
+    Unmatched model configs:
+      model config_id 1: no sweep match -- [1, 128, 32, 512]
+      model config_id 2: no sweep match -- [1, 1, 32, 16384]
+      model config_id 3: no sweep match -- [1, 1, 8, 7168]
+      model config_id 4: no sweep match -- [1, 1, 32, 896]
+      model config_id 5: no sweep match -- [1, 8, 32, 7168]
+      model config_id 6: no sweep match -- [1, 8, 32, 7168]
+      model config_id 7: no sweep match -- [1, 8, 32, 2048]
+      model config_id 8: no sweep match -- [1, 1, 8, 7168]
+      model config_id 9: no sweep match -- [1, 1, 8, 256]
+      model config_id 10: no sweep match -- [1, 1, 32, 1536]
+      model config_id 11: no sweep match -- [1, 16, 32, 128]
+      model config_id 12: no sweep match -- [1, 1, 8, 7168]
+      model config_id 13: no sweep match -- [1, 1, 8, 7168]
+      model config_id 14: no sweep match -- [1, 1, 8, 2304]
+      model config_id 15: no sweep match -- [1, 1, 32, 896]
+      model config_id 16: no sweep match -- [1, 1, 32, 1536]
+      model config_id 17: no sweep match -- [1, 16, 32, 128]
+      model config_id 18: no sweep match -- [1, 128, 4, 512]
+      model config_id 19: no sweep match -- [1, 1, 32, 16384]
+      model config_id 20: no sweep match -- [1, 1, 32, 7168]
+      model config_id 21: no sweep match -- [1, 1, 32, 2304]
+      model config_id 22: no sweep match -- [1, 1, 32, 7168]
+      model config_id 23: no sweep match -- [1, 8, 128, 7168]
+      model config_id 24: no sweep match -- [1, 8, 128, 7168]
+      model config_id 25: no sweep match -- [1, 8, 128, 2048]
+      model config_id 26: no sweep match -- [1, 1, 32, 7168]
+      model config_id 27: no sweep match -- [1, 1, 32, 256]
+      model config_id 28: no sweep match -- [1, 1, 32, 7168]
+
+  config_hash: all 0 matched pairs have identical hashes
+
+--- Operation: ttnn.multiply ---
+  Model configs: 16 | Sweep configs: 13
+  Exact matches: 2/13
+  Close matches: 9/13 (>=80% similarity)
+  Unmatched sweep configs: 2
+  Unmatched model configs: 5
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 8    -> model config_id 9
+      sweep config_id 13   -> model config_id 15
+    Close matches:
+      sweep config_id 2    -> model config_id 4 (85.7% similarity)
+      sweep config_id 3    -> model config_id 5 (92.3% similarity)
+      sweep config_id 4    -> model config_id 2 (92.3% similarity)
+      sweep config_id 5    -> model config_id 1 (85.7% similarity)
+      sweep config_id 6    -> model config_id 7 (85.7% similarity)
+      sweep config_id 7    -> model config_id 8 (85.7% similarity)
+      sweep config_id 9    -> model config_id 11 (92.3% similarity)
+      sweep config_id 11   -> model config_id 13 (85.7% similarity)
+      sweep config_id 12   -> model config_id 14 (92.3% similarity)
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 3 at 78.6%) -- [1, 1, 8, 8]
+      sweep config_id 10: no model match (best candidate: model config_id 12 at 78.6%) -- [1, 1, 32, 8]
+    Unmatched model configs:
+      model config_id 3: no sweep match -- [1, 1, 8, 8]
+      model config_id 6: no sweep match -- [1, 1, 8, 256]
+      model config_id 10: no sweep match -- [1, 1, 32, 2304]
+      model config_id 12: no sweep match -- [1, 1, 32, 8]
+      model config_id 16: no sweep match -- [1, 1, 32, 256]
+
+  config_hash diagnostics:
+    Pairs with matching hash: 2
+    Pairs with different hash: 9
+    Pair: sweep config_id 2 -> model config_id 4
+      Root causes: Category 6
+        arguments.input_tensor_a_activations: model=[{'repr': 'UnaryOpType.SILU', 'type': 'UnaryOpType'}] sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 3 -> model config_id 5
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 4 -> model config_id 2
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 5 -> model config_id 1
+      Root causes: Category 7
+        arguments.arg1: model=0.25 sweep=2.0
+          Category 7: argument value difference -- fixable in sweep module
+    Pair: sweep config_id 6 -> model config_id 7
+      Root causes: Category 6
+        arguments.input_tensor_a_activations: model=[{'repr': 'UnaryOpType.SILU', 'type': 'UnaryOpType'}] sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 7 -> model config_id 8
+      Root causes: Category 7
+        arguments.arg1: model=0.25 sweep=2.0
+          Category 7: argument value difference -- fixable in sweep module
+    Pair: sweep config_id 9 -> model config_id 11
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 11 -> model config_id 13
+      Root causes: Category 6
+        arguments.input_tensor_a_activations: model=[{'repr': 'UnaryOpType.SILU', 'type': 'UnaryOpType'}] sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 12 -> model config_id 14
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.neg ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 2/2
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+      sweep config_id 2    -> model config_id 2
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.ones_like ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 2/2
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+      sweep config_id 2    -> model config_id 2
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.pad ---
+  Model configs: 4 | Sweep configs: 4
+  Exact matches: 0/4
+  Unmatched sweep configs: 4
+  Unmatched model configs: 4
+
+  Config ID mapping (sweep -> model):
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 3 at 70.0%) -- [1, 32, 8, 32]
+      sweep config_id 2: no model match (best candidate: model config_id 4 at 70.0%) -- [1, 1, 32, 8]
+      sweep config_id 3: no model match (best candidate: model config_id 1 at 70.0%) -- [1, 8, 8, 32]
+      sweep config_id 4: no model match (best candidate: model config_id 2 at 70.0%) -- [1, 1, 8, 8]
+    Unmatched model configs:
+      model config_id 1: no sweep match -- [1, 8, 8, 32]
+      model config_id 2: no sweep match -- [1, 1, 8, 8]
+      model config_id 3: no sweep match -- [1, 32, 8, 32]
+      model config_id 4: no sweep match -- [1, 1, 32, 8]
+
+  config_hash: all 0 matched pairs have identical hashes
+
+--- Operation: ttnn.permute ---
+  Model configs: 6 | Sweep configs: 6
+  Exact matches: 6/6
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 5
+      sweep config_id 4    -> model config_id 6
+      sweep config_id 5    -> model config_id 1
+      sweep config_id 6    -> model config_id 2
+
+  config_hash: all 6 matched pairs have identical hashes
+
+--- Operation: ttnn.repeat ---
+  Model configs: 12 | Sweep configs: 12
+  Exact matches: 0/12
+  Close matches: 2/12 (>=80% similarity)
+  Unmatched sweep configs: 10
+  Unmatched model configs: 10
+
+  Config ID mapping (sweep -> model):
+    Close matches:
+      sweep config_id 2    -> model config_id 4 (85.7% similarity)
+      sweep config_id 9    -> model config_id 10 (85.7% similarity)
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 3 at 71.4%) -- [1, 1, 1, 4]
+      sweep config_id 3: no model match (best candidate: model config_id 5 at 75.0%) -- [1, 1, 8, 8]
+      sweep config_id 4: no model match (best candidate: model config_id 6 at 75.0%) -- [1, 1, 32, 7168]
+      sweep config_id 5: no model match (best candidate: model config_id 1 at 71.4%) -- [1, 1, 1, 256]
+      sweep config_id 6: no model match (best candidate: model config_id 1 at 71.4%) -- [1, 1, 1, 256]
+      sweep config_id 7: no model match (best candidate: model config_id 2 at 71.4%) -- [1, 1, 1, 8]
+      sweep config_id 8: no model match (best candidate: model config_id 3 at 71.4%) -- [1, 1, 1, 4]
+      sweep config_id 10: no model match (best candidate: model config_id 11 at 75.0%) -- [1, 1, 32, 8]
+      sweep config_id 11: no model match (best candidate: model config_id 12 at 75.0%) -- [1, 1, 128, 7168]
+      sweep config_id 12: no model match (best candidate: model config_id 2 at 71.4%) -- [1, 1, 1, 8]
+    Unmatched model configs:
+      model config_id 1: no sweep match -- [1, 1, 1, 256]
+      model config_id 2: no sweep match -- [1, 1, 1, 8]
+      model config_id 3: no sweep match -- [1, 1, 1, 4]
+      model config_id 5: no sweep match -- [1, 1, 8, 8]
+      model config_id 6: no sweep match -- [1, 1, 32, 7168]
+      model config_id 7: no sweep match -- [1, 1, 1, 256]
+      model config_id 8: no sweep match -- [1, 1, 1, 8]
+      model config_id 9: no sweep match -- [1, 1, 1, 4]
+      model config_id 11: no sweep match -- [1, 1, 32, 8]
+      model config_id 12: no sweep match -- [1, 1, 128, 7168]
+
+  config_hash diagnostics:
+    Pairs with matching hash: 0
+    Pairs with different hash: 2
+    Pair: sweep config_id 2 -> model config_id 4
+      Root causes: Category 7
+        arguments.arg1: model={'type': 'Shape', 'value': 'Shape([1, 1, 1, 32])'} sweep=[1, 1, 1, 32]
+          Category 7: argument value difference -- fixable in sweep module
+    Pair: sweep config_id 9 -> model config_id 10
+      Root causes: Category 7
+        arguments.arg1: model={'type': 'Shape', 'value': 'Shape([1, 1, 1, 32])'} sweep=[1, 1, 1, 32]
+          Category 7: argument value difference -- fixable in sweep module
+
+--- Operation: ttnn.reshape ---
+  Model configs: 22 | Sweep configs: 22
+  Exact matches: 2/22
+  Unmatched sweep configs: 20
+  Unmatched model configs: 20
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 6    -> model config_id 1
+      sweep config_id 11   -> model config_id 12
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 3 at 75.0%) -- [1, 1, 8, 8]
+      sweep config_id 2: no model match (best candidate: model config_id 4 at 75.0%) -- [1, 8, 8, 32]
+      sweep config_id 3: no model match (best candidate: model config_id 5 at 75.0%) -- [1, 1, 8, 7168]
+      sweep config_id 4: no model match (best candidate: model config_id 6 at 75.0%) -- [1, 1, 8, 8]
+      sweep config_id 5: no model match (best candidate: model config_id 7 at 75.0%) -- [1, 32, 1, 7168]
+      sweep config_id 7: no model match (best candidate: model config_id 8 at 75.0%) -- [8, 1, 32, 7168]
+      sweep config_id 8: no model match (best candidate: model config_id 9 at 75.0%) -- [1, 8, 32, 7168]
+      sweep config_id 9: no model match (best candidate: model config_id 10 at 75.0%) -- [1, 32, 1, 8]
+      sweep config_id 10: no model match (best candidate: model config_id 11 at 75.0%) -- [8, 8, 1, 7168]
+      sweep config_id 12: no model match (best candidate: model config_id 13 at 75.0%) -- [1, 1, 32, 256]
+      sweep config_id 13: no model match (best candidate: model config_id 14 at 75.0%) -- [1, 1, 32, 8]
+      sweep config_id 14: no model match (best candidate: model config_id 15 at 75.0%) -- [1, 32, 8, 32]
+      sweep config_id 15: no model match (best candidate: model config_id 16 at 75.0%) -- [1, 1, 32, 7168]
+      sweep config_id 16: no model match (best candidate: model config_id 17 at 75.0%) -- [1, 1, 32, 8]
+      sweep config_id 17: no model match (best candidate: model config_id 2 at 75.0%) -- [1, 1, 8, 256]
+      sweep config_id 18: no model match (best candidate: model config_id 18 at 75.0%) -- [1, 128, 1, 7168]
+      sweep config_id 19: no model match (best candidate: model config_id 19 at 75.0%) -- [8, 1, 128, 7168]
+      sweep config_id 20: no model match (best candidate: model config_id 20 at 75.0%) -- [1, 8, 128, 7168]
+      sweep config_id 21: no model match (best candidate: model config_id 21 at 75.0%) -- [1, 128, 1, 8]
+      sweep config_id 22: no model match (best candidate: model config_id 22 at 75.0%) -- [8, 32, 1, 7168]
+    Unmatched model configs:
+      model config_id 2: no sweep match -- [1, 1, 8, 256]
+      model config_id 3: no sweep match -- [1, 1, 8, 8]
+      model config_id 4: no sweep match -- [1, 8, 8, 32]
+      model config_id 5: no sweep match -- [1, 1, 8, 7168]
+      model config_id 6: no sweep match -- [1, 1, 8, 8]
+      model config_id 7: no sweep match -- [1, 32, 1, 7168]
+      model config_id 8: no sweep match -- [8, 1, 32, 7168]
+      model config_id 9: no sweep match -- [1, 8, 32, 7168]
+      model config_id 10: no sweep match -- [1, 32, 1, 8]
+      model config_id 11: no sweep match -- [8, 8, 1, 7168]
+      model config_id 13: no sweep match -- [1, 1, 32, 256]
+      model config_id 14: no sweep match -- [1, 1, 32, 8]
+      model config_id 15: no sweep match -- [1, 32, 8, 32]
+      model config_id 16: no sweep match -- [1, 1, 32, 7168]
+      model config_id 17: no sweep match -- [1, 1, 32, 8]
+      model config_id 18: no sweep match -- [1, 128, 1, 7168]
+      model config_id 19: no sweep match -- [8, 1, 128, 7168]
+      model config_id 20: no sweep match -- [1, 8, 128, 7168]
+      model config_id 21: no sweep match -- [1, 128, 1, 8]
+      model config_id 22: no sweep match -- [8, 32, 1, 7168]
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.rms_norm ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 2/2
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+      sweep config_id 2    -> model config_id 2
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.rms_norm_post_all_gather ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 1/2
+  Unmatched sweep configs: 1
+  Unmatched model configs: 1
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 2    -> model config_id 1
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 2 at 76.2%) -- [1, 1, 32, 896]
+    Unmatched model configs:
+      model config_id 2: no sweep match -- [1, 1, 32, 896]
+
+  config_hash: all 1 matched pairs have identical hashes
+
+--- Operation: ttnn.rms_norm_pre_all_gather ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 0/2
+  Close matches: 2/2 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Close matches:
+      sweep config_id 1    -> model config_id 1 (87.5% similarity)
+      sweep config_id 2    -> model config_id 2 (87.5% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 0
+    Pairs with different hash: 2
+    Pair: sweep config_id 1 -> model config_id 1
+      Root causes: Category 6
+        arguments.program_config: model={'type': 'LayerNormDefaultProgramConfig', 'value': 'Layer... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 2 -> model config_id 2
+      Root causes: Category 7
+        arguments.arg0.original_dtype: model=DataType.FLOAT32 sweep=DataType.BFLOAT16
+          Category 7: argument value difference -- fixable in sweep module
+
+--- Operation: ttnn.scatter ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 0/2
+  Unmatched sweep configs: 2
+  Unmatched model configs: 2
+
+  Config ID mapping (sweep -> model):
+    Unmatched sweep configs:
+      sweep config_id 1: no model match (best candidate: model config_id 2 at 68.4%) -- dim=3
+      sweep config_id 2: no model match (best candidate: model config_id 1 at 73.7%) -- dim=3
+    Unmatched model configs:
+      model config_id 1: no sweep match -- dim=3
+      model config_id 2: no sweep match -- dim=3
+
+  config_hash: all 0 matched pairs have identical hashes
+
+--- Operation: ttnn.sigmoid ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 2/2
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+      sweep config_id 2    -> model config_id 2
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.slice ---
+  Model configs: 16 | Sweep configs: 16
+  Exact matches: 12/16
+  Close matches: 4/16 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 5
+      sweep config_id 4    -> model config_id 6
+      sweep config_id 5    -> model config_id 7
+      sweep config_id 6    -> model config_id 1
+      sweep config_id 7    -> model config_id 8
+      sweep config_id 11   -> model config_id 12
+      sweep config_id 13   -> model config_id 14
+      sweep config_id 14   -> model config_id 15
+      sweep config_id 15   -> model config_id 16
+      sweep config_id 16   -> model config_id 2
+    Close matches:
+      sweep config_id 8    -> model config_id 9 (88.9% similarity)
+      sweep config_id 9    -> model config_id 10 (88.9% similarity)
+      sweep config_id 10   -> model config_id 11 (88.9% similarity)
+      sweep config_id 12   -> model config_id 13 (88.9% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 12
+    Pairs with different hash: 4
+    Pair: sweep config_id 8 -> model config_id 9
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': True, 'shard_spec': {'grid': [{'end': {'x'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 9 -> model config_id 10
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': True, 'shard_spec': {'grid': [{'end': {'x'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 10 -> model config_id 11
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': False, 'shard_spec': 'None', 'buffer_type'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 12 -> model config_id 13
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': True, 'shard_spec': {'grid': [{'end': {'x'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.sum ---
+  Model configs: 6 | Sweep configs: 6
+  Exact matches: 4/6
+  Close matches: 2/6 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 3    -> model config_id 5
+      sweep config_id 4    -> model config_id 6
+      sweep config_id 6    -> model config_id 2
+    Close matches:
+      sweep config_id 2    -> model config_id 4 (87.5% similarity)
+      sweep config_id 5    -> model config_id 1 (87.5% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 4
+    Pairs with different hash: 2
+    Pair: sweep config_id 2 -> model config_id 4
+      Root causes: Category 6
+        arguments.keepdim: model=<missing> sweep=True
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 5 -> model config_id 1
+      Root causes: Category 6
+        arguments.keepdim: model=<missing> sweep=True
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.tilize ---
+  Model configs: 1 | Sweep configs: 1
+  Exact matches: 1/1
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+
+  config_hash: all 1 matched pairs have identical hashes
+
+--- Operation: ttnn.tilize_with_zero_padding ---
+  Model configs: 1 | Sweep configs: 1
+  Exact matches: 1/1
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+
+  config_hash: all 1 matched pairs have identical hashes
+
+--- Operation: ttnn.topk ---
+  Model configs: 6 | Sweep configs: 6
+  Exact matches: 6/6
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 4
+      sweep config_id 3    -> model config_id 5
+      sweep config_id 4    -> model config_id 6
+      sweep config_id 5    -> model config_id 1
+      sweep config_id 6    -> model config_id 2
+
+  config_hash: all 6 matched pairs have identical hashes
+
+--- Operation: ttnn.transpose ---
+  Model configs: 8 | Sweep configs: 8
+  Exact matches: 2/8
+  Close matches: 6/8 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 8    -> model config_id 2
+    Close matches:
+      sweep config_id 2    -> model config_id 4 (88.9% similarity)
+      sweep config_id 3    -> model config_id 5 (88.9% similarity)
+      sweep config_id 4    -> model config_id 6 (100.0% similarity)
+      sweep config_id 5    -> model config_id 7 (88.9% similarity)
+      sweep config_id 6    -> model config_id 1 (88.9% similarity)
+      sweep config_id 7    -> model config_id 8 (100.0% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 2
+    Pairs with different hash: 6
+    Pair: sweep config_id 2 -> model config_id 4
+      Root causes: Category 6
+        arguments.memory_config: model=<missing> sweep={'memory_layout': 'TensorMemoryLayout.INTERLEAVED', 'buff...
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 3 -> model config_id 5
+      Root causes: Category 8
+        arguments.memory_config.shard_spec.grid[0].end.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[0].end.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[0].start.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[0].start.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[1].end.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[1].start.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[2].end.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[2].start.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[3].end.x: model=0 sweep=3
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[3].end.y: model=5 sweep=8
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        ... and 20 more diffs
+    Pair: sweep config_id 4 -> model config_id 6
+      Root causes: Category 8
+        arguments.arg0.memory_config.shard_spec.grid[0].end.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[0].end.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[0].start.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[0].start.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[1].end.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[1].start.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[2].end.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[2].start.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[3].end.x: model=0 sweep=3
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[3].end.y: model=5 sweep=8
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        ... and 20 more diffs
+    Pair: sweep config_id 5 -> model config_id 7
+      Root causes: Category 8
+        arguments.memory_config.shard_spec.grid[0].end.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[0].end.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[0].start.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[0].start.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[1].end.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[1].start.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[2].end.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[2].start.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[3].end.x: model=0 sweep=3
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.memory_config.shard_spec.grid[3].end.y: model=5 sweep=8
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        ... and 20 more diffs
+    Pair: sweep config_id 6 -> model config_id 1
+      Root causes: Category 6
+        arguments.memory_config: model=<missing> sweep={'memory_layout': 'TensorMemoryLayout.INTERLEAVED', 'buff...
+          Category 6: extra/missing keys -- fixable in sweep module
+    Pair: sweep config_id 7 -> model config_id 8
+      Root causes: Category 8
+        arguments.arg0.memory_config.shard_spec.grid[0].end.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[0].end.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[0].start.x: model=3 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[0].start.y: model=8 sweep=0
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[1].end.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[1].start.y: model=0 sweep=4
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[2].end.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[2].start.y: model=4 sweep=5
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[3].end.x: model=0 sweep=3
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        arguments.arg0.memory_config.shard_spec.grid[3].end.y: model=5 sweep=8
+          Category 8: shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module
+        ... and 20 more diffs
+
+--- Operation: ttnn.typecast ---
+  Model configs: 3 | Sweep configs: 3
+  Exact matches: 3/3
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 3
+      sweep config_id 2    -> model config_id 1
+      sweep config_id 3    -> model config_id 2
+
+  config_hash: all 3 matched pairs have identical hashes
+
+--- Operation: ttnn.unsqueeze ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 2/2
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+      sweep config_id 2    -> model config_id 2
+
+  config_hash: all 2 matched pairs have identical hashes
+
+--- Operation: ttnn.unsqueeze_to_4D ---
+  Model configs: 1 | Sweep configs: 1
+  Exact matches: 1/1
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+
+  config_hash: all 1 matched pairs have identical hashes
+
+--- Operation: ttnn.untilize ---
+  Model configs: 2 | Sweep configs: 2
+  Exact matches: 1/2
+  Close matches: 1/2 (>=80% similarity)
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 2    -> model config_id 2
+    Close matches:
+      sweep config_id 1    -> model config_id 1 (85.7% similarity)
+
+  config_hash diagnostics:
+    Pairs with matching hash: 1
+    Pairs with different hash: 1
+    Pair: sweep config_id 1 -> model config_id 1
+      Root causes: Category 6
+        arguments.memory_config: model={'is_sharded': True, 'shard_spec': {'grid': [{'end': {'x'... sweep=<missing>
+          Category 6: extra/missing keys -- fixable in sweep module
+
+--- Operation: ttnn.zeros ---
+  Model configs: 1 | Sweep configs: 1
+  Exact matches: 1/1
+  Unmatched sweep configs: 0
+  Unmatched model configs: 0
+
+  Config ID mapping (sweep -> model):
+    Exact matches:
+      sweep config_id 1    -> model config_id 1
+
+  config_hash: all 1 matched pairs have identical hashes
+
+=== Summary ===
+Total sweep configs: 184 | Matched: 88 exact + 33 close | Unmatched sweep: 63 | Unmatched model: 202
+Coverage: 65.8%  (of sweep configs matched)
+
+=== config_hash Summary ===
+Total matched pairs analyzed: 121
+Pairs with identical config_hash: 88
+Pairs with different config_hash: 33
+Root cause breakdown:
+  Category 3 (tensor_placement -- fixable in sweep module): 5 pairs
+  Category 6 (extra/missing keys -- fixable in sweep module): 22 pairs
+  Category 7 (argument value difference -- fixable in sweep module): 5 pairs
+  Category 8 (shard_spec.grid coordinates -- device/run-specific, NOT fixable in sweep module): 4 pairs
+Actionable in sweep module: 32 pair-categories (Categories 3, 6, 7)
+Requires tracer fix: 0 pair-categories (Categories 1, 2)
+Environment/device-dependent: 4 pair-categories (Categories 4, 5, 8)
+
+=== Full Config ID Match List ===
+Operation                                            Sweep ID   Model ID    Match   Similarity   Hash Match
+--------------------------------------------------------------------------------------------------------
+ttnn.add                                                    1          3    exact       100.0%          YES
+ttnn.add                                                    2          4    exact       100.0%          YES
+ttnn.add                                                    3          5    exact       100.0%          YES
+ttnn.add                                                    4          6    exact       100.0%          YES
+ttnn.add                                                    5          7    exact       100.0%          YES
+ttnn.add                                                    6          8    close        85.7%           NO
+ttnn.add                                                    7          1    exact       100.0%          YES
+ttnn.add                                                    8          9    exact       100.0%          YES
+ttnn.add                                                    9         10    exact       100.0%          YES
+ttnn.add                                                   10         11    exact       100.0%          YES
+ttnn.add                                                   11         12    exact       100.0%          YES
+ttnn.add                                                   12          2    close        85.7%           NO
+ttnn.concat                                                 1          3    exact       100.0%          YES
+ttnn.concat                                                 2          4    exact       100.0%          YES
+ttnn.concat                                                 3          1    exact       100.0%          YES
+ttnn.concat                                                 4          2    exact       100.0%          YES
+ttnn.div                                                    1          3    exact       100.0%          YES
+ttnn.div                                                    2          4    exact       100.0%          YES
+ttnn.div                                                    3          1    exact       100.0%          YES
+ttnn.div                                                    4          2    exact       100.0%          YES
+ttnn.embedding                                              3          2    exact       100.0%          YES
+ttnn.exp                                                    1          1    exact       100.0%          YES
+ttnn.exp                                                    2          2    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          1          3    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          2          4    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          3          5    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          4          6    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          5          7    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          6          1    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          7          8    exact       100.0%          YES
+ttnn.experimental.all_gather_async                          8          9    close        85.7%           NO
+ttnn.experimental.all_gather_async                          9         10    exact       100.0%          YES
+ttnn.experimental.all_gather_async                         10         11    exact       100.0%          YES
+ttnn.experimental.all_gather_async                         11         12    exact       100.0%          YES
+ttnn.experimental.all_gather_async                         12         13    exact       100.0%          YES
+ttnn.experimental.all_gather_async                         13          2    exact       100.0%          YES
+ttnn.experimental.fast_reduce_nc                            1          1    exact       100.0%          YES
+ttnn.experimental.fast_reduce_nc                            2          2    close        90.0%           NO
+ttnn.experimental.paged_update_cache                        1          1    close        92.0%           NO
+ttnn.experimental.rotary_embedding_llama                    4          4    close        88.0%           NO
+ttnn.experimental.rotary_embedding_llama                    5          3    close        88.0%           NO
+ttnn.interleaved_to_sharded                                 1          1    exact       100.0%          YES
+ttnn.multiply                                               2          4    close        85.7%           NO
+ttnn.multiply                                               3          5    close        92.3%           NO
+ttnn.multiply                                               4          2    close        92.3%           NO
+ttnn.multiply                                               5          1    close        85.7%           NO
+ttnn.multiply                                               6          7    close        85.7%           NO
+ttnn.multiply                                               7          8    close        85.7%           NO
+ttnn.multiply                                               8          9    exact       100.0%          YES
+ttnn.multiply                                               9         11    close        92.3%           NO
+ttnn.multiply                                              11         13    close        85.7%           NO
+ttnn.multiply                                              12         14    close        92.3%           NO
+ttnn.multiply                                              13         15    exact       100.0%          YES
+ttnn.neg                                                    1          1    exact       100.0%          YES
+ttnn.neg                                                    2          2    exact       100.0%          YES
+ttnn.ones_like                                              1          1    exact       100.0%          YES
+ttnn.ones_like                                              2          2    exact       100.0%          YES
+ttnn.permute                                                1          3    exact       100.0%          YES
+ttnn.permute                                                2          4    exact       100.0%          YES
+ttnn.permute                                                3          5    exact       100.0%          YES
+ttnn.permute                                                4          6    exact       100.0%          YES
+ttnn.permute                                                5          1    exact       100.0%          YES
+ttnn.permute                                                6          2    exact       100.0%          YES
+ttnn.repeat                                                 2          4    close        85.7%           NO
+ttnn.repeat                                                 9         10    close        85.7%           NO
+ttnn.reshape                                                6          1    exact       100.0%          YES
+ttnn.reshape                                               11         12    exact       100.0%          YES
+ttnn.rms_norm                                               1          1    exact       100.0%          YES
+ttnn.rms_norm                                               2          2    exact       100.0%          YES
+ttnn.rms_norm_post_all_gather                               2          1    exact       100.0%          YES
+ttnn.rms_norm_pre_all_gather                                1          1    close        87.5%           NO
+ttnn.rms_norm_pre_all_gather                                2          2    close        87.5%           NO
+ttnn.sigmoid                                                1          1    exact       100.0%          YES
+ttnn.sigmoid                                                2          2    exact       100.0%          YES
+ttnn.slice                                                  1          3    exact       100.0%          YES
+ttnn.slice                                                  2          4    exact       100.0%          YES
+ttnn.slice                                                  3          5    exact       100.0%          YES
+ttnn.slice                                                  4          6    exact       100.0%          YES
+ttnn.slice                                                  5          7    exact       100.0%          YES
+ttnn.slice                                                  6          1    exact       100.0%          YES
+ttnn.slice                                                  7          8    exact       100.0%          YES
+ttnn.slice                                                  8          9    close        88.9%           NO
+ttnn.slice                                                  9         10    close        88.9%           NO
+ttnn.slice                                                 10         11    close        88.9%           NO
+ttnn.slice                                                 11         12    exact       100.0%          YES
+ttnn.slice                                                 12         13    close        88.9%           NO
+ttnn.slice                                                 13         14    exact       100.0%          YES
+ttnn.slice                                                 14         15    exact       100.0%          YES
+ttnn.slice                                                 15         16    exact       100.0%          YES
+ttnn.slice                                                 16          2    exact       100.0%          YES
+ttnn.sum                                                    1          3    exact       100.0%          YES
+ttnn.sum                                                    2          4    close        87.5%           NO
+ttnn.sum                                                    3          5    exact       100.0%          YES
+ttnn.sum                                                    4          6    exact       100.0%          YES
+ttnn.sum                                                    5          1    close        87.5%           NO
+ttnn.sum                                                    6          2    exact       100.0%          YES
+ttnn.tilize                                                 1          1    exact       100.0%          YES
+ttnn.tilize_with_zero_padding                               1          1    exact       100.0%          YES
+ttnn.topk                                                   1          3    exact       100.0%          YES
+ttnn.topk                                                   2          4    exact       100.0%          YES
+ttnn.topk                                                   3          5    exact       100.0%          YES
+ttnn.topk                                                   4          6    exact       100.0%          YES
+ttnn.topk                                                   5          1    exact       100.0%          YES
+ttnn.topk                                                   6          2    exact       100.0%          YES
+ttnn.transpose                                              1          3    exact       100.0%          YES
+ttnn.transpose                                              2          4    close        88.9%           NO
+ttnn.transpose                                              3          5    close        88.9%           NO
+ttnn.transpose                                              4          6    close       100.0%           NO
+ttnn.transpose                                              5          7    close        88.9%           NO
+ttnn.transpose                                              6          1    close        88.9%           NO
+ttnn.transpose                                              7          8    close       100.0%           NO
+ttnn.transpose                                              8          2    exact       100.0%          YES
+ttnn.typecast                                               1          3    exact       100.0%          YES
+ttnn.typecast                                               2          1    exact       100.0%          YES
+ttnn.typecast                                               3          2    exact       100.0%          YES
+ttnn.unsqueeze                                              1          1    exact       100.0%          YES
+ttnn.unsqueeze                                              2          2    exact       100.0%          YES
+ttnn.unsqueeze_to_4D                                        1          1    exact       100.0%          YES
+ttnn.untilize                                               1          1    close        85.7%           NO
+ttnn.untilize                                               2          2    exact       100.0%          YES
+ttnn.zeros                                                  1          1    exact       100.0%          YES

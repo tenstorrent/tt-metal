@@ -466,6 +466,13 @@ def _normalize_for_hash(obj):
     regardless of capture environment or serialization quirks.
     """
     if isinstance(obj, dict):
+        # Strip excluded arg keys (runtime-specific handles like device
+        # semaphores) so that old traces which still contain them produce
+        # the same hash as new traces where they were already removed by
+        # get_excluded_arg_keys() during conversion.
+        for key in get_excluded_arg_keys():
+            obj.pop(key, None)
+
         # memory_config.hash is a device-specific pointer — remove it
         if "hash" in obj and isinstance(obj["hash"], int):
             del obj["hash"]
@@ -1188,6 +1195,12 @@ Examples (Import existing traces):
         help="Process existing trace directory and add to master JSON (skips test execution). "
         "Useful for importing traces collected on other machines with --store flag.",
     )
+    parser.add_argument(
+        "--recompute-hashes",
+        type=str,
+        metavar="JSON_FILE",
+        help="Recompute config_hash for every configuration in an existing master JSON file, then exit.",
+    )
 
     # Handle explicit separator
     if "--" in sys.argv:
@@ -1197,6 +1210,16 @@ Examples (Import existing traces):
         args = parser.parse_args(tracer_argv)
     else:
         args, extra_args = parser.parse_known_args()
+
+    # Handle --recompute-hashes independently
+    if args.recompute_hashes:
+        json_file = args.recompute_hashes
+        if not os.path.isfile(json_file):
+            print(f"❌ Error: File not found: {json_file}")
+            return 1
+        fix_memory_config_in_json(json_file)
+        recompute_config_hashes(json_file)
+        return 0
 
     # Either test_path or load must be provided
     if not args.test_path and not args.load:

@@ -130,6 +130,7 @@ def step_split_trace(
     split_dir: Path,
     label: str,
     dry_run: bool,
+    force: bool = False,
 ) -> None:
     """Split a trace JSON by operation using split_model_trace.py."""
     print(f"\n{SEPARATOR}")
@@ -137,8 +138,21 @@ def step_split_trace(
     print(SEPARATOR)
 
     if split_dir.is_dir() and any(split_dir.iterdir()):
-        print(f"  Split directory already exists, skipping: {split_dir}")
-        return
+        if force:
+            print(f"  --force: removing stale split directory: {split_dir}")
+            if not dry_run:
+                import shutil
+
+                shutil.rmtree(split_dir)
+        elif trace_json.is_file() and split_dir.stat().st_mtime < trace_json.stat().st_mtime:
+            print(f"  Split directory is older than source JSON, re-splitting: {split_dir}")
+            if not dry_run:
+                import shutil
+
+                shutil.rmtree(split_dir)
+        else:
+            print(f"  Split directory already exists, skipping: {split_dir}")
+            return
 
     cmd = [
         sys.executable,
@@ -269,6 +283,11 @@ def main() -> int:
         action="store_true",
         help="Print the commands that would be executed without running them",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-split of trace directories even if they already exist",
+    )
 
     args = parser.parse_args()
 
@@ -325,6 +344,7 @@ def main() -> int:
         split_dir=sweep_trace_split_dir,
         label="sweep trace (3/4)",
         dry_run=args.dry_run,
+        force=args.force,
     )
 
     # Step 4: Ensure model trace is split
@@ -333,6 +353,7 @@ def main() -> int:
         split_dir=model_trace_split_dir,
         label="model trace (4/4)",
         dry_run=args.dry_run,
+        force=args.force,
     )
 
     # Print validation pairs

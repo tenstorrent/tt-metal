@@ -501,9 +501,10 @@ def run(
                 for _ in range(num_iters)
             ]
 
-            # Create barrier semaphore if needed
+            # Create barrier semaphore -- always for model_traced (model always
+            # passes it), conditionally for other suites.
             barrier_semaphore_handles = []
-            if barrier_semaphore is not None:
+            if is_model_traced or barrier_semaphore is not None:
                 barrier_semaphore_handles = [
                     ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
                 ]
@@ -521,10 +522,6 @@ def run(
                     start_time = start_measuring_time()
 
                     if is_model_traced:
-                        # Build kwargs matching the reference test pattern
-                        # (test_minimal_all_gather_async.py::run_all_gather_impl).
-                        # subdevice_id is always passed; persistent_output_buffer
-                        # is created locally (not from traced JSON).
                         op_kwargs = {
                             "dim": dim,
                             "multi_device_global_semaphore": ccl_semaphore_handles[i],
@@ -532,8 +529,9 @@ def run(
                             "topology": topology,
                             "cluster_axis": cluster_axis,
                             "mesh_device": device,
-                            "subdevice_id": worker_sub_device_id,
                         }
+                        if subdevice_id is not None:
+                            op_kwargs["subdevice_id"] = worker_sub_device_id
                         if output_memory_config is not None:
                             op_kwargs["memory_config"] = output_memory_config
                         if barrier_semaphore_handles:
