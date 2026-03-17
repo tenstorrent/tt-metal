@@ -219,7 +219,11 @@ void populateZoneSrcLocations(
     std::string line;
     while (std::getline(log_file_read, line)) {
         std::string delimiter = "'#pragma message: ";
-        int delimiter_index = line.find(delimiter) + delimiter.length();
+        auto pos = line.find(delimiter);
+        if (pos == std::string::npos) {
+            continue;
+        }
+        size_t delimiter_index = pos + delimiter.length();
         std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
 
         uint16_t hash_16bit = hash16CT(zone_src_location);
