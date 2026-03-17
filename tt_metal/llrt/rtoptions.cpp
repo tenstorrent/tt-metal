@@ -291,11 +291,24 @@ BlackholeDramInitCase parse_blackhole_dram_init_case(const char* value) {
     if (normalized == "dram_cq_launch_rdptr") {
         return BlackholeDramInitCase::DramCqLaunchRdptr;
     }
+    if (normalized == "dram_watcher_init") {
+        return BlackholeDramInitCase::DramWatcherInit;
+    }
+    if (normalized == "dram_watcher_mailbox_read") {
+        return BlackholeDramInitCase::DramWatcherMailboxRead;
+    }
+    if (normalized == "dram_core_reset_assert") {
+        return BlackholeDramInitCase::DramCoreResetAssert;
+    }
+    if (normalized == "dram_fw_reset_assert") {
+        return BlackholeDramInitCase::DramFwResetAssert;
+    }
 
     TT_THROW(
         "Invalid TT_METAL_BH_DRAM_INIT_CASE value '{}'. Expected one of: none, dram_core_info, "
         "dram_bank_to_noc_tables, dram_fw_binary, dram_launch_msg, dram_go_msg, dram_fw_launch_rdptr, "
-        "dram_fw_go_msg_index, dram_reset_pc, dram_cq_launch_rdptr",
+        "dram_fw_go_msg_index, dram_reset_pc, dram_cq_launch_rdptr, dram_watcher_init, "
+        "dram_watcher_mailbox_read, dram_core_reset_assert, dram_fw_reset_assert",
         value);
 }
 

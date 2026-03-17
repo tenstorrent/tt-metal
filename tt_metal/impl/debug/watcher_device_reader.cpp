@@ -556,9 +556,22 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
     fprintf(reader.f, "%s: ", core_str.c_str());
 
+    auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
+    if (
+        programmable_core_type == HalProgrammableCoreType::DRAM &&
+        !rtoptions.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramWatcherMailboxRead)) {
+        return Core(
+            virtual_coord,
+            programmable_core_type,
+            std::move(core_str),
+            {},
+            dev_msgs_factory,
+            reader,
+            dump_data);
+    }
+
     uint64_t mailbox_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
-    auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
     uint32_t mailbox_read_size =
         dev_msgs_factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::watcher) +
         dev_msgs_factory.size_of<dev_msgs::watcher_msg_t>();

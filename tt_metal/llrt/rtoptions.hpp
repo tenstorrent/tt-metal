@@ -78,6 +78,10 @@ enum class BlackholeDramInitCase {
     DramFwGoMsgIndex,
     DramResetPc,
     DramCqLaunchRdptr,
+    DramWatcherInit,
+    DramWatcherMailboxRead,
+    DramCoreResetAssert,
+    DramFwResetAssert,
 };
 
 extern const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];

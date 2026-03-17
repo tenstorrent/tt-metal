@@ -330,7 +330,8 @@ void RiscFirmwareInitializer::assert_inactive_ethernet_cores(tt::ChipId device_i
 
 void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
     bool has_dram_fw = hal_.has_programmable_core_type(HalProgrammableCoreType::DRAM);
-    if (has_dram_fw) {
+    if (has_dram_fw &&
+        rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramCoreResetAssert)) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
         for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
             CoreCoord virtual_core{dram_core.x, dram_core.y};
@@ -1016,7 +1017,9 @@ void RiscFirmwareInitializer::initialize_firmware(
             break;
         }
         case HalProgrammableCoreType::DRAM: {
-            cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramFwResetAssert)) {
+                cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
+            }
             if (not rtoptions_.get_skip_loading_fw() &&
                 rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramFwBinary)) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
