@@ -108,7 +108,11 @@ public:
      * @return Total number of used receiver channels
      */
     size_t get_num_receiver_channels() const {
-        return num_used_receiver_channels_per_vc_[0] + num_used_receiver_channels_per_vc_[1];
+        size_t total = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            total += num_used_receiver_channels_per_vc_[vc];
+        }
+        return total;
     }
 
     /**

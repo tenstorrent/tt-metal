@@ -107,10 +107,18 @@ public:
     }
     // For total counts: return sum across all VCs
     size_t get_num_sender_channels() const {
-        return num_used_sender_channels_per_vc[0] + num_used_sender_channels_per_vc[1];
+        size_t total = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            total += num_used_sender_channels_per_vc[vc];
+        }
+        return total;
     }
     size_t get_num_receiver_channels() const {
-        return num_used_receiver_channels_per_vc[0] + num_used_receiver_channels_per_vc[1];
+        size_t total = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            total += num_used_receiver_channels_per_vc[vc];
+        }
+        return total;
     }
 
     // Override virtual print method from base class
@@ -188,10 +196,22 @@ inline void FabricStaticSizedChannelsAllocator::print(std::ostream& os) const {
 
     // Configuration parameters
     os << "  Configuration:\n";
-    os << "    num_used_sender_channels_per_vc: [" << num_used_sender_channels_per_vc[0] << ", "
-       << num_used_sender_channels_per_vc[1] << "]\n";
-    os << "    num_used_receiver_channels_per_vc: [" << num_used_receiver_channels_per_vc[0] << ", "
-       << num_used_receiver_channels_per_vc[1] << "]\n";
+    os << "    num_used_sender_channels_per_vc: [";
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (vc > 0) {
+            os << ", ";
+        }
+        os << num_used_sender_channels_per_vc[vc];
+    }
+    os << "]\n";
+    os << "    num_used_receiver_channels_per_vc: [";
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (vc > 0) {
+            os << ", ";
+        }
+        os << num_used_receiver_channels_per_vc[vc];
+    }
+    os << "]\n";
     os << "    channel_buffer_size_bytes: " << channel_buffer_size_bytes << " B\n";
     os << "    available_channel_buffering_space: " << available_channel_buffering_space << " B\n";
     os << "    buffer_region_start: 0x" << std::hex << buffer_region_start << std::dec << "\n";
