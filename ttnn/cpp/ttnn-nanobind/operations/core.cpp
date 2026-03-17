@@ -375,7 +375,7 @@ void py_module(nb::module_& mod) {
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<CoreRangeSet>& sub_core_grids,
-               const float pad_value = 0.0f) -> ttnn::Tensor {
+               const float pad_value) -> ttnn::Tensor {
                 return self(tensor, layout, dtype, memory_config, sub_core_grids, pad_value);
             },
             nb::arg("tensor"),
