@@ -2,74 +2,76 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writes 1024-element chunks from the output CB back to the DRAM destination.
+// Writes row-major sticks from the untilize output CB back to DRAM.
 //
-// Mirrors reader.cpp: work is split on row boundaries so the cursor always
-// starts at byte offset 0 of the first assigned row.
+// untilize_block produces ntiles_per_row tile-sized (2048-byte) pages per
+// row-block, with data laid out row-major within the block:
+//   row k starts at byte offset k * stick_size from the block base.
 //
-// CT args: [STICK_SIZE_BYTES, TensorAccessorArgs_out...]
-// RT args: [dst_addr, num_full_sticks, start_row,
-//           last_chunk_bytes, row_size_bytes]
+// For each row-block the writer pops the whole ntiles_per_row-page block at
+// once and issues TILE_HEIGHT NOC writes (one per row) at the computed offsets.
+//
+// The last block may be partial (num_sticks % TILE_HEIGHT != 0).  In that case
+// only the first tail_rows rows carry real data; the remainder is padding that
+// is never written to DRAM.
+//
+// Stick (DRAM page) == one full tensor row == stick_size bytes.
+//
+// CT args: [cb_out, stick_size, TensorAccessorArgs_out...,
+//           ntiles_per_row, tile_width_bytes]
+//   cb_out           = output CB index
+//   stick_size       = row_size_bytes (= ntiles_per_row * tile_width_bytes)
+//   ntiles_per_row   = number of tile-columns (pages per CB block)
+//   tile_width_bytes = TILE_WIDTH * dtype_bytes (unused, kept for CT-arg layout
+//                      compatibility with the reader)
+//
+// RT args: [dst_addr, num_sticks, start_stick_id]
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-// Write chunk_bytes bytes from the CB read pointer to DRAM, advancing cursor.
-template <typename Accessor>
-FORCE_INLINE void write_chunk(
-    const Accessor& acc,
-    uint32_t& current_row,
-    uint32_t& current_offset,
-    uint32_t cb_id,
-    uint32_t chunk_bytes,
-    uint32_t row_size_bytes) {
-    uint32_t remaining = chunk_bytes;
-
-    uint32_t l1_read_addr = get_read_ptr(cb_id);
-
-    while (remaining > 0) {
-        uint32_t avail = row_size_bytes - current_offset;
-        uint32_t n = avail < remaining ? avail : remaining;
-        noc_async_write(l1_read_addr, acc.get_noc_addr(current_row, current_offset), n);
-        remaining -= n;
-        current_offset += n;
-        if (current_offset == row_size_bytes) {
-            current_row++;
-            current_offset = 0;
-        }
-        l1_read_addr += n;
-    }
-}
+constexpr uint32_t TILE_HEIGHT = 32;
 
 void kernel_main() {
-    // CT arg 0 = STICK_SIZE_BYTES; TensorAccessorArgs start at index 1.
-    constexpr uint32_t STICK_SIZE_BYTES = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_out_id = get_compile_time_arg_val(0);
+    constexpr uint32_t stick_size = get_compile_time_arg_val(1);
+    constexpr auto out_args = TensorAccessorArgs<2>();
+    constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(out_args.next_compile_time_args_offset());
+    constexpr uint32_t tile_width_bytes = get_compile_time_arg_val(out_args.next_compile_time_args_offset() + 1);
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_full_sticks = get_arg_val<uint32_t>(1);
-    uint32_t current_row = get_arg_val<uint32_t>(2);
-    const uint32_t last_chunk_bytes = get_arg_val<uint32_t>(3);
-    const uint32_t row_size_bytes = get_arg_val<uint32_t>(4);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(1);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
 
-    uint32_t current_offset = 0;
+    const auto dst = TensorAccessor(out_args, dst_addr, stick_size);
 
-    constexpr auto cb_out = tt::CBIndex::c_2;
+    uint32_t stick_id = start_stick_id;
 
-    // TensorAccessorArgs start at CT index 1.
-    constexpr auto out_args = TensorAccessorArgs<1>();
-    const auto out = TensorAccessor(out_args, dst_addr, row_size_bytes);
+    const uint32_t num_full_blocks = num_sticks / TILE_HEIGHT;
+    const uint32_t tail_rows = num_sticks % TILE_HEIGHT;
 
-    for (uint32_t i = 0; i < num_full_sticks; ++i) {
-        cb_wait_front(cb_out, 1);
-        write_chunk(out, current_row, current_offset, cb_out, STICK_SIZE_BYTES, row_size_bytes);
+    // Full blocks: pop ntiles_per_row pages, write TILE_HEIGHT rows.
+    // Row k is at base_l1 + k * stick_size.
+    for (uint32_t i = 0; i < num_full_blocks; ++i) {
+        cb_wait_front(cb_out_id, ntiles_per_row);
+        uint32_t base_l1 = get_read_ptr(cb_out_id);
+        for (uint32_t k = 0; k < TILE_HEIGHT; ++k) {
+            noc_async_write(base_l1 + k * stick_size, dst.get_noc_addr(stick_id), stick_size);
+            ++stick_id;
+        }
         noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        cb_pop_front(cb_out_id, ntiles_per_row);
     }
 
-    if (last_chunk_bytes > 0) {
-        cb_wait_front(cb_out, 1);
-        write_chunk(out, current_row, current_offset, cb_out, last_chunk_bytes, row_size_bytes);
+    // Partial last block: pop ntiles_per_row pages, write only tail_rows rows.
+    if (tail_rows > 0) {
+        cb_wait_front(cb_out_id, ntiles_per_row);
+        uint32_t base_l1 = get_read_ptr(cb_out_id);
+        for (uint32_t k = 0; k < tail_rows; ++k) {
+            noc_async_write(base_l1 + k * stick_size, dst.get_noc_addr(stick_id), stick_size);
+            ++stick_id;
+        }
         noc_async_write_barrier();
-        cb_pop_front(cb_out, 1);
+        cb_pop_front(cb_out_id, ntiles_per_row);
     }
 }

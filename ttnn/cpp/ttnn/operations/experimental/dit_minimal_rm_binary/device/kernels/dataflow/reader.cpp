@@ -2,104 +2,123 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reads 1024-element chunks from two row-major DRAM tensors into double-buffered CBs.
+// Reads row-major sticks from two DRAM tensors (A and B) into CBs using the
+// tilize split-rows reader pattern.
 //
-// Work is split on row boundaries: each core is assigned a contiguous range of
-// complete rows, so the cursor always starts at byte offset 0 of a row.
-// Because DRAM page size equals one full row, cross-page reads within a chunk
-// are still handled by the while-loop inside read_chunks when row_size <
-// STICK_SIZE_BYTES (multiple rows packed per stick).
+// For each row-block of TILE_HEIGHT rows the reader iterates over ntiles_per_row
+// tile-columns, producing one CB push per tile-column per tensor:
+//   - Each push: 1 page = TILE_HEIGHT rows × tile_width_bytes laid out row-by-row
+// This layout is consumed directly by tilize_block in the compute kernel.
 //
-// CT args: [STICK_SIZE_BYTES, TensorAccessorArgs_A..., TensorAccessorArgs_B...]
-// RT args: [src_a_addr, src_b_addr, num_full_sticks, start_row,
-//           last_chunk_bytes, row_size_bytes]
+// The last block may be partial (num_sticks % TILE_HEIGHT != 0).  In that case
+// the reader only issues NOC reads for the real rows; the remainder of the
+// tile-sized CB page is left as uninitialized L1.  The writer mirrors this by
+// only writing back the real rows to DRAM.
+//
+// Stick (DRAM page) == one full tensor row == row_size_bytes.
+//
+// CT args: [stick_size, TensorAccessorArgs_A..., TensorAccessorArgs_B...,
+//           ntiles_per_row, tile_width_bytes]
+//   stick_size       = row_size_bytes (DRAM page for both A and B)
+//   ntiles_per_row   = last_dim / TILE_WIDTH
+//   tile_width_bytes = TILE_WIDTH * dtype_bytes
+//
+// RT args: [src_a_addr, src_b_addr, num_sticks, start_stick_id]
+//   num_sticks     = number of rows assigned to this core
+//   start_stick_id = first row index for this core
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
-// Read chunk_bytes bytes for both tensors A and B simultaneously into their
-// respective CBs, advancing the shared (cur_row, cur_offset) cursor across
-// DRAM pages of size row_size_bytes.  Both cur_row and cur_offset are updated
-// so that successive calls continue from the right position (needed when
-// row_size does not evenly divide STICK_SIZE_BYTES).
-template <typename Accessor>
-FORCE_INLINE void read_chunks(
-    const Accessor& acc_a,
-    const Accessor& acc_b,
-    uint32_t& cur_row,
-    uint32_t& cur_offset,
-    uint32_t cb_a,
-    uint32_t cb_b,
-    uint32_t chunk_bytes,
-    uint32_t row_size_bytes) {
-    uint32_t l1_write_addr_cba = get_write_ptr(cb_a);
-    uint32_t l1_write_addr_cbb = get_write_ptr(cb_b);
+constexpr uint32_t TILE_HEIGHT = 32;
 
-    uint32_t remaining = chunk_bytes;
-
-    while (remaining > 0) {
-        uint32_t avail = row_size_bytes - cur_offset;
-        uint32_t n = avail < remaining ? avail : remaining;
-
-        noc_async_read(acc_a.get_noc_addr(cur_row, cur_offset), l1_write_addr_cba, n);
-        noc_async_read(acc_b.get_noc_addr(cur_row, cur_offset), l1_write_addr_cbb, n);
-
-        remaining -= n;
-        cur_offset += n;
-        if (cur_offset == row_size_bytes) {
-            cur_row++;
-            cur_offset = 0;
-        }
-        l1_write_addr_cba += n;
-        l1_write_addr_cbb += n;
+void print_data(uint16_t* ptr, uint32_t len) {
+    for (uint32_t i = 0; i < len; ++i) {
+        DPRINT << BF16(ptr[i]) << " ";
     }
+    DPRINT << ENDL();
+}
+
+// Read one tile-column of num_rows rows from 'acc' into 'cb'.
+// For each of the num_rows rows in the block, reads tile_width_bytes starting
+// at col_byte_offset within that row.  NOC addresses are computed on-the-fly.
+// The CB page is always tile-sized (TILE_HEIGHT rows); rows beyond num_rows
+// are left as uninitialized L1 (harmless — the writer will not emit them).
+template <typename Accessor>
+void read_tile_col(
+    const Accessor& acc,
+    tt::CBIndex cb,
+    uint32_t block_start_stick,
+    uint32_t col_byte_offset,
+    uint32_t tile_width_bytes,
+    uint32_t num_rows,
+    uint32_t dbg_j) {
+    cb_reserve_back(cb, 1);
+    uint32_t l1 = get_write_ptr(cb);
+
+    // DEBUG: Print address of NoC for k=0
+    // DPRINT << "NoC address for k=0 = " << acc.get_noc_addr(block_start_stick) + col_byte_offset << ENDL();
+    // DPRINT << "L1 address = " << l1 << ENDL();
+
+    for (uint32_t k = 0; k < num_rows; ++k) {
+        noc_async_read(acc.get_noc_addr(block_start_stick + k) + col_byte_offset, l1, tile_width_bytes);
+        l1 += tile_width_bytes;
+    }
+    noc_async_read_barrier();
+
+    if (dbg_j == 15) {
+        uint16_t* l1_start = reinterpret_cast<uint16_t*>(get_write_ptr(cb));
+        print_data(l1_start, tile_width_bytes);  //
+    }
+
+    cb_push_back(cb, 1);
 }
 
 void kernel_main() {
-    // CT arg 0 = STICK_SIZE_BYTES; TensorAccessorArgs start at index 1.
-    constexpr uint32_t STICK_SIZE_BYTES = get_compile_time_arg_val(0);
+    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+    constexpr auto a_args = TensorAccessorArgs<1>();
+    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+    constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(b_args.next_compile_time_args_offset());
+    constexpr uint32_t tile_width_bytes = get_compile_time_arg_val(b_args.next_compile_time_args_offset() + 1);
 
     const uint32_t src_a_addr = get_arg_val<uint32_t>(0);
     const uint32_t src_b_addr = get_arg_val<uint32_t>(1);
-    const uint32_t num_full_sticks = get_arg_val<uint32_t>(2);
-    uint32_t cur_row = get_arg_val<uint32_t>(3);
-    const uint32_t last_chunk_bytes = get_arg_val<uint32_t>(4);
-    const uint32_t bytes_per_row = get_arg_val<uint32_t>(5);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(2);
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
 
-    // Cursor always starts at offset 0 since work is split on row boundaries.
-    uint32_t cur_offset = 0;
+    const auto a = TensorAccessor(a_args, src_a_addr, stick_size);
+    const auto b = TensorAccessor(b_args, src_b_addr, stick_size);
 
     constexpr auto cb_a = tt::CBIndex::c_0;
     constexpr auto cb_b = tt::CBIndex::c_1;
 
-    // CT arg 0 = STICK_SIZE_BYTES; a_args starts at CT index 1.
-    constexpr auto a_args = TensorAccessorArgs<1>();
-    const auto a = TensorAccessor(a_args, src_a_addr, bytes_per_row);
+    const uint32_t num_full_blocks = num_sticks / TILE_HEIGHT;
+    const uint32_t tail_rows = num_sticks % TILE_HEIGHT;
 
-    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    const auto b = TensorAccessor(b_args, src_b_addr, bytes_per_row);
+    uint32_t stick_id = start_stick_id;
 
-    for (uint32_t i = 0; i < num_full_sticks; ++i) {
-        cb_reserve_back(cb_a, 1);
-        cb_reserve_back(cb_b, 1);
+    DPRINT << "tile width bytes = " << tile_width_bytes << ENDL();
+    DPRINT << "ntiles/row = " << ntiles_per_row << ENDL();
+    DPRINT << "num full blocks = " << num_full_blocks << ENDL();
+    DPRINT << "tail rows = " << tail_rows << ENDL();
 
-        read_chunks(a, b, cur_row, cur_offset, cb_a, cb_b, STICK_SIZE_BYTES, bytes_per_row);
-
-        noc_async_read_barrier();
-
-        cb_push_back(cb_a, 1);
-        cb_push_back(cb_b, 1);
+    for (uint32_t i = 0; i < num_full_blocks; ++i) {
+        for (uint32_t j = 0; j < ntiles_per_row; ++j) {
+            DPRINT << "j = " << j << ENDL();
+            read_tile_col(a, cb_a, stick_id, j * tile_width_bytes, tile_width_bytes, TILE_HEIGHT, j);
+            read_tile_col(b, cb_b, stick_id, j * tile_width_bytes, tile_width_bytes, TILE_HEIGHT, j);
+        }
+        stick_id += TILE_HEIGHT;
     }
 
-    if (last_chunk_bytes > 0) {
-        cb_reserve_back(cb_a, 1);
-        cb_reserve_back(cb_b, 1);
-
-        read_chunks(a, b, cur_row, cur_offset, cb_a, cb_b, last_chunk_bytes, bytes_per_row);
-
-        noc_async_read_barrier();
-
-        cb_push_back(cb_a, 1);
-        cb_push_back(cb_b, 1);
+    // Partial last block: push full tile-sized pages but only read tail_rows
+    // real rows.  The remainder of each page is uninitialized L1.
+    if (tail_rows > 0) {
+        for (uint32_t j = 0; j < ntiles_per_row; ++j) {
+            DPRINT << "j = " << j << ", cb_a" << ENDL();
+            read_tile_col(a, cb_a, stick_id, j * tile_width_bytes, tile_width_bytes, tail_rows, j);
+            DPRINT << "j = " << j << ", cb_b" << ENDL();
+            read_tile_col(b, cb_b, stick_id, j * tile_width_bytes, tile_width_bytes, tail_rows, j);
+        }
     }
 }
