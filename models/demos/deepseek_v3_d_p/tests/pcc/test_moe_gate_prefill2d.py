@@ -12,7 +12,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import Gate as ReferenceMoEGate
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import linear as referenceLinear
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_gate_outputs
 from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     adjust_shapes_for_testing,
@@ -248,20 +248,27 @@ def test_forward_pass(
                 f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.99"
             )
 
-    # Compute reference dispatch offsets from tt_topk_indices (isolates bincount + cumsum logic)
+    # Compute reference dispatch offsets from tt_topk_indices using get_gate_outputs
     n_sp_devices = mesh_device.shape[0]
     n_tp_devices = mesh_device.shape[1]
     n_routed_experts = config.n_routed_experts
+    experts_per_chip = n_routed_experts // n_sp_devices
 
-    ref_histograms = torch.zeros(n_sp_devices, n_routed_experts, dtype=torch.long)
+    indices_for_gate = torch.zeros(n_sp_devices, seq_len_per_device, config.n_activated_experts, dtype=torch.int32)
     for row in range(n_sp_devices):
-        device_id = row * n_tp_devices  # pick first column device for this row
-        tt_indices_torch = ttnn.to_torch(per_device_topk_indices[device_id]).flatten().long()
-        ref_histograms[row] = torch.bincount(tt_indices_torch, minlength=n_routed_experts)
+        device_id = row * n_tp_devices
+        indices_for_gate[row] = ttnn.to_torch(per_device_topk_indices[device_id]).int()
 
-    ref_cumsum = torch.cumsum(ref_histograms, dim=0)
-    reference_offsets = torch.zeros(n_sp_devices + 1, n_routed_experts, dtype=torch.long)
-    reference_offsets[1:] = ref_cumsum
+    expert_offsets, _, cum_sum = get_gate_outputs(
+        indices=indices_for_gate,
+        dispatch_group_size=n_sp_devices,
+        num_routed_experts=n_routed_experts,
+        experts_per_chip=experts_per_chip,
+        seq_len_per_chip=seq_len_per_device,
+        num_experts_per_tok=config.n_activated_experts,
+    )
+
+    reference_offsets = torch.vstack([expert_offsets, cum_sum[-1:]]).long()
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):
