@@ -1,0 +1,103 @@
+# Maps each pipeline stage to a (host, slice) pair.
+
+stage_to_slice_mapping:
+  0:
+    host: bh-glx-d09u08
+    slice: 1
+  1:
+    host: bh-glx-d09u08
+    slice: 2
+  2:
+    host: bh-glx-d09u08
+    slice: 3
+  3:
+    host: bh-glx-d09u02
+    slice: 0
+  4:
+    host: bh-glx-d09u02
+    slice: 1
+  5:
+    host: bh-glx-d09u02
+    slice: 2
+  6:
+    host: bh-glx-d09u02
+    slice: 3
+  7:
+    host: bh-glx-d10u02
+    slice: 0
+  8:
+    host: bh-glx-d10u02
+    slice: 1
+  9:
+    host: bh-glx-d10u02
+    slice: 2
+  10:
+    host: bh-glx-d10u02
+    slice: 3
+  11:
+    host: bh-glx-d10u08
+    slice: 0
+  12:
+    host: bh-glx-d10u08
+    slice: 1
+  13:
+    host: bh-glx-d10u08
+    slice: 2
+  14:
+    host: bh-glx-d10u08
+    slice: 3
+  15:
+    host: bh-glx-d09u08
+    slice: 0
+  16:
+    host: bh-glx-d08u08
+    slice: 3
+  17:
+    host: bh-glx-d07u08
+    slice: 0
+  18:
+    host: bh-glx-d07u08
+    slice: 1
+  19:
+    host: bh-glx-d07u08
+    slice: 2
+  20:
+    host: bh-glx-d07u08
+    slice: 3
+  21:
+    host: bh-glx-d07u02
+    slice: 0
+  22:
+    host: bh-glx-d07u02
+    slice: 1
+  23:
+    host: bh-glx-d07u02
+    slice: 2
+  24:
+    host: bh-glx-d07u02
+    slice: 3
+  25:
+    host: bh-glx-d08u02
+    slice: 0
+  26:
+    host: bh-glx-d08u02
+    slice: 1
+  27:
+    host: bh-glx-d08u02
+    slice: 2
+  28:
+    host: bh-glx-d08u02
+    slice: 3
+  29:
+    host: bh-glx-d08u08
+    slice: 0
+  30:
+    host: bh-glx-d08u08
+    slice: 1
+  31:
+    host: bh-glx-d08u08
+    slice: 2
+
+mesh_graph_desc_path: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_dual_pod.textproto
+rank_binding_file: blitz_decode_pipeline_rank_binding_dual_pod.yaml
+rank_file: blitz_decode_pipeline_rank_file_dual_pod
