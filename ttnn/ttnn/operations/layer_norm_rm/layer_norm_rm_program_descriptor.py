@@ -372,11 +372,11 @@ def create_program_descriptor(
     if has_gamma:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     else:
-        reader_ct_args.append(0)  # placeholder for absent gamma
+        reader_ct_args.extend([0, 0])  # placeholder for absent gamma (TensorAccessorArgs uses 2 CT args)
     if has_beta:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
     else:
-        reader_ct_args.append(0)  # placeholder for absent beta
+        reader_ct_args.extend([0, 0])  # placeholder for absent beta (TensorAccessorArgs uses 2 CT args)
 
     # --- Compute CT args (per core group - num_tile_rows differs) ---
     # [Wt, num_tile_rows, has_gamma, has_beta]

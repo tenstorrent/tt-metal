@@ -3,7 +3,7 @@
   "op_path": "ttnn/ttnn/operations/layer_norm_rm",
   "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
   "layout": "ROW_MAJOR_LAYOUT",
-  "current_stage_index": 0,
+  "current_stage_index": 1,
   "last_passing_commit": null,
   "stages": [
     {
@@ -34,7 +34,7 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "passed",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,
