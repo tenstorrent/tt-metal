@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -127,20 +128,6 @@ void JitBuildEnv::init(
     }
     if (!sfpi_found) {
         TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
-    }
-
-    // Read the sfpi version file tracked in the repo.  This captures the
-    // toolchain version (e.g. "sfpi_version='7.25.0'", "sfpi_build='252'")
-    // so that upgrading sfpi invalidates the build cache.
-    std::string sfpi_version_contents;
-    {
-        std::string sfpi_version_path = this->root_ + "tt_metal/sfpi-version";
-        std::ifstream ifs(sfpi_version_path);
-        if (ifs.is_open()) {
-            std::ostringstream oss;
-            oss << ifs.rdbuf();
-            sfpi_version_contents = oss.str();
-        }
     }
 
     // Flags
@@ -302,7 +289,21 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
-    hasher.update(sfpi_version_contents);
+
+    // Read the sfpi compiler version directly from the compiler
+    // we're using.  Compiler changes invalidate the cache.
+    if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
+        // First line is typically about 55 chars on main
+        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0[333]) 15.1.0
+        // + branch name suffix on a branch
+        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0-checking-36930[340]) 15.1.0
+        char buf[100];
+        if (fgets(buf, sizeof(buf), pipe)) {
+            hasher.update(buf, buf + std::strlen(buf));
+        }
+        pclose(pipe);
+    }
+
     build_key_ = hasher.digest();
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
