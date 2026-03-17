@@ -18,14 +18,34 @@ import ttnn
 
 @pytest.fixture
 def processor():
-    """Load the Molmo2 processor."""
-    from transformers import AutoProcessor
+    """Load the Molmo2 processor.
 
-    return AutoProcessor.from_pretrained(
-        "allenai/Molmo2-8B",
-        trust_remote_code=True,
-        local_files_only=os.getenv("CI") == "true",
-    )
+    The upstream Molmo2 processor code may pass custom kwargs
+    (image_use_col_tokens, etc.) that the installed transformers
+    version rejects.  Work around this by temporarily relaxing
+    the ProcessorMixin kwarg validation.
+    """
+    from transformers import AutoProcessor, processing_utils
+
+    _orig_init = processing_utils.ProcessorMixin.__init__
+
+    def _lenient_init(self, *args, **kwargs):
+        known = set(self.get_attributes())
+        extra = {k: kwargs.pop(k) for k in list(kwargs) if k not in known and k != "chat_template"}
+        _orig_init(self, *args, **kwargs)
+        for k, v in extra.items():
+            setattr(self, k, v)
+
+    processing_utils.ProcessorMixin.__init__ = _lenient_init
+    try:
+        proc = AutoProcessor.from_pretrained(
+            "allenai/Molmo2-8B",
+            trust_remote_code=True,
+            local_files_only=os.getenv("CI") == "true",
+        )
+    finally:
+        processing_utils.ProcessorMixin.__init__ = _orig_init
+    return proc
 
 
 @pytest.mark.parametrize("num_layers", [1])  # Use 1 layer for fast smoke test

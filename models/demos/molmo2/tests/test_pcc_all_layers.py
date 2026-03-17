@@ -182,7 +182,7 @@ def test_all_layers_pcc():
     state_dict = load_state_dict_from_safetensors("allenai/Molmo2-8B")
     logger.info("Loaded weights")
 
-    prompt = "The capital of France is"
+    prompt = "The capital of Karnataka is"
     input_ids = tokenizer.encode(prompt, return_tensors="pt")
     seq_len = input_ids.shape[1]
     logger.info(f"Input: {prompt} (seq_len={seq_len})")
