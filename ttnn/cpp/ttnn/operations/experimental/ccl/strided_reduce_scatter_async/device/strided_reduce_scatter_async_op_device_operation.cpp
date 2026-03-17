@@ -58,6 +58,16 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
             intermediate_tensor.logical_shape());
     }
 
+    // The ring scatter kernel does not loop over the C dimension, so C must be 1
+    TT_FATAL(
+        input_tensor.logical_shape().rank() == 4 && input_tensor.logical_shape()[1] == 1,
+        "strided_reduce_scatter_async requires a 4D tensor with C=1, but got shape {}",
+        input_tensor.logical_shape());
+
+    // mm_block_ht and mm_block_wt are used as divisors in the program factory
+    TT_FATAL(operation_attributes.mm_block_ht > 0, "mm_block_ht must be > 0, got {}", operation_attributes.mm_block_ht);
+    TT_FATAL(operation_attributes.mm_block_wt > 0, "mm_block_wt must be > 0, got {}", operation_attributes.mm_block_wt);
+
     // Validate semaphore count
     constexpr auto num_expected_semaphores = 3;
     TT_FATAL(
@@ -153,7 +163,6 @@ tt::stl::hash::hash_t StridedReduceScatterAsyncDeviceOperation::compute_program_
                   tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         operation_attributes.cluster_axis,
-        operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         operation_attributes.mm_cores_y,
@@ -190,7 +199,6 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         bool using_persistent_buffers,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         std::optional<uint32_t> cluster_axis,
-        std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
@@ -214,7 +222,6 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         using_persistent_buffers,
         resolved_sub_device_id,
         cluster_axis,
-        chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel,
         mm_cores_y,

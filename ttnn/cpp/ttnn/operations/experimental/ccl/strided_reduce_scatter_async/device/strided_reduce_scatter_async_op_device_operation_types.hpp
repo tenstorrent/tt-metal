@@ -43,7 +43,6 @@ struct operation_attributes_t {
     bool using_persistent_buffers;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
-    std::optional<uint32_t> chunks_per_sync;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
     std::optional<uint32_t> mm_cores_y;
@@ -66,7 +65,6 @@ struct operation_attributes_t {
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_workers_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
         attrs.emplace_back("mm_cores_y", mm_cores_y);

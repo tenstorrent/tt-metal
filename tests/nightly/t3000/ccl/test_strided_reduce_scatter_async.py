@@ -213,7 +213,6 @@ def run_reduce_scatter_impl(
                 topology=rs_topology,
                 subdevice_id=worker_sub_device_id,
                 cluster_axis=cluster_axis,
-                chunks_per_sync=chunks_per_sync,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 mm_cores_y=mm_cores_y,
@@ -1456,7 +1455,7 @@ def test_strided_reduce_scatter_blocking_sweep(
         "non_div_Wt_N3_into_16_wide_block_cross_col_multi_cores",
     ],
 )
-# @pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
+@pytest.mark.skip(reason="Sweep test, can take a long time to run, run manually")
 def test_strided_reduce_scatter_blocking_sweep_large(
     mesh_device,
     mm_cores_y,
@@ -1584,6 +1583,63 @@ def test_strided_reduce_scatter_blocking_sweep_non_divisible_Ht(
         rs_topology=ttnn.Topology.Ring,
         enable_trace=False,
         num_iters=1,
+        small_random_ints=True,
+        use_barrier=True,
+        use_persistent_buffers=True,
+        use_strided=True,
+        verify_output_shape=True,
+        verify_output_pcc=True,
+        mm_cores_y=mm_cores_y,
+        mm_block_ht=mm_block_ht,
+        mm_block_wt=mm_block_wt,
+        mm_N_full_block_wt=mm_N_full_block_wt,
+        chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    # Two representative shapes to exercise the trace capture / replay path:
+    #   - "toy": small single-core case, fast compile, quick sanity check
+    #   - "prod_like": production-like 4-core shape that exercises the multi-core ghost-row path
+    "rs_input_shape, mm_cores_y, mm_block_ht, mm_block_wt, mm_N_full_block_wt, chunk_width_in_mm_blocks",
+    [
+        ([8, 1, 64, 512], 1, 2, 2, 2, 1),
+        ([4, 1, 512, 2048], 4, 4, 2, 4, 1),
+    ],
+    ids=[
+        "toy_1core_2x2",
+        "prod_like_4cores_4x2",
+    ],
+)
+def test_strided_reduce_scatter_async_trace(
+    mesh_device,
+    rs_input_shape,
+    mm_cores_y,
+    mm_block_ht,
+    mm_block_wt,
+    mm_N_full_block_wt,
+    chunk_width_in_mm_blocks,
+):
+    run_reduce_scatter_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        rs_input_shape,
+        3,  # dim
+        1,  # num_links
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        rs_topology=ttnn.Topology.Ring,
+        enable_trace=True,
+        num_iters=2,
         small_random_ints=True,
         use_barrier=True,
         use_persistent_buffers=True,

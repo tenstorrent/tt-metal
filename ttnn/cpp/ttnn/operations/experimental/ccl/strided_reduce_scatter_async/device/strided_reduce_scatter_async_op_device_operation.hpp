@@ -53,7 +53,6 @@ ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail::Strid
         bool using_persistent_buffers,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         std::optional<uint32_t> cluster_axis,
-        std::optional<uint32_t> chunks_per_sync,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
         std::optional<uint32_t> mm_cores_y,
