@@ -239,14 +239,11 @@ def test_panoptic_upsample(device, batch_size, num_channels, height, width, scal
     )
 
     torch.manual_seed(0)
-    torch_input_nchw = torch.rand(input_shape_nchw, dtype=dtype_torch)
+    torch_input_nhwc = torch.rand((batch_size, input_h, input_w, channels), dtype=dtype_torch)
 
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode_pytorch)
-    torch_output_nchw = torch_upsample(torch_input_nchw)
+    torch_output_nhwc = golden_upsample(torch_input_nhwc, scale_factor=scale_factor, mode=mode_pytorch)
 
-    ttnn_input_nhwc = ttnn.from_torch(
-        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype_ttnn
-    )
+    ttnn_input_nhwc = ttnn.from_torch(torch_input_nhwc, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype_ttnn)
 
     ttnn_output_nhwc = ttnn.upsample(
         ttnn_input_nhwc,
@@ -265,8 +262,6 @@ def test_panoptic_upsample(device, batch_size, num_channels, height, width, scal
     ttnn_output_nhwc = ttnn.to_memory_config(ttnn_output_nhwc, ttnn.DRAM_MEMORY_CONFIG)
 
     ttnn.deallocate(ttnn_input_nhwc)
-
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1)
 
     ttnn_output_torch_nhwc = ttnn.to_torch(ttnn_output_nhwc)
 

@@ -27,54 +27,56 @@ SliceHeight = ttnn.Op2DDRAMSliceHeight
 
 # helper to correct torch output for asymmetric padding
 def correct_torch_asym_pad(
-    torch_output, input_shape, kernel_size, stride, padding, divisor_override, count_include_pad
+    torch_output, input_shape, kernel_size, stride, padding, divisor_override, count_include_pad, out_h, out_w
 ):
-    _, _, in_h, in_w = input_shape
+    """Correct torch output for asymmetric padding. Operates directly on (1, 1, NHW, C) format."""
+    in_n, _, in_h, in_w = input_shape
     pad_t, pad_b, pad_l, pad_r = padding
     kernel_h, kernel_w = kernel_size
     stride_h, stride_w = stride
-    _, _, out_h, out_w = torch_output.shape
     padded_h = in_h + pad_t + pad_b
     padded_w = in_w + pad_l + pad_r
 
-    for oh in range(out_h):
-        for ow in range(out_w):
-            # get the kernel position in the padded input
-            top_left_h = oh * stride_h
-            top_left_w = ow * stride_w
+    for n in range(in_n):
+        for oh in range(out_h):
+            for ow in range(out_w):
+                # get the kernel position in the padded input
+                top_left_h = oh * stride_h
+                top_left_w = ow * stride_w
 
-            # count the number of sticks positions in the kernel which should be used in the divisor,
-            # and the number used by torch which is unaware of basic padding since it was applied manually
-            valid_sticks = 0
-            torch_sticks = 0
-            for kh in range(kernel_h):
-                for kw in range(kernel_w):
-                    # get the padded coordinates of this stick
-                    h = top_left_h + kh
-                    w = top_left_w + kw
+                # count the number of sticks positions in the kernel which should be used in the divisor,
+                # and the number used by torch which is unaware of basic padding since it was applied manually
+                valid_sticks = 0
+                torch_sticks = 0
+                for kh in range(kernel_h):
+                    for kw in range(kernel_w):
+                        # get the padded coordinates of this stick
+                        h = top_left_h + kh
+                        w = top_left_w + kw
 
-                    if h < padded_h and w < padded_w:
-                        # torch is unaware of basic padding but is aware of ceil mode padding and never includes ceil
-                        # mode sticks in the divisor count so only count sticks that are within the basic padded input
-                        torch_sticks += 1
+                        if h < padded_h and w < padded_w:
+                            # torch is unaware of basic padding but is aware of ceil mode padding and never includes ceil
+                            # mode sticks in the divisor count so only count sticks that are within the basic padded input
+                            torch_sticks += 1
 
-                        # get the non-padded coordinates of this stick
-                        orig_h = h - pad_t
-                        orig_w = w - pad_l
+                            # get the non-padded coordinates of this stick
+                            orig_h = h - pad_t
+                            orig_w = w - pad_l
 
-                        # check if this position is should be used in the divisor (within the original input shape)
-                        if 0 <= orig_h < in_h and 0 <= orig_w < in_w:
-                            valid_sticks += 1
+                            # check if this position is should be used in the divisor (within the original input shape)
+                            if 0 <= orig_h < in_h and 0 <= orig_w < in_w:
+                                valid_sticks += 1
 
-            # apply a divisor correction if there's a mismatch between what torch used as divisor
-            # and what should be used based on actual valid sticks
-            if valid_sticks != torch_sticks:
-                if valid_sticks > 0:
-                    torch_output[:, :, oh, ow] *= torch_sticks / valid_sticks
-                else:
-                    raise ValueError(
-                        "no valid sticks found, cannot correct torch output, it is possible padding is too large for the kernel size so we have an entire kernel in the padded region"
-                    )
+                # apply a divisor correction if there's a mismatch between what torch used as divisor
+                # and what should be used based on actual valid sticks
+                if valid_sticks != torch_sticks:
+                    flat_idx = n * out_h * out_w + oh * out_w + ow
+                    if valid_sticks > 0:
+                        torch_output[0, 0, flat_idx, :] *= torch_sticks / valid_sticks
+                    else:
+                        raise ValueError(
+                            "no valid sticks found, cannot correct torch output, it is possible padding is too large for the kernel size so we have an entire kernel in the padded region"
+                        )
 
     return torch_output
 
@@ -253,20 +255,18 @@ def run_avg_pool2d(
         ttnn_output = ttnn_output.reshape(1, 1, -1, in_c)
 
     # apply correction to TORCH output for asymmetric padding when needed
-    # This requires NCHW format, so convert only when correction is needed
     if torch_needs_correction:
-        torch_output_nchw = torch_output.reshape(in_n, out_h, out_w, in_c).permute(0, 3, 1, 2)
-        torch_output_nchw = correct_torch_asym_pad(
-            torch_output_nchw,
+        torch_output = correct_torch_asym_pad(
+            torch_output,
             input_shape,
             kernel_size,
             stride,
             (pad_t, pad_b, pad_l, pad_r),
             divisor_override,
             count_include_pad,
+            out_h,
+            out_w,
         )
-        # Convert back to (1, 1, NHW, C) for comparison
-        torch_output = torch_output_nchw.permute(0, 2, 3, 1).reshape(1, 1, in_n * out_h * out_w, in_c)
 
     # test for equivalence
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)

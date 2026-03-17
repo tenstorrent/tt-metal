@@ -668,23 +668,50 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
 
     logger.info(f"Running Panoptic MaxPool2D with Channel Slicing (slices={num_slices})")
 
-    torch.manual_seed(0)
-    torch_input_nchw = randomize_tensor(tensor_map, input_shape_nchw)
+    kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+    dilation_h, dilation_w = dilation
+    pad_h = padding[0] * 2
+    pad_w = padding[1] * 2
 
-    torch_output = torch.nn.MaxPool2d(
+    out_h, out_w, _ = compute_output_shape(
+        input_h,
+        input_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        dilation_h,
+        dilation_w,
+        pad_h,
+        pad_w,
+        padding[0],
+        padding[1],
+        False,
+    )
+
+    torch.manual_seed(0)
+    nhwc_shape = (1, 1, batch_size * input_h * input_w, channels)
+    torch_input = randomize_tensor(tensor_map, nhwc_shape)
+
+    # Golden reference on full tensor
+    torch_output = golden_maxpool2d(
+        input_tensor=torch_input,
+        batch_size=batch_size,
+        input_h=input_h,
+        input_w=input_w,
+        channels=channels,
         kernel_size=kernel_size,
         stride=stride,
-        padding=padding,
+        padding=list(padding),
         dilation=dilation,
-        return_indices=False,
         ceil_mode=False,
-    )(torch_input_nchw)
-
-    out_h, out_w = torch_output.shape[2], torch_output.shape[3]
-
-    ttnn_input_nhwc = ttnn.from_torch(
-        torch_input_nchw.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype
     )
+
+    # TTNN path with channel slicing
+    torch_input_nhwc = torch_input.reshape(batch_size, input_h, input_w, channels)
+    ttnn_input_nhwc = ttnn.from_torch(torch_input_nhwc, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+
     output_slices = []
     for i in range(num_slices):
         start_idx = i * slice_channels
@@ -721,12 +748,11 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
     for s in output_slices:
         ttnn.deallocate(s)
 
-    ttnn_output_torch = ttnn.to_torch(ttnn_output_nhwc)
-    ttnn_output_torch_nchw = torch.permute(ttnn_output_torch, (0, 3, 1, 2))
-    ttnn_output_torch_nchw = ttnn_output_torch_nchw.to(torch.bfloat16)
+    ttnn_output_torch = ttnn.to_torch(ttnn_output_nhwc).to(torch.bfloat16)
+    torch_output = torch_output.reshape(ttnn_output_torch.shape)
 
     atol = 0.35
-    allclose = torch.allclose(ttnn_output_torch_nchw, torch_output, atol=atol)
+    allclose = torch.allclose(ttnn_output_torch, torch_output, atol=atol)
     assert allclose
 
 
@@ -784,21 +810,14 @@ def test_golden_maxpool2d_with_vovnet_params(device, padding):
         ceil_mode=ceil_mode,
     )
 
-    # Convert golden output back to NCHW for comparison
-    # First get the expected output shape
-    expected_out_h = torch_output.shape[2]
-    expected_out_w = torch_output.shape[3]
-
-    # Reshape golden output from (1, 1, N*H*W, C) to (N, C, H, W)
-    # Golden function returns a torch tensor already
-    golden_torch = golden_output.reshape(batch_size, expected_out_h, expected_out_w, in_c)
-    golden_torch = golden_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
+    # Convert torch NCHW output to (1, 1, NHW, C) to match golden output format
+    torch_output_flat = torch_output.permute(0, 2, 3, 1).reshape(1, 1, -1, in_c)
 
     # Verify golden function produces correct results
     # For bfloat16 maxpool tests we use torch.equal since we don't expect any loss
     assert torch.equal(
-        golden_torch, torch_output
-    ), f"Golden function produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_torch.shape}"
+        golden_output, torch_output_flat
+    ), f"Golden function produces incorrect output. Expected shape: {torch_output_flat.shape}, got: {golden_output.shape}"
 
 
 # quick test to verify the results of max pool are the same for tensors with the N or C dim squeezed
@@ -810,14 +829,12 @@ def test_run_max_pool_low_rank(rank, device):
     stride = (2, 2)
     padding = (0, 0)
 
-    # Create torch input in NCHW format [1, 1, 112, 112]
+    # Create input directly in (1, 1, NHW, C) format
     torch.manual_seed(0)
-    torch_input_nchw = torch.randn(1, 1, 112, 112, dtype=torch.bfloat16)
-
-    # Permute to NHWC [1, 112, 112, 1]
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1)
+    torch_input = torch.randn(1, 1, 112 * 112, 1, dtype=torch.bfloat16)
 
     # Create input tensor based on rank
+    torch_input_nhwc = torch_input.reshape(1, 112, 112, 1)
     if rank == 4:
         torch_test_input = torch_input_nhwc
     elif rank == 3:
@@ -846,20 +863,20 @@ def test_run_max_pool_low_rank(rank, device):
         dilation=(1, 1),
     )
 
-    # Run torch reference
-    torch_output_nchw = torch.nn.functional.max_pool2d(
-        torch_input_nchw,
+    # Run golden reference
+    torch_output = golden_maxpool2d(
+        input_tensor=torch_input,
+        batch_size=1,
+        input_h=112,
+        input_w=112,
+        channels=1,
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
+        dilation=(1, 1),
     )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1)
 
-    # Convert ttnn output to torch and compare
-    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+    # Compare directly in (1, 1, NHW, C) format
+    ttnn_output_torch = ttnn.to_torch(ttnn_output).reshape(torch_output.shape)
 
-    # ttnn output is always 4D [1, H, W, 1], reshape for comparison
-    out_h, out_w = torch_output_nchw.shape[2], torch_output_nchw.shape[3]
-    ttnn_output_torch = ttnn_output_torch.reshape(1, out_h, out_w, 1)
-
-    assert torch.equal(ttnn_output_torch, torch_output_nhwc)
+    assert torch.equal(ttnn_output_torch, torch_output)

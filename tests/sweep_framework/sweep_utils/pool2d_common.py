@@ -8,6 +8,7 @@ Shared utility functions for max_pool2d and avg_pool2d tests.
 import math
 import torch
 import ttnn
+from ttnn.operations.pool import golden_maxpool2d
 
 
 def randomize_tensor(tensor_map, tensor_shape):
@@ -300,23 +301,21 @@ def run_max_pool2d_with_indices(
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
-    tensor_shape = (in_n, in_c, in_h, in_w)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    # torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(ttnn_input_shape, dtype=torch.bfloat16)
+    # torch_input = torch.zeros(ttnn_input_shape, dtype=torch.bfloat16)
     # for n in range(in_n):
     #     for c in range(in_c):
     #         for h in range(in_h):
     #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = h * in_w + w
-    torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
-    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+    #                 torch_input[0, 0, n * in_h * in_w + h * in_w + w, c] = h * in_w + w
+
     ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
     if ttnn_dtype == ttnn.bfloat8_b:
         ttnn_layout = ttnn.TILE_LAYOUT
 
     ttnn_input = ttnn.from_torch(
-        torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, memory_config=memory_config, device=device
+        torch_input, ttnn_dtype, layout=ttnn_layout, memory_config=memory_config, device=device
     )
 
     ttnn_output, ttnn_indices = ttnn.max_pool2d(
@@ -373,8 +372,12 @@ def run_max_pool2d_with_indices(
         # uint32: wraps at 4294967296 (2^32)
         ttnn_indices_torch = torch.where(ttnn_indices_torch < 0, ttnn_indices_torch + 4294967296, ttnn_indices_torch)
 
-    torch_output, torch_indices = torch.nn.functional.max_pool2d(
-        torch_input,
+    torch_output, torch_indices = golden_maxpool2d(
+        input_tensor=torch_input,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
@@ -383,19 +386,15 @@ def run_max_pool2d_with_indices(
         return_indices=True,
     )
 
-    # Reshape torch output to match TTNN format (NCHW -> NHWC)
-    torch_output_reshaped = torch_output.permute(0, 2, 3, 1)  # N, H, W, C
-    torch_indices_reshaped = torch_indices.permute(0, 2, 3, 1)  # N, H, W, C
-
-    # Reshape TTNN outputs to match PyTorch shape for comparison
-    # TTNN output is in shape (1, 1, in_n * out_h * out_w, channels)
-    ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
-    ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
-
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if ttnn_dtype == ttnn.bfloat8_b:
         atol = 0.35
-    output_match = torch.allclose(ttnn_output_reshaped, torch_output_reshaped, atol=atol, rtol=rtol)
+    output_match = torch.allclose(ttnn_output_torch, torch_output, atol=atol, rtol=rtol)
+
+    # Reshape to (N, H, W, C) for indices validation which needs spatial coordinates
+    torch_input_nhwc = torch_input.reshape(in_n, in_h, in_w, in_c)
+    torch_indices_nhwc = torch_indices.reshape(in_n, out_h, out_w, in_c)
+    ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
 
     (
         indices_valid,
@@ -404,8 +403,8 @@ def run_max_pool2d_with_indices(
         value_differences,
         window_violations,
     ) = validate_maxpool2d_indices(
-        torch_input_permuted,
-        torch_indices_reshaped,
+        torch_input_nhwc,
+        torch_indices_nhwc,
         ttnn_indices_reshaped,
         kernel_size,
         stride,
