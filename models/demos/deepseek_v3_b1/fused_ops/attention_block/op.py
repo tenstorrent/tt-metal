@@ -1128,7 +1128,7 @@ class AttentionBlock:
         ]
         # BRISC: no-op (empty args)
         qrope_brisc_named_compile_time_args = []
-        # TRISC: in_cb, cos_cb, sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_interm_cb, sin_interm_cb, out_cb, Wt, Ht
+        # TRISC: in_cb, cos_sin_cb, trans_mat_cb, rotated_in_interm_cb, cos_sin_interm_cb, out_cb, Wt, Ht
         qrope_trisc_named_compile_time_args = [
             ("qrope_in_cb", matmul2_output_cb),
             ("qrope_cos_sin_cb", qrope_cos_sin_cb),
