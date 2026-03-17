@@ -455,6 +455,10 @@ def device(request, device_params):
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    device.cache_entries_counter = CacheEntriesCounter(device)
+
     yield device
 
     # Restore the original default device BEFORE closing the test-specific one
@@ -576,6 +580,10 @@ def mesh_device(request, silicon_arch_name, device_params):
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
