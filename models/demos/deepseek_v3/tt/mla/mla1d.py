@@ -2309,8 +2309,14 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
         dim = x.shape[3]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
+        # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
+        # The program config must account for that batch so fuse_batch stays disabled.
         wq_kv_a_program_config = build_prefill_matmul_program_config(
-            seq_len, k=dim, n=qkv_a_n, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            seq_len,
+            k=dim,
+            n=qkv_a_n,
+            batch=x.shape[1],
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
