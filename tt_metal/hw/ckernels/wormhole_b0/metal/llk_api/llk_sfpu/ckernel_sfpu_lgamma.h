@@ -154,6 +154,11 @@ inline void calculate_lgamma_adjusted(
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        } else {
+            sfpi::vInt exp = sfpi::exexp(in);
+            sfpi::vInt man = sfpi::exman9(in);
+            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_endif;
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
