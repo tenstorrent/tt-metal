@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "optimizers/muon.hpp"
+#include "optimizers/muon_composite.hpp"
 
 #include <gtest/gtest.h>
 

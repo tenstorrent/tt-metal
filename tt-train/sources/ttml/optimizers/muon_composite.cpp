@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "muon.hpp"
+#include "muon_composite.hpp"
 
 #include "autograd/auto_context.hpp"
 #include "core/debug.hpp"

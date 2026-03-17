@@ -23,7 +23,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "nanobind/nb_fwd.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_full_precision.hpp"
-#include "optimizers/muon.hpp"
+#include "optimizers/muon_composite.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/optimizer_registry.hpp"

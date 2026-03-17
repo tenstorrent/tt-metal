@@ -7,7 +7,7 @@
 #include "optimizers/adamw.hpp"
 #include "optimizers/adamw_composite.hpp"
 #include "optimizers/adamw_full_precision.hpp"
-#include "optimizers/muon.hpp"
+#include "optimizers/muon_composite.hpp"
 #include "optimizers/no_op.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
