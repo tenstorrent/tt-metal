@@ -93,16 +93,20 @@ _OPT_STAGE_ENV = {
     "stage3": {
         "MASKFORMER_TT_FUSE_LINEAR_ACT": "1",
         "MASKFORMER_TT_USE_LINEAR": "1",
-        "MASKFORMER_TT_ENABLE_SDPA": "0",
+        # Program cache is stable on the tuned stage3 N300 path and removes repeated-forward recompilation cost.
+        "MASKFORMER_TT_DISABLE_PROGRAM_CACHE": "0",
+        "MASKFORMER_TT_ENABLE_SDPA": "1",
         "MASKFORMER_TT_ENABLE_FUSED_QKV": "0",
         "MASKFORMER_TT_ENABLE_FUSED_QKV_BACKBONE": "0",
         "MASKFORMER_TT_ENABLE_L1_SEQ": "1",
-        "MASKFORMER_TT_SDPA_MIN_SEQ": "192",
+        # Decoder query length is 100, so stage3 must lower the threshold to actually take the SDPA path.
+        "MASKFORMER_TT_SDPA_MIN_SEQ": "96",
         # Stage 3: reduce shifted-window attention overhead (N300).
         "MASKFORMER_TT_BACKBONE_TILE_MASK_ADD": "1",
         "MASKFORMER_TT_BACKBONE_FUSED_MASK_SOFTMAX": "0",
         "MASKFORMER_TT_BACKBONE_INPLACE_ADDS": "1",
         "MASKFORMER_TT_BACKBONE_REUSE_ATTN_MASK_CACHE": "1",
+        "MASKFORMER_TT_SYNC_WINDOW_ATTN_WINDOWS1": "0",
         "MASKFORMER_TT_BACKBONE_L1_ACT": "0",
         "MASKFORMER_TT_HEADS_USE_L1_ACT": "0",
         # Keep math fidelity stable.
@@ -330,11 +334,11 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 def _maybe_disable_program_cache(device: object) -> None:
-    """Disable tt-metal program cache by default (N300 stability workaround).
+    """Disable tt-metal program cache unless the selected stage/env opts into it.
 
-    Several tt-metal builds have exhibited hangs on repeated inference when the device
-    program cache is enabled. This model runs multiple forwards per invocation
-    (warmup + timed repeats), so disable the cache unless explicitly overridden.
+    Some tt-metal builds have exhibited hangs on repeated inference when the device
+    program cache is enabled. Keep the conservative default, but allow tuned stages
+    to override it explicitly through `MASKFORMER_TT_DISABLE_PROGRAM_CACHE=0`.
     """
 
     disable = os.environ.get("MASKFORMER_TT_DISABLE_PROGRAM_CACHE", "1").strip() != "0"
@@ -357,11 +361,14 @@ def _set_seed(seed: int) -> None:
 
 
 def _configure_optimization_stage(stage: str) -> Dict[str, str]:
-    settings = dict(_OPT_STAGE_ENV[stage])
-    for key, value in settings.items():
-        os.environ[key] = value
-    print(f"[maskformer] Optimization stage={stage} with env flags: {json.dumps(settings, sort_keys=True)}")
-    return settings
+    defaults = dict(_OPT_STAGE_ENV[stage])
+    effective_settings: Dict[str, str] = {}
+    for key, value in defaults.items():
+        effective_value = os.environ.get(key, value)
+        os.environ[key] = effective_value
+        effective_settings[key] = effective_value
+    print(f"[maskformer] Optimization stage={stage} with env flags: {json.dumps(effective_settings, sort_keys=True)}")
+    return effective_settings
 
 
 def _prepare_inputs(args: argparse.Namespace):

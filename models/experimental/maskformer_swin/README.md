@@ -153,6 +153,16 @@ Summary (mean latency over 5 runs; includes full TT forward + explicit device sy
 - Stage 2: `934.30 ms` (12.65% faster vs stage1)
 - Stage 3: `904.63 ms` (15.43% faster vs stage1, 3.18% faster vs stage2)
 
+Stage 3 with program cache enabled (steady-state repeated inference):
+- Demo (5-repeat avg): `71.60 ms` (13.97 FPS)
+- Trace+2CQ replay (8 iterations): `64.49 ms`
+- Pure device compute (skip-IO, 32 iterations): `62.85 ms`
+
+Key optimizations in the program-cache path:
+- ROW_MAJOR layer norm: eliminates TILE↔ROW_MAJOR round-trips around all backbone layer norms (saves ~152 layout conversion ops per forward).
+- Direct K transpose: pre-transposes K during QKV permute, removing one redundant permute per attention block.
+- Zero-copy view reshapes: uses `ttnn.view` for contiguous MLP and patch-merging reshapes.
+
 640x640 stage1 sanity (single run):
 - `generated/maskformer_swin/stage1_640_sanity/perf_640.json`
 - latency: `2299.33 ms`
@@ -214,16 +224,19 @@ Outputs:
 
 ## Tuning / known issues
 
-- Program cache: disabled by default for N300 stability (`MASKFORMER_TT_DISABLE_PROGRAM_CACHE=1`). Set `MASKFORMER_TT_DISABLE_PROGRAM_CACHE=0` to override.
+- Program cache: stage3 now enables program cache on N300 (`MASKFORMER_TT_DISABLE_PROGRAM_CACHE=0`) because it is stable on the tuned path and cuts repeated-forward latency substantially. Set `MASKFORMER_TT_DISABLE_PROGRAM_CACHE=1` to fall back to the conservative path if your build shows instability.
+- Stage profiles set defaults only. If you export a `MASKFORMER_TT_*` variable before launching the demo runner, that explicit value now overrides the selected optimization stage.
 - Stage 3 backbone attention optimizations (enabled by `--optimization-stage stage3`):
+  - shifted-window `_roll()` uses a combined 2D spatial fast path for NHWC tensors instead of two sequential full-tensor rolls.
   - `MASKFORMER_TT_BACKBONE_TILE_MASK_ADD=1`: add shifted-window attention mask in TILE layout (B=1 path) to avoid ROW_MAJOR<->TILE conversions.
   - `MASKFORMER_TT_BACKBONE_INPLACE_ADDS=1`: use inplace elementwise ops (`add_`, `multiply_`) where supported to reduce allocations.
   - `MASKFORMER_TT_BACKBONE_REUSE_ATTN_MASK_CACHE=1`: reuse cached attention masks without cloning (reduces per-forward allocations).
+  - `MASKFORMER_TT_SYNC_WINDOW_ATTN_WINDOWS1=0`: skip the stage3 single-window safety sync once the N300 path is warmed up.
 - Fused mask+softmax (`MASKFORMER_TT_BACKBONE_FUSED_MASK_SOFTMAX=1`): available on some builds, but currently **not PCC-safe** for this model (kept disabled in tests and stage configs).
 - Backbone L1 activations (`MASKFORMER_TT_BACKBONE_L1_ACT=1`): known to be unstable on N300 for this model; keep disabled.
 - SDPA (experimental, transformer decoder):
-  - `MASKFORMER_TT_ENABLE_SDPA=1` enables SDPA paths (currently disabled in the stage configs because it regressed on N300 in local tuning).
-  - `MASKFORMER_TT_SDPA_MIN_SEQ` (default `192`) avoids SDPA on small sequences where it can regress.
+  - `MASKFORMER_TT_ENABLE_SDPA=1` enables SDPA paths. Stage3 now enables it by default on N300.
+  - `MASKFORMER_TT_SDPA_MIN_SEQ` (default `192`) avoids SDPA on small sequences where it can regress; stage3 lowers this to `96` so the decoder's length-100 path actually takes SDPA.
   - `MASKFORMER_TT_FORCE_SDPA=1` forces SDPA regardless of sequence lengths (debug/tuning).
 - Matmul/core-grid knobs:
   - `MASKFORMER_TT_DISABLE_CORE_GRID=1` disables explicit core grid for linear/matmul.

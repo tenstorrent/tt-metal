@@ -729,11 +729,8 @@ class MaskFormerSwinBackbone:
                         block_filter = 0
                     debug_steps = stage_idx == stage_filter and block_idx == block_filter
 
-                # LN before attention
-                x_ln = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-                xn = ttnn.layer_norm(x_ln, weight=block["ln1_w"], bias=block["ln1_b"], memory_config=act_mem_cfg)
-                ttnn.deallocate(x_ln)
-                xn = ttnn.to_layout(xn, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+                # LN before attention — ROW_MAJOR-in/ROW_MAJOR-out avoids 2 layout conversions.
+                xn = ttnn.layer_norm(x, weight=block["ln1_w"], bias=block["ln1_b"], memory_config=act_mem_cfg)
                 if debug_steps:
                     tt.synchronize_device(self.device)
                     print(
@@ -763,11 +760,8 @@ class MaskFormerSwinBackbone:
                         flush=True,
                     )
 
-                # LN + MLP
-                x_ln2 = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-                xn2 = ttnn.layer_norm(x_ln2, weight=block["ln2_w"], bias=block["ln2_b"], memory_config=act_mem_cfg)
-                ttnn.deallocate(x_ln2)
-                xn2 = ttnn.to_layout(xn2, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+                # LN + MLP — ROW_MAJOR-in/ROW_MAJOR-out avoids 2 layout conversions.
+                xn2 = ttnn.layer_norm(x, weight=block["ln2_w"], bias=block["ln2_b"], memory_config=act_mem_cfg)
                 if debug_steps:
                     tt.synchronize_device(self.device)
                     print(
@@ -802,10 +796,7 @@ class MaskFormerSwinBackbone:
 
             # Per-stage output norm (used by FPN and transformer module)
             out_norm = self._out_norms[stage_idx]
-            x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
-            x_out = ttnn.layer_norm(x_tile, weight=out_norm["w"], bias=out_norm["b"], memory_config=act_mem_cfg)
-            ttnn.deallocate(x_tile)
-            x_out = ttnn.to_layout(x_out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
+            x_out = ttnn.layer_norm(x, weight=out_norm["w"], bias=out_norm["b"], memory_config=act_mem_cfg)
             feature_maps.append(x_out)
             hidden_states.append(x_out)
 
@@ -835,7 +826,9 @@ class MaskFormerSwinBackbone:
         linear_kwargs, _ = self._linear_matmul_kwargs()
         fuse_linear_act = os.environ.get("MASKFORMER_TT_FUSE_LINEAR_ACT", "0").strip() == "1"
         B, H, W, C = x.shape
-        seq = ttnn.reshape(x, (int(B), int(H) * int(W), int(C)))
+        # view is zero-copy (reinterprets buffer) vs reshape which may copy data.
+        _view = ttnn.view if hasattr(ttnn, "view") else ttnn.reshape
+        seq = _view(x, (int(B), int(H) * int(W), int(C)))
         seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         y = None
         if fuse_linear_act:
@@ -876,7 +869,8 @@ class MaskFormerSwinBackbone:
             **linear_kwargs,
         )
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-        y = ttnn.reshape(y, (int(B), int(H), int(W), int(C)))
+        _view = ttnn.view if hasattr(ttnn, "view") else ttnn.reshape
+        y = _view(y, (int(B), int(H), int(W), int(C)))
         return y
 
     def _patch_merging(self, x, *, norm_w, norm_b, reduction_w):
@@ -906,11 +900,11 @@ class MaskFormerSwinBackbone:
         ttnn.deallocate(x2)
         ttnn.deallocate(x3)
 
-        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
+        # ROW_MAJOR layer norm avoids 2 layout conversions.
         y = ttnn.layer_norm(y, weight=norm_w, bias=norm_b, memory_config=act_mem_cfg)
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
         B2, H2, W2, C4 = y.shape
-        seq = ttnn.reshape(y, (int(B2), int(H2) * int(W2), int(C4)))
+        _view = ttnn.view if hasattr(ttnn, "view") else ttnn.reshape
+        seq = _view(y, (int(B2), int(H2) * int(W2), int(C4)))
         seq = ttnn.to_layout(seq, ttnn.TILE_LAYOUT, memory_config=act_mem_cfg)
         out = ttnn.linear(
             seq,
@@ -920,7 +914,7 @@ class MaskFormerSwinBackbone:
             compute_kernel_config=compute_cfg,
         )
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=act_mem_cfg)
-        out = ttnn.reshape(out, (int(B2), int(H2), int(W2), int(out.shape[-1])))
+        out = _view(out, (int(B2), int(H2), int(W2), int(out.shape[-1])))
         ttnn.deallocate(y)
         return out
 
@@ -1073,7 +1067,9 @@ class MaskFormerSwinBackbone:
             k = ttnn.reshape(k, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
             v = ttnn.reshape(v, (B * num_windows, N, num_heads, head_dim), memory_config=act_mem_cfg)
             q = ttnn.permute(q, (0, 2, 1, 3), memory_config=act_mem_cfg)
-            k = ttnn.permute(k, (0, 2, 1, 3), memory_config=act_mem_cfg)
+            # Materialize K directly in score-ready layout to avoid an extra hot-path transpose.
+            k = ttnn.permute(k, (0, 2, 3, 1), memory_config=act_mem_cfg)
+            key_is_transposed = True
             v = ttnn.permute(v, (0, 2, 1, 3), memory_config=act_mem_cfg)
         _attn_mark("qkv end")
 
