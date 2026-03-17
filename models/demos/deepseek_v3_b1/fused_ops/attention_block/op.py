@@ -179,8 +179,8 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores():
-        # 14 from pre-SDPA, 3 from post
-        return 17
+        # 14 from pre-SDPA, 4 from post
+        return 18
 
     @staticmethod
     def create_semaphores(mesh_device):
@@ -237,6 +237,7 @@ class AttentionBlock:
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         cb_id_context=None,
+        upstream_socket=None,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -263,7 +264,7 @@ class AttentionBlock:
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
             skip_ccl: If True, skip CCL broadcast (single-device mode)
             noc_mode: NOC mode for the kernel (dedicated or dynamic)
-
+            upstream_socket: Socket for upstream communication
         Returns:
             Tuple of (io_tensors, full_device_grid, per_device_contexts) where:
             - full_device_grid: CoreRangeSet covering the full device compute grid
@@ -372,9 +373,13 @@ class AttentionBlock:
 
         # Get full device grid
         device = input_tensor_sample.device()
+        input_noc_coord = device.worker_core_from_logical_core(rmsnorm_core)
         device_grid_size = device.compute_with_storage_grid_size()
         full_device_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        full_device_grid = full_device_grid.subtract(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(12, 8), ttnn.CoreCoord(12, 8))])
         )
 
         # Matmul1 grid from OverlappedTensor metadata (single packed weight tensor)
@@ -560,6 +565,7 @@ class AttentionBlock:
         # CCL sender core: (11, 9) - adjacent to gather core
         ccl_sender_core = ttnn.CoreCoord(11, 9)
         ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
+        num_ccl_sender_cores = ccl_sender_core_grid.num_cores()
 
         # TODO: Subtract the pipeline core
         is_full_mcast_grid_core = ttnn.CoreRangeSet([main_grid]).subtract(rmsnorm_core_grid)
@@ -580,9 +586,24 @@ class AttentionBlock:
         full_grid = rmsnorm_core_grid.merge(ttnn.CoreRangeSet([main_grid])).merge(ccl_sender_core_grid)
 
         # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
-        sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
 
-        sdpa_worker_grid = sdpa_input_l_sample.memory_config().shard_spec.grid
+        NUM_SDPA_WORKERS = 8
+        SDPA_L_HEIGHT = 8
+        SDPA_L_WIDTH = 512 * NUM_SDPA_WORKERS
+
+        sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS
+        sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
+        sdpa_worker_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
+        )
+        sdpa_tile = ttnn.Tile([8, 32])
+        sdpa_dtype = ttnn.bfloat16
+        sdpa_l_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(sdpa_worker_grid, (SDPA_L_HEIGHT, sdpa_l_per_worker), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        sdpa_worker_grid = sdpa_l_mem_config.shard_spec.grid
 
         # SDPA forwarder grid: derived from the scratch buffer's shard spec so that
         # the kernel runs on exactly the cores where the scratch buffer is allocated.
@@ -592,19 +613,22 @@ class AttentionBlock:
         sdpa_forwarder_scratch_sample = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
         sdpa_forwarder_grid = sdpa_forwarder_scratch_sample.memory_config().shard_spec.grid
         sdpa_forwarder_cores = list(ttnn.corerange_to_cores(sdpa_forwarder_grid, row_wise=True))
+        num_sdpa_forwarder_cores = len(sdpa_forwarder_cores)
 
         # Add SDPA cores to full grid (workers and forwarders both part of unified kernel)
         full_grid = full_grid.merge(sdpa_worker_grid).merge(sdpa_forwarder_grid)
+        full_grid = full_grid.subtract(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(12, 8), ttnn.CoreCoord(12, 8))])
+        )
 
         # Get actual tile dimensions from input tensor (matches original op)
-        sdpa_tile = sdpa_input_l_sample.tile
         sdpa_tile_height, sdpa_tile_width = sdpa_tile.tile_shape
-        sdpa_element_size_bytes = _get_element_size_bytes(sdpa_input_l_sample.dtype)
+        sdpa_element_size_bytes = _get_element_size_bytes(sdpa_dtype)
         sdpa_input_page_size_bytes = sdpa_element_size_bytes * sdpa_tile_height * sdpa_tile_width
         sdpa_l1_alignment = 16  # L1 alignment for SDPA (matches original op)
 
         # Get shard spec to calculate tile counts (matches original op)
-        sdpa_shard_spec = sdpa_input_l_sample.memory_config().shard_spec
+        sdpa_shard_spec = sdpa_l_mem_config.shard_spec
         sdpa_input_l_num_pages = (sdpa_shard_spec.shape[0] // sdpa_tile_height) * (
             sdpa_shard_spec.shape[1] // sdpa_tile_width
         )
@@ -802,6 +826,9 @@ class AttentionBlock:
         ccl_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
         ccl_semaphore_addr = ttnn.get_global_semaphore_address(ccl_semaphore)
+        ccl_sync_semaphore = attention_block_semaphores[semaphore_index]
+        semaphore_index += 1
+        ccl_sync_semaphore_addr = ttnn.get_global_semaphore_address(ccl_sync_semaphore)
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -953,9 +980,6 @@ class AttentionBlock:
         ccl_remote_data_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL received remote data (receiver core)
         ccl_residual_cb = input_cb
         ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL output (receiver core)
-        ccl_packet_header_cb = cb_id_context.get_cb_id(
-            ttnn.uint32, TD_32x32
-        )  # CCL packet headers (sender + receiver cores)
 
         attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
 
@@ -1740,6 +1764,11 @@ class AttentionBlock:
                 ("sdpa_fwd_r2_buffer_offset", sdpa_fwd_r2_buffer_offset),
                 # Scatter arrival semaphore
                 ("scatter_arrival_semaphore_id", scatter_arrival_semaphore_id),
+                # Input NOC coord
+                ("input_noc_coord_x", input_noc_coord.x),
+                ("input_noc_coord_y", input_noc_coord.y),
+                # CCL sync semaphore
+                ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
             ]
         )
 
@@ -1785,6 +1814,13 @@ class AttentionBlock:
             ("ccl_sender_remote_receiver_noc_y", ccl_receiver_noc_core.y),
             ("ccl_sender_dst_num_hops", 1),
             ("ccl_sender_num_connections", 1),
+            ("ccl_sender_num_cores", num_ccl_sender_cores),
+            ("sdpa_fwd_num_cores", num_sdpa_forwarder_cores),
+            # Input NOC coord
+            ("input_noc_coord_x", input_noc_coord.x),
+            ("input_noc_coord_y", input_noc_coord.y),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
         ]
 
         # Add SDPA BRISC compile-time args when enabled
@@ -1878,9 +1914,6 @@ class AttentionBlock:
         ref_post_sdpa_weights1_fused_tensor = post_sdpa_weights1_fused_tensors_per_device[0]
         ref_post_sdpa_weights2_fused_tensor = post_sdpa_weights2_fused_tensors_per_device[0]
         ref_attention_block_output_tensor = attention_block_output_tensors_per_device[0]
-        ref_sdpa_input_l = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
-        ref_sdpa_input_ms = ttnn.get_device_tensors(sdpa_input_ms_mesh)[0]
-        ref_sdpa_output_l = ttnn.get_device_tensors(sdpa_output_l_mesh)[0]
         ref_sdpa_intermediate_recv = ttnn.get_device_tensors(sdpa_intermediate_recv_mesh)[0]
         ref_sdpa_forwarder_scratch = ttnn.get_device_tensors(sdpa_forwarder_scratch_mesh)[0]
 
@@ -2741,23 +2774,6 @@ class AttentionBlock:
         attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
 
-        # CB 13: CCL packet headers
-        ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=ccl_packet_header_cb,
-            data_format=ttnn.uint32,
-            page_size=ccl_packet_header_size_bytes,
-        )
-        ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ccl_packet_header_cb,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=2 * ccl_packet_header_size_bytes,
-            core_ranges=full_device_grid,
-        )
-        ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
-        sdpa_forwarder_scratch_running_offset += ccl_packet_header_cb_descriptor.total_size
-        post_sdpa_cb_list.append(ccl_packet_header_cb_descriptor)
-
         # CB 16: SDPA neighbor L (aliased to intermediate recv buffer)
         # The recv buffer holds both L and MS data, but this CB should only
         # cover the L portion. Override total_size like the original op does.
@@ -2814,9 +2830,21 @@ class AttentionBlock:
         post_sdpa_cb_list.append(sdpa_r1_result_ms_cb_descriptor)
 
         # CB 20: SDPA L output (aliased to output tensor)
-        sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            sdpa_cb_l_out, ref_sdpa_output_l, core_ranges=full_device_grid
+        sdpa_l_out_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=sdpa_cb_l_out,
+            data_format=data_format,
+            page_size=sdpa_l_tile_size,
+            tile=ttnn.TileDescriptor(sdpa_tile),
         )
+        sdpa_l_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            sdpa_cb_l_out,
+            ref_sdpa_out_interm_buffer,
+            address_offset=sdpa_out_interm_running_offset_post_sdpa,
+            total_size=sdpa_l_tiles_per_worker * sdpa_l_tile_size,
+            core_ranges=full_device_grid,
+        )
+        sdpa_l_out_cb_descriptor.format_descriptors = [sdpa_l_out_cb_format]
+        sdpa_out_interm_running_offset_post_sdpa += sdpa_l_out_cb_descriptor.total_size
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
         # ========================================================================
@@ -3241,12 +3269,10 @@ class AttentionBlock:
             qrope_output_cb_descriptor,
             create_q_heads_out_cb_descriptor,
             qkv_rope_cos_sin_cb_descriptor,
-            # qrope_trans_mat_cb_descriptor,
             qrope_rotated_input_interm_cb_descriptor,
             qrope_cos_sin_interm_cb_descriptor,
             dkv_matmul_output_cb_descriptor,
             kv_rmsnorm_input_cb_descriptor,
-            # kv_rmsnorm_gamma_cb_descriptor,
             kv_rmsnorm_output_cb_descriptor,
             krope_output_cb_descriptor,
             krope_cos_sin_cb_descriptor,
@@ -3362,11 +3388,24 @@ class AttentionBlock:
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
+                # bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
+                # bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
+                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if upstream_socket is not None else None
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
                     ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
                     ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("bcast_use_socket", 1 if upstream_socket is not None else 0),
+                    (
+                        "bcast_socket_config_addr",
+                        upstream_socket.get_config_buffer_address() if upstream_socket is not None else 0,
+                    ),
+                    (
+                        "bcast_socket_page_size",
+                        input_shape[0] * input_shape[1] * element_size if upstream_socket is not None else 0,
+                    ),
+                    ("bcast_socket_num_pages", 1 if upstream_socket is not None else 0),
                 ]
 
                 bcast_ncrisc_named_compile_time_args = [
@@ -3455,6 +3494,8 @@ class AttentionBlock:
                 matmul2_weights_addr = fused_weights_base_addr + matmul2_weights_tensor.byte_offset
                 dkv_matmul_weights_addr = fused_weights_base_addr + dkv_matmul_weights_tensor.byte_offset
                 gamma_addr = ref_gamma_fused_tensor.buffer_address() + gamma_tensor.byte_offset
+                rmsnorm2_gamma_addr = ref_gamma_fused_tensor.buffer_address() + rmsnorm2_gamma_tensor.byte_offset
+                kv_rmsnorm_gamma_addr = ref_gamma_fused_tensor.buffer_address() + dkv_rmsnorm_gamma_tensor.byte_offset
                 matmul3_weights_addr = ref_kv_b12_fused_tensor.buffer_address() + matmul3_weights_tensor.byte_offset
                 matmul4_weights_addr = (
                     ref_post_sdpa_weights1_fused_tensor.buffer_address() + post_sdpa_weights1_tensor.byte_offset
@@ -3463,8 +3504,6 @@ class AttentionBlock:
                     ref_post_sdpa_weights2_fused_tensor.buffer_address() + post_sdpa_weights2_tensor.byte_offset
                 )
                 qrope_trans_mat_addr = ref_trans_mat_tensor.buffer_address()
-                rmsnorm2_gamma_addr = ref_gamma_fused_tensor.buffer_address() + rmsnorm2_gamma_tensor.byte_offset
-                kv_rmsnorm_gamma_addr = ref_gamma_fused_tensor.buffer_address() + dkv_rmsnorm_gamma_tensor.byte_offset
 
                 # TRISC common runtime args (shared scalar values)
                 trisc_common_runtime_args = [
@@ -3771,6 +3810,7 @@ class AttentionBlock:
                 per_device_contexts.append(
                     {
                         "mesh_coord": mesh_coord,
+                        "device_kernel_defines": device_kernel_defines,
                         "ncrisc_compile_time_args": ncrisc_compile_time_args,
                         "brisc_compile_time_args": brisc_compile_time_args,
                         "brisc_named_compile_time_args": brisc_named_compile_time_args,
@@ -3845,6 +3885,7 @@ class AttentionBlock:
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
+        upstream_socket=None,
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
@@ -3892,6 +3933,7 @@ class AttentionBlock:
             skip_ccl,
             noc_mode,
             cb_id_context,
+            upstream_socket,
         )
 
         io_tensors = []
@@ -3902,7 +3944,7 @@ class AttentionBlock:
 
         # TODO: Passing the address here as a named compile time arg is not ideal. Done for simplicity.
         additional_named_compile_time_args = [
-            ("reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
+            ("mla_reconfig_cb_config_l1_addr", reconfig_tensor.buffer_address()),
             ("num_iterations", num_iterations),
         ]
 
@@ -4087,5 +4129,6 @@ class AttentionBlock:
                 ]
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
+
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result
