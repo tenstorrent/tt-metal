@@ -135,6 +135,7 @@ def cb_descriptor_from_overlapped_tensors(
     cb_index: int,
     overlapped_list: list[OverlappedTensor],
     fused_tensor_device: ttnn.Tensor,
+    core_ranges: ttnn.CoreRangeSet = None,
 ) -> ttnn.CBDescriptor:
     """Create a single CBDescriptor spanning multiple OverlappedTensors in the same fused buffer.
 
@@ -144,16 +145,19 @@ def cb_descriptor_from_overlapped_tensors(
     assert len(overlapped_list) > 0
 
     first = overlapped_list[0]
-    merged_core_ranges = first.core_range_set
+    core_range_override = core_ranges is not None
+    if not core_range_override:
+        core_ranges = first.core_range_set
     for ot in overlapped_list[1:]:
         assert ot.dtype == first.dtype
         assert ot.tile_shape == first.tile_shape
-        merged_core_ranges = merged_core_ranges.merge(ot.core_range_set)
+        if not core_range_override:
+            core_ranges = core_ranges.merge(ot.core_range_set)
 
     cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
         cb_index,
         fused_tensor_device,
-        core_ranges=merged_core_ranges,
+        core_ranges=core_ranges,
     )
     tile = ttnn.Tile(first.tile_shape)
     cb_desc.format_descriptors = [
