@@ -334,18 +334,26 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_blocks_per_core_group_1 = num_output_blocks_total / num_cores * batch_scale_factor;
-    } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
-        CoreRangeSet requested_cores = core_range_set.has_value()
-                                           ? core_range_set.value()
-                                           : CoreRangeSet({CoreRange({0, 0}, {grid.x - 1, grid.y - 1})});
+    } else if (core_range_set.has_value()) {
         std::tie(
             num_cores,
             all_cores,
             core_group_1,
             core_group_2,
             num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(requested_cores, num_output_blocks_total);
+            num_blocks_per_core_group_2) =
+            tt::tt_metal::split_work_to_cores(core_range_set.value(), num_output_blocks_total);
+        num_blocks_per_core_group_1 *= batch_scale_factor;
+        num_blocks_per_core_group_2 *= batch_scale_factor;
+    } else {
+        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        std::tie(
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            num_blocks_per_core_group_1,
+            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
