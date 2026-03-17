@@ -13,6 +13,7 @@ void kernel_main() {
     const uint32_t dst_base_addr = get_arg_val<uint32_t>(rt++);
     const uint32_t num_tiles_core = get_arg_val<uint32_t>(rt++);
     const uint32_t shard_start_tile = get_arg_val<uint32_t>(rt++);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
 
 #ifdef SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -23,17 +24,14 @@ void kernel_main() {
         get_compile_time_arg_val(5),
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7)>;
-    
-    const auto [mapping_table, rt_increment] = 
+
+    const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_base_addr, .shard_array = mapping_table};
 #else
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr auto dst_args = TensorAccessorArgs<1>();
     constexpr auto s0 = TensorAccessor(dst_args, dst_base_addr, tile_bytes);
 #endif
-
-    constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
 
     // Each core writes its own global tile range [shard_start_tile ... shard_start_tile + num_tiles_core]
     for (uint32_t t = 0; t < num_tiles_core; ++t) {
