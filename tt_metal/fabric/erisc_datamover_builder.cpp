@@ -265,7 +265,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->datapath_usage_l1_address = next_l1_addr;
         this->datapath_usage_buffer_size = sizeof(tt::tt_fabric::FabricDatapathUsageL1Results<
                                                   true,
-                                                  builder_config::num_max_receiver_channels,
+                                                  builder_config::MAX_NUM_VCS,
                                                   builder_config::num_max_sender_channels>);
         next_l1_addr += this->datapath_usage_buffer_size;
     } else {
@@ -1078,6 +1078,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // --- Max channel counts ---
     named_args["MAX_NUM_SENDER_CHANNELS"] = builder_config::num_max_sender_channels;
     named_args["MAX_NUM_RECEIVER_CHANNELS"] = builder_config::num_max_receiver_channels;
+    named_args["MAX_NUM_VCS"] = static_cast<uint32_t>(builder_config::MAX_NUM_VCS);
 
     // --- Downstream tensix connections ---
     named_args["NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS"] = this->num_downstream_tensix_connections;
