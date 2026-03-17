@@ -26,7 +26,7 @@ namespace tt::tt_fabric {
 
 template <
     bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS,
+    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
     uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
 struct WorkerToFabricEdmSenderBase;
 
@@ -62,8 +62,8 @@ namespace fabric_detail{
  */
 template <
     bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
-    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
+    uint8_t EDM_NUM_BUFFER_SLOTS,
+    uint32_t STREAM_ID>
 struct WorkerToFabricEdmSenderBase {
     static_assert(STREAM_ID <= 31, "Stream ID must be in range 0-31");
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
