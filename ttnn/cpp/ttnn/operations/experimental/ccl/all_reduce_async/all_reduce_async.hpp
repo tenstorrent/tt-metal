@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -20,7 +20,7 @@ ttnn::Tensor all_reduce_async(
     const std::vector<GlobalSemaphore>& barrier_semaphores,
     const std::vector<GlobalSemaphore>& rs_global_semaphores,
     const std::vector<GlobalSemaphore>& ag_global_semaphores,
-    ttnn::operations::reduction::ReduceType math_op,
+    reduction_common::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<size_t> num_preferred_links = std::nullopt,
@@ -33,7 +33,7 @@ ttnn::Tensor all_reduce_async(
     const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
     const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
-    ttnn::operations::reduction::ReduceType math_op,
+    reduction_common::ReduceType math_op,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<size_t> num_preferred_links,
@@ -42,7 +42,7 @@ ttnn::Tensor all_reduce_async(
 ttnn::Tensor all_reduce_async(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
-    ttnn::operations::reduction::ReduceType math_op,
+    reduction_common::ReduceType math_op,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
