@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_exp2.h"
 
 namespace ckernel::sfpu {
