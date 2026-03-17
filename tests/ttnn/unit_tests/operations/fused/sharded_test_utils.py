@@ -8,6 +8,9 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def generate_input_tensor(h, w, type, dtype):
@@ -377,6 +380,16 @@ def do_test_main(
             weight=weight,
             bias=bias,
         )
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"do_test_main[{op_name},h={h},w={w},num_cores_h={num_cores_h},num_cores_w={num_cores_w},block_ht={block_ht},block_wt={block_wt},subblock_wt={subblock_wt},use_welford={use_welford},two_stage={two_stage},tensor_type={tensor_type},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        ref_output_tensor,
+        output_ttnn,
+        test_name=test_name,
+        csv_filename=f"test_{op_name}_sharded_numeric_results.csv",
+        test_params=None,
+    )
 
     # Check PCC
     assert_with_pcc(ref_output_tensor, output_ttnn, 0.9998)

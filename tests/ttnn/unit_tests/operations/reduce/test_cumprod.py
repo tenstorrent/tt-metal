@@ -33,8 +33,8 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        # [],
-        # [2],
+        [],
+        [2],
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],

@@ -11,6 +11,9 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from itertools import product
 from models.common.utility_functions import comp_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -120,6 +123,17 @@ def test_batch_norm_tests(
             else:
                 comp_BN_running_var = False
         comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm_tests[input_shapes={input_shapes},check_mean={check_mean},check_var={check_var},weight={weight},bias={bias},eps={eps},momentum={momentum},training={training},testing_dtype={testing_dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert comp_BN_Output
 
 
@@ -160,6 +174,16 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
         input_tensor_tt, running_mean=batch_mean_tt, running_var=batch_var_tt, eps=eps, weight=weight_tt, bias=bias_tt
     )
     tt_out = ttnn.to_torch(result_tt)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_BN_fp32_full_value[channel_size={channel_size},eps={eps},weight={weight},bias={bias}]"
+    collect_and_dump_numeric_metrics(
+        result_torch,
+        tt_out,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     status_1 = torch.allclose(result_torch, tt_out, atol=1e-10, rtol=1e-5)
     status_2 = compare_results_batch_norm([result_torch], [tt_out])
@@ -238,6 +262,17 @@ def test_batch_norm_fp32(
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result]) and torch.allclose(
         torch_result, tt_output, atol=1e-6, rtol=1e-3
     )
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm_fp32[input_shapes={input_shapes},check_mean={check_mean},check_var={check_var},weight={weight},bias={bias},eps={eps}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert comp_BN_Output
 
 
@@ -330,6 +365,16 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
                 comp_BN_running_var = False
         comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm[input_shapes={input_shapes},training={training},check_mean={check_mean},check_var={check_var},weight={weight},bias={bias},eps={eps},momentum={momentum}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert comp_BN_Output
 
 
@@ -361,6 +406,17 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm_program_cache_and_default[input_shapes={input_shapes},mem_layout={mem_layout}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     assert comp_BN_Output
 
@@ -382,6 +438,17 @@ def test_batch_norm_qid_Default(input_shapes, device):
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm_qid_Default[input_shapes={input_shapes}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     assert comp_BN_Output
 
@@ -401,6 +468,17 @@ def test_batch_norm_qid(input_shapes, device):
     tt_output_tensor_on_device = ttnn.batch_norm(input_tensor, running_mean=mean_tensor, running_var=var_tensor)
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm_qid[input_shapes={input_shapes}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     assert comp_BN_Output
 
@@ -421,6 +499,17 @@ def test_batch_norm_output_Default(input_shapes, device):
     ttnn.batch_norm(input_tensor, running_mean=mean_tensor, running_var=var_tensor, queue_id=0, output=tt_output_tensor)
     tt_output = ttnn.to_torch(tt_output_tensor)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_batch_norm_output_Default[input_shapes={input_shapes}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_batch_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     assert comp_BN_Output
 
@@ -521,6 +610,22 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, device)
     )
     torch_tensors, tt_tensors = do_batch_norm_for_config(config_high)
     pccs_high = compute_pccs_for_tensors(torch_tensors, tt_tensors)
+
+    # Collect numeric metrics and dump to CSV using reusable function (for high accuracy config)
+    test_name = (
+        f"test_batch_norm_compute_config[input_shapes={input_shapes},training={training},weight={weight},bias={bias}]"
+    )
+    if torch_tensors and tt_tensors:
+        # Use the output tensor (first one if training, otherwise only output)
+        torch_output = torch_tensors[0] if not training else torch_tensors[-1]
+        tt_output = tt_tensors[0] if not training else tt_tensors[-1]
+        collect_and_dump_numeric_metrics(
+            torch_output,
+            tt_output,
+            test_name=test_name,
+            csv_filename="test_batch_norm_numeric_results.csv",
+            test_params=None,
+        )
 
     assert all(
         high > low for high, low in zip(pccs_high, pccs_low)

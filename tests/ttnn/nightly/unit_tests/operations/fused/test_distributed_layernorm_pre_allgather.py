@@ -11,6 +11,9 @@ import ttnn
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def reference(x, n_devices, is_rmsnorm):
@@ -145,6 +148,16 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         )
         logger.debug(f"tt vs torch sum(xˆ2) = {output_str}")
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"run_layernorm_part_1[inp_shape={inp_shape},n_devices={n_devices},is_rmsnorm={is_rmsnorm},input_dtype={input_dtype},output_dtype={output_dtype},device_idx={i},ex2]"
+        collect_and_dump_numeric_metrics(
+            out_torch[:, :, :, 0 + device_offset],
+            tt_output_host[:, :, :, 0 + device_offset],
+            test_name=test_name,
+            csv_filename="test_distributed_layernorm_pre_allgather_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         all_passing &= passing
 
         # Check if zeros are same
@@ -173,6 +186,16 @@ def run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
                 pcc=0.97,
             )
             logger.debug(f"tt vs torch sum(x) = {output_str}")
+
+            # Collect numeric metrics and dump to CSV using reusable function
+            test_name = f"run_layernorm_part_1[inp_shape={inp_shape},n_devices={n_devices},is_rmsnorm={is_rmsnorm},input_dtype={input_dtype},output_dtype={output_dtype},device_idx={i},ex]"
+            collect_and_dump_numeric_metrics(
+                out_torch[:, :, :, 32 + device_offset],
+                tt_output_host[:, :, :, 32 + device_offset],
+                test_name=test_name,
+                csv_filename="test_distributed_layernorm_pre_allgather_nightly_numeric_results.csv",
+                test_params=None,
+            )
 
             all_passing &= passing
 

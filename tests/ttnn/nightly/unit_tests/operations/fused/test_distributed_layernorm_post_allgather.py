@@ -12,6 +12,9 @@ from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
@@ -116,6 +119,17 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
 
         tt_lnp2_out_cpu = tt2torch_tensor(tt_lnp2_out)
         passing, output_str = comp_allclose(ref_chunks[d], tt_lnp2_out_cpu, rtol=1e-1, atol=1e-01)
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"run_layernorm_part_2[inp_shape={inp_shape},n_devices={n_devices},is_rmsnorm={is_rmsnorm},input_dtype={input_dtype},output_dtype={output_dtype},device_idx={d},fp32_enabled={fp32_enabled}]"
+        collect_and_dump_numeric_metrics(
+            ref_chunks[d],
+            tt_lnp2_out_cpu,
+            test_name=test_name,
+            csv_filename="test_distributed_layernorm_post_allgather_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         if passing:
             pass_n += [[d, output_str]]
         else:

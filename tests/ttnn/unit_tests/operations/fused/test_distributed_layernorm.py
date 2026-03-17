@@ -14,6 +14,9 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
@@ -122,6 +125,16 @@ def run_distributed_layernorm(
 
     # reference impl
     out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"run_distributed_layernorm[inp_shape={inp_shape},n_devices={n_devices},is_rmsnorm={is_rmsnorm},dtype={dtype},stats_dtype={stats_dtype},has_weights={has_weights},fp32_enabled={fp32_enabled}]"
+    collect_and_dump_numeric_metrics(
+        out_torch,
+        tt_output_host,
+        test_name=test_name,
+        csv_filename="test_distributed_layernorm_numeric_results.csv",
+        test_params=None,
+    )
 
     passing, output_str = comp_allclose(tt_output_host, out_torch, rtol=1e-1, atol=1e-01)
     logger.debug(f"torch vs tt distributed layernorm = {output_str}")

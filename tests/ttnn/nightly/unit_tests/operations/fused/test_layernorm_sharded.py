@@ -14,6 +14,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.common.utility_functions import torch2tt_tensor
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -272,6 +275,16 @@ def test_layernorm_sharded_mix_precision_rm(
     else:
         ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"run_layernorm_sharded_tests[test_id={test_id},in_dtype={in_dtype},gamma_dtype={gamma_dtype},in0_mem_config={in0_mem_config.buffer_type},out_mem_config={out_mem_config.buffer_type},gamma_beta_mem_config={gamma_beta_mem_config.buffer_type}]"
+    collect_and_dump_numeric_metrics(
+        ref_lnorm,
+        tt_got_back,
+        test_name=test_name,
+        csv_filename="test_layernorm_sharded_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
     logger.info(output)
@@ -545,6 +558,16 @@ def test_layernorm_1d_sharded_mix_precision_rm(
     else:
         ref_fn = rms_norm
     ref_lnorm = ref_fn(pt_in, in0.shape[-1:], gamma.flatten(), beta.flatten(), epsf)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layernorm_1d_sharded_mix_precision_rm[test_id={test_id},M={M},K={K},subblock_w={subblock_w},in_dtype={in_dtype},gamma_dtype={gamma_dtype},gamma_beta_mem_config={gamma_beta_mem_config.buffer_type},out_mem_config={out_mem_config.buffer_type},shard_orientation={shard_orientation}]"
+    collect_and_dump_numeric_metrics(
+        ref_lnorm,
+        tt_got_back,
+        test_name=test_name,
+        csv_filename="test_layernorm_sharded_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     passing, output = comp_pcc(tt_got_back, ref_lnorm, 0.999)
     logger.info(output)

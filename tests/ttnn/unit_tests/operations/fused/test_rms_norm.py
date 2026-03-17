@@ -9,6 +9,9 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -29,6 +32,16 @@ def test_rms_norm(device, batch_size, h, w):
     output_tensor = ttnn.rms_norm(input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_rms_norm[batch_size={batch_size},h={h},w={w}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_rms_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
@@ -72,6 +85,16 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_rms_norm_row_major[batch_size={batch_size},h={h},w={w},math_fidelity={math_fidelity},math_approx_mode={math_approx_mode},fp32_dest_acc_en={fp32_dest_acc_en},packer_l1_acc={packer_l1_acc}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_rms_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
@@ -94,5 +117,15 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     output_tensor = ttnn.rms_norm(input_tensor, residual_input_tensor=residual_input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_rms_norm_with_weight_and_residual[batch_size={batch_size},h={h},w={w},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_rms_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)

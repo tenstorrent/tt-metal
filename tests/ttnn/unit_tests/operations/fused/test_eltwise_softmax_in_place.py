@@ -9,6 +9,9 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_config, data_seed, device):
@@ -36,6 +39,16 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     # compare tt and golden outputs
     success, pcc_value = comp_pcc(ref_value, tt_result)
     logger.debug(pcc_value)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_eltwise_softmax_in_place_test[input_shape={input_shape},dtype={dtype},dlayout={dlayout},in_mem_config={in_mem_config},data_seed={data_seed}]"
+    collect_and_dump_numeric_metrics(
+        ref_value,
+        tt_result,
+        test_name=test_name,
+        csv_filename="test_eltwise_softmax_in_place_numeric_results.csv",
+        test_params=None,
+    )
 
     assert success
 

@@ -13,6 +13,9 @@ from tt_lib.utils import (
 )
 
 from models.common.utility_functions import comp_pcc, pad_by_zero
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 shapes = [[1, 1, 32, 32], [1, 1, 32, 128], [1, 2, 128, 128]]
 
@@ -27,6 +30,16 @@ def test_softmax(shape, device):
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_out = torch.nn.functional.softmax(x, dim=-1)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax[shape={shape}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        tt_got_back,
+        test_name=test_name,
+        csv_filename="test_single_core_fused_ops_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     passing, output = comp_pcc(pt_out, tt_got_back, 0.95752)
     logger.info(output)
@@ -49,6 +62,16 @@ def test_layernorm(shape, device):
     tt_got_back = xtt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
     pt_out = torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, 1e-5)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layernorm[shape={shape}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        tt_got_back,
+        test_name=test_name,
+        csv_filename="test_single_core_fused_ops_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     passing, output = comp_pcc(pt_out, tt_got_back, 0.98630)
     logger.info(output)

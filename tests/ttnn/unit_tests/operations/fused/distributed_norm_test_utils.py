@@ -448,6 +448,20 @@ def run_distributed_norm_test(
     # Check average relative difference
     passes, max_abs_diff, max_rel_diff, mean_rel_diff = check_average_relative_diff(torch_output, ttnn_output_torch)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+        collect_and_dump_numeric_metrics,
+    )
+
+    test_name = f"run_distributed_norm_test[batch_size={batch_size},seq_len={seq_len},hidden_dim={hidden_dim},eps={eps},norm_type={norm_type},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        ttnn_output_torch,
+        test_name=test_name,
+        csv_filename="test_distributed_layernorm_exhaustive_numeric_results.csv",
+        test_params=None,
+    )
+
     # Always log the results
     status = "PASS" if passes else "FAIL"
     avg_status = "✓" if passes else "✗"

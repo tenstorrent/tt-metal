@@ -10,6 +10,9 @@ import models.experimental.ops.descriptors as descriptors
 import models.experimental.ops.descriptors.composite as composite
 from tests.ttnn.utils_for_testing import assert_allclose
 from tests.ttnn.unit_tests.operations.fused.test_layer_norm import allclose_thresholds as thresholds
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 # ============================================================================
@@ -42,13 +45,24 @@ def assert_outputs_are_close(
     ttnn_outputs,
     rtol=thresholds[torch.bfloat16].rtol,
     atol=thresholds[torch.bfloat16].atol,
+    test_name_prefix="assert_outputs_are_close",
 ):
-    for torch_input, torch_weight, ttnn_output in zip(torch_inputs, torch_weights, ttnn_outputs):
+    for idx, (torch_input, torch_weight, ttnn_output) in enumerate(zip(torch_inputs, torch_weights, ttnn_outputs)):
         # Compute expected output
         expected = torch_rms_norm(torch_input, torch_weight)
 
         # Convert actual output to torch
         actual = ttnn.to_torch(ttnn.from_device(ttnn_output))
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"{test_name_prefix}[output_idx={idx}]"
+        collect_and_dump_numeric_metrics(
+            expected,
+            actual,
+            test_name=test_name,
+            csv_filename="test_composite_numeric_results.csv",
+            test_params=None,
+        )
 
         assert_allclose(expected, actual, rtol=rtol, atol=atol)
 
@@ -229,6 +243,7 @@ def test_deepseek_v3_q_kv_rms_norm(device):
         torch_inputs=[q_tensors["torch_input"], kv_tensors["torch_input"]],
         torch_weights=[q_tensors["torch_weight"], kv_tensors["torch_weight"]],
         ttnn_outputs=[outputs[0][0], outputs[1][0]],
+        test_name_prefix="test_deepseek_v3_q_kv_rms_norm",
     )
 
 
@@ -372,13 +387,26 @@ def _run_heavy_composite_norm_test(device, norm_fn, torch_norm_fn):
     outputs = composite.launch([left_branch, right_branch])
 
     # Verify outputs (extract first output tensor from each op's output list)
-    for torch_input, torch_weight, ttnn_output in zip(
-        [tensors["left"]["torch_input"], tensors["right"]["torch_input"]],
-        [tensors["left"]["torch_weight"], tensors["right"]["torch_weight"]],
-        [outputs[0][0], outputs[1][0]],
+    for idx, (torch_input, torch_weight, ttnn_output) in enumerate(
+        zip(
+            [tensors["left"]["torch_input"], tensors["right"]["torch_input"]],
+            [tensors["left"]["torch_weight"], tensors["right"]["torch_weight"]],
+            [outputs[0][0], outputs[1][0]],
+        )
     ):
         expected = torch_norm_fn(torch_input, torch_weight)
         actual = ttnn.to_torch(ttnn.from_device(ttnn_output))
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_composite_rms_heavy[output_idx={idx}]"
+        collect_and_dump_numeric_metrics(
+            expected,
+            actual,
+            test_name=test_name,
+            csv_filename="test_composite_numeric_results.csv",
+            test_params=None,
+        )
+
         assert_allclose(expected, actual, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol)
 
 
@@ -442,6 +470,17 @@ def test_composite_mixed_norm(device):
     # Verify left output (RMS norm)
     expected_left = torch_rms_norm(tensors["left"]["torch_input"], tensors["left"]["torch_weight"])
     actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_composite_layer_norm_heavy[left_output]"
+    collect_and_dump_numeric_metrics(
+        expected_left,
+        actual_left,
+        test_name=test_name,
+        csv_filename="test_composite_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_allclose(
         expected_left, actual_left, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
     )
@@ -449,6 +488,17 @@ def test_composite_mixed_norm(device):
     # Verify right output (layer norm)
     expected_right = torch_layer_norm(tensors["right"]["torch_input"], tensors["right"]["torch_weight"])
     actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_composite_layer_norm_heavy[right_output]"
+    collect_and_dump_numeric_metrics(
+        expected_right,
+        actual_right,
+        test_name=test_name,
+        csv_filename="test_composite_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_allclose(
         expected_right, actual_right, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
     )
@@ -522,12 +572,34 @@ def test_composite_non_sharded(device):
     # Verify outputs
     expected_left = torch_rms_norm(torch_left_input, torch_left_weight)
     actual_left = ttnn.to_torch(ttnn.from_device(outputs[0][0]))
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_composite_mixed_norm[left_output]"
+    collect_and_dump_numeric_metrics(
+        expected_left,
+        actual_left,
+        test_name=test_name,
+        csv_filename="test_composite_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_allclose(
         expected_left, actual_left, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
     )
 
     expected_right = torch_layer_norm(torch_right_input, torch_right_weight)
     actual_right = ttnn.to_torch(ttnn.from_device(outputs[1][0]))
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_composite_mixed_norm[right_output]"
+    collect_and_dump_numeric_metrics(
+        expected_right,
+        actual_right,
+        test_name=test_name,
+        csv_filename="test_composite_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_allclose(
         expected_right, actual_right, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol
     )
@@ -630,6 +702,17 @@ def test_composite_8_ops_random_cores(device):
     ):
         expected = norm_fn(torch_input, torch_weight)
         actual = ttnn.to_torch(ttnn.from_device(output[0]))
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_composite_8_ops_random_cores[output_idx={i}]"
+        collect_and_dump_numeric_metrics(
+            expected,
+            actual,
+            test_name=test_name,
+            csv_filename="test_composite_numeric_results.csv",
+            test_params=None,
+        )
+
         assert_allclose(expected, actual, rtol=thresholds[torch.bfloat16].rtol, atol=thresholds[torch.bfloat16].atol)
 
 

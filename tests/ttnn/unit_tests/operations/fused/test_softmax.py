@@ -10,6 +10,9 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random, is_watcher_enabled
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -37,6 +40,17 @@ def test_large_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=True)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_softmax[batch_size={batch_size},h={h},w={w},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -70,6 +84,16 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.softmax(input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax_stable_neg_values[input_vector={input_vector},math_approx={math_approx},fp32_acc_en={fp32_acc_en}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
@@ -112,6 +136,16 @@ def run_softmax_stable_with_program_cache(
             input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True
         )
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"run_softmax_stable_with_program_cache[batch_size={batch_size},h={h},w={w},skip_scale_mask={skip_scale_mask},math_approx={math_approx},fp32_acc_en={fp32_acc_en},in_dtype={in_dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
@@ -205,6 +239,16 @@ def run_softmax_sharded_stable(
         )
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"run_softmax_sharded_stable[batch_size={batch_size},num_heads={num_heads},h={h},w={w},skip_scale_mask={skip_scale_mask},math_approx={math_approx},fp32_acc_en={fp32_acc_en},in_dtype={in_dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
@@ -253,6 +297,16 @@ def test_softmax(device, batch_size, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax[batch_size={batch_size},h={h},w={w},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -264,6 +318,16 @@ def test_softmax_with_3D(device):
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_softmax_with_3D"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -279,6 +343,16 @@ def test_softmax_with_padded_tile_layout(device):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_softmax_with_padded_tile_layout"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -292,6 +366,16 @@ def test_softmax_with_padded_tile_layout_large(device):
     output_tensor = ttnn.softmax(input_tensor, dim=-1)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_softmax_with_padded_tile_layout_large"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -309,6 +393,16 @@ def test_specific_tensor_combination(device):
     output = ttnn.softmax(input_tensor, -1)
     output = ttnn.from_device(output)
     output = ttnn.to_torch(output)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_specific_tensor_combination"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
@@ -334,6 +428,16 @@ def test_5d_softmax(device, input_shape, dim):
 
     output_tensor = ttnn.softmax(input_tensor, dim)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_5d_softmax[input_shape={input_shape},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
@@ -372,6 +476,16 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
     output_tensor = ttnn.softmax(input_tensor, dim, numeric_stable=numeric_stable)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_fill_softmax[input_shape={input_shape},dtype={dtype},dlayout={dlayout},dim={dim},numeric_stable={numeric_stable},fill_value={fill_value}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert len(output_tensor.shape) == len(torch_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape
 
@@ -409,7 +523,19 @@ def test_softmax_sd(device):
         program_config=softmax_program_config,
     )
 
-    passed, pcc = assert_with_pcc(out_torch, ttnn.to_torch(out), pcc=0.999)
+    out_ttnn = ttnn.to_torch(out)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_softmax_sd"
+    collect_and_dump_numeric_metrics(
+        out_torch,
+        out_ttnn,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
+    passed, pcc = assert_with_pcc(out_torch, out_ttnn, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -441,6 +567,16 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     )
     ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
     ttnn_output = ttnn.to_torch(ttnn_output)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax_dtypes[shape={shape},dim={dim},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output, ttnn_output, 0.997)
 
@@ -483,6 +619,16 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
 
     output_torch = ttnn_output.cpu().to_torch()
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax_accuracy[shape={shape},fp32_acc_en={fp32_acc_en},math_approx_mode={math_approx_mode},expected_ulp={expected_ulp},numeric_stable={numeric_stable}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        output_torch,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_ulp(torch_output, output_torch, expected_ulp)
 
 
@@ -516,6 +662,16 @@ def test_softmax_large_kernel_block_size(device, Wt):
     ttnn_output = ttnn.softmax(ttnn_input, dim=-1, compute_kernel_config=compute_config, numeric_stable=True)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax_large_kernel_block_size[Wt={Wt}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output, ttnn_output, 0.997)
 
 
@@ -531,4 +687,15 @@ def test_softmax_4096x4096_fp32(device):
 
     ttnn_output_tensor = ttnn.softmax(ttnn_input_tensor, dim=3)
     output_torch = ttnn_output_tensor.cpu().to_torch()
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = "test_softmax_4096x4096_fp32"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        output_torch,
+        test_name=test_name,
+        csv_filename="test_softmax_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output, output_torch, 0.998)

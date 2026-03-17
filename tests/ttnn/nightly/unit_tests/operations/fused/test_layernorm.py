@@ -11,6 +11,9 @@ import ttnn
 
 
 from models.common.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def ref_layernorm(x, gamma, beta, eps):
@@ -160,6 +163,16 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 
         ref_lnorm = ref_fn(pt_in, gamma.flatten(), beta.flatten(), epsf)
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"run_layernorm_mix_precision_tests[test_id={test_id},in_dtype={in_dtype},gamma_dtype={gamma_dtype},in0_mem_config={in0_mem_config.buffer_type},out_mem_config={out_mem_config.buffer_type},test_shape={test_shape}]"
+        collect_and_dump_numeric_metrics(
+            ref_lnorm,
+            tt_got_back,
+            test_name=test_name,
+            csv_filename="test_layernorm_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         passing, output = comp_pcc(ref_lnorm, tt_got_back)
 
         assert passing, output
@@ -240,6 +253,16 @@ def test_layer_norm_4D_llama(device, h, w, num_chunks):
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm_4D_llama[h={h},w={w},num_chunks={num_chunks}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layernorm_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     passing, output = comp_pcc(torch_output_tensor, output_tensor)
     assert passing, output

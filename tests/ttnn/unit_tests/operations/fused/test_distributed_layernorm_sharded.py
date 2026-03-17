@@ -15,6 +15,9 @@ from models.common.utility_functions import (
 )
 
 from models.common.utility_functions import tt2torch_tensor
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -246,6 +249,17 @@ def run_pre_allgather_layernorm(
             torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
             _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
             atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
+
+            # Collect numeric metrics and dump to CSV using reusable function
+            test_name = f"run_pre_allgather_layernorm[device={d},input_width={input_width},num_devices={num_devices},is_rmsnorm={is_rmsnorm},input_df={input_df},seed={seed},fuse_residual={fuse_residual},ex2]"
+            collect_and_dump_numeric_metrics(
+                torch_ex2,
+                tt_ex2,
+                test_name=test_name,
+                csv_filename="test_distributed_layernorm_sharded_numeric_results.csv",
+                test_params=None,
+            )
+
             assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
             assert torch.allclose(
                 tt_ex2, torch_ex2, atol=max_atol_ex2
@@ -259,6 +273,26 @@ def run_pre_allgather_layernorm(
             _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
             atol_delta_ex = torch.max(torch.abs(torch_ex - tt_ex)).item()
             atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
+
+            # Collect numeric metrics and dump to CSV using reusable function
+            test_name_ex = f"run_pre_allgather_layernorm[device={d},input_width={input_width},num_devices={num_devices},is_rmsnorm={is_rmsnorm},input_df={input_df},seed={seed},fuse_residual={fuse_residual},ex]"
+            collect_and_dump_numeric_metrics(
+                torch_ex,
+                tt_ex,
+                test_name=test_name_ex,
+                csv_filename="test_distributed_layernorm_sharded_numeric_results.csv",
+                test_params=None,
+            )
+
+            test_name_ex2 = f"run_pre_allgather_layernorm[device={d},input_width={input_width},num_devices={num_devices},is_rmsnorm={is_rmsnorm},input_df={input_df},seed={seed},fuse_residual={fuse_residual},ex2]"
+            collect_and_dump_numeric_metrics(
+                torch_ex2,
+                tt_ex2,
+                test_name=test_name_ex2,
+                csv_filename="test_distributed_layernorm_sharded_numeric_results.csv",
+                test_params=None,
+            )
+
             assert pcc_ex >= min_pcc_ex, f"PCC of E(x) test failed: {pcc_ex} (threshold: {min_pcc_ex})"
             assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
             assert torch.allclose(
@@ -441,6 +475,16 @@ def test_post_allgather_layernorm(
         _, pcc_out = comp_pcc(torch_output_chunks[d], tt_output_torch, pcc=min_pcc)
         atol_delta = torch.max(torch.abs(torch_output_chunks[d] - tt_output_torch)).item()
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_post_allgather_layernorm[device={d},input_width={input_width},num_devices={num_devices},is_rmsnorm={is_rmsnorm},input_df={input_df},weights_df={weights_df},output_df={output_df},eps={eps},seed={seed}]"
+        collect_and_dump_numeric_metrics(
+            torch_output_chunks[d],
+            tt_output_torch,
+            test_name=test_name,
+            csv_filename="test_distributed_layernorm_sharded_numeric_results.csv",
+            test_params=None,
+        )
+
         assert pcc_out >= min_pcc, f"PCC test failed for device {d}: {pcc_out} (threshold: {min_pcc})"
         assert atol_delta <= max_atol, f"Max Atol exceeded for device {d}: {atol_delta} (allowed: {max_atol})"
 
@@ -550,6 +594,16 @@ def test_simulated_distributed_layernorm(
     _, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
     all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
     atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_simulated_distributed_layernorm[input_width={input_width},num_devices={num_devices},is_rmsnorm={is_rmsnorm},input_df={input_df},weights_df={weights_df},seed={seed},eps={eps},mean={mean},var={var}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        tt_output_torch,
+        test_name=test_name,
+        csv_filename="test_distributed_layernorm_sharded_numeric_results.csv",
+        test_params=None,
+    )
 
     assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
     assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"

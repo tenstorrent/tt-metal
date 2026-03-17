@@ -14,6 +14,9 @@ import math
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 # perf_test_mode is used to skip the torch execution and pcc comparison, and always runs the operation once
@@ -106,6 +109,17 @@ def run_group_norm_DRAM(
     if not perf_test_mode:
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"run_group_norm_DRAM[N={N},C={C},H={H},W={W},num_groups={num_groups},num_out_blocks={num_out_blocks},cores_y={cores_y},cores_x={cores_x},welford_mode={welford_mode},use_input_mask={use_input_mask}]"
+        collect_and_dump_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            test_name=test_name,
+            csv_filename="test_group_norm_DRAM_numeric_results.csv",
+            test_params=None,
+        )
+
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
 
@@ -308,6 +322,18 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = (
+        f"test_sdxl_base_group_norm_split[N={N},C={C},H={H},W={W},num_groups={num_groups},num_splits={num_splits}]"
+    )
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        tt_output_tensor,
+        test_name=test_name,
+        csv_filename="test_group_norm_DRAM_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 

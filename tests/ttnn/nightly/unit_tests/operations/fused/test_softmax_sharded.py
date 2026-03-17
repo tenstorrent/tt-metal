@@ -17,6 +17,9 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax, comp_pcc
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
@@ -177,6 +180,18 @@ def test_softmax(device, in_dtype, in0_mem_config, causal_mask):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = (
+        f"test_softmax[in_dtype={in_dtype},in0_mem_config={in0_mem_config.buffer_type},causal_mask={causal_mask}]"
+    )
+    collect_and_dump_numeric_metrics(
+        golden_output_tensor,
+        tt_output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_sharded_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     allclose, output = comp_pcc(
         tt_output_tensor,
         golden_output_tensor,
@@ -271,6 +286,16 @@ def test_scale_mask_softmax_rm(device, in_dtype, in0_mem_config, causal_mask):
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_scale_mask_softmax_rm[in_dtype={in_dtype},in0_mem_config={in0_mem_config.buffer_type},causal_mask={causal_mask}]"
+    collect_and_dump_numeric_metrics(
+        golden_output_tensor,
+        tt_output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_sharded_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     allclose, output = comp_pcc(
         tt_output_tensor,
         golden_output_tensor,
@@ -345,6 +370,16 @@ def test_softmax_with_sharded_mask(device, in_dtype, in0_mem_config, shard_orien
 
     golden_output_tensor = input_tensor * scale + attention_mask
     golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_softmax_with_sharded_mask[in_dtype={in_dtype},in0_mem_config={in0_mem_config.buffer_type},shard_orient={shard_orient}]"
+    collect_and_dump_numeric_metrics(
+        golden_output_tensor,
+        tt_output_tensor,
+        test_name=test_name,
+        csv_filename="test_softmax_sharded_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     allclose, output = comp_pcc(
         tt_output_tensor,

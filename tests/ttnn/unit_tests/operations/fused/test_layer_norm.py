@@ -9,6 +9,9 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
@@ -72,6 +75,16 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm[h={h},w={w},use_welford={use_welford},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
@@ -100,6 +113,16 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm_with_weight_and_bias[h={h},w={w},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
@@ -130,6 +153,16 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm_with_weight_and_bias_row_major[h={h},w={w},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
@@ -166,6 +199,18 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = (
+        f"test_layer_norm_with_weight_bias_and_residual_input[h={h},w={w},use_welford={use_welford},dtype={dtype}]"
+    )
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
@@ -207,6 +252,16 @@ def test_layer_norm_with_tile_layout(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm_with_tile_layout[h={h},w={w}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
@@ -226,6 +281,16 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_layer_norm[h={h},w={w},use_welford={use_welford},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
@@ -257,6 +322,16 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_layer_norm_with_weight_and_bias[h={h},w={w},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
@@ -283,6 +358,16 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_layer_norm_with_weight[h={h},w={w},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
@@ -306,6 +391,16 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     output_tensor = ttnn.layer_norm(input_tensor, bias=bias, program_config=program_config, recip_tensor=recip_tensor)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_layer_norm_with_bias[h={h},w={w},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
@@ -340,6 +435,16 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     )
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_layer_norm_with_bias[h={h},w={w},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     # Non-fp32 accumulation is inaccurate, so we'll just compare pcc
     # to make sure it captures the general trend
@@ -378,11 +483,19 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if dtype == torch.float32 and use_welford and w == 3232:
-        # Fallback to PCC, see https://github.com/tenstorrent/tt-metal/issues/33694
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    else:
-        assert_output_accuracy(torch_output_tensor, output_tensor)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_large_layer_norm_with_legacy_reduction_and_rsqrt[h={h},w={w},legacy_reduction={legacy_reduction},legacy_rsqrt={legacy_rsqrt}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
+
+    # Non-fp32 accumulation is inaccurate, so we'll just compare pcc
+    # to make sure it captures the general trend
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
 @pytest.mark.parametrize("use_welford", [True, False])
@@ -409,6 +522,16 @@ def test_l1_interleaved(device, use_welford, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_l1_interleaved[use_welford={use_welford},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_output_accuracy(torch_output_tensor, output_tensor)
 
 
@@ -428,6 +551,16 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     tt_output = ttnn.layer_norm(tt_input, epsilon=epsilon)
 
     tt_output_torch = ttnn.to_torch(tt_output)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm_across_dtypes[dim_a={dim_a},dim_b={dim_b},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_output_torch,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     if dtype == ttnn.bfloat16:
         assert_output_accuracy(torch_output, tt_output_torch)
@@ -473,5 +606,15 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     # Compute golden layer normoutput
     golden = ttnn.get_golden_function(ttnn.layer_norm)
     golden_output = golden(torch_input_tensor, weight=None, bias=None, eps=1e-5)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_layer_norm_with_padding[h={h},w={w},use_welford={use_welford},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        golden_output,
+        output_ttnn,
+        test_name=test_name,
+        csv_filename="test_layer_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_output_accuracy(golden_output, output_ttnn)

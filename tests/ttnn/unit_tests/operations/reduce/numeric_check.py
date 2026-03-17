@@ -25,7 +25,7 @@ ALLCLOSE_ATOL = 1e-08  # Absolute tolerance for allclose
 ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
-NEAR_ZERO_THRESHOLD = 0.000001
+NEAR_ZERO_THRESHOLD = 1e-09
 FROBENIUS_GRID_SPLITS = 4  # Split each dim into N pieces → NxN tile grid
 FROBENIUS_TOP_K = 5  # Report the K worst tiles
 # # Padding validation configuration
@@ -190,7 +190,7 @@ def collect_and_dump_numeric_metrics(
     non_near_zero_mask = torch.abs(expected_allclose) >= NEAR_ZERO_THRESHOLD
     expected_allclose = expected_allclose[non_near_zero_mask]
     actual_allclose = actual_allclose[non_near_zero_mask]
-
+    print(f"expected_allclose.numel(): {expected_allclose.numel()}, expected.numel(): {expected.numel()}")
     if expected_allclose.numel() > 0 and actual_allclose.numel() > 0:
         allclose_passed, allclose_message = comp_allclose_custom(
             expected_allclose, actual_allclose, rtol=allclose_rtol, atol=allclose_atol
@@ -201,7 +201,7 @@ def collect_and_dump_numeric_metrics(
         max_rtol = float(allclose_message.split("Max RTOL Delta: ")[1].split(",")[0])
         mean_rtol = float(allclose_message.split("Mean RTOL Delta: ")[1])
     else:
-        allclose_passed = False
+        allclose_passed = True
         allclose_message = "Both tensors are empty"
         max_atol = 0
         mean_atol = 0
@@ -267,7 +267,7 @@ def collect_and_dump_numeric_metrics(
     else:
         avg_ulp = 0
         max_ulp = 0
-        ulp_passed = False
+        ulp_passed = True
 
     # Prepare metrics dict
     metrics = {

@@ -13,6 +13,9 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import comp_pcc, run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
@@ -114,6 +117,16 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_group_norm_with_height_sharded[N={N},C={C},H={H},W={W},num_groups={num_groups},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997 if use_welford else 0.9998)
 
 
@@ -202,6 +215,16 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_group_norm_with_block_sharded_v2_8x4_grid[N={N},C={C},H={H},W={W},num_groups={num_groups},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
@@ -302,6 +325,16 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_group_norm_with_block_sharded_v2_8x8_grid[N={N},C={C},H={H},W={W},num_groups={num_groups},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
@@ -391,6 +424,16 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
     output_tensor = ttnn.to_memory_config(output_tensor, ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout[N={N},C={C},H={H},W={W},num_groups={num_groups},use_welford={use_welford}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
@@ -513,6 +556,16 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_sdxl_base_group_norm[input_shape={input_shape},use_welford={use_welford}]"
+        collect_and_dump_numeric_metrics(
+            torch_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_group_norm_numeric_results.csv",
+            test_params=None,
+        )
+
         assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9996)
 
 
@@ -611,6 +664,16 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_sdxl_base_group_norm_negative_mask[input_shape={input_shape}]"
+        collect_and_dump_numeric_metrics(
+            torch_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_group_norm_numeric_results.csv",
+            test_params=None,
+        )
+
         assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 
 
@@ -699,6 +762,16 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     )
     tt_output_high = do_group_norm_for_config(config_high)
     _, pcc_high = comp_pcc(torch_output_tensor, tt_output_high)
+
+    # Collect numeric metrics and dump to CSV using reusable function (for high accuracy config)
+    test_name = f"test_group_norm_compute_config[N={N},C={C},H={H},W={W},num_groups={num_groups}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        tt_output_high,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     # Verify that the higher-accuracy config is closer to torch
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
@@ -803,6 +876,17 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
         epsilon=eps,
     )
     output_tensor = ttnn.to_torch(output_tensor)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_group_norm_oft[N={N},C={C},H={H},W={W},num_groups={num_groups},shard={shard},eps={eps},use_negative_mask={use_negative_mask}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
@@ -881,6 +965,16 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
     )
     tt_output_high = do_group_norm_for_config(config_high)
     _, pcc_high = comp_pcc(torch_output_tensor, tt_output_high)
+
+    # Collect numeric metrics and dump to CSV using reusable function (for high accuracy config)
+    test_name = f"test_group_norm_no_input_mask[N={N},C={C},H={H},W={W},num_groups={num_groups}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        tt_output_high,
+        test_name=test_name,
+        csv_filename="test_group_norm_numeric_results.csv",
+        test_params=None,
+    )
 
     # Verify that the higher-accuracy config is closer to torch
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"

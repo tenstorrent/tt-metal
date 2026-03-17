@@ -18,6 +18,9 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def rmsnorm(x, gamma, beta, eps):
@@ -102,6 +105,16 @@ def run_rmsnorm_tests(test_id, dtype, in0_mem_config, out_mem_config, device):
         # ref_lnorm = ref_layernorm(x, epsf, gammaf, betaf, H, W)
         ref_rmsnorm = rmsnorm(x, gamma.flatten(), beta.flatten(), epsf)
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"run_rmsnorm_tests[test_id={test_id},dtype={dtype},in0_mem_config={in0_mem_config.buffer_type},out_mem_config={out_mem_config.buffer_type},N={N},C={C},H={H},W={W}]"
+        collect_and_dump_numeric_metrics(
+            ref_rmsnorm,
+            tt_got_back,
+            test_name=test_name,
+            csv_filename="test_rmsnorm_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         passing = is_close(tt_got_back, ref_rmsnorm)
         assert passing
 
@@ -157,6 +170,16 @@ def test_llama_4D_rms_norm(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_llama_4D_rms_norm[h={h},w={w}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_rmsnorm_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     is_close(torch_output_tensor, output_tensor)
 
 
@@ -172,7 +195,7 @@ def test_large_tensor_rms_norm(device, batch_size, w):
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight, epsilon=epsilon)
 
     # Multiple iterations to test with program cache
-    for _ in range(3):
+    for iteration in range(3):
         input_tensor = ttnn.from_torch(
             torch_input_tensor,
             device=device,
@@ -203,4 +226,15 @@ def test_large_tensor_rms_norm(device, batch_size, w):
         )
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_large_tensor_rms_norm[batch_size={batch_size},w={w},iteration={iteration}]"
+        collect_and_dump_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            test_name=test_name,
+            csv_filename="test_rmsnorm_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)

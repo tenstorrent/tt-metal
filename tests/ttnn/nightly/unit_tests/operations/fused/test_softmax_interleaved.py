@@ -17,6 +17,9 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax, comp_pcc
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -59,6 +62,16 @@ def test_softmax(device, inplace, dtype):
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_softmax[dtype={dtype},inplace={inplace},input_shape={input_shape}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_softmax_interleaved_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         logger.info(output)
         assert allclose, f"FAILED: {output}"
@@ -82,6 +95,16 @@ def test_softmax_with_program_cache(device, inplace):
 
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_softmax_with_program_cache[inplace={inplace},input_shape={input_shape}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_softmax_interleaved_nightly_numeric_results.csv",
+            test_params=None,
+        )
 
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"
@@ -110,6 +133,16 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
 
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_softmax_mix_precision[inplace={inplace},in_dtype={in_dtype},input_shape={input_shape}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_softmax_interleaved_nightly_numeric_results.csv",
+            test_params=None,
+        )
 
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"
@@ -207,6 +240,16 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
         golden_output_tensor = input_tensor[i] * scale + attention_mask[i]
         golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_scale_mask_softmax[seq_len={seq_len},causal_mask={causal_mask},batch_idx={i}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor[i],
+            test_name=test_name,
+            csv_filename="test_softmax_interleaved_nightly_numeric_results.csv",
+            test_params=None,
+        )
+
         allclose, output = comp_pcc(
             tt_output_tensor[i],
             golden_output_tensor,
@@ -261,6 +304,16 @@ def test_scale_mask_softmax(device, in_dtype, in0_mem_config):
     for i in range(batch):
         golden_output_tensor = input_tensor[i] * scale + attention_mask_ref[i]
         golden_output_tensor = torch.softmax(golden_output_tensor, dim=-1)
+
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_scale_mask_softmax_rm[in0_mem_config={in0_mem_config.buffer_type},batch_idx={i}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor[i],
+            test_name=test_name,
+            csv_filename="test_softmax_interleaved_nightly_numeric_results.csv",
+            test_params=None,
+        )
 
         allclose, output = comp_pcc(
             tt_output_tensor[i],
