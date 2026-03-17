@@ -22,16 +22,8 @@ struct ExpRingJointSDPASharedVariables {
     tt::tt_metal::KernelHandle
         writer_fabric_kernels_id{};  // fabric MUX clients: columns grid_size.x-2 and grid_size.x-1
     tt::tt_metal::KernelHandle compute_kernels_id{};
-    // CCL (all-gather) kernel handles
-    tt::tt_metal::KernelHandle ccl_reader_forward_kernel_id{};
-    tt::tt_metal::KernelHandle ccl_writer_forward_kernel_id{};
-    tt::tt_metal::KernelHandle ccl_reader_backward_kernel_id{};
-    tt::tt_metal::KernelHandle ccl_writer_backward_kernel_id{};
-    std::vector<CoreCoord> ccl_worker_cores;
-    uint32_t ccl_num_inputs = 0;
-    uint32_t ccl_reader_sender_rt_offset = 0;
-    uint32_t ccl_writer_sender_rt_offset = 0;
-    uint32_t ccl_num_links = 0;
+    // Offset into fabric writer RT args where all-gather args begin (termination master cores only)
+    uint32_t writer_fabric_ag_rt_offset = 0;
     // MUX kernel handle and core positions
     tt::tt_metal::KernelHandle ccl_mux_kernel_id{};
     std::vector<CoreCoord> ccl_mux_backward_cores;
