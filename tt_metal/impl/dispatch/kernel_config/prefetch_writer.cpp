@@ -7,14 +7,10 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 #include <map>
-#include <string>
 
 #include <tt_stl/assert.hpp>
-#include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "dispatch_core_common.hpp"
-#include "hal_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -24,13 +20,33 @@
 using namespace tt::tt_metal;
 
 PrefetchWriterKernel::PrefetchWriterKernel(
-    int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-    FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-    uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
+    int node_id,
+    ChipId device_id,
+    ChipId servicing_device_id,
+    uint8_t cq_id,
+    noc_selection_t noc_selection,
+    const ContextDescriptor& descriptor,
+    dispatch_core_manager& dispatch_core_manager,
+    const GetControlPlaneFn& get_control_plane,
+    const GetDispatchQueryManagerFn& get_dispatch_query_manager,
+    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
+    const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
+    FDKernel(
+        node_id,
+        device_id,
+        servicing_device_id,
+        cq_id,
+        noc_selection,
+        descriptor,
+        dispatch_core_manager,
+        get_control_plane,
+        get_dispatch_query_manager,
+        get_max_num_eth_cores,
+        get_reads_dispatch_cores) {
+    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     // Runs on the same physical core as the upstream PrefetchKernel (BRISC). Core is set in
     // GenerateStaticConfigs() once the upstream kernel is known.
-    this->logical_core_ =
-        MetalContext::instance().get_dispatch_core_manager().prefetcher_core(device_id, channel, cq_id);
+    this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
     this->kernel_type_ = FDKernelType::DISPATCH;
 }
 

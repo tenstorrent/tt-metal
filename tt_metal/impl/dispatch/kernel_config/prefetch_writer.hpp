@@ -18,7 +18,17 @@ namespace tt::tt_metal {
 class PrefetchWriterKernel : public FDKernel {
 public:
     PrefetchWriterKernel(
-        int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection);
+        int node_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
+        uint8_t cq_id,
+        noc_selection_t noc_selection,
+        const ContextDescriptor& descriptor,
+        dispatch_core_manager& dispatch_core_manager,
+        const GetControlPlaneFn& get_control_plane,
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager,
+        const GetMaxNumEthCoresFn& get_max_num_eth_cores,
+        const GetReadsDispatchCoresFn& get_reads_dispatch_cores);
 
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
