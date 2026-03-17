@@ -113,6 +113,11 @@ jobs:
           name: ${{ needs.build-tt-train.outputs.build-artifact-name }}
           path: /work/build
 
+      - name: Restore execute permissions
+        run: |
+          chmod +x /work/build/tt-train/tests/ttml_tests
+          find /work/build/lib -name "*.so*" -exec chmod +x {} \; 2>/dev/null || true
+
       - name: tt-train tests
         run: |
           cd /work/build/tt-train
