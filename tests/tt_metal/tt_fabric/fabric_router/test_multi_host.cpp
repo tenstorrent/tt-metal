@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>
@@ -84,9 +85,10 @@ std::unique_ptr<ControlPlane> make_control_plane(
         cluster, rtoptions, hal, distributed_context, graph_desc.string(), fabric_config, fabric_reliability_mode);
 }
 
-// Helper: Creates control plane or skips test if topology doesn't match.
-// Returns nullptr only when GTEST_SKIP() is called (test will exit).
-std::unique_ptr<ControlPlane> try_make_control_plane_or_skip(
+// Helper: Creates control plane or returns nullopt if topology doesn't match.
+// Returns std::nullopt when the MGD topology doesn't fit the physical hardware.
+// The caller should check has_value() and call GTEST_SKIP() if nullopt.
+std::optional<std::unique_ptr<ControlPlane>> try_make_control_plane(
     const std::filesystem::path& graph_desc,
     FabricConfig fabric_config,
     FabricReliabilityMode fabric_reliability_mode,
@@ -100,17 +102,24 @@ std::unique_ptr<ControlPlane> try_make_control_plane_or_skip(
         if (error_msg.find("could not fit in the discovered physical topology") != std::string::npos) {
             log_info(
                 tt::LogTest,
-                "{}: Skipping - MGD {} doesn't match physical hardware topology. "
+                "{}: MGD {} doesn't match physical hardware topology. "
                 "Use TestDualGalaxyControlPlaneDiscovery for auto-discovery or "
                 "TestDualGalaxyControlPlaneInitRankEnv with appropriate rank_bindings.",
                 test_name,
                 graph_desc.filename().string());
-            GTEST_SKIP();
+            return std::nullopt;
         }
         throw;
     }
-    return nullptr;
 }
+
+// Macro to simplify the try-or-skip pattern
+#define TRY_MAKE_CONTROL_PLANE_OR_SKIP(var, mgd_path, fabric_config, reliability_mode, test_name)  \
+    auto var##_opt = try_make_control_plane(mgd_path, fabric_config, reliability_mode, test_name); \
+    if (!var##_opt.has_value()) {                                                                  \
+        GTEST_SKIP() << "Skipping: MGD topology doesn't match physical hardware";                  \
+    }                                                                                              \
+    auto var = std::move(var##_opt.value())
 
 // 8x8 Grid topology (LINE, LINE) - skips if physical topology doesn't match
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
@@ -122,7 +131,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
@@ -142,7 +152,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInitFlipped) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
@@ -162,7 +173,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit8x8Torus) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/torus_dual_galaxy_graph_descriptor.textproto";
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
@@ -182,7 +194,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit8x8TorusFlipped) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/torus_dual_galaxy_graph_descriptor.textproto";
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
@@ -202,7 +215,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit4x16LineRing) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_4x16_mesh_graph_descriptor.textproto";
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
@@ -222,7 +236,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit4x16LineRingFlipped) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_4x16_mesh_graph_descriptor.textproto";
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
@@ -252,7 +267,8 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInitRankEnv) {
     std::filesystem::path mgd_path = rtoptions.get_custom_fabric_mesh_graph_desc_path();
     log_info(tt::LogTest, "TestDualGalaxyControlPlaneInitRankEnv: Using MGD from rank_bindings: {}", mgd_path.string());
 
-    auto control_plane = try_make_control_plane_or_skip(
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
         mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
