@@ -143,6 +143,38 @@ void py_module(nb::module_& m) {
         py_distributed.def(
             "replicate_tensor_to_mesh_mapper", &ttnn::distributed::replicate_tensor_to_mesh_mapper, nb::arg("device"));
 
+        // Create a mapper with explicit placements for each mesh axis
+        // placements is a list where each element is either:
+        //   - None or "replicate" for Replicate
+        //   - An integer (shard dimension) for Shard
+        py_distributed.def(
+            "create_tensor_to_mesh_mapper",
+            [](ttnn::distributed::MeshDevice& device,
+               nb::list placements_py) -> std::unique_ptr<ttnn::distributed::TensorToMesh> {
+                const auto& mesh_shape = device.shape();
+                ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> placements(
+                    mesh_shape.dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
+
+                size_t idx = 0;
+                for (nb::handle h : placements_py) {
+                    if (idx >= placements.size())
+                        break;
+                    if (nb::isinstance<nb::int_>(h)) {
+                        int dim = nb::cast<int>(h);
+                        placements[idx] = ttnn::distributed::MeshMapperConfig::Shard{dim};
+                    }
+                    // None or anything else -> Replicate (already default)
+                    idx++;
+                }
+
+                return std::make_unique<ttnn::distributed::TensorToMesh>(ttnn::distributed::TensorToMesh::create(
+                    device, ttnn::distributed::MeshMapperConfig{.placements = placements}));
+            },
+            nb::arg("device"),
+            nb::arg("placements"),
+            "Create a tensor-to-mesh mapper with explicit placements. "
+            "placements is a list where each element is either None (replicate) or an int (shard dim).");
+
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
             "concat_mesh_to_tensor_composer",

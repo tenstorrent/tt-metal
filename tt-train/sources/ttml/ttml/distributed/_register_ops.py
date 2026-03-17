@@ -70,6 +70,9 @@ def init_ops():
     # -- Attention ---------------------------------------------------------------
 
     _patch(ttml.ops.attention, "scaled_dot_product_attention", "sdpa")
+    _patch(
+        ttml.ops.distributed, "ring_attention_sdpa", "ring_sdpa"
+    )  # Same rule as sdpa, distinct name for trace
 
     # -- Embedding ---------------------------------------------------------------
 

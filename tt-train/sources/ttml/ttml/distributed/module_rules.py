@@ -15,6 +15,7 @@ The rule must return the (possibly mutated) module.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any, Dict, Optional
 
 from .layout import Layout, Shard, Replicate
@@ -93,12 +94,17 @@ def _distribute_gqa(
     mesh_device,
     policy: Dict[str, Layout],
     prefix: str = "",
+    cp_axis: Optional[int] = None,
 ):
-    """Distribute GQA: adjust local head/group counts and distribute sub-linears.
+    """Distribute GQA: adjust local head/group counts, distribute sub-linears, and handle CP.
 
     The TP axis and size are inferred from the policy layouts. If no TP sharding
     is found in the policy for this module's weights, the module is returned
-    unchanged.
+    unchanged (but CP handling still applies if cp_axis is provided).
+
+    When cp_axis is provided:
+    - Rebuilds rope_params with CP sharding
+    - Swaps sdpa to ring_attention_sdpa with cp_axis bound
 
     Reference: C++ DistributedGroupedQueryAttention in
     modules/distributed/grouped_query_attention.cpp
@@ -106,54 +112,74 @@ def _distribute_gqa(
     from .training import distribute_tensor, _match_policy
     from ttml.models.llama.gqattn import GroupedQueryAttention
 
+    mesh_shape = mesh_device.shape
+
     # Try to find TP axis and size from the policy
     q_weight_key = f"{prefix}.q_linear.weight" if prefix else "q_linear.weight"
     q_layout = _match_policy(q_weight_key, policy)
 
-    if q_layout is None:
-        # No TP policy for this GQA, skip
-        return module
+    # Handle TP if policy exists
+    if q_layout is not None:
+        # Find which axis has Shard placement to determine TP axis
+        tp_axis = None
+        for i, p in enumerate(q_layout.placements):
+            if isinstance(p, Shard):
+                tp_axis = i
+                break
 
-    # Find which axis has Shard placement to determine TP axis
-    tp_axis = None
-    for i, p in enumerate(q_layout.placements):
-        if isinstance(p, Shard):
-            tp_axis = i
-            break
+        if tp_axis is not None:
+            tp_size = mesh_shape[tp_axis]
 
-    if tp_axis is None:
-        # Replicated, no TP
-        return module
+            if tp_size > 1:
+                num_heads = module.num_heads
+                num_groups = module.num_groups
 
-    mesh_shape = mesh_device.shape
-    tp_size = mesh_shape[tp_axis]
+                if num_heads % tp_size != 0:
+                    raise ValueError(
+                        f"num_heads ({num_heads}) must be divisible by tp_size ({tp_size})"
+                    )
+                if num_groups % tp_size != 0:
+                    raise ValueError(
+                        f"num_groups ({num_groups}) must be divisible by tp_size ({tp_size})"
+                    )
 
-    if tp_size <= 1:
-        return module
+                module.num_heads = num_heads // tp_size
+                module.num_groups = num_groups // tp_size
 
-    num_heads = module.num_heads
-    num_groups = module.num_groups
+                # Distribute sub-linear layers
+                q_prefix = f"{prefix}.q_linear" if prefix else "q_linear"
+                kv_prefix = f"{prefix}.kv_linear" if prefix else "kv_linear"
+                out_prefix = f"{prefix}.out_linear" if prefix else "out_linear"
 
-    if num_heads % tp_size != 0:
-        raise ValueError(
-            f"num_heads ({num_heads}) must be divisible by tp_size ({tp_size})"
-        )
-    if num_groups % tp_size != 0:
-        raise ValueError(
-            f"num_groups ({num_groups}) must be divisible by tp_size ({tp_size})"
-        )
+                distribute_linear(module.q_linear, mesh_device, policy, q_prefix)
+                distribute_linear(module.kv_linear, mesh_device, policy, kv_prefix)
+                distribute_linear(module.out_linear, mesh_device, policy, out_prefix)
 
-    module.num_heads = num_heads // tp_size
-    module.num_groups = num_groups // tp_size
+    # Handle CP
+    if cp_axis is not None:
+        cp_size = mesh_shape[cp_axis]
+        if cp_size > 1:
+            # Rebuild rope_params with CP sharding
+            old_params = module.rope_params
+            old_seq_len = old_params.sequence_length
+            new_params = ttml.ops.rope.build_rope_params(
+                old_seq_len,
+                old_params.head_dim,
+                old_params.theta,
+                old_params.rope_scaling_params,
+                cp_axis=cp_axis,
+            )
+            module.rope_params = new_params
 
-    # Distribute sub-linear layers
-    q_prefix = f"{prefix}.q_linear" if prefix else "q_linear"
-    kv_prefix = f"{prefix}.kv_linear" if prefix else "kv_linear"
-    out_prefix = f"{prefix}.out_linear" if prefix else "out_linear"
+            # Verify the update
+            assert (
+                module.rope_params.sequence_length == old_seq_len // cp_size
+            ), f"rope_params not updated: expected {old_seq_len // cp_size}, got {module.rope_params.sequence_length}"
 
-    distribute_linear(module.q_linear, mesh_device, policy, q_prefix)
-    distribute_linear(module.kv_linear, mesh_device, policy, kv_prefix)
-    distribute_linear(module.out_linear, mesh_device, policy, out_prefix)
+            # Swap to ring_attention_sdpa with cp_axis bound
+            module.sdpa = partial(
+                ttml.ops.distributed.ring_attention_sdpa, cp_axis=cp_axis
+            )
 
     return module
 

@@ -90,6 +90,7 @@ def _fallback_replicated(op_name: str, tensor_args, other_args, kwargs):
                 input_layouts=[get_layout(a) for a in tensor_args],
                 rule_name=None,
                 plan=None,
+                pre_collectives=[],
                 redistributions=redistributions,
                 post_collectives=[],
                 output_layout=rep,
@@ -114,124 +115,152 @@ def dispatch(op_name: str, *args, **kwargs):
     6. Apply post-collective if needed.
     7. Stamp output layout.
     """
-    runtime = get_runtime()
+    dispatch_trace.enter_dispatch()
+    try:
+        runtime = get_runtime()
 
-    tensor_args = []
-    other_args = []
-    for a in args:
-        if hasattr(a, "get_value"):
-            tensor_args.append(a)
-        else:
-            other_args.append(a)
+        tensor_args = []
+        other_args = []
+        for a in args:
+            if hasattr(a, "get_value"):
+                tensor_args.append(a)
+            else:
+                other_args.append(a)
 
-    # Check if any tensor is actually distributed (lives on a mesh device)
-    has_distributed = any(is_distributed(t) for t in tensor_args)
-    if not has_distributed:
-        raw = _get_raw(op_name)
-        return raw(*args, **kwargs)
-
-    input_layouts = [get_layout(t) for t in tensor_args]
-
-    rule_fn = get_rule(op_name)
-    if rule_fn is None:
-        return _fallback_replicated(op_name, tensor_args, other_args, kwargs)
-
-    cache = runtime.plan_cache
-    cache_key = (op_name, tuple(input_layouts), _hashable_kwargs(kwargs))
-    plan: Optional[ShardingPlan] = cache.get(cache_key)
-    if plan is None:
-        plan = rule_fn(*input_layouts, runtime=runtime, **kwargs)
-        cache.put(cache_key, plan)
-
-    # Apply pre-collective (e.g., broadcast for column-parallel)
-    pre_collectives = []
-    preprocessed = []
-    layout_idx = 0
-    for a in args:
-        if hasattr(a, "get_value"):
-            processed = a
-            # Apply pre-collective to first tensor input (activation)
-            if (
-                layout_idx == 0
-                and plan.pre_collective == "broadcast"
-                and plan.pre_collective_mesh_axis is not None
-            ):
-                processed = ttml.ops.distributed.broadcast(
-                    processed,
-                    cluster_axis=plan.pre_collective_mesh_axis,
+        # Check if any tensor is actually distributed (lives on a mesh device)
+        has_distributed = any(is_distributed(t) for t in tensor_args)
+        if not has_distributed:
+            raw = _get_raw(op_name)
+            result = raw(*args, **kwargs)
+            # Record fast-path when tracing is enabled so it's visible in debug output
+            if dispatch_trace.enabled:
+                dispatch_trace.record(
+                    TraceEntry(
+                        op_name=op_name,
+                        input_layouts=[get_layout(t) for t in tensor_args],
+                        rule_name="fast_path",
+                        plan=None,
+                        pre_collectives=[],
+                        redistributions=[],
+                        post_collectives=[],
+                        output_layout=None,
+                    )
                 )
-                pre_collectives.append(
-                    {
-                        "type": "broadcast",
-                        "mesh_axis": plan.pre_collective_mesh_axis,
-                    }
-                )
-            preprocessed.append(processed)
-            layout_idx += 1
-        else:
-            preprocessed.append(a)
+            return result
 
-    # Redistribute inputs to required layouts
-    redistributions = []
-    redistributed = []
-    layout_idx = 0
-    for a in preprocessed:
-        if hasattr(a, "get_value"):
-            target = plan.input_layouts[layout_idx]
-            cur = input_layouts[layout_idx]
-            if cur is not None and cur != target:
-                redistributions.append(
-                    {
-                        "arg_idx": layout_idx,
-                        "from": cur,
-                        "to": target,
-                    }
-                )
-                redistributed.append(
-                    redistribute(a, target, grad_replicated=plan.gather_grad_replicated)
-                )
+        # If runtime is not set but we have distributed tensors, fall back to raw op
+        # This can happen during optimizer creation before training starts
+        if runtime is None:
+            raw = _get_raw(op_name)
+            return raw(*args, **kwargs)
+
+        input_layouts = [get_layout(t) for t in tensor_args]
+
+        rule_fn = get_rule(op_name)
+        if rule_fn is None:
+            return _fallback_replicated(op_name, tensor_args, other_args, kwargs)
+
+        cache = runtime.plan_cache
+        cache_key = (op_name, tuple(input_layouts), _hashable_kwargs(kwargs))
+        plan: Optional[ShardingPlan] = cache.get(cache_key)
+        if plan is None:
+            plan = rule_fn(*input_layouts, runtime=runtime, **kwargs)
+            cache.put(cache_key, plan)
+
+        # Apply pre-collective (e.g., broadcast for column-parallel)
+        pre_collectives = []
+        preprocessed = []
+        layout_idx = 0
+        for a in args:
+            if hasattr(a, "get_value"):
+                processed = a
+                # Apply pre-collective to first tensor input (activation)
+                if (
+                    layout_idx == 0
+                    and plan.pre_collective == "broadcast"
+                    and plan.pre_collective_mesh_axis is not None
+                ):
+                    processed = ttml.ops.distributed.broadcast(
+                        processed,
+                        cluster_axis=plan.pre_collective_mesh_axis,
+                    )
+                    pre_collectives.append(
+                        {
+                            "type": "broadcast",
+                            "mesh_axis": plan.pre_collective_mesh_axis,
+                        }
+                    )
+                preprocessed.append(processed)
+                layout_idx += 1
+            else:
+                preprocessed.append(a)
+
+        # Redistribute inputs to required layouts
+        redistributions = []
+        redistributed = []
+        layout_idx = 0
+        for a in preprocessed:
+            if hasattr(a, "get_value"):
+                target = plan.input_layouts[layout_idx]
+                cur = input_layouts[layout_idx]
+                if cur is not None and cur != target:
+                    redistributions.append(
+                        {
+                            "arg_idx": layout_idx,
+                            "from": cur,
+                            "to": target,
+                        }
+                    )
+                    redistributed.append(
+                        redistribute(
+                            a, target, grad_replicated=plan.gather_grad_replicated
+                        )
+                    )
+                else:
+                    redistributed.append(a)
+                layout_idx += 1
             else:
                 redistributed.append(a)
-            layout_idx += 1
-        else:
-            redistributed.append(a)
 
-    raw = _get_raw(op_name)
-    result = raw(*redistributed, **kwargs)
+        raw = _get_raw(op_name)
+        result = raw(*redistributed, **kwargs)
 
-    # Apply post-collective (e.g., all_reduce for row-parallel)
-    post_collectives = []
-    if plan.post_collective == "all_reduce" and plan.reduce_mesh_axis is not None:
-        result = ttml.ops.distributed.all_reduce(
-            result,
-            noop_backward=plan.noop_backward,
-            cluster_axis=plan.reduce_mesh_axis,
-        )
-        post_collectives.append(
-            {
-                "type": "all_reduce",
-                "mesh_axis": plan.reduce_mesh_axis,
-                "noop_backward": plan.noop_backward,
-            }
-        )
-
-    if hasattr(result, "get_value"):
-        set_layout(result, plan.output_layout)
-
-    if dispatch_trace.enabled:
-        dispatch_trace.record(
-            TraceEntry(
-                op_name=op_name,
-                input_layouts=input_layouts,
-                rule_name=rule_fn.__name__ if rule_fn else None,
-                plan=plan,
-                redistributions=redistributions,
-                post_collectives=post_collectives,
-                output_layout=plan.output_layout,
+        # Apply post-collective (e.g., all_reduce for row-parallel)
+        post_collectives = []
+        if plan.post_collective == "all_reduce" and plan.reduce_mesh_axis is not None:
+            result = ttml.ops.distributed.all_reduce(
+                result,
+                noop_backward=plan.noop_backward,
+                cluster_axis=plan.reduce_mesh_axis,
             )
-        )
+            post_collectives.append(
+                {
+                    "type": "all_reduce",
+                    "mesh_axis": plan.reduce_mesh_axis,
+                    "noop_backward": plan.noop_backward,
+                }
+            )
 
-    return result
+        if hasattr(result, "get_value"):
+            set_layout(result, plan.output_layout)
+
+        if dispatch_trace.enabled:
+            dispatch_trace.record(
+                TraceEntry(
+                    op_name=op_name,
+                    input_layouts=input_layouts,
+                    rule_name=rule_fn.__name__ if rule_fn else None,
+                    plan=plan,
+                    pre_collectives=pre_collectives,
+                    redistributions=redistributions,
+                    post_collectives=post_collectives,
+                    output_layout=plan.output_layout,
+                )
+            )
+
+        return result
+    finally:
+        dispatch_trace.exit_dispatch()
 
 
 # ---------------------------------------------------------------------------

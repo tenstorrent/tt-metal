@@ -16,6 +16,7 @@
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -136,6 +137,18 @@ void py_module(nb::module_& m) {
             nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
+        nb::enum_<ttml::metal::AttentionMaskType>(py_distributed, "AttentionMaskType")
+            .value("Causal", ttml::metal::AttentionMaskType::Causal)
+            .value("None", ttml::metal::AttentionMaskType::None);
+        py_distributed.def(
+            "ring_attention_sdpa",
+            &ttml::ops::distributed::ring_attention_sdpa,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nb::none(),
+            nb::arg("mask_type") = ttml::metal::AttentionMaskType::Causal,
+            nb::arg("cp_axis") = nb::none());
     }
 
     {
@@ -305,7 +318,8 @@ void py_module(nb::module_& m) {
             nb::arg("sequence_length"),
             nb::arg("head_dim"),
             nb::arg("theta") = 10000.0F,
-            nb::arg("rope_scaling_params") = RopeScalingParams{});
+            nb::arg("rope_scaling_params") = RopeScalingParams{},
+            nb::arg("cp_axis") = nb::none());
         py_rope.def(
             "validate_rope_input_and_params",
             &ttml::ops::validate_rope_input_and_params,

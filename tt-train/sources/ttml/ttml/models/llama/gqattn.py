@@ -36,6 +36,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         self.num_groups = num_groups
         self.dropout_prob = dropout
         self.rope_params = rope_params
+        self.sdpa = ttml.ops.attention.scaled_dot_product_attention
 
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
@@ -56,9 +57,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(
-            q_heads, k_heads, v_heads, mask
-        )
+        attention = self.sdpa(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)
@@ -108,9 +107,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         k_cache_to_process = ttml.autograd.create_tensor(k_cache_slice)
         v_cache_to_process = ttml.autograd.create_tensor(v_cache_slice)
 
-        attention = ttml.ops.attention.scaled_dot_product_attention(
-            q_heads, k_cache_to_process, v_cache_to_process, mask
-        )
+        attention = self.sdpa(q_heads, k_cache_to_process, v_cache_to_process, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
 
         out = self.out_linear(attention)

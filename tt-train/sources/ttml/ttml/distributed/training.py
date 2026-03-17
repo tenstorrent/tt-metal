@@ -144,6 +144,7 @@ def distribute_module(
     model: AbstractModuleBase,
     mesh_device,
     policy: Dict[str, Layout],
+    cp_axis: Optional[int] = None,
 ) -> AbstractModuleBase:
     """Distribute a model for parallel training.
 
@@ -156,6 +157,7 @@ def distribute_module(
         model: The model to distribute
         mesh_device: The mesh device to distribute tensors to
         policy: Dict mapping parameter names (or regex patterns) to Layouts
+        cp_axis: Optional context parallelism axis for sequence sharding
     """
     from . import module_rules as _  # ensure module rules are registered  # noqa: F401
 
@@ -163,7 +165,7 @@ def distribute_module(
     runtime = MeshRuntime(mesh_device=mesh_device)
     set_runtime(runtime)
 
-    _apply_module_rules(model, mesh_device, policy, prefix="")
+    _apply_module_rules(model, mesh_device, policy, prefix="", cp_axis=cp_axis)
 
     return model
 
@@ -173,18 +175,26 @@ def _apply_module_rules(
     mesh_device,
     policy: Dict[str, Layout],
     prefix: str,
+    cp_axis: Optional[int] = None,
 ) -> None:
     """Recursively apply module rules or direct parameter distribution."""
     rule = get_module_rule(type(module))
 
     if rule is not None:
-        rule(module, mesh_device, policy, prefix)
+        # Pass cp_axis to module rules that support it
+        try:
+            rule(module, mesh_device, policy, prefix, cp_axis=cp_axis)
+        except TypeError:
+            # Rule doesn't accept cp_axis, call without it
+            rule(module, mesh_device, policy, prefix)
         return
 
     for name, child in module.named_children():
         child_prefix = f"{prefix}.{name}" if prefix else name
         if isinstance(child, AbstractModuleBase):
-            _apply_module_rules(child, mesh_device, policy, child_prefix)
+            _apply_module_rules(
+                child, mesh_device, policy, child_prefix, cp_axis=cp_axis
+            )
 
     _distribute_unhandled_params(module, mesh_device, policy, prefix)
 

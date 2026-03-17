@@ -141,24 +141,24 @@ class _GradSyncFunction(ttml.autograd.Function):
     """Custom autograd function that syncs gradients in backward pass."""
 
     @staticmethod
-    def forward(ctx, output, model, dp_axis):
+    def forward(ctx, output, model, sync_axes):
         """Forward pass - just returns the output unchanged."""
         ctx.model = model
-        ctx.dp_axis = dp_axis
+        ctx.sync_axes = sync_axes
         return output.get_value()
 
     @staticmethod
     def backward(ctx, grad_output):
-        """Backward pass - sync gradients across DP axis, then return grad unchanged."""
-        sync_gradients(ctx.model, cluster_axes=[ctx.dp_axis])
+        """Backward pass - sync gradients across specified axes, then return grad unchanged."""
+        sync_gradients(ctx.model, cluster_axes=ctx.sync_axes)
         return grad_output
 
 
-class DataParallelModel:
-    """Wrapper that adds automatic gradient synchronization for data parallel training.
+class DistributedModelWrapper:
+    """Wrapper that adds automatic gradient synchronization for distributed training.
 
     This wrapper is orthogonal to the trainer - it wraps any model and adds
-    automatic gradient synchronization across the DP axis at the end of backward.
+    automatic gradient synchronization across the specified axes at the end of backward.
 
     The gradient sync happens automatically when backward() is called on the loss,
     because the wrapper inserts a custom autograd function that syncs gradients
@@ -168,26 +168,26 @@ class DataParallelModel:
 
         model = Llama(config)
         model = distribute_module(model, mesh_device, tp_policy)  # TP sharding
-        model = DataParallelModel(model, dp_axis=0)  # DP wrapper
+        model = DistributedModelWrapper(model, sync_axes=[0, 1])  # DP + CP sync
 
         # Use with SFTTrainer - no special hooks needed
         trainer = SFTTrainer(model, ...)
     """
 
-    def __init__(self, model: Any, dp_axis: int):
+    def __init__(self, model: Any, sync_axes: list):
         """
         Args:
             model: The underlying model to wrap.
-            dp_axis: The mesh axis for data parallelism (gradient sync axis).
+            sync_axes: List of mesh axes for gradient synchronization (DP and/or CP).
         """
         self._model = model
-        self._dp_axis = dp_axis
+        self._sync_axes = sync_axes
 
     def __call__(self, *args, **kwargs):
         """Forward pass with automatic gradient sync in backward."""
         output = self._model(*args, **kwargs)
         # Insert gradient sync node into the autograd graph
-        return _GradSyncFunction.apply(output, self._model, self._dp_axis)
+        return _GradSyncFunction.apply(output, self._model, self._sync_axes)
 
     def train(self):
         """Set model to training mode."""
@@ -214,6 +214,10 @@ class DataParallelModel:
     def __getattr__(self, name: str):
         """Delegate attribute access to the underlying model."""
         return getattr(self._model, name)
+
+
+# Backward compatibility alias
+DataParallelModel = DistributedModelWrapper
 
 
 # ---------------------------------------------------------------------------
@@ -251,16 +255,17 @@ def distributed_collate_fn(
     seq_length: int,
     mesh_device: Any = None,
     dp_axis: Optional[int] = None,
+    cp_axis: Optional[int] = None,
 ) -> Batch:
     """Collate samples into a Batch with distributed tensor support.
 
     This collate function creates Batch objects compatible with SFTTrainer,
-    with optional DP sharding when dp_axis is provided.
+    with optional DP sharding (batch dim) and CP sharding (sequence dim).
 
-    Use with functools.partial to bind seq_length, mesh_device, and dp_axis::
+    Use with functools.partial to bind parameters::
 
         collate = partial(distributed_collate_fn, seq_length=1024,
-                          mesh_device=mesh_device, dp_axis=0)
+                          mesh_device=mesh_device, dp_axis=0, cp_axis=1)
         dataloader = InMemoryDataloader(dataset, collate, batch_size=8)
 
     Args:
@@ -268,6 +273,7 @@ def distributed_collate_fn(
         seq_length: Sequence length for the batch.
         mesh_device: Mesh device for distributed tensors.
         dp_axis: Data parallel axis for batch sharding (None to disable).
+        cp_axis: Context parallel axis for sequence sharding (None to disable).
 
     Returns:
         Batch object with input_ids, labels, and loss_mask tensors.
@@ -284,22 +290,45 @@ def distributed_collate_fn(
         input_ids_np[i, 0, 0, :n] = input_ids[:n]
         labels_np[i, :n] = labels[:n]
 
-    # Shard batch across DP axis if enabled
-    if dp_axis is not None and mesh_device is not None:
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-            mesh_device, 0, dp_axis
+    # Determine sharding strategy
+    # DP shards batch (dim 0), CP shards sequence (dim 3 for input_ids, dim 1 for labels)
+    if mesh_device is not None and (dp_axis is not None or cp_axis is not None):
+        # Build placements list for each mesh axis
+        # input_ids: (batch, 1, 1, seq_length) -> DP shards dim 0, CP shards dim 3
+        # labels: (batch, seq_length) -> DP shards dim 0, CP shards dim 1
+        mesh_shape = mesh_device.shape
+        ndim = mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
+
+        # Build placements: None = replicate, int = shard on that dim
+        input_placements = [None] * ndim
+        labels_placements = [None] * ndim
+
+        if dp_axis is not None:
+            input_placements[dp_axis] = 0  # Shard batch dim
+            labels_placements[dp_axis] = 0  # Shard batch dim
+
+        if cp_axis is not None:
+            input_placements[cp_axis] = 3  # Shard sequence dim (dim 3 for input_ids)
+            labels_placements[cp_axis] = 1  # Shard sequence dim (dim 1 for labels)
+
+        mapper_input = ttml.core.distributed.create_tensor_to_mesh_mapper(
+            mesh_device, input_placements
         )
+        mapper_labels = ttml.core.distributed.create_tensor_to_mesh_mapper(
+            mesh_device, labels_placements
+        )
+
         input_ids_t = ttml.autograd.Tensor.from_numpy(
             input_ids_np,
             layout=ttnn.Layout.ROW_MAJOR,
             new_type=ttnn.DataType.UINT32,
-            mapper=mapper,
+            mapper=mapper_input,
         )
         labels_t = ttml.autograd.Tensor.from_numpy(
             labels_np,
             layout=ttnn.Layout.ROW_MAJOR,
             new_type=ttnn.DataType.UINT32,
-            mapper=mapper,
+            mapper=mapper_labels,
         )
     else:
         input_ids_t = ttml.autograd.Tensor.from_numpy(
@@ -325,47 +354,72 @@ def distributed_collate_fn(
 # ---------------------------------------------------------------------------
 
 
-class MemoryTrackingCallback(TrainerCallback):
-    """Callback for memory tracking on the first training step."""
+class DispatchTraceCallback(TrainerCallback):
+    """Callback for dispatch trace logging.
 
-    def __init__(self):
-        self._memory_guard = None
-        self._is_first_step = True
+    Args:
+        max_entries_to_print: Maximum entries to print at train end (default 20).
+        first_step_only: If True, disable tracing after the first step completes.
+        dump_path: Optional file path to dump all entries as JSON lines.
+    """
+
+    def __init__(
+        self,
+        max_entries_to_print: int = 20,
+        first_step_only: bool = False,
+        dump_path: Optional[str] = None,
+    ):
+        self.max_entries_to_print = max_entries_to_print
+        self.first_step_only = first_step_only
+        self.dump_path = dump_path
+        self._first_step_done = False
 
     def on_train_begin(self, trainer: "SFTTrainer") -> None:
-        print("\n   Memory tracking enabled")
-        self._memory_guard = MemoryUsageTracker.begin_capture()
+        dispatch_trace.clear()
+        dispatch_trace.enable()
+        self._first_step_done = False
 
     def on_step_end(
         self, trainer: "SFTTrainer", step: int, loss: float, lr: float
     ) -> None:
-        if self._is_first_step:
-            self._is_first_step = False
-            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
-            print("\n" + "=" * 70)
-            print("MEMORY USAGE REPORT")
-            print("=" * 70)
-            MemoryUsageTracker.print_memory_usage()
-            MemoryUsageTracker.clear()
-            if self._memory_guard:
-                self._memory_guard.release()
-                self._memory_guard = None
-            print("=" * 70 + "\n")
-
-
-class DispatchTraceCallback(TrainerCallback):
-    """Callback for dispatch trace logging."""
-
-    def on_train_begin(self, trainer: "SFTTrainer") -> None:
-        dispatch_trace.enable()
+        if self.first_step_only and not self._first_step_done:
+            self._first_step_done = True
+            dispatch_trace.disable()
+            self._dump_and_print("first step")
 
     def on_train_end(self, trainer: "SFTTrainer") -> None:
         dispatch_trace.disable()
-        print(f"\nDispatch trace: {len(dispatch_trace.entries)} recorded events")
-        for entry in dispatch_trace.entries[:20]:
-            print(f"  {entry}")
-        if len(dispatch_trace.entries) > 20:
-            print(f"  ... and {len(dispatch_trace.entries) - 20} more")
+        if not (self.first_step_only and self._first_step_done):
+            self._dump_and_print("train end")
+
+    def _dump_and_print(self, label: str) -> None:
+        entries = dispatch_trace.entries
+        print(f"\nDispatch trace ({label}): {len(entries)} recorded events")
+        tree = dispatch_trace.format_entries_tree(
+            entries=entries,
+            max_entries=self.max_entries_to_print,
+        )
+        print(tree)
+        if len(entries) > self.max_entries_to_print:
+            print(
+                f"  ... and {len(entries) - self.max_entries_to_print} more (use --debug_dispatch_dump for full trace)"
+            )
+
+        if self.dump_path:
+            if self.dump_path.endswith(".html"):
+                html = dispatch_trace.format_entries_html(
+                    entries=entries, title="Dispatch trace"
+                )
+                with open(self.dump_path, "w") as f:
+                    f.write(html)
+                print(f"  Wrote HTML trace to {self.dump_path} (open in a browser)")
+            else:
+                import json
+
+                with open(self.dump_path, "w") as f:
+                    for entry in entries:
+                        f.write(json.dumps(entry.to_dict()) + "\n")
+                print(f"  Dumped {len(entries)} entries to {self.dump_path} (JSONL)")
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +479,17 @@ def main():
     parser.add_argument(
         "--debug_dispatch", action="store_true", help="Enable dispatch trace logging"
     )
+    parser.add_argument(
+        "--debug_dispatch_first_step_only",
+        action="store_true",
+        help="Only trace the first training step (reduces memory)",
+    )
+    parser.add_argument(
+        "--debug_dispatch_dump",
+        type=str,
+        default=None,
+        help="Path to dump trace: .html for a viewable report (open in browser), otherwise JSONL",
+    )
     # Mesh and parallelism overrides
     parser.add_argument(
         "--mesh_shape",
@@ -436,13 +501,19 @@ def main():
         "--tp_axis",
         type=int,
         default=None,
-        help="Tensor parallel axis (0 or 1). Overrides config. Use -1 to disable TP.",
+        help="Tensor parallel axis (0 or 1). Overrides config tp_axis. Use -1 to disable.",
     )
     parser.add_argument(
         "--dp_axis",
         type=int,
         default=None,
-        help="Data parallel axis (0 or 1). Overrides config. Use -1 to disable DP.",
+        help="Data parallel axis (0 or 1). Overrides config dp_axis. Use -1 to disable.",
+    )
+    parser.add_argument(
+        "--cp_axis",
+        type=int,
+        default=None,
+        help="Context parallel axis (0 or 1). Overrides config cp_axis. Use -1 to disable.",
     )
     # Memory profiling
     parser.add_argument(
@@ -570,16 +641,21 @@ def main():
     ttml.autograd.AutoContext.get_instance().set_seed(seed)
     np.random.seed(seed)
 
-    # Determine TP/DP axes - command line overrides config
+    # Determine TP/DP/CP axes - command line overrides config
     if args.tp_axis is not None:
         tp_axis = args.tp_axis if args.tp_axis >= 0 else None
     else:
-        tp_axis = 1 if device_cfg.enable_tp else None
+        tp_axis = device_cfg.tp_axis  # Uses config or legacy enable_tp
 
     if args.dp_axis is not None:
         dp_axis = args.dp_axis if args.dp_axis >= 0 else None
     else:
-        dp_axis = 0 if device_cfg.enable_ddp else None
+        dp_axis = device_cfg.dp_axis  # Uses config or legacy enable_ddp
+
+    if args.cp_axis is not None:
+        cp_axis = args.cp_axis if args.cp_axis >= 0 else None
+    else:
+        cp_axis = device_cfg.cp_axis  # Uses config
 
     # Validate axes
     mesh_dims = len(device_cfg.mesh_shape)
@@ -591,14 +667,24 @@ def main():
         raise ValueError(
             f"dp_axis={dp_axis} out of range for mesh with {mesh_dims} dims"
         )
+    if cp_axis is not None and cp_axis >= mesh_dims:
+        raise ValueError(
+            f"cp_axis={cp_axis} out of range for mesh with {mesh_dims} dims"
+        )
     if tp_axis is not None and dp_axis is not None and tp_axis == dp_axis:
         raise ValueError(f"tp_axis and dp_axis cannot be the same (both are {tp_axis})")
+    if tp_axis is not None and cp_axis is not None and tp_axis == cp_axis:
+        raise ValueError(f"tp_axis and cp_axis cannot be the same (both are {tp_axis})")
+    if dp_axis is not None and cp_axis is not None and dp_axis == cp_axis:
+        raise ValueError(f"dp_axis and cp_axis cannot be the same (both are {dp_axis})")
 
     tp_size = device_cfg.mesh_shape[tp_axis] if tp_axis is not None else 1
     dp_size = device_cfg.mesh_shape[dp_axis] if dp_axis is not None else 1
+    cp_size = device_cfg.mesh_shape[cp_axis] if cp_axis is not None else 1
     print(f"   Mesh shape: {device_cfg.mesh_shape}")
     print(
-        f"   TP axis: {tp_axis} (size={tp_size}), DP axis: {dp_axis} (size={dp_size})"
+        f"   TP axis: {tp_axis} (size={tp_size}), DP axis: {dp_axis} (size={dp_size}), "
+        f"CP axis: {cp_axis} (size={cp_size})"
     )
 
     # Initialize dispatch layer for distributed ops
@@ -621,6 +707,10 @@ def main():
                 f"TP size ({tp_size}). Try a different mesh_shape or tp_axis."
             )
 
+    # Track model creation memory
+    if args.track_memory:
+        model_guard = MemoryUsageTracker.begin_capture()
+
     model = Llama(llama_config)
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     print(
@@ -629,20 +719,46 @@ def main():
     )
     print(f"   Total parameters: {total_params:,}")
 
-    # Distribute model with TP
-    if tp_axis is not None:
-        print("\n4. Distributing model with TP...")
-        policy = build_llama_tp_policy(mesh_device, tp_axis)
-        print(f"   Policy covers {len(policy)} parameter patterns")
-        model = distribute_module(model, mesh_device, policy)
+    if args.track_memory:
+        MemoryUsageTracker.end_capture("MODEL_CREATION")
+        print_memory_stats("MODEL_CREATION")
+
+    # Distribute model with TP and/or CP
+    if tp_axis is not None or cp_axis is not None:
+        print("\n4. Distributing model...")
+        if tp_axis is not None:
+            print(f"   TP enabled on axis {tp_axis}")
+            policy = build_llama_tp_policy(mesh_device, tp_axis)
+            print(f"   Policy covers {len(policy)} parameter patterns")
+        else:
+            policy = {}
+        if cp_axis is not None:
+            print(f"   CP enabled on axis {cp_axis}")
+
+        if args.track_memory:
+            dist_guard = MemoryUsageTracker.begin_capture()
+
+        model = distribute_module(model, mesh_device, policy, cp_axis=cp_axis)
+
+        if args.track_memory:
+            MemoryUsageTracker.end_capture("MODEL_DISTRIBUTION")
+            print_memory_stats("MODEL_DISTRIBUTION")
+
         print("   Model distributed.")
     else:
-        print("\n4. TP not enabled, skipping distribution...")
+        print("\n4. TP/CP not enabled, skipping distribution...")
 
-    # Wrap model with DataParallelModel for DP gradient sync
+    # Wrap model with DistributedModelWrapper for gradient sync (DP and/or CP)
+    sync_axes = []
     if dp_axis is not None:
-        print(f"\n   Wrapping model with DataParallelModel (dp_axis={dp_axis})...")
-        model = DataParallelModel(model, dp_axis)
+        sync_axes.append(dp_axis)
+    if cp_axis is not None:
+        sync_axes.append(cp_axis)
+    if sync_axes:
+        print(
+            f"\n   Wrapping model with DistributedModelWrapper (sync_axes={sync_axes})..."
+        )
+        model = DistributedModelWrapper(model, sync_axes)
 
     # Create dataloader with distributed collate function
     print("\n5. Creating dataloader...")
@@ -651,6 +767,7 @@ def main():
         seq_length=seq_len,
         mesh_device=mesh_device,
         dp_axis=dp_axis,
+        cp_axis=cp_axis,
     )
     train_dataloader = InMemoryDataloader(
         dataset=dataset,
@@ -681,13 +798,17 @@ def main():
     optimizer_dict = (
         optimizer_cfg if optimizer_cfg else {"type": "AdamW", "lr": learning_rate}
     )
+    print(f"   Optimizer: {optimizer_dict}")
 
     # Setup callbacks
     callbacks = []
-    if args.track_memory:
-        callbacks.append(MemoryTrackingCallback())
     if args.debug_dispatch:
-        callbacks.append(DispatchTraceCallback())
+        callbacks.append(
+            DispatchTraceCallback(
+                first_step_only=args.debug_dispatch_first_step_only,
+                dump_path=args.debug_dispatch_dump,
+            )
+        )
 
     # Create and run trainer
     print(f"\n6. Training for {max_steps} steps...")
@@ -699,6 +820,10 @@ def main():
         optimizer=optimizer_dict,
         callbacks=callbacks if callbacks else None,
     )
+
+    # When CP is enabled, don't pass causal mask - ring_attention_sdpa handles it internally
+    if cp_axis is not None:
+        trainer._causal_mask = None
 
     start_time = time.time()
     trainer.train()

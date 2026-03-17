@@ -17,6 +17,15 @@ class DeviceConfig:
 
         Args:
             yaml_config: Dictionary containing configuration
+
+        Config fields:
+            mesh_shape: [rows, cols] shape of device mesh
+            device_ids: Optional list of device IDs to use
+            enable_tp: Enable tensor parallelism (legacy, use tp_axis instead)
+            enable_ddp: Enable data parallelism (legacy, use dp_axis instead)
+            tp_axis: Tensor parallel axis (0 or 1), None to disable
+            dp_axis: Data parallel axis (0 or 1), None to disable
+            cp_axis: Context parallel axis (0 or 1), None to disable
         """
         device_config = {}
         if isinstance(yaml_config, str):
@@ -26,12 +35,53 @@ class DeviceConfig:
 
         self.mesh_shape = device_config.get("mesh_shape", [1, 1])
         self.device_ids = device_config.get("device_ids", None)
+
+        # Legacy enable flags (for backward compatibility)
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
 
-        # Validate mesh shape for combined DP+TP
+        # New explicit axis configuration (takes precedence over enable flags)
+        # None means disabled, 0 or 1 specifies the mesh axis
+        self._tp_axis = device_config.get("tp_axis", None)
+        self._dp_axis = device_config.get("dp_axis", None)
+        self._cp_axis = device_config.get("cp_axis", None)
+
+        # Validate mesh shape for combined parallelism
         if self.enable_ddp and self.enable_tp:
             assert len(self.mesh_shape) >= 2, "DP+TP requires 2D mesh"
+
+    @property
+    def tp_axis(self) -> int:
+        """Get tensor parallel axis. Returns axis from config or infers from enable_tp."""
+        if self._tp_axis is not None:
+            return self._tp_axis
+        # Legacy: if enable_tp is set, default to axis 1
+        return 1 if self.enable_tp else None
+
+    @tp_axis.setter
+    def tp_axis(self, value):
+        self._tp_axis = value
+
+    @property
+    def dp_axis(self) -> int:
+        """Get data parallel axis. Returns axis from config or infers from enable_ddp."""
+        if self._dp_axis is not None:
+            return self._dp_axis
+        # Legacy: if enable_ddp is set, default to axis 0
+        return 0 if self.enable_ddp else None
+
+    @dp_axis.setter
+    def dp_axis(self, value):
+        self._dp_axis = value
+
+    @property
+    def cp_axis(self) -> int:
+        """Get context parallel axis. Returns axis from config."""
+        return self._cp_axis
+
+    @cp_axis.setter
+    def cp_axis(self, value):
+        self._cp_axis = value
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.

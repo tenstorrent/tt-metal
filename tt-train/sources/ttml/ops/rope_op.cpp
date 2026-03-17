@@ -248,7 +248,11 @@ ttnn::Tensor gen_trans_mat() {
 }
 
 RotaryEmbeddingParams build_rope_params(
-    uint32_t sequence_length, uint32_t head_dim, float theta, RopeScalingParams scaling_params) {
+    uint32_t sequence_length,
+    uint32_t head_dim,
+    float theta,
+    RopeScalingParams scaling_params,
+    std::optional<uint32_t> cp_axis_param) {
     if (head_dim % 32U != 0U) {
         throw std::invalid_argument(fmt::format("RoPE head_dim must be divisible by 32, but is {}", head_dim));
     }
@@ -260,26 +264,34 @@ RotaryEmbeddingParams build_rope_params(
         throw std::invalid_argument("RoPE head_dim must be non-zero.");
     }
 
-    // If ParallelismContext is initialized and CP is enabled, shard freqs across the CP axis.
+    // Use explicit cp_axis if provided, otherwise fall back to ParallelismContext
     std::shared_ptr<ttnn::distributed::TensorToMesh> mapper;
     uint32_t local_seq_len = sequence_length;
 
-    if (autograd::ctx().is_parallelism_context_initialized()) {
+    std::optional<uint32_t> cp_axis = cp_axis_param;
+    uint32_t cp_size = 1;
+
+    if (cp_axis.has_value()) {
+        // Explicit cp_axis provided - get cp_size from mesh device
+        auto* device = &autograd::ctx().get_device();
+        cp_size = device->shape()[cp_axis.value()];
+    } else if (autograd::ctx().is_parallelism_context_initialized()) {
+        // Fall back to ParallelismContext
         auto& pctx = autograd::ctx().get_parallelism_context();
-        std::optional<uint32_t> cp_axis = pctx.get_cp_axis();
-        const uint32_t cp_size = pctx.get_cp_size();
+        cp_axis = pctx.get_cp_axis();
+        cp_size = pctx.get_cp_size();
+    }
 
-        if (cp_axis.has_value() && cp_size > 1) {
-            TT_FATAL(
-                sequence_length % cp_size == 0,
-                "sequence_length ({}) must be divisible by cp_size ({})",
-                sequence_length,
-                cp_size);
-            local_seq_len = sequence_length / cp_size;
+    if (cp_axis.has_value() && cp_size > 1) {
+        TT_FATAL(
+            sequence_length % cp_size == 0,
+            "sequence_length ({}) must be divisible by cp_size ({})",
+            sequence_length,
+            cp_size);
+        local_seq_len = sequence_length / cp_size;
 
-            auto* device = &autograd::ctx().get_device();
-            mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis.value());
-        }
+        auto* device = &autograd::ctx().get_device();
+        mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis.value());
     }
 
     auto [sin_freqs, cos_freqs] = gen_freqs(head_dim, sequence_length, theta, scaling_params, mapper.get());

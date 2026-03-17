@@ -18,7 +18,7 @@ Reshape: Layout passes through (conservative; specific reshapes may need rules).
 
 from __future__ import annotations
 
-from ..layout import Layout, Replicate
+from ..layout import Layout, Replicate, Shard
 from .registry import ShardingPlan, register_rule
 
 
@@ -36,6 +36,10 @@ def sdpa_rule(
         input_layouts=list(layouts),
         output_layout=q_layout,
     )
+
+
+# ring_sdpa uses the same sharding rule as sdpa (trace shows "ring_sdpa" when ring_attention_sdpa is used)
+register_rule("ring_sdpa")(sdpa_rule)
 
 
 # -- Multi-head utils --------------------------------------------------------
@@ -99,6 +103,25 @@ def rope_rule(
 # -- Embedding ---------------------------------------------------------------
 
 
+def _embedding_output_layout(input_layout: Layout) -> Layout:
+    """Remap input layout to embedding output layout.
+
+    Embedding input is (B, 1, 1, S) so sequence is dim 3; output is (B, 1, S, D)
+    so sequence is dim 2. Preserve sequence sharding by remapping Shard(3) -> Shard(2).
+    Shard(-1) on input (last dim = S) -> Shard(2) on output (seq dim).
+    """
+    new_placements = []
+    for p in input_layout.placements:
+        if isinstance(p, Shard):
+            if p.dim in (3, -1):
+                new_placements.append(Shard(2))
+            else:
+                new_placements.append(p)
+        else:
+            new_placements.append(p)
+    return Layout(placements=tuple(new_placements))
+
+
 @register_rule("embedding")
 def embedding_rule(
     *layouts,
@@ -106,9 +129,10 @@ def embedding_rule(
     **kwargs,
 ) -> ShardingPlan:
     input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    output_layout = _embedding_output_layout(input_layout)
     return ShardingPlan(
         input_layouts=list(layouts),
-        output_layout=input_layout,
+        output_layout=output_layout,
     )
 
 

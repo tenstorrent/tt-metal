@@ -26,6 +26,8 @@ from ttml.common.data import build_causal_mask
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 
+MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
+
 
 class TrainerCallback:
     """Base class for SFTTrainer callbacks.
@@ -181,7 +183,11 @@ class SFTTrainer:
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
 
+        # Start memory tracking from optimizer creation (will be printed in train())
+        self._memory_guard = MemoryUsageTracker.begin_capture()
         self._optimizer = self._build_optimizer(optimizer)
+        MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
+
         self._lr_schedule = (
             lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         )
@@ -218,6 +224,13 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
+        # Memory tracking state (capture started in __init__ for optimizer creation)
+        is_first_step = True
+
+        def memory_snapshot(name: str) -> None:
+            if is_first_step:
+                MemoryUsageTracker.snapshot(name)
+
         bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
         for _ in bar:
             # self.step is 0-based so external lr_schedule callables (e.g.
@@ -227,9 +240,26 @@ class SFTTrainer:
             self._optimizer.zero_grad()
 
             micro_losses = []
-            for _ in range(cfg.gradient_accumulation_steps):
+            for micro_step in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
-                loss = self._compute_loss(batch)
+
+                # Forward pass
+                logits = self.model(batch.input_ids, self._causal_mask)
+                if micro_step == 0:
+                    memory_snapshot("FORWARD_PASS")
+
+                # Loss computation
+                if self._compute_loss_override is not None:
+                    loss = self._compute_loss_override(logits, batch)
+                else:
+                    loss = self._loss_fn(logits, batch.labels, ttml.ops.ReduceType.NONE)
+                    if batch.loss_mask is not None:
+                        loss = loss * batch.loss_mask
+                    loss = ttml.ops.unary.mean(loss)
+
+                if micro_step == 0:
+                    memory_snapshot("LOSS_COMPUTATION")
+
                 micro_losses.append(
                     float(loss.to_numpy(ttnn.DataType.FLOAT32, self._composer).mean())
                 )
@@ -237,7 +267,12 @@ class SFTTrainer:
                 scaled = ttml.ops.binary.mul(
                     loss, 1.0 / cfg.gradient_accumulation_steps
                 )
+
+                # Backward pass
                 scaled.backward(False)
+                if micro_step == 0:
+                    memory_snapshot("BACKWARD_PASS")
+
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
             if cfg.max_grad_norm > 0:
@@ -245,8 +280,23 @@ class SFTTrainer:
                     self.model.parameters(), cfg.max_grad_norm, 2.0, False
                 )
 
+            # Optimizer step
             self._optimizer.step()
+            memory_snapshot("OPTIMIZER_STEP")
+
             self.step += 1
+
+            # Print memory report after first step
+            if is_first_step:
+                is_first_step = False
+                MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+                print("\n" + "=" * 70)
+                print("MEMORY USAGE REPORT (First Step)")
+                print("=" * 70)
+                MemoryUsageTracker.print_memory_usage()
+                MemoryUsageTracker.clear()
+                self._memory_guard.release()
+                print("=" * 70 + "\n")
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:

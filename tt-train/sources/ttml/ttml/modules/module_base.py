@@ -111,7 +111,17 @@ class AbstractModuleBase(CppModuleBase):
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Invoke forward(). Subclasses implement forward()."""
-        return self.forward(*args, **kwargs)
+        from ttml.distributed.debug import dispatch_trace
+
+        if dispatch_trace.enabled:
+            name = getattr(self, "get_name", lambda: self.__class__.__name__)()
+            if callable(name):
+                name = name()
+            dispatch_trace.push_module(str(name))
+        result = self.forward(*args, **kwargs)
+        if dispatch_trace.enabled:
+            dispatch_trace.pop_module()
+        return result
 
 
 class ModuleList(AbstractModuleBase):

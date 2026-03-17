@@ -41,21 +41,48 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    const ttml::metal::AttentionMaskType mask_type) {
-    if (!autograd::ctx().is_parallelism_context_initialized() ||
-        !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
+    const ttml::metal::AttentionMaskType mask_type,
+    std::optional<uint32_t> cp_axis_param) {
+    // Use explicit cp_axis if provided, otherwise fall back to ParallelismContext
+    std::optional<uint32_t> cp_axis = cp_axis_param;
+    uint32_t ring_size = 1;
+
+    if (cp_axis.has_value()) {
+        // Explicit cp_axis provided - get ring_size from mesh device
+        const auto& query_tensor = query->get_value();
+        auto* mesh_device = query_tensor.device();
+        TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
+        ring_size = mesh_device->shape()[cp_axis.value()];
+    } else if (
+        autograd::ctx().is_parallelism_context_initialized() &&
+        autograd::ctx().get_parallelism_context().is_cp_enabled()) {
+        // Fall back to ParallelismContext
+        const auto& pctx = autograd::ctx().get_parallelism_context();
+        cp_axis = pctx.get_cp_axis();
+        ring_size = pctx.get_cp_size();
+    }
+
+    // If no CP enabled, fall back to regular SDPA
+    if (!cp_axis.has_value() || ring_size <= 1) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
     }
 
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    const uint32_t cp_axis_value = pctx.get_cp_axis().value();
-    const uint32_t ring_size = pctx.get_cp_size();
+    const uint32_t cp_axis_value = cp_axis.value();
     const auto& query_tensor = query->get_value();
     auto* mesh_device = query_tensor.device();
-    TT_FATAL(mesh_device != nullptr, "Query tensor must be on a mesh device for ring attention");
     TT_FATAL(
         !mask.has_value(),
         "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
+
+    // Initialize distributed context and socket manager if not already initialized (required for ring_shift)
+    auto& ctx = autograd::ctx();
+    if (!ctx.is_distributed_context_initialized()) {
+        ctx.initialize_distributed_context(0, nullptr);
+    }
+    if (!ctx.is_socket_manager_initialized()) {
+        ctx.initialize_socket_manager(ttnn::distributed::SocketType::MPI);
+    }
+
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     auto [batch_num, heads, seq_len_local, dim] = query_tensor.logical_shape().to_array_4D();
