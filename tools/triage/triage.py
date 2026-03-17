@@ -54,33 +54,19 @@ from pathlib import Path
 import re
 
 
-def find_install_debugger_script() -> str:
-    script_path = Path(__file__).resolve()
-    install_script = script_path.parent.parent.parent / "scripts" / "install_debugger.sh"
-    return str(install_script)
+def _triage_requirements_path() -> str:
+    return str(Path(__file__).resolve().parent / "requirements.txt")
 
 
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
-except ImportError as e:
-    RST = "\033[0m" if utils.should_use_color() else ""
-    GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
-    install_script = find_install_debugger_script()
-    print(f"Module '{e}' not found. Please install tt-exalens by running:")
-    print(f"  {GREEN}{install_script}{RST}")
-    exit(1)
-
-# Check if requirements are installed
-try:
     import capnp
 except ImportError as e:
     RST = "\033[0m" if utils.should_use_color() else ""
     GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    requirements_path = os.path.join(script_dir, "requirements.txt")
-    print(f"Module '{e}' not found. Please install requirements.txt:")
     pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
-    print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
+    print(f"Module '{e}' not found. Please install requirements by running:")
+    print(f"  {GREEN}{pip_cmd} install -r {_triage_requirements_path()}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -686,58 +672,75 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
 def _enforce_dependencies(args: ScriptArguments) -> None:
     """Enforce approved `ttexalens` version unless skipped.
 
-    Reads a single-line SHA from `ttexalens_ref.txt` in the parent
-    directory of this script (next to `install_debugger.sh`). Compares it to the
-    installed `ttexalens` version's dev hash and raises `TTTriageError` on
-    mismatch unless `--skip-version-check` is provided. If the ref file
-    is missing or empty, a warning is printed and the check is skipped.
+    Reads the `tt-exalens` requirement from `requirements.txt` in the same
+    directory as this script. Compares the specifier to the installed
+    `tt-exalens` version and exits on mismatch unless `--skip-version-check`
+    is provided. If the requirement is missing or the file is unreadable, a
+    warning is printed and the check is skipped.
     """
-    # Skip flag for dependency checks
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
     try:
         skip_check = bool(args["--skip-version-check"])
     except Exception:
         skip_check = False
 
-    install_script = find_install_debugger_script()
-    scripts_dir = os.path.dirname(install_script)
-    ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
+    req_path = _triage_requirements_path()
 
     try:
-        with open(ref_path, "r", encoding="utf-8") as f:
-            approved_version = f.read().strip()
+        with open(req_path, "r", encoding="utf-8") as f:
+            req_lines = f.read().splitlines()
     except FileNotFoundError:
-        utils.WARN("ttexalens_ref.txt not found. Skipping debugger version check. " f"Expected at: {ref_path}")
+        utils.WARN(f"requirements.txt not found. Skipping debugger version check. Expected at: {req_path}")
         return
     except Exception as e:
-        utils.WARN(f"Failed to read ttexalens_ref.txt: {e}. Skipping debugger version check.")
+        utils.WARN(f"Failed to read requirements.txt: {e}. Skipping debugger version check.")
         return
 
-    if not approved_version:
-        utils.WARN("ttexalens_ref.txt is empty. Skipping debugger version check.")
+    # Find the tt-exalens requirement line
+    tt_exalens_req = None
+    for line in req_lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            req = Requirement(line)
+            if re.sub(r"[-_]", "-", req.name).lower() == "tt-exalens":
+                tt_exalens_req = req
+                break
+        except Exception:
+            continue
+
+    if tt_exalens_req is None:
+        utils.WARN(f"tt-exalens not found in requirements.txt ({req_path}). Skipping debugger version check.")
         return
 
-    # Get installed version string
+    # Get installed version
     try:
-        installed_version = importlib_metadata.version("tt-exalens")
-        utils.DEBUG(f"Installed tt-exalens version: {installed_version}")
+        installed_version_str = importlib_metadata.version("tt-exalens")
+        installed_version = Version(installed_version_str)
+        utils.DEBUG(f"Installed tt-exalens version: {installed_version_str}")
     except importlib_metadata.PackageNotFoundError:
-        utils.WARN(
-            f"Required debugger component is not installed. Please run {install_script} to install debugger dependencies."
-        )
+        pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+        install_cmd = f"{pip_cmd} install -r {req_path}"
+        utils.WARN(f"Required debugger component is not installed. Please run: {install_cmd}")
         console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
-        console.print(f"  [command]{install_script}[/]")
+        console.print(f"  [command]{install_cmd}[/]")
         exit(1)
 
-    # Check if installed version matches approved version
-    if approved_version != installed_version:
-        message = f"Debugger version mismatch.\n  Installed: {installed_version}\n  Approved:  {approved_version}"
+    # Check if installed version satisfies the requirement
+    if installed_version not in tt_exalens_req.specifier:
+        pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
+        install_cmd = f"{pip_cmd} install -r {req_path}"
+        message = f"Debugger version mismatch.\n  Installed: {installed_version_str}\n  Required:  {tt_exalens_req}"
         if skip_check:
             utils.WARN(message)
             utils.WARN("Proceeding due to --skip-version-check")
         else:
             console.print(message)
             console.print(f"Please install tt-exalens by running:")
-            console.print(f"  [command]{install_script}[/]")
+            console.print(f"  [command]{install_cmd}[/]")
             console.print(f"Or disable this check by running with [command]--skip-version-check[/] argument.")
             exit(1)
 
