@@ -70,9 +70,9 @@ ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
 
-    auto* mesh_device = tensor_args.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.sub_device_id);
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args);
+    auto subdevice_core_range_set =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id);
     return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(
         operation_attributes.num_links,
         operation_attributes.ring_size,

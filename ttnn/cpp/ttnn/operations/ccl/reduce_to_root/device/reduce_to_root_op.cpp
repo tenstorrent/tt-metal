@@ -147,9 +147,9 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor_l.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_current_sub_device_id();
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor_l);
+    auto available_cores = device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, std::nullopt);
+    auto* mesh_device = device_ctx.raw_mesh_device();
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
     semaphores.reserve(2);
     // 2 semaphores: one for each round

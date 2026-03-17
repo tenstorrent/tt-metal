@@ -99,9 +99,9 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReduceScatterDeviceOperation::compute_program_hash is called");
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id);
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
+    auto subdevice_core_range_set =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
     return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
