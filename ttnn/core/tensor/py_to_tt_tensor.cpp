@@ -8,6 +8,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/unreachable.hpp>
 
 #include <tracy/Tracy.hpp>
@@ -76,6 +77,55 @@ bool can_construct_on_device(
     return res;
 }
 
+// Estimates peak per-bank memory during the on-device conversion path (borrow → to_device →
+// tilize → typecast) and returns true when it fits within the bank capacity. During tilize and
+// typecast the input and output buffers coexist, so peak memory is the sum of both.
+bool has_sufficient_device_memory(
+    ttnn::distributed::MeshDevice* device,
+    const ttnn::Shape& tensor_shape,
+    DataType src_dtype,
+    DataType dst_dtype,
+    Layout target_layout,
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& optional_tile) {
+    if (device == nullptr) {
+        return false;
+    }
+
+    auto buffer_type = memory_config.buffer_type();
+    auto alignment = device->allocator()->get_alignment(buffer_type);
+    auto num_banks = device->allocator()->get_num_banks(buffer_type);
+    auto bank_size = device->allocator()->get_bank_size(buffer_type);
+
+    TensorSpec src_rm_spec(tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+    auto src_rm_per_bank = src_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+
+    size_t peak_per_bank = src_rm_per_bank;
+
+    if (target_layout == Layout::TILE) {
+        // Tilize: input (src_dtype, RM) + output (src_dtype, TILE) coexist.
+        TensorSpec src_tile_spec(
+            tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
+        auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+        peak_per_bank = src_rm_per_bank + src_tile_per_bank;
+
+        if (src_dtype != dst_dtype) {
+            // Typecast follows tilize: input (src_dtype, TILE) + output (dst_dtype, TILE) coexist.
+            TensorSpec dst_tile_spec(
+                tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
+            auto dst_tile_per_bank = dst_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+            peak_per_bank = std::max(peak_per_bank, src_tile_per_bank + dst_tile_per_bank);
+        }
+    } else if (src_dtype != dst_dtype) {
+        // Typecast in ROW_MAJOR: input + output coexist.
+        TensorSpec dst_rm_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+        auto dst_rm_per_bank = dst_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+        peak_per_bank = src_rm_per_bank + dst_rm_per_bank;
+    }
+
+    return peak_per_bank <= bank_size;
+}
+
 Tensor create_tt_tensor_from_host_data(
     HostBuffer& host_buffer,
     DataType src_dtype,
@@ -117,7 +167,13 @@ Tensor create_tt_tensor_from_host_data(
         }
 
         // Borrow the Python buffer directly when possible, otherwise copy via from_span.
-        const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device;
+        // Borrowing sends the tensor to device in src_dtype ROW_MAJOR, then converts on-device.
+        // This requires enough memory for both input and output to coexist during tilize/typecast.
+        // Example: src_dtype = FLOAT32, dst_dtype = BFLOAT16.
+        // The f32 tensor does not fit in L1, but bf16 does, so the typecast is performed on the host.
+        const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device &&
+                                has_sufficient_device_memory(
+                                    device, tensor_shape, src_dtype, dst_dtype, layout, memory_config, optional_tile);
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
         }

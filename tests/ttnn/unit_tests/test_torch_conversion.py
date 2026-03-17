@@ -637,6 +637,44 @@ def test_from_torch_enable_bfloat_opt_preserves_sharded_memory_config(
     assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
 
 
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype,shape",
+    [
+        (torch.float32, ttnn.bfloat16, (8, 384, 4096)),
+        (torch.float32, ttnn.bfloat16, (4, 384, 4096)),
+    ],
+)
+def test_from_torch_large_tensor_type_conversion_l1(device, torch_dtype, ttnn_dtype, shape):
+    """
+    Regression test: from_torch with a type conversion (e.g. float32 → bfloat16),
+    TILE_LAYOUT, and L1_MEMORY_CONFIG must not OOM for tensors whose source
+    representation is too large to tilize on device.
+
+    The borrow path sends the raw source buffer to L1 in ROW_MAJOR and tilizes
+    on device, requiring both input and output to coexist in per-bank memory.
+    For float32 (8, 384, 4096) the peak is ~1.5 MB/bank which exceeds the
+    ~1.4 MB bank size on Wormhole B0. The memory check in has_sufficient_device_memory
+    falls back to host-side conversion (float32 → bfloat16 + tilize) which only
+    needs 1x bfloat16 size on device.
+    """
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(shape, dtype=torch_dtype) * 0.2 - 0.1
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    assert ttnn_tensor.dtype == ttnn_dtype
+    assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
+
+    result = ttnn.to_torch(ttnn_tensor)
+    assert_with_pcc(torch_tensor, result, 0.999)
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 @pytest.mark.parametrize("enable_bfloat_opt", [True, False])
 @pytest.mark.parametrize(
