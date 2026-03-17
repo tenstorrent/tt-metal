@@ -92,9 +92,9 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
             "adamw": self._adamw.get_state_dict(),
         }
 
-    def set_state_dict(self, dict):
-        self._muon.set_state_dict(dict["muon"])
-        self._adamw.set_state_dict(dict["adamw"])
+    def set_state_dict(self, state_dict):
+        self._muon.set_state_dict(state_dict["muon"])
+        self._adamw.set_state_dict(state_dict["adamw"])
 
     def get_steps(self):
         return self._muon.get_steps()
