@@ -44,12 +44,8 @@ inline void calculate_lgamma_stirling() {
 
         if constexpr (!is_fp32_dest_acc_en) {
             res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, 0));
-        } else {
-            sfpi::vInt exp = sfpi::exexp(in);
-            sfpi::vInt man = sfpi::exman9(in);
-            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
-            v_endif;
         }
+
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
@@ -81,6 +77,11 @@ inline void calculate_lgamma_adjusted(
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        } else {
+            sfpi::vInt exp = sfpi::exexp(in);
+            sfpi::vInt man = sfpi::exman9(in);
+            v_if(exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
+            v_endif;
         }
 
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
@@ -92,6 +93,7 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_lgamma_stirling_fp32(
     const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
+    constexpr float LOG_SQRT_PI = 0.57236494f;  // lgamma(0.5) = ln(sqrt(pi))
     constexpr uint dst_tile_size_sfpi = 32;
 
     // Minimal coefficients for 0-3 ULP
@@ -116,47 +118,34 @@ inline void calculate_lgamma_stirling_fp32(
 
         sfpi::vFloat res = z;
 
-        // Polynomial bridge for small range inputs
+        // Polynomial bridge for small range inputs (z near 1 or 2 only)
         v_if((abs_range1 < 0.2f) || (abs_range2 < 0.2f)) {
             sfpi::vFloat d = range2;
-
             v_if(abs_range1 < abs_range2) { d = range1; }
             v_endif;
-
-            // Coefficients for float32 stability
             const float p0 = -0.57721566f;
             const float p1 = 0.82246703f;
             const float p2 = -0.40068563f;
             const float p3 = 0.27058081f;
             const float p4 = -0.20738555f;
-
-            //    // Calculate Taylor expansion: d * (-0.577215 + d * (0.822467 - d * 0.400685))
-            //    res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
-
-            // Horner's Method: d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))))
             res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
         }
         v_else {
-            // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
+            // Stirling base + Bernoulli correction
             res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
-
-            // 3. High-Accuracy Correction (The "Bernoulli" series)
-            // We use a minimax rational fit for 1/z.
             sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
             sfpi::vFloat inv_z2 = (inv_z * inv_z);
-
-            //    // High-Accuracy Bernoulli Correction: inv_z * (r0 + inv_z2 * (r1 + inv_z2 * r2))
-            //    sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * (r1 + (inv_z * inv_z) * r2));
-
-            // Nested Horner: r0 + inv_z2 * (r1 + inv_z2 * (r2 + inv_z2 * r3))
             sfpi::vFloat correction = r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
-            correction = inv_z * correction;
-            res = res + correction;
+            res = res + inv_z * correction;
         }
         v_endif;
 
-        // TODO: use a polynomial bridge here instead
+        // Handle special cases
         v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
+        v_endif;
+
+        // Handle boundary case
+        v_if(sfpi::abs(z - 0.5f) < 0.01f) { res = LOG_SQRT_PI; }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.

@@ -59,8 +59,7 @@ void kernel_main() {
 
             // tile 1 = z = (x < 0.5) ? 1-x : x
             where_tile_init();
-            where_tile<DataFormat::Float32>(
-                1, 2, 0, 1);  // TODO: pass other dataformats if necessary or block other dtypes
+            where_tile<DataFormat::Float32>(1, 2, 0, 1);
 
             // log z
             log_tile_init<false>();
