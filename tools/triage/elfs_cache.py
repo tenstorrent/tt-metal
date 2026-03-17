@@ -17,7 +17,7 @@ Owner:
 
 import errno
 import logging
-import os
+from pathlib import Path
 import shutil
 import tempfile
 import threading
@@ -85,9 +85,9 @@ class ElfsCache:
             time.sleep(delay)
             try:
                 with tempfile.TemporaryDirectory(prefix="tt-triage-elf-") as tmp_dir:
-                    local_elf_path = os.path.join(tmp_dir, os.path.basename(elf_path))
+                    local_elf_path = Path(tmp_dir) / Path(elf_path).name
                     shutil.copy2(elf_path, local_elf_path)
-                    return parse_elf(local_elf_path, self.context)
+                    return parse_elf(str(local_elf_path), self.context)
             except Exception as exc:
                 if not self._is_estale_error(exc):
                     raise

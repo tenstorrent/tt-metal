@@ -15,8 +15,8 @@ Owner:
 """
 
 
-import os
 from dataclasses import dataclass
+from pathlib import Path
 from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
@@ -60,13 +60,14 @@ def _is_safe_path(file_path: str) -> bool:
     """Validate that the file path is safe to open (no path traversal)."""
     if not file_path:
         return False
-    normalized = os.path.normpath(file_path)
+    normalized = Path(file_path)
     # Reject paths that resolve to a parent directory escape
-    if ".." in normalized.split(os.sep):
+    if ".." in normalized.parts:
         return False
-    if os.path.isabs(normalized):
+    if normalized.is_absolute():
         allowed_prefixes = ("/work/", "/home/", "/opt/", "/tmp/", "/usr/")
-        if not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
+        normalized_str = str(normalized)
+        if not any(normalized_str.startswith(prefix) for prefix in allowed_prefixes):
             return False
     return True
 
@@ -78,7 +79,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
     if not _is_safe_path(file):
         return "?invalid file path?"
 
-    if not os.path.exists(file):
+    if not Path(file).exists():
         return "?file not found?"
     try:
         with open(file, "r") as f:

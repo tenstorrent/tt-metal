@@ -75,8 +75,8 @@ try:
 except ImportError as e:
     RST = "\033[0m" if utils.should_use_color() else ""
     GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    requirements_path = os.path.join(script_dir, "requirements.txt")
+    script_dir = Path(__file__).resolve().parent
+    requirements_path = script_dir / "requirements.txt"
     print(f"Module '{e}' not found. Please install requirements.txt:")
     pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
     print(f"  {GREEN}{pip_cmd} install -r {requirements_path}{RST}")
@@ -255,14 +255,15 @@ class TriageScript:
 
     @staticmethod
     def load(script_path: str) -> "TriageScript":
-        script_path = os.path.abspath(script_path)
-        base_path = os.path.dirname(script_path)
+        script_path_obj = Path(script_path).resolve()
+        script_path = str(script_path_obj)
+        base_path = str(script_path_obj.parent)
         appended = False
-        if not base_path in sys.path:
+        if base_path not in sys.path:
             sys.path.append(base_path)
             appended = True
         try:
-            script_name = os.path.splitext(os.path.basename(script_path))[0]
+            script_name = script_path_obj.stem
             script_module = importlib.import_module(script_name)
 
             # Check if script has a configuration
@@ -296,7 +297,7 @@ class TriageScript:
                 )
 
             triage_script = TriageScript(
-                name=os.path.basename(script_path),
+                name=script_path_obj.name,
                 path=script_path,
                 config=deepcopy(script_config),
                 module=script_module,
@@ -312,7 +313,7 @@ class TriageScript:
                     dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
                     for dep in triage_script.config.depends
                 ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
+                triage_script.config.depends = [str(Path(base_path) / dep) for dep in triage_script.config.depends]
 
             return triage_script
         finally:
@@ -531,7 +532,7 @@ def parse_arguments(
 
     docs: dict[str, str] = {}
     assert __doc__ is not None, "Help message must be provided in the script docstring."
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    my_name = Path(__file__).stem
     docs[my_name] = __doc__
     for script in scripts.values():
         docs[script.name] = script.documentation
@@ -773,12 +774,10 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         skip_check = False
 
     install_script = find_install_debugger_script()
-    scripts_dir = os.path.dirname(install_script)
-    ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
+    ref_path = Path(install_script).parent / "ttexalens_ref.txt"
 
     try:
-        with open(ref_path, "r", encoding="utf-8") as f:
-            approved_version = f.read().strip()
+        approved_version = ref_path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         utils.WARN("ttexalens_ref.txt not found. Skipping debugger version check. " f"Expected at: {ref_path}")
         return
@@ -890,11 +889,13 @@ def run_script(
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
-        application_path = os.path.dirname(__file__)
-        if not os.path.isabs(script_path):
-            script_path = os.path.join(application_path, script_path)
-        script_path = os.path.abspath(script_path)
-        if not os.path.exists(script_path):
+        script_path_obj = Path(script_path)
+        if not script_path_obj.is_absolute():
+            application_path = Path(__file__).parent
+            script_path_obj = application_path / script_path
+        script_path_obj = script_path_obj.resolve()
+        script_path = str(script_path_obj)
+        if not script_path_obj.exists():
             raise FileNotFoundError(f"Script {script_path} does not exist.")
 
     # Load script and its dependencies
@@ -946,20 +947,20 @@ def main():
     parse_arguments(only_triage_script_args=True)
 
     # Enumerate all scripts in application directory
-    application_path = os.path.abspath(os.path.dirname(__file__))
-    script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
+    application_path = Path(__file__).resolve().parent
+    this_file_name = Path(__file__).name
+    script_files = [f.name for f in application_path.iterdir() if f.suffix == ".py" and f.name != this_file_name]
 
     # To avoid multiple imports of this script, we add it to sys.modules
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    my_name = Path(__file__).stem
     if my_name not in sys.modules:
         sys.modules[my_name] = sys.modules["__main__"]
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
     scripts: dict[str, TriageScript] = {}
-    base_path = application_path
     for script in script_files:
-        script_path = os.path.join(base_path, script)
+        script_path = str(application_path / script)
         try:
             triage_script = TriageScript.load(script_path)
             if triage_script.config.disabled:
