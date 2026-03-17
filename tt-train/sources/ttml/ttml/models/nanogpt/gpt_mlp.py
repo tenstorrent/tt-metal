@@ -27,10 +27,10 @@ class GPTMLP(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
 
         # First linear: embedding_dim -> embedding_dim * 4
-        self.fc1 = LinearLayer(embedding_dim, embedding_dim * 4, True)
+        self.fc1 = LinearLayer(embedding_dim, embedding_dim * 4, True, zero_init=True)
 
         # Second linear: embedding_dim * 4 -> embedding_dim
-        self.fc2 = LinearLayer(embedding_dim * 4, embedding_dim, True)
+        self.fc2 = LinearLayer(embedding_dim * 4, embedding_dim, True, zero_init=True)
 
     # train() and eval() are inherited from AbstractModuleBase
 

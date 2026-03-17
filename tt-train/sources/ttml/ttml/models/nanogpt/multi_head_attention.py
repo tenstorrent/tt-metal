@@ -44,8 +44,12 @@ class MultiHeadAttention(AbstractModuleBase):
         # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
         # Note: scaling by 1/sqrt(head_dim) is handled inside scaled_dot_product_attention
 
-        self.qkv_linear = LinearLayer(embedding_dim, embedding_dim * 3, True)
-        self.out_linear = LinearLayer(embedding_dim, embedding_dim, True)
+        self.qkv_linear = LinearLayer(
+            embedding_dim, embedding_dim * 3, True, zero_init=True
+        )
+        self.out_linear = LinearLayer(
+            embedding_dim, embedding_dim, True, zero_init=True
+        )
 
     # train() and eval() are inherited from AbstractModuleBase
 

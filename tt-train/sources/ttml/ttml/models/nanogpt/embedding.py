@@ -6,9 +6,6 @@
 
 from __future__ import annotations
 
-import numpy as np
-import ml_dtypes
-
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
@@ -17,26 +14,34 @@ from ttml.modules import AbstractModuleBase, Parameter
 class Embedding(AbstractModuleBase):
     """Embedding layer implemented in Python using ttml operations."""
 
-    def __init__(self, num_embeddings: int, embedding_dim: int) -> None:
+    def __init__(
+        self, num_embeddings: int, embedding_dim: int, zero_init: bool = False
+    ) -> None:
         """Initialize embedding layer.
 
         Args:
             num_embeddings: Size of vocabulary
             embedding_dim: Dimension of embeddings
+            zero_init: If True, initialize weights to zero
         """
         super().__init__()
 
         # Initialize weight tensor: shape [1, 1, num_embeddings, embedding_dim]
-        # Embedding weights must be BFLOAT16 - use ml_dtypes.bfloat16 on NumPy side
         # Weight must be in TILE layout because embedding calls untilize on it
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         weight_shape = (1, 1, num_embeddings, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-            ml_dtypes.bfloat16
-        )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
-        self.weight = Parameter(weight_tensor)
+        if zero_init:
+            weight_ttnn = ttnn.zeros(
+                weight_shape,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        else:
+            weight_ttnn = ttnn.normal(
+                weight_shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            )
+        self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of embedding layer.

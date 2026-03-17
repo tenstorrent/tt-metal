@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
+import math
+
 import ml_dtypes
 
 import ttnn
@@ -14,31 +15,33 @@ from .parameter import Parameter
 
 def _create_weight(in_features: int, out_features: int, zero_init: bool = False):
     # Shape matches C++ convention: (1, 1, out_features, in_features)
+    device = ttml.autograd.AutoContext.get_instance().get_device()
     shape = (1, 1, out_features, in_features)
     if zero_init:
-        weight_np = np.zeros(shape).astype(ml_dtypes.bfloat16)
+        weight_ttnn = ttnn.zeros(
+            shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
     else:
-        init_k = np.sqrt(1.0 / in_features)
-        weight_np = np.random.uniform(
-            low=-init_k,
-            high=init_k,
-            size=shape,
-        ).astype(ml_dtypes.bfloat16)
-    return ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
+        init_k = math.sqrt(1.0 / in_features)
+        weight_ttnn = ttnn.rand(
+            shape, device=device, dtype=ttnn.bfloat16, low=-init_k, high=init_k
+        )
+    return ttml.autograd.create_tensor(weight_ttnn)
 
 
 def _create_bias(in_features: int, out_features: int, zero_init: bool = False):
+    device = ttml.autograd.AutoContext.get_instance().get_device()
     shape = (1, 1, 1, out_features)
     if zero_init:
-        bias_np = np.zeros(shape).astype(ml_dtypes.bfloat16)
+        bias_ttnn = ttnn.zeros(
+            shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
     else:
-        init_k = np.sqrt(1.0 / in_features)
-        bias_np = np.random.uniform(
-            low=-init_k,
-            high=init_k,
-            size=shape,
-        ).astype(ml_dtypes.bfloat16)
-    return ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
+        init_k = math.sqrt(1.0 / in_features)
+        bias_ttnn = ttnn.rand(
+            shape, device=device, dtype=ttnn.bfloat16, low=-init_k, high=init_k
+        )
+    return ttml.autograd.create_tensor(bias_ttnn)
 
 
 class LinearLayer(AbstractModuleBase):

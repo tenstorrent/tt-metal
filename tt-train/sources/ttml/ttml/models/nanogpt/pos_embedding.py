@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import numpy as np
-import ml_dtypes
 
 import ttnn
 import ttml
@@ -100,7 +99,11 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
     """Trainable positional embedding matching C++ TrainablePositionalEmbedding."""
 
     def __init__(
-        self, sequence_length: int, embedding_dim: int, dropout_prob: float = 0.0
+        self,
+        sequence_length: int,
+        embedding_dim: int,
+        dropout_prob: float = 0.0,
+        zero_init: bool = False,
     ) -> None:
         """Initialize trainable positional embedding.
 
@@ -108,20 +111,27 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
             sequence_length: Maximum sequence length
             embedding_dim: Dimension of embeddings
             dropout_prob: Dropout probability
+            zero_init: If True, initialize weights to zero
         """
         super().__init__()
 
         self.sequence_length = sequence_length
         self.dropout_prob = dropout_prob
 
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         weight_shape = (1, 1, sequence_length, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-            ml_dtypes.bfloat16
-        )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
-        self.weight = Parameter(weight_tensor)
+        if zero_init:
+            weight_ttnn = ttnn.zeros(
+                weight_shape,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        else:
+            weight_ttnn = ttnn.normal(
+                weight_shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            )
+        self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass: add positional embeddings and apply dropout.

@@ -8,9 +8,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import numpy as np
-import ml_dtypes
-
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer
@@ -31,10 +28,11 @@ class RMSNormLayer(AbstractModuleBase):
         self.use_composite = use_composite
 
         gamma_shape = (1, 1, 1, features)
-        gamma_np = np.ones(gamma_shape, dtype=ml_dtypes.bfloat16)
-        gamma_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_np, layout=ttnn.Layout.TILE
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        gamma_ttnn = ttnn.ones(
+            gamma_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
+        gamma_tensor = ttml.autograd.create_tensor(gamma_ttnn)
         self.gamma = Parameter(gamma_tensor)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:

@@ -7,9 +7,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Dict
 
-import numpy as np
-import ml_dtypes
-
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, LinearLayer
@@ -78,24 +75,23 @@ class LlamaConfig:
 
 
 def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
+    device = ttml.autograd.AutoContext.get_instance().get_device()
     for name, tensor in parameters.items():
         shape = tensor.shape()
 
         if "weight" in name:
             # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
-                ml_dtypes.bfloat16
+            weight_ttnn = ttnn.normal(
+                shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
             )
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                weight_np, layout=ttnn.Layout.TILE
-            )
+            new_tensor = ttml.autograd.create_tensor(weight_ttnn)
             tensor.assign(new_tensor)
         elif "bias" in name:
             # Re-initialize biases with 0
-            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                bias_np, layout=ttnn.Layout.TILE
+            bias_ttnn = ttnn.zeros(
+                shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
+            new_tensor = ttml.autograd.create_tensor(bias_ttnn)
             tensor.assign(new_tensor)
 
 

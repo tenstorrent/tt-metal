@@ -6,9 +6,6 @@
 
 from __future__ import annotations
 
-import numpy as np
-import ml_dtypes
-
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
@@ -30,18 +27,21 @@ class Embedding(AbstractModuleBase):
         super().__init__()
 
         # Initialize weight tensor: shape [1, 1, num_embeddings, embedding_dim]
-        # Embedding weights must be BFLOAT16 - use ml_dtypes.bfloat16 on NumPy side
         # Weight must be in TILE layout because embedding calls untilize on it
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         weight_shape = (1, 1, num_embeddings, embedding_dim)
         if zero_init:
-            weight_np = np.zeros(weight_shape).astype(ml_dtypes.bfloat16)
-        else:
-            weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-                ml_dtypes.bfloat16
+            weight_ttnn = ttnn.zeros(
+                weight_shape,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
             )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
+        else:
+            weight_ttnn = ttnn.normal(
+                weight_shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            )
+        weight_tensor = ttml.autograd.create_tensor(weight_ttnn)
         self.weight = Parameter(weight_tensor)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:

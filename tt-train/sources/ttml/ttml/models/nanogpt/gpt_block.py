@@ -8,9 +8,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import numpy as np
-import ml_dtypes
-
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter
@@ -40,19 +37,18 @@ class LayerNorm(AbstractModuleBase):
         self.use_composite_layernorm = use_composite_layernorm
 
         # Layer norm requires gamma (scale) and beta (shift) parameters
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         ln_shape = (1, 1, 1, embedding_dim)
-        gamma_np = np.ones(ln_shape, dtype=ml_dtypes.bfloat16)
-        gamma_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_np, layout=ttnn.Layout.TILE
+        gamma_ttnn = ttnn.ones(
+            ln_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
-        self.gamma = Parameter(gamma_tensor)
+        self.gamma = Parameter(ttml.autograd.create_tensor(gamma_ttnn))
 
         if bias:
-            beta_np = np.zeros(ln_shape, dtype=ml_dtypes.bfloat16)
-            beta_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_np, layout=ttnn.Layout.TILE
+            beta_ttnn = ttnn.zeros(
+                ln_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
-            self.beta = Parameter(beta_tensor)
+            self.beta = Parameter(ttml.autograd.create_tensor(beta_ttnn))
         else:
             self.beta = None
 

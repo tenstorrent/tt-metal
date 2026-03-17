@@ -13,9 +13,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Literal
 
-import numpy as np
-import ml_dtypes
-
 import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, ModuleList, RunMode, LinearLayer
@@ -39,25 +36,24 @@ def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None
     Args:
         parameters: Dictionary of parameter name to tensor
     """
+    device = ttml.autograd.AutoContext.get_instance().get_device()
     for name, tensor in parameters.items():
         # Get current shape from tensor
         shape = tensor.shape()
 
         if "weight" in name:
             # Re-initialize weights with normal(0, 0.02)
-            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
-                ml_dtypes.bfloat16
+            weight_ttnn = ttnn.normal(
+                shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
             )
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                weight_np, layout=ttnn.Layout.TILE
-            )
+            new_tensor = ttml.autograd.create_tensor(weight_ttnn)
             tensor.assign(new_tensor)
         elif "bias" in name:
             # Re-initialize biases with 0
-            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
-            new_tensor = ttml.autograd.Tensor.from_numpy(
-                bias_np, layout=ttnn.Layout.TILE
+            bias_ttnn = ttnn.zeros(
+                shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
+            new_tensor = ttml.autograd.create_tensor(bias_ttnn)
             tensor.assign(new_tensor)
 
 
@@ -112,17 +108,19 @@ class NanoGPT(AbstractModuleBase):
         # Use get_run_mode() to check, train()/eval() to set
 
         self.fc = LinearLayer(
-            config.n_embd, config.vocab_size, False
+            config.n_embd, config.vocab_size, False, zero_init=True
         )  # False - no bias
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.n_embd)
+        self.tok_emb = Embedding(
+            vocab_size_divisible_by_32, config.n_embd, zero_init=True
+        )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight.tensor
 
         if config.positional_embedding_type == "trainable":
             self.pos_emb = TrainablePositionalEmbedding(
-                config.block_size, config.n_embd, config.dropout
+                config.block_size, config.n_embd, config.dropout, zero_init=True
             )
         elif config.positional_embedding_type == "fixed":
             self.pos_emb = PositionalEmbedding(
@@ -148,21 +146,19 @@ class NanoGPT(AbstractModuleBase):
             ]
         )
 
-        # Final layer norm (use ml_dtypes.bfloat16)
-        # Layer norm parameters must be in TILE layout
+        # Final layer norm parameters must be in TILE layout
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         ln_f_shape = (1, 1, 1, config.n_embd)
-        gamma_f_np = np.ones(ln_f_shape, dtype=ml_dtypes.bfloat16)
-        gamma_f_tensor = ttml.autograd.Tensor.from_numpy(
-            gamma_f_np, layout=ttnn.Layout.TILE
+        gamma_f_ttnn = ttnn.ones(
+            ln_f_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
-        self.ln_f_gamma = Parameter(gamma_f_tensor)
+        self.ln_f_gamma = Parameter(ttml.autograd.create_tensor(gamma_f_ttnn))
 
         if config.bias:
-            beta_f_np = np.zeros(ln_f_shape, dtype=ml_dtypes.bfloat16)
-            beta_f_tensor = ttml.autograd.Tensor.from_numpy(
-                beta_f_np, layout=ttnn.Layout.TILE
+            beta_f_ttnn = ttnn.zeros(
+                ln_f_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
-            self.ln_f_beta = Parameter(beta_f_tensor)
+            self.ln_f_beta = Parameter(ttml.autograd.create_tensor(beta_f_ttnn))
         else:
             self.ln_f_beta = None
 
