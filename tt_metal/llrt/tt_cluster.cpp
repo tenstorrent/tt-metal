@@ -231,6 +231,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(*this->driver_);
+
     if (this->target_type_ != tt::TargetDevice::Mock) {
         this->assert_risc_reset();
     }
@@ -628,7 +629,6 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
     if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
         TT_THROW("Undefined conversion for core type.");
     }
-    // Coord Translation done here
 
     const auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {

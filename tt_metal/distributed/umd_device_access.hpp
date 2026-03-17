@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 
 namespace tt::umd {
 class Cluster;
@@ -19,31 +21,25 @@ namespace tt::tt_metal::distributed {
  *
  * Opens the UMD driver for a single chip without going through MetalContext
  * or tt-metal's Cluster (no ethernet firmware init, no RISC reset).
- * Provides a pcie_writer callable suitable for H2D/D2H socket connectors.
+ * Caches the UMD Cluster per device_id so topology discovery runs only once.
  */
 class UmdDeviceAccess {
 public:
-    /**
-     * @param device_id Physical chip ID to open.
-     * @param virtual_core_x Pre-resolved virtual (translated) core X coordinate.
-     * @param virtual_core_y Pre-resolved virtual (translated) core Y coordinate.
-     */
     UmdDeviceAccess(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y);
-    ~UmdDeviceAccess();
 
     UmdDeviceAccess(const UmdDeviceAccess&) = delete;
     UmdDeviceAccess& operator=(const UmdDeviceAccess&) = delete;
-    UmdDeviceAccess(UmdDeviceAccess&&) noexcept;
-    UmdDeviceAccess& operator=(UmdDeviceAccess&&) noexcept;
+    UmdDeviceAccess(UmdDeviceAccess&&) noexcept = default;
+    UmdDeviceAccess& operator=(UmdDeviceAccess&&) noexcept = default;
 
-    /**
-     * Returns a writer function: (void* data, uint32_t num_bytes, uint64_t device_addr).
-     * Uses UMD's write_to_device with dynamic TLB reconfiguration per write.
-     */
     std::function<void(void*, uint32_t, uint64_t)> get_pcie_writer() const;
 
 private:
-    std::unique_ptr<tt::umd::Cluster> umd_cluster_;
+    static tt::umd::Cluster* get_or_create_cluster(uint32_t device_id);
+
+    static std::mutex cluster_cache_mutex_;
+    static std::unordered_map<uint32_t, std::unique_ptr<tt::umd::Cluster>> cluster_cache_;
+
     uint32_t device_id_ = 0;
     uint32_t virtual_core_x_ = 0;
     uint32_t virtual_core_y_ = 0;

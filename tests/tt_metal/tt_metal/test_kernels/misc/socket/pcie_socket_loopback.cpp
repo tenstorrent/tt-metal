@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
@@ -29,8 +30,9 @@ void kernel_main() {
         uint32_t outstanding_data_size = data_size;
         while (outstanding_data_size) {
             // Wait for pages in H2D socket
+            DPRINT << "Waiting for pages in H2D socket" << ENDL();
             socket_wait_for_pages(receiver_socket, 1);
-
+            DPRINT << "Pages available in H2D socket" << ENDL();
             if constexpr (pull_from_host) {
                 // Pages available in H2D socket - read over PCIe
                 noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
