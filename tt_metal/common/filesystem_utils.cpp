@@ -613,6 +613,11 @@ size_t remove_empty_parent_directories(const std::filesystem::path& path) {
     size_t removed_count = 0;
     std::error_code ec;
 
+    // Sync to ensure directory metadata is fully committed before checking emptiness.
+    // This is important in containerized/CI environments where filesystem operations
+    // may have delayed commit semantics.
+    sync_filesystem(path);
+
     std::filesystem::path current = path;
     while (true) {
         // Check if directory is empty
