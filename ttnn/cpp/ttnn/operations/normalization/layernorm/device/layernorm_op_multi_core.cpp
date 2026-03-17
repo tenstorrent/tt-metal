@@ -178,9 +178,12 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+
     // Data span in tiles, rounded up to tile boundaries
-    uint32_t Wt = Wp / TILE_WIDTH;
-    uint32_t Ht = Hp / TILE_HEIGHT;
+    uint32_t Wt = Wp / tile_width;
+    uint32_t Ht = Hp / tile_height;
 
     // Block size that maximizes dest usage depending on
     // whether fp32 accumulation is enabled
@@ -456,6 +459,28 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
     }
 
+    // Named compile-time args for CB indices - enables kernel chaining/fusion
+    KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
+        {"cb_in", tt::CBIndex::c_0},
+        {"cb_inb", tt::CBIndex::c_1},
+        {"cb_scaler", tt::CBIndex::c_2},
+        {"cb_eps", tt::CBIndex::c_3},
+        {"cb_gamma", tt::CBIndex::c_5},
+        {"cb_beta", tt::CBIndex::c_6},
+        {"cb_out", tt::CBIndex::c_16},
+        {"cb_ex", tt::CBIndex::c_18},
+        {"cb_ex2", tt::CBIndex::c_19},
+        {"cb_xmm2", tt::CBIndex::c_20},
+        {"cb_ex2pe", tt::CBIndex::c_21},
+        {"cb_fusion", tt::CBIndex::c_22},
+        {"cb_x", tt::CBIndex::c_23},
+        {"cb_xmm", tt::CBIndex::c_24},
+        {"cb_reciprocals", tt::CBIndex::c_25},
+        {"cb_accumulate", tt::CBIndex::c_26},
+        {"cb_in_rm", tt::CBIndex::c_27},
+        {"cb_out_rm", tt::CBIndex::c_28},
+    };
+
     // Select reader kernel path
     const char* reader_kernel_path = nullptr;
     if (large_tensor_needed) {
@@ -484,6 +509,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
         compute_args.push_back(W);
+        compute_args.push_back(tile_width);
     }
 
     // The large-tensor non-Welford reduce kernel needs
@@ -554,6 +580,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             b_dram_addr};
         if (!(use_welford && large_tensor_needed)) {
             reader_args.push_back(W);
+            reader_args.push_back(tile_width);
+            reader_args.push_back(tile_height);
         }
         if (input_is_row_major) {
             reader_args.push_back(H_logical);  // arg[10]
@@ -584,6 +612,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = reader_compile_time_args;
+    reader_kernel_desc.named_compile_time_args = cb_named_args;
     reader_kernel_desc.defines = reader_defines;
     reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
@@ -599,6 +628,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
+    writer_kernel_desc.named_compile_time_args = cb_named_args;
     writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
@@ -609,6 +639,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = compute_args;
+    compute_kernel_desc.named_compile_time_args = cb_named_args;
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{

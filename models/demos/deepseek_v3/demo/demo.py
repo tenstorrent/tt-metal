@@ -13,12 +13,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
-
-optimal_topology = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-)
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -62,6 +59,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--output-path",
         type=str,
         help="Path to output JSON file. If --prompts-file is provided and --output-path is not specified, output will be saved to <prompts-file-stem>_output.json in the same directory as the prompts file.",
+    )
+    p.add_argument(
+        "--checkpoint-jsonl",
+        type=str,
+        help="Optional JSONL path for appending per-user results during generation.",
     )
     p.add_argument(
         "--model-path",
@@ -110,10 +112,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
-        "--enable-trace",
-        action="store_true",
-        default=False,
-        help="Enable trace for decode forward pass",
+        "--disable-trace",
+        action="store_false",
+        dest="enable_trace",
+        default=True,
+        help="Disable trace for decode forward pass.",
     )
     p.add_argument(
         "--enable-mem-profile",
@@ -143,6 +146,34 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
+    p.add_argument(
+        "--sample-on-host",
+        action="store_false",
+        dest="sample_on_device",
+        default=True,
+        help="Disable on-device sampling and use host-side sampling.",
+    )
+    p.add_argument(
+        "--force-recalculate",
+        "--recalculate-weights",
+        dest="force_recalculate",
+        action="store_true",
+        default=False,
+        help="Force regeneration of cached TTNN weight files and config.",
+    )
+    p.add_argument(
+        "--stop-at-eos",
+        dest="stop_at_eos",
+        action="store_true",
+        help="Stop recording output tokens for a user after EOS (default).",
+    )
+    p.add_argument(
+        "--no-stop-at-eos",
+        dest="stop_at_eos",
+        action="store_false",
+        help="Always record max-new-tokens even after EOS.",
+    )
+    p.set_defaults(stop_at_eos=True)
     return p
 
 
@@ -254,12 +285,16 @@ def run_demo(
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
-    enable_trace: bool = False,
+    enable_trace: bool = True,
     enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
+    sample_on_device: bool = True,
+    force_recalculate: bool = False,
+    stop_at_eos: bool = True,
+    checkpoint_jsonl: str | Path | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -287,7 +322,7 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-    fabric_config = optimal_topology
+    fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
@@ -322,6 +357,7 @@ def run_demo(
             )
             raise
 
+    gen = None
     try:
         # If random single-layer requested with 'moe', fail fast (Model1D demo is MLP-only)
         if random_weights and single_layer and single_layer.lower() == "moe":
@@ -358,8 +394,12 @@ def run_demo(
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
+                sample_on_device=sample_on_device,
             )
+        else:
+            raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
         pre_tokenized_prompts = None
         if random_weights:
@@ -381,38 +421,85 @@ def run_demo(
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
 
-        # Multi-prompt generation
-        generations, statistics = gen.generate(
-            prompt_list,
-            max_new_tokens=max_new_tokens,
-            teacher_forcing=token_acc,
-            early_print_first_user=early_print_first_user,
-            repeat_batches=repeat_batches,
-            pre_tokenized=pre_tokenized_prompts,
-        )
-
-        # Process all generations
-        results = []
-        for i, generation_tokens in enumerate(generations):
-            result = {"tokens": generation_tokens, "text": None}
-            if gen.tokenizer is not None:
-                result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
-            if token_acc is not None and i == 0:  # Only compute accuracy for first generation
-                acc = token_acc.compute_accuracy()
-                result.update(
-                    {
-                        "accuracy_top1": acc.get("top1"),
-                        "accuracy_top5": acc.get("top5"),
-                        "predicted_tokens": token_acc._pred_tokens,
-                    }
+        checkpoint_fh = None
+        checkpoint_written: set[int] = set()
+        checkpoint_path = Path(checkpoint_jsonl) if checkpoint_jsonl is not None else None
+        if checkpoint_path is not None:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_fh = open(checkpoint_path, "w", encoding="utf-8")
+            if not stop_at_eos:
+                logger.info(
+                    "checkpoint-jsonl is enabled without stop-at-eos; records will be written after generation."
                 )
-            results.append(result)
 
-        return {"generations": results, "statistics": statistics}
+        def checkpoint_user(user_idx: int, token_ids: list[int]) -> None:
+            if checkpoint_fh is None or user_idx in checkpoint_written:
+                return
+            text = None
+            if gen.tokenizer is not None:
+                text = gen.tokenizer.decode(token_ids, skip_special_tokens=True)
+            record = {
+                "index": user_idx + 1,
+                "prompt": prompt_list[user_idx] if user_idx < len(prompt_list) else "",
+                "text": text,
+            }
+            checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            checkpoint_fh.flush()
+            os.fsync(checkpoint_fh.fileno())
+            checkpoint_written.add(user_idx)
+
+        try:
+            # Multi-prompt generation
+            generations, statistics = gen.generate(
+                prompt_list,
+                max_new_tokens=max_new_tokens,
+                teacher_forcing=token_acc,
+                early_print_first_user=early_print_first_user,
+                repeat_batches=repeat_batches,
+                pre_tokenized=pre_tokenized_prompts,
+                stop_at_eos=stop_at_eos,
+                on_user_finished=checkpoint_user if checkpoint_fh is not None else None,
+            )
+
+            # Process all generations
+            results = []
+            for i, generation_tokens in enumerate(generations):
+                result = {"tokens": generation_tokens, "text": None}
+                if gen.tokenizer is not None:
+                    result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
+                if token_acc is not None and i == 0:  # Only compute accuracy for first generation
+                    acc = token_acc.compute_accuracy()
+                    result.update(
+                        {
+                            "accuracy_top1": acc.get("top1"),
+                            "accuracy_top5": acc.get("top5"),
+                            "predicted_tokens": token_acc._pred_tokens,
+                        }
+                    )
+                results.append(result)
+
+            if checkpoint_fh is not None:
+                for i, result in enumerate(results):
+                    if i in checkpoint_written:
+                        continue
+                    record = {
+                        "index": i + 1,
+                        "prompt": prompt_list[i] if i < len(prompt_list) else "",
+                        "text": result["text"],
+                    }
+                    checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                checkpoint_fh.flush()
+                os.fsync(checkpoint_fh.fileno())
+
+            return {"generations": results, "statistics": statistics}
+        finally:
+            if checkpoint_fh is not None:
+                checkpoint_fh.close()
     finally:
         # Clean up generator resources
         try:
-            gen.cleanup_all()
+            if gen is not None:
+                gen.cleanup_all()
         except Exception as e:
             logger.warning(f"Failed to cleanup generator: {e}")
         # Synchronize device before closing to flush pending ops (e.g. profiler data)
@@ -461,6 +548,10 @@ def main() -> None:
         signpost=args.signpost,
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
+        sample_on_device=args.sample_on_device,
+        force_recalculate=bool(args.force_recalculate),
+        stop_at_eos=bool(args.stop_at_eos),
+        checkpoint_jsonl=args.checkpoint_jsonl,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
