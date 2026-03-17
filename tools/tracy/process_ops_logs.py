@@ -643,14 +643,15 @@ def _enrich_ops_from_device_logs(
                 op_id_host_data_dict[op_id] = copy.deepcopy(device_op)
 
             trace_ops_map = {}
+            unmatched_device_ops = []
             for device_op_time in device_ops_time:
                 if len(device_op_time["timeseries"]) > 0:
                     time_id, ts, stat_data, risc, core = device_op_time["timeseries"][0]
                     assert "run_host_id" in time_id, "Device op ID missing: Device data must provide op ID"
                     device_op_id = time_id["run_host_id"]
-                    assert (
-                        device_op_id in op_id_host_data_dict
-                    ), f"Device op ID not present: Device op ID {device_op_id} not present in host data on device {device}"
+                    if device_op_id not in op_id_host_data_dict:
+                        unmatched_device_ops.append(device_op_id)
+                        continue
 
                     trace_id = op_id_host_data_dict[device_op_id].get("metal_trace_id")
                     if trace_id is not None:
@@ -676,6 +677,18 @@ def _enrich_ops_from_device_logs(
                         )
                     generated_host_data.append(copy.deepcopy(op_id_host_data_dict[device_op_id]))
 
+            if unmatched_device_ops:
+                logger.warning(
+                    f"Skipping {len(unmatched_device_ops)} device op(s) with no matching host data "
+                    f"on device {device} (dispatch-only trace replay entries): {unmatched_device_ops}"
+                )
+                matched_ids = set(op_id_host_data_dict.keys())
+                device_ops_time[:] = [
+                    op
+                    for op in device_ops_time
+                    if op["timeseries"] and op["timeseries"][0][0].get("run_host_id") in matched_ids
+                ]
+
             # Update host_ops_by_device with generated data including trace replays
             host_ops_by_device[device] = generated_host_data
 
@@ -695,7 +708,14 @@ def _enrich_ops_from_device_logs(
                     device_op["analysis"][dispatch_analysis] = dispatch_op_analysis[op_id][dispatch_analysis]
                 del dispatch_op_analysis[op_id]
 
-        assert len(dispatch_op_analysis) == 0, "Unrecognized dispatch OPs are presentent by dispatch cores"
+        if dispatch_op_analysis:
+            if has_trace_runs:
+                logger.debug(
+                    f"Ignoring {len(dispatch_op_analysis)} dispatch op(s) with no matching device op "
+                    f"on device {device} (likely trace replay dispatch entries)"
+                )
+            else:
+                assert False, "Unrecognized dispatch OPs are presentent by dispatch cores"
 
         if len(host_ops_by_device[device]) != len(device_ops_time):
             device_op_id_debug = None
