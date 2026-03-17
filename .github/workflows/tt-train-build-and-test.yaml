@@ -3,7 +3,6 @@ name: "[tt-train] Build and Test"
 on:
   workflow_call:
   workflow_dispatch:
-  merge_group:
 
 jobs:
   run-tests:
