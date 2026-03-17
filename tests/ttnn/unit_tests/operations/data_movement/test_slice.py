@@ -49,7 +49,8 @@ def run_slice_rm_sharded(device, n, c, h, w):
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
+    with device.cache_entries_counter.measure():
+        tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
     # output shard config
     num_cores_x = 8
@@ -63,13 +64,15 @@ def run_slice_rm_sharded(device, n, c, h, w):
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
 
-    tt_output_tensor = ttnn.slice(
-        tt_input_tensor,
-        (0, 0, 0, 0),
-        (n_unpadded, c_unpadded, h_unpadded, w),
-        memory_config=output_mem_config,
-    )
-    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+    with device.cache_entries_counter.measure():
+        tt_output_tensor = ttnn.slice(
+            tt_input_tensor,
+            (0, 0, 0, 0),
+            (n_unpadded, c_unpadded, h_unpadded, w),
+            memory_config=output_mem_config,
+        )
+    with device.cache_entries_counter.measure():
+        tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
@@ -157,7 +160,7 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 3
+    assert device.cache_entries_counter.total == 3
 
 
 @pytest.mark.parametrize("n", [16])
@@ -206,13 +209,14 @@ def slice_test(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
 
-    tt_output_tensor = ttnn.slice(
-        tt_input_tensor,
-        slice_start=output_tensor_start,
-        slice_end=output_tensor_end,
-        slice_step=slice_step,
-        memory_config=out_mem_config,
-    )
+    with device.cache_entries_counter.measure():
+        tt_output_tensor = ttnn.slice(
+            tt_input_tensor,
+            slice_start=output_tensor_start,
+            slice_end=output_tensor_end,
+            slice_step=slice_step,
+            memory_config=out_mem_config,
+        )
 
     a_pt = ttnn.to_torch(tt_output_tensor)
 
@@ -224,7 +228,7 @@ def slice_test(
         output_tensor_start[3] : output_tensor_end[3] : slice_step[3],
     ]
 
-    return a_pt, a_ref, device.num_program_cache_entries()
+    return a_pt, a_ref, device.cache_entries_counter.total
 
 
 # from https://github.com/tenstorrent/tt-metal/issues/23237
