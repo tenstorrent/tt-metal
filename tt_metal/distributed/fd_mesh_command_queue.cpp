@@ -413,6 +413,15 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 chip_ids_in_workload,
                 program.get_runtime_id());
         }
+
+        // Annotate host-side Tracy zone with encoded program IDs so the host
+        // EnqueueProgram zone can be matched 1:1 with device-side program zones
+        // reported by the real-time profiler (which uses the same encoded ID as
+        // runtime_host_id).
+        if (!tt::tt_metal::getDeviceProfilerState()) {
+            std::string msg = fmt::format("EnqueueProgram op_id={}", program.get_runtime_id());
+            TracyMessage(msg.c_str(), msg.size());
+        }
     }
     // Send go signals to devices not running a program to ensure consistent global state
     if (not sysmem_manager.get_bypass_mode()) {
