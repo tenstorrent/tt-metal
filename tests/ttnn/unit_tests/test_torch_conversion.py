@@ -220,6 +220,7 @@ def test_to_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout
 @pytest.mark.parametrize(
     "shape,ttnn_dtype,torch_dtype,ttnn_layout,convert_with_device,value_ranges,pcc_override,memory_config",
     [
+        ((0, 0), ttnn.bfloat16, torch.bfloat16, ttnn.TILE_LAYOUT, True, (0, 100), None, None),
         ((4, 4), ttnn.float32, torch.float64, ttnn.TILE_LAYOUT, True, (0, 100), None, None),
         ((32, 32), ttnn.bfloat16, torch.int64, ttnn.ROW_MAJOR_LAYOUT, False, (0, 255), None, None),
         ((32, 32, 64, 64), ttnn.bfloat8_b, torch.float16, ttnn.TILE_LAYOUT, True, (0, 127), None, None),

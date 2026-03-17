@@ -33,19 +33,39 @@ bool can_exec_ops_on_device(DataType type) {
     }
 };
 
-// Check if the tensor with the specified memory config and tiling can be
-// constructed and used on the device, ignoring details of the type conversion.
 bool can_construct_on_device(
-    ttnn::distributed::MeshDevice* device, const std::optional<Tile>& optional_tile, const TensorSpec& tensor_spec) {
+    ttnn::distributed::MeshDevice* device,
+    const ttnn::Shape& tensor_shape,
+    DataType src_dtype,
+    DataType dst_dtype,
+    const MemoryConfig& memory_config,
+    const std::optional<Tile>& optional_tile,
+    bool enable_bf4_opt,
+    bool preserve_nan_values) {
+    // typecast to bfloat4_b is expected to lose precision, see
+    // https://github.com/tenstorrent/tt-metal/issues/35048
+    // user can choose to use enable_bf4_opt=True to get the best performance, but the precision will be lost.
+    bool enable_device_typecast = dst_dtype == DataType::BFLOAT4_B ? enable_bf4_opt : true;
+
     bool res = device != nullptr &&
                // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
                // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
                // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
                // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
                // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
-               tensor_spec.logical_shape().rank() <= 4 &&
-               // Logical shape must match physical shape for the tensor to be constructed on the device.
-               tt::tt_metal::logical_matches_physical(tensor_spec);
+               tensor_shape.rank() <= 4 && tensor_shape.volume() > 0 && can_exec_ops_on_device(src_dtype) &&
+               can_exec_ops_on_device(dst_dtype) &&
+               // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
+               // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
+               // than the shape dimension.
+               !memory_config.is_sharded() && enable_device_typecast &&
+               // TODO: Remove preserve_nan_values check after
+               // https://github.com/tenstorrent/tt-metal/issues/31406
+               !preserve_nan_values &&
+               // Logical shape must match physical shape for the tensor to be constructed on the device(no padding
+               // required). TensorSpec creation must follow after memory_config.is_sharded() check to avoid fatal error
+               tt::tt_metal::logical_matches_physical(TensorSpec(
+                   tensor_shape, TensorLayout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config)));
 
     if (optional_tile.has_value()) {
         // on-device tiling operation expects tiles to be divisible by 32x32.
@@ -71,25 +91,19 @@ Tensor create_tt_tensor_from_host_data(
     bool enable_bf4_opt) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
+        const bool construct_on_device = can_construct_on_device(
+            device,
+            tensor_shape,
+            src_dtype,
+            dst_dtype,
+            memory_config,
+            optional_tile,
+            enable_bf4_opt,
+            preserve_nan_values);
+
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
-        TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
-
-        // typecast to bfloat4_b is expected to lose precision, see
-        // https://github.com/tenstorrent/tt-metal/issues/35048
-        // user can choose to use enable_bf4_opt=True to get the best performance, but the precision will be lost.
-        bool enable_device_typecast = dst_dtype == DataType::BFLOAT4_B ? enable_bf4_opt : true;
-
-        // TODO: Remove preserve_nan_values check after
-        // https://github.com/tenstorrent/tt-metal/issues/31406
-        // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
-        // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
-        // than the shape dimension.
-        const bool construct_on_device =
-            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) && !memory_config.is_sharded() &&
-            can_construct_on_device(device, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
-            enable_device_typecast && !preserve_nan_values;
-
         if (mesh_mapper != nullptr) {
+            TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
