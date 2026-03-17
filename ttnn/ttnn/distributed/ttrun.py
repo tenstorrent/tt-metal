@@ -139,6 +139,7 @@ def inject_rankfile_mpi_args(
     base_mpi_args: List[str],
     mpi_launcher: str,
     detect_fn=detect_rankfile_syntax,
+    add_host_slots: bool = False,
 ) -> List[str]:
     """Inject rankfile MPI arguments into base MPI args.
 
@@ -150,13 +151,28 @@ def inject_rankfile_mpi_args(
         base_mpi_args: Existing MPI arguments to prepend to
         mpi_launcher: MPI launcher executable name/path (for detection)
         detect_fn: Function to detect rankfile syntax (injectable for testing)
+        add_host_slots: If True, prepend --host host1:N,host2:N and -np total
+            derived from the rankfile (for Phase 2 real cluster). Skip if user
+            already provided --host in base_mpi_args.
 
     Returns:
-        New list with rankfile args prepended: [rankfile_args..., ...base_mpi_args]
+        New list with rankfile args prepended: [--host, -np?, rankfile_args..., ...base_mpi_args]
     """
+    result: List[str] = []
+
+    # Add --host and -np when requested and not already in base_mpi_args
+    if add_host_slots:
+        has_host = "--host" in (base_mpi_args or [])
+        if not has_host:
+            host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
+            if host_str and total_ranks > 0:
+                result.extend(["--host", host_str, "-np", str(total_ranks)])
+
     syntax = detect_fn(mpi_launcher)
     rankfile_args = build_rankfile_args(syntax, rankfile)
-    return rankfile_args + base_mpi_args
+    result.extend(rankfile_args)
+    result.extend(base_mpi_args or [])
+    return result
 
 
 def find_generate_rank_bindings_executable() -> Path:
@@ -259,6 +275,34 @@ def rankfile_needs_oversubscribe(rankfile_path: Path) -> bool:
 
     # Check if any host has more than one rank
     return any(count > 1 for count in host_to_rank_count.values())
+
+
+def build_host_slots_from_rankfile(rankfile_path: Path) -> tuple[str, int]:
+    """Build --host host1:N,host2:N string and total rank count from rankfile.
+
+    Args:
+        rankfile_path: Path to OpenMPI rankfile
+
+    Returns:
+        Tuple of (host_slots_str, total_ranks). host_slots_str is in format
+        "host1:4,host2:4" for use with mpirun --host. Returns ("", 0) if rankfile
+        is empty or unparseable.
+    """
+    rank_to_host = parse_rankfile(rankfile_path)
+    if not rank_to_host:
+        return ("", 0)
+
+    # Build host -> count, preserving order of first appearance (by rank order)
+    host_to_count: Dict[str, int] = {}
+    for rank in sorted(rank_to_host.keys()):
+        hostname = rank_to_host[rank]
+        host_to_count[hostname] = host_to_count.get(hostname, 0) + 1
+
+    # Format as host1:count1,host2:count2
+    host_parts = [f"{host}:{count}" for host, count in host_to_count.items()]
+    host_str = ",".join(host_parts)
+    total_ranks = len(rank_to_host)
+    return (host_str, total_ranks)
 
 
 def build_phase2_mock_mapping(
@@ -1254,9 +1298,21 @@ def legacy_flow(
             )
         else:
             mpi_launcher = get_mpi_launcher()
-            # Detect rankfile syntax once
+            rankfile_args: List[str] = []
+
+            # Add --host host1:N,host2:N and -np for Phase 2 real cluster (skip when mock)
+            if not mock_cluster_rank_binding:
+                has_host = "--host" in effective_mpi_args
+                if not has_host:
+                    host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
+                    if host_str and total_ranks > 0:
+                        rankfile_args.extend(["--host", host_str, "-np", str(total_ranks)])
+                        if verbose:
+                            logger.info(f"{TT_RUN_PREFIX} Injected --host {host_str} -np {total_ranks} from rankfile")
+
+            # Detect rankfile syntax and add rankfile args
             rankfile_syntax = detect_rankfile_syntax(mpi_launcher)
-            rankfile_args = build_rankfile_args(rankfile_syntax, rankfile)
+            rankfile_args.extend(build_rankfile_args(rankfile_syntax, rankfile))
             effective_mpi_args = rankfile_args + effective_mpi_args
             if verbose:
                 logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
@@ -1455,7 +1511,9 @@ def new_mode_flow(
     if phase2_mock_binding_path:
         phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
     mpi_launcher = get_mpi_launcher()
-    rankfile_args = inject_rankfile_mpi_args(rankfile_path, mpi_args or [], mpi_launcher)
+    # Include --host host1:N,host2:N and -np for real clusters (not mock)
+    add_host_slots = phase2_mock_binding_path is None
+    rankfile_args = inject_rankfile_mpi_args(rankfile_path, mpi_args or [], mpi_launcher, add_host_slots=add_host_slots)
     if rankfile_needs_oversubscribe(rankfile_path) and "--oversubscribe" not in (mpi_args or []):
         rankfile_args = ["--oversubscribe"] + rankfile_args
     mpi_args_str = " ".join(shlex.quote(a) for a in rankfile_args)
