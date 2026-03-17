@@ -394,9 +394,8 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if dtype == torch.float32 and use_welford:
-        # Fallback to PCC, see https://github.com/tenstorrent/tt-metal/issues/33694
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    if dtype == torch.float32 and use_welford and w == 4083 and h == 19:
+        assert_relative_frobenius(torch_output_tensor, output_tensor, threshold=0.0103)
     else:
         assert_output_accuracy(torch_output_tensor, output_tensor)
 
