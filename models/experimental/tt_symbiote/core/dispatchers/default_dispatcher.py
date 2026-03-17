@@ -1326,8 +1326,6 @@ def handle_isin(func, args, kwargs):
             "Ensure set_device(model, device) was called, or at least one input has a TTNN tensor on device."
         )
 
-    print("Device : ", device)
-
     tensor1, tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(elements, test_elements, device)
     if deallocate_a:
         tensor1.ttnn_tensor = ttnn.to_device(tensor1.to_ttnn, device)
