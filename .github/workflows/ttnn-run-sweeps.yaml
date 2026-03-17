@@ -1163,7 +1163,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    timeout-minutes: 720
+    timeout-minutes: 60
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
