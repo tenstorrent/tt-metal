@@ -233,7 +233,12 @@ struct FlashMLADecode {
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
             (void)k_num_chunks;
 
+            volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
+
             if (k_chunk_start == k_chunk_end) {
+                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
+                noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                 return;
             }
 
@@ -270,9 +275,6 @@ struct FlashMLADecode {
                 uint64_t k_src_noc_addr = get_shard_noc_addr_helper(k_reader, shard_id);
                 noc_async_read_one_packet_set_state<true>(k_src_noc_addr, args.k_page_size, args.vc, READ_NOC_INDEX);
             }
-
-            volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             // Wait for KV cache cur pos ready
             noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
@@ -370,6 +372,7 @@ struct FlashMLADecode {
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
             const bool is_output_core = args.is_output_core == 1;
+            noc_async_write_set_trid(0, WRITE_NOC_INDEX);
 
             {
                 DeviceZoneScopedN("reader-q-read");
@@ -567,6 +570,7 @@ struct FlashMLADecode {
                         cb_push_back(args.cb_out_in, out_chunk_tiles);
                     }
                 }
+                noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
             }
 
 // ====================================================================
