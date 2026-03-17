@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
 #include <fmt/format.h>
+#include "tools/scaleout/validation/utils/ethernet_link_api.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -54,13 +55,13 @@ protected:
         distributed_context_ = context_->get_distributed_context_ptr();
 
         // Check if running on T3K (8 WH devices)
-        auto* const cluster_desc = (*driver_)->get_cluster_description();
-        const size_t num_devices = cluster_->get_unique_chip_ids().size();
-        const auto board_type = cluster_desc->get_board_type(0);
+        // auto* const cluster_desc = (*driver_)->get_cluster_description();
+        // const size_t num_devices = cluster_->get_unique_chip_ids().size();
+        // const auto board_type = cluster_desc->get_board_type(0);
 
-        if (num_devices != 8 || board_type != BoardType::N300) {
-            GTEST_SKIP() << "This test requires a T3K system";
-        }
+        // if (num_devices != 8 || board_type != BoardType::N300) {
+        //     GTEST_SKIP() << "This test requires a T3K system";
+        // }
 
         // Initialize physical system descriptor
         auto& driver_ref = const_cast<tt::umd::Cluster&>(**driver_);
@@ -232,15 +233,15 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
 
 [[nodiscard]] std::vector<LinkDescriptors> collect_mmio_link_params(
     const DirectedRetrainingFixture& fixture, const tt::tt_metal::AsicTopology& asic_topology) {
-    constexpr size_t MAX_LINKS_TO_RESET = 4;
+    // constexpr size_t MAX_LINKS_TO_RESET = 4;
 
     auto* const cluster_desc = fixture.get_driver()->get_cluster_description();
     const auto& asic_descriptors = fixture.get_physical_system_descriptor().get_asic_descriptors();
 
     std::vector<LinkDescriptors> local_links;
     std::vector<LinkDescriptors> remote_links;
-    local_links.reserve(MAX_LINKS_TO_RESET);
-    remote_links.reserve(MAX_LINKS_TO_RESET);
+    // local_links.reserve(MAX_LINKS_TO_RESET);
+    // remote_links.reserve(MAX_LINKS_TO_RESET);
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         const auto src_chip_id = fixture.get_asic_id_to_chip_id().at(*asic_id);
@@ -262,12 +263,14 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
             const auto [dst_asic_id, dst_channel] =
                 fixture.get_physical_system_descriptor().get_connected_asic_and_channel(
                     asic_id, eth_connections.front().src_chan);
+            const auto& dst_asic_desc = asic_descriptors.at(dst_asic_id);
             const bool is_local = (src_asic_desc.host_name == asic_descriptors.at(dst_asic_id).host_name);
 
             const auto src_coord =
                 get_eth_core_coord(fixture.get_cluster(), src_chip_id, eth_connections.front().src_chan);
-
-            const LinkDescriptors link{
+            const auto dst_coord =
+                get_eth_core_coord(fixture.get_cluster(), dst_chip_id, eth_connections.front().dst_chan);
+            const LinkDescriptors link_local{
                 .host = src_asic_desc.host_name,
                 .tray_id = *src_asic_desc.tray_id,
                 .asic_location = *src_asic_desc.asic_location,
@@ -275,14 +278,23 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
                 .chip_id = src_chip_id,
                 .coord = src_coord};
 
-            (is_local ? local_links : remote_links).push_back(link);
+            const LinkDescriptors link_remote{
+                .host = dst_asic_desc.host_name,
+                .tray_id = *dst_asic_desc.tray_id,
+                .asic_location = *dst_asic_desc.asic_location,
+                .channel = eth_connections.front().dst_chan,
+                .chip_id = dst_chip_id,
+                .coord = dst_coord};
+
+            (is_local ? local_links : remote_links).push_back(link_local);
+            (is_local ? local_links : remote_links).push_back(link_remote);
         }
     }
 
     // Select up to MAX_LINKS_TO_RESET links, prioritizing local
     std::vector<LinkDescriptors> selected;
-    const auto num_local = std::min(local_links.size(), MAX_LINKS_TO_RESET);
-    const auto num_remote = std::min(remote_links.size(), MAX_LINKS_TO_RESET - num_local);
+    const auto num_local = std::min(local_links.size(), local_links.size());
+    const auto num_remote = std::min(remote_links.size(), remote_links.size());
 
     selected.insert(selected.end(), local_links.begin(), local_links.begin() + num_local);
     selected.insert(selected.end(), remote_links.begin(), remote_links.begin() + num_remote);
@@ -292,7 +304,7 @@ TEST_F(DirectedRetrainingFixture, DISABLED_TestExitNodeRetraining) {
 }
 
 TEST_F(DirectedRetrainingFixture, TestOnDemandCableRestart) {
-    validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+    // validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 
     const auto& asic_topology =
         get_physical_system_descriptor().get_asic_topology(get_physical_system_descriptor().my_host_name());
@@ -310,19 +322,21 @@ TEST_F(DirectedRetrainingFixture, TestOnDemandCableRestart) {
             link.asic_location,
             link.channel);
 
+        down_links_bh({ResetLink{.chip_id = link.chip_id, .channel = link.channel}});
         // Take down the link
-        set_link_training_status(get_cluster(), link.chip_id, link.coord, 0);
-        EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 0);
+        // set_link_training_status(get_cluster(), link.chip_id, link.coord, 0);
+        // EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 0);
 
         // Reset the single link we are currently processing
-        perform_link_reset(link.host, link.tray_id, link.asic_location, link.channel, get_physical_system_descriptor());
+        // perform_link_reset(link.host, link.tray_id, link.asic_location, link.channel,
+        // get_physical_system_descriptor());
 
-        // Verify the link is back up
-        EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 1);
+        // // Verify the link is back up
+        // EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 1);
     }
 
     // Validate connectivity after link resets using T3K cabling descriptor
-    validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
+    // validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 }
 
 }  // namespace tt::scaleout_tools

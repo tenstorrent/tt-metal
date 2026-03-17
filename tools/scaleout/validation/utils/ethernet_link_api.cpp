@@ -180,6 +180,14 @@ void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
     send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
 }
 
+void down_links_bh(const std::vector<ResetLink>& links_to_reset) {
+    const BHEthMsg ETH_MSG_PORT_DOWN = {
+        tt_metal::FWMailboxMsg::ETH_MSG_PORT_ACTION,
+        {2, 0, 0},
+        "Sending ETH_MSG_PORT_ACTION to bring ports down on all links"};
+    send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_DOWN);
+}
+
 // ============================================================================
 // Consolidated helpers (should be arch agnostic)
 // ============================================================================
