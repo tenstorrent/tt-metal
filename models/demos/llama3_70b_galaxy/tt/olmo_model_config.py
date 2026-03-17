@@ -659,6 +659,16 @@ class TtOlmoModelArgs(TtModelArgs):
             ),
         )
 
+        # ==== Decode K-norm L1 Config ====
+        # K exits llama_rs_create_heads as [1, 8, 1, 128] HEIGHT_SHARDED in L1 with [1, 128] shard.
+        # Use L1 INTERLEAVED for norm ops — K is only 8*128*2=2KB so it fits in a single L1 bank.
+        # This avoids the DRAM roundtrip while working correctly with the default norm program config.
+        # NOTE: LayerNormShardedMultiCoreProgramConfig requires a CoreGrid from origin (x=0,y=0),
+        # which conflicts with sub_core_grids starting at x=1. L1 INTERLEAVED avoids this constraint.
+        self.model_config["OLMO_K_NORM_L1_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1
+        )
+
         # ==== Prefill MLP Configs ====
         def w1_w3_prg_config(seq_len, use_interleaved=False):
             if seq_len == 128:
@@ -905,24 +915,26 @@ class TtOlmoModelArgs(TtModelArgs):
             1, 32, wo_shape_ring[0], wo_shape_ring[1], RING_SIZE
         )
 
-        # SDPA program config
-        # Use (7, 4) to avoid dispatch core column
+        # SDPA program config — match Qwen3 grid (7, 10) = 70 cores
         def sdpa_progcfg(seq_len):
             if seq_len <= 256:
                 return ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=[7, 4],
+                    compute_with_storage_grid_size=[7, 10],
+                    exp_approx_mode=False,
                     q_chunk_size=64,
                     k_chunk_size=64,
                 )
             elif seq_len <= 2048:
                 return ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=[7, 4],
+                    compute_with_storage_grid_size=[7, 10],
+                    exp_approx_mode=False,
                     q_chunk_size=128,
                     k_chunk_size=128,
                 )
             else:
                 return ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=[7, 4],
+                    compute_with_storage_grid_size=[7, 10],
+                    exp_approx_mode=False,
                     q_chunk_size=256,
                     k_chunk_size=256,
                 )
@@ -980,16 +992,16 @@ class TtOlmoModelArgs(TtModelArgs):
         )
 
         # QKV prefill config (uses unpadded QKV weights: 5 Q heads, N=896 per device)
-        # 896 / 32 = 28 tiles. Use 4 cores for N (28/4=7 tiles/core)
+        # 896 / 32 = 28 tiles. Use 7 cores for N (28/7=4 tiles/core), matching Qwen3 grid
         qkv_pf_n_tiles = qkv_size_per_device_prefill // 32  # 28 tiles
-        qkv_pf_n_cores = 4  # 28 / 4 = 7 evenly
-        qkv_pf_per_core_n = qkv_pf_n_tiles // qkv_pf_n_cores  # 7
+        qkv_pf_n_cores = 7  # 28 / 7 = 4 evenly
+        qkv_pf_per_core_n = qkv_pf_n_tiles // qkv_pf_n_cores  # 4
         self.model_config["XQKV_PREFILL_PROGCFG"] = (
             lambda seq_len: self.matmul_1d_config(
                 seq_len,
                 self.dim // 4,
                 qkv_size_per_device_prefill,
-                grid=ttnn.CoreGrid(x=4, y=10),
+                grid=ttnn.CoreGrid(x=7, y=10),
                 overwrite_per_core_k=8,
             )
             if seq_len == 128
@@ -998,7 +1010,7 @@ class TtOlmoModelArgs(TtModelArgs):
                     compute_with_storage_grid_size=(qkv_pf_n_cores, 10),
                     in0_block_w=8,
                     out_subblock_h=1,
-                    out_subblock_w=1,
+                    out_subblock_w=2,
                     per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),
                     per_core_N=qkv_pf_per_core_n,
                     transpose_mcast=False,
@@ -1008,14 +1020,56 @@ class TtOlmoModelArgs(TtModelArgs):
             )
         )
 
+        def prefill_xqkv_minimal_matmul_config(seq_len):
+            if seq_len <= 128:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                )
+            elif seq_len <= 1024:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=4,
+                    subblock_w=2,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                )
+            else:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    subblock_h=1,
+                    subblock_w=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                )
+
+        self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal_matmul_config
+
+        assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+        self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         # WO prefill config (uses unpadded WO: K=640, N=1280)
-        # 640/32 = 20 tiles for K, 1280/32 = 40 tiles for N
+        # 640/32 = 20 K-tiles, 1280/32 = 40 N-tiles
+        # Use 7 cores for N: ceil(40/7) = 6 tiles/core (matching Qwen3 grid)
+        # in0_block_w must divide K-tiles: 20 % 4 = 0 ✓ (can't use 8: 20%8≠0)
         wo_n_tiles = self.dim // 4 // 32  # 40 tiles
-        wo_n_cores = 5  # 40 / 5 = 8 evenly
-        wo_per_core_n = wo_n_tiles // wo_n_cores  # 8
+        wo_n_cores = 7
+        wo_per_core_n = math.ceil(wo_n_tiles / wo_n_cores)  # ceil(40/7) = 6
         self.model_config["WO_PREFILL_PROGCFG"] = (
             lambda seq_len: self.matmul_1d_config(
-                seq_len, wo_k_prefill, self.dim // 4, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=4
+                seq_len, wo_k_prefill, self.dim // 4, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=4
             )
             if seq_len == 128
             else (
@@ -1023,12 +1077,12 @@ class TtOlmoModelArgs(TtModelArgs):
                     compute_with_storage_grid_size=(wo_n_cores, 10),
                     in0_block_w=4,
                     out_subblock_h=1,
-                    out_subblock_w=2,  # 8 % 2 == 0 ✓
-                    per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),
+                    out_subblock_w=2,  # 6 % 2 == 0 ✓
+                    per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),
                     per_core_N=wo_per_core_n,
                     transpose_mcast=False,
                     fused_activation=None,
-                    fuse_batch=seq_len <= 2048,
+                    fuse_batch=seq_len <= 1024,
                 )
             )
         )

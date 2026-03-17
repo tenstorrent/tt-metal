@@ -663,13 +663,18 @@ class TtLlamaAttention(LightweightModule):
             self._capture_attn("k_pre_norm", k_heads_pre_rot_1BKD)
             self._capture_attn("v_heads", v_heads_1BKD)
 
-            # ---- K global norm: distributed rms_norm over 8 row devices (1024 total elements) ----
-            # K [1,1,32,128] (1 KV head per device, 128 dims per row device)
-            # all_gather on cluster_axis=0 (row axis, 8 devices) to compute global variance over 1024 dims
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.DRAM_MEMORY_CONFIG)
+            # ---- K global norm: L1 INTERLEAVED (no DRAM roundtrip) ----
+            # K exits create_heads as [1,8,1,128] HEIGHT_SHARDED in L1 with [1,128] shard (2KB total).
+            # Move to L1 INTERLEAVED before to_layout (sub-tile [1,128] shards can't tile-convert directly).
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                k_heads_pre_rot_1BKD, self.model_config["OLMO_K_NORM_L1_MEMCFG"]
+            )
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
             k_stats = ttnn.rms_norm_pre_all_gather(
-                k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config_hifi2
+                k_heads_pre_rot_1BKD,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.model_config["OLMO_K_NORM_L1_MEMCFG"],
             )
             k_stats_gathered = self._olmo_qk_norm_all_gather(k_stats, cluster_axis=0)
             ttnn.deallocate(k_stats)
@@ -679,6 +684,7 @@ class TtLlamaAttention(LightweightModule):
                 epsilon=1e-6,
                 weight=self.olmo_k_norm_weight,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.model_config["OLMO_K_NORM_L1_MEMCFG"],
             )
             ttnn.deallocate(k_stats_gathered)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
