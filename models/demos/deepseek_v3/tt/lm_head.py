@@ -261,7 +261,6 @@ class LMHead(AbstractModule):
     @staticmethod
     def _fwd_linear(x: ttnn.Tensor, cfg: dict, program_config: Any = None) -> ttnn.Tensor:
         """Wrapper for lm_head linear projection.
-        Matches: forward_decode line 267, forward_prefill line 315-316
 
         Args:
             x: Input tensor
@@ -281,7 +280,7 @@ class LMHead(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         mesh_scatter(x, **cfg["mesh_scatter"])
-        output = ttnn.linear(x, **cfg["linear"])
+        output = cls._fwd_linear(x, cfg)
 
         assert output.memory_config() == cfg["output_memory_config"]
 
@@ -329,8 +328,8 @@ class LMHead(AbstractModule):
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [1, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
 
-        output = ttnn.linear(
-            x, program_config=cls._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"]), **cfg["linear"]
+        output = cls._fwd_linear(
+            x, cfg, program_config=cls._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"])
         )
         ttnn.deallocate(x)
 
