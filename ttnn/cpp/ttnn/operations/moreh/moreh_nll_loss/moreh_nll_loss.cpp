@@ -39,7 +39,7 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor.value(), memory_config, compute_kernel_config_val);
+        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,

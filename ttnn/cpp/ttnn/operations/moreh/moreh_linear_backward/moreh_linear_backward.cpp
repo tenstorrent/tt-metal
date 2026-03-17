@@ -161,8 +161,7 @@ std::vector<std::optional<Tensor>> moreh_linear_backward(
             TT_FATAL(weight_grad.has_value(), "weight_grad tensor should not be std::nullopt");
             ttnn::SmallVector<int64_t> dims = operations::moreh::moreh_linear_backward::find_reduce_dim(
                 temp_weight_grad.padded_shape(), weight_grad.value().padded_shape());
-            ttnn::moreh_sum(
-                temp_weight_grad, dims, true, weight_grad.value(), weight_grad_memory_config, compute_kernel);
+            ttnn::moreh_sum(temp_weight_grad, dims, true, weight_grad, weight_grad_memory_config, compute_kernel);
         }
         result[1] = weight_grad_tensor;
     }
