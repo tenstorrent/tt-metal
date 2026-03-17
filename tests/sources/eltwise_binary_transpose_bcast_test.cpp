@@ -21,10 +21,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Configure hardware for unpacking:
     // - srcA with transpose enabled
@@ -36,11 +36,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_unpack_AB_init_<BROADCAST_TYPE>(
         FACE_R_DIM,
         4 /* num_faces */,
-        false,                           // narrow_tile
-        params->UNPACK_TRANSPOSE_FACES); // Enable face rearrangement for srcA
+        false,                          // narrow_tile
+        params.UNPACK_TRANSPOSE_FACES); // Enable face rearrangement for srcA
 
     // Unpack tiles: srcA will be transposed, srcB will be column broadcasted
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (int i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
     }
@@ -56,10 +56,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Initialize math for element-wise subtraction
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
@@ -69,7 +69,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_math_wait_for_dest_available_<dest_sync>();
 
     // Perform element-wise subtraction: result = transposed(srcA) - column_broadcast(srcB)
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (int i = 0; i < params.TILE_CNT; ++i)
     {
         LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_math_eltwise_binary_<EltwiseBinaryType::ELWSUB, BROADCAST_TYPE, dest_sync, is_fp32_dest_acc_en, MathFidelity::LoFi>(
@@ -87,10 +87,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -107,7 +107,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #endif
 
     _llk_packer_wait_for_math_done_();
-    for (int i = 0; i < params->TILE_CNT; i++)
+    for (int i = 0; i < params.TILE_CNT; i++)
     {
         LLK_ASSERT((i < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
         _llk_pack_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>(i, L1_ADDRESS(buffer_Res[i]));

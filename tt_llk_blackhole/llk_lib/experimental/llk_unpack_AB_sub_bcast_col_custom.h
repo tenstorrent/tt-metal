@@ -21,7 +21,7 @@ using namespace ckernel::unpacker;
 // SDPA-specific custom init for the blocked sub+bcast(col) unpack flow.
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_sub_bcast_col_init_custom_(
-    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool narrow_tile = false)
+    [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, [[maybe_unused]] const bool narrow_tile = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face

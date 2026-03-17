@@ -80,11 +80,11 @@ template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathF
 inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_dest, const ckernel::TensorShape &tensor_shape)
 {
     validate_tensor_shape_tile_dependent_ops_(tensor_shape);
-    const std::uint32_t num_faces       = tensor_shape.total_num_faces();
-    const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
-    const bool narrow_tile              = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
-    constexpr bool high_fidelity        = is_high_fidelity(math_fidelity);
-    constexpr std::uint8_t addr_mod     = ADDR_MOD_0;
+    const std::uint32_t num_faces           = tensor_shape.total_num_faces();
+    const std::uint32_t num_faces_c_dim     = tensor_shape.num_faces_c_dim;
+    [[maybe_unused]] const bool narrow_tile = tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim;
+    constexpr bool high_fidelity            = is_high_fidelity(math_fidelity);
+    constexpr std::uint8_t addr_mod         = ADDR_MOD_0;
 
     // Inner loop: number of MAX_FPU_ROWS (8-row) operations per face
     // Even if face_r_dim < 16, we still process at least 1 inner loop iteration
@@ -457,7 +457,7 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
     const std::uint32_t num_faces_r_dim = tensor_shape.num_faces_r_dim;
     const std::uint32_t num_faces_c_dim = tensor_shape.num_faces_c_dim;
     LLK_ASSERT(math_fidelity == MathFidelity::LoFi || eltwise_binary_type == ELWMUL, "Math fidelity larger than LoFi only works with Eltwise multiply");
-    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    [[maybe_unused]] constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
     // Dest counter always jumps by 32x32 tile spacing regardless of actual tile size
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);

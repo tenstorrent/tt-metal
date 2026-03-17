@@ -114,19 +114,15 @@ const int NUM_TILES_PER_STAGE = 2;
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
-    const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
+    const int NUM_TOPK_PIPELINE_EXECUTIONS = params.FULL_RT_DIM;
 
-    const int NUM_INDEX_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
-    const int NUM_VALUE_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
-
-    // We pack the result with index tiles right after value tiles.
-    const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
+    const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
 
     // Data formats.
     const std::uint32_t unpack_src_data_types[NUM_STAGES] = {formats.unpack_A_src, ckernel::to_underlying(DataFormat::UInt16)};
@@ -190,7 +186,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                         unpack_src_format,
                         unpack_dst_format);
 
-                    const int tile_row_offset = current_tile_row * params->FULL_CT_DIM;
+                    const int tile_row_offset = current_tile_row * params.FULL_CT_DIM;
                     const int tile_pair_offset =
                         current_tile_pair_idx * (distance_between_corresponding_tiles *
                                                  NUM_TILES_PER_STAGE); // offset to get to the correct tile pair we are processing in current iteration.
@@ -201,7 +197,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     const int first_tile_index = tile_row_offset + stage_offset + tile_pair_offset;
 
                     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(params->buffer_A[first_tile_index]), unpack_src_format, unpack_dst_format);
+                        L1_ADDRESS(params.buffer_A[first_tile_index]), unpack_src_format, unpack_dst_format);
 
                     // Unpack second tile in pair.
                     const int second_tile_index =
@@ -209,7 +205,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                         distance_between_corresponding_tiles; // since we are processing pairs of tiles that are distance_between_corresponding_tiles apart.
 
                     _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-                        L1_ADDRESS(params->buffer_A[second_tile_index]), unpack_src_format, unpack_dst_format);
+                        L1_ADDRESS(params.buffer_A[second_tile_index]), unpack_src_format, unpack_dst_format);
 
                 } // Stage loop.
             } // Pipeline loop.
@@ -238,15 +234,15 @@ using namespace ckernel;
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
-    const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
+    const int NUM_TOPK_PIPELINE_EXECUTIONS = params.FULL_RT_DIM;
 
-    const int NUM_VALUE_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
+    const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
 
     /* TOPK api constants. */
     constexpr bool APPROX             = false;
@@ -403,16 +399,15 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
-    const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
+    const int NUM_TOPK_PIPELINE_EXECUTIONS = params.FULL_RT_DIM;
 
-    const int NUM_INDEX_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
-    const int NUM_VALUE_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
+    const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
 
     // We pack the result with index tiles right after value tiles.
     const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
@@ -500,11 +495,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
                         // Pack only the first tile from the pair in the last iteration since after final merge/rebuild,
                         // the result is in the first tile of each pair (DEST indices 0 and 2 for values and indices respectively).
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_dest_offset, L1_ADDRESS(params->buffer_Res[tile_L1_offset]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_dest_offset, L1_ADDRESS(params.buffer_Res[tile_L1_offset]));
                     }
                     else
                     {
-                        const int tile_row_offset = current_tile_row * params->FULL_CT_DIM;
+                        const int tile_row_offset = current_tile_row * params.FULL_CT_DIM;
                         const int tile_pair_offset =
                             current_tile_pair_idx * (distance_between_corresponding_tiles_in_current_math *
                                                      NUM_TILES_PER_STAGE); // offset to get to the correct tile pair we are processing in current iteration.
@@ -513,7 +508,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
                         const int tile_L1_offset = tile_row_offset + stage_offset + tile_pair_offset;
 
                         // Pack both tiles in the pair back to L1 for next iteration.
-                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_dest_offset, L1_ADDRESS(params->buffer_A[tile_L1_offset]));
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, false>(tile_dest_offset, L1_ADDRESS(params.buffer_A[tile_L1_offset]));
                     }
 
                 } // Stage loop.

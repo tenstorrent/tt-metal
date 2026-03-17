@@ -163,6 +163,9 @@ class TestConfig:
     MODE: ClassVar[TestMode] = TestMode.DEFAULT
     SKIP_JUST_FOR_COMPILE_MARKER: ClassVar[str] = "SKIPPED_JUST_FOR_COMPILE"
     _BUILD_DIRS_CREATED: ClassVar[bool] = False
+    SPEED_OF_LIGHT: ClassVar[bool] = (
+        False  # Should everything be converted to compile-time arguments?
+    )
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -299,11 +302,13 @@ class TestConfig:
         with_coverage: bool = False,
         detailed_artefacts: bool = False,
         no_debug_symbols: bool = False,
+        speed_of_light: bool = False,
     ):
         debug_flag = "" if no_debug_symbols else "-g "
         TestConfig.OPTIONS_ALL = f"{debug_flag}-O3 -std=c++17 -ffast-math"
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
+        TestConfig.SPEED_OF_LIGHT = speed_of_light
 
         if detailed_artefacts:
             TestConfig.OPTIONS_ALL += (
@@ -312,9 +317,10 @@ class TestConfig:
 
         TestConfig.OPTIONS_LINK = "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
         TestConfig.INITIAL_OPTIONS_COMPILE = (
-            "-nostdlib -fno-use-cxa-atexit -Wall -fno-asynchronous-unwind-tables -fno-exceptions -fno-rtti -Wunused-parameter "
+            "-nostdlib -fno-use-cxa-atexit -Werror -Wall -fno-asynchronous-unwind-tables -fno-exceptions -fno-rtti -Wunused-parameter "
             "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -Wmaybe-uninitialized "
-            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE}"
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE} "
+            f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
         TestConfig.INCLUDES = [
             "-Isfpi/include",
@@ -335,13 +341,14 @@ class TestConfig:
         with_coverage: bool = False,
         detailed_artefacts: bool = False,
         no_debug_symbols: bool = False,
+        speed_of_light: bool = False,
     ):
         device_module.Mailbox = MailboxesDebug if with_coverage else MailboxesPerf
 
         TestConfig.setup_arch()
         TestConfig.setup_paths(sources_path)
         TestConfig.setup_compilation_options(
-            with_coverage, detailed_artefacts, no_debug_symbols
+            with_coverage, detailed_artefacts, no_debug_symbols, speed_of_light
         )
 
     @staticmethod
@@ -393,6 +400,11 @@ class TestConfig:
                 "test_name argument needs to be passed in order to resolve which C++ file is compiled"
             )
 
+        if TestConfig.SPEED_OF_LIGHT:
+            templates += runtimes
+            runtimes = []
+            compile_time_formats = True
+
         self.test_name = test_name
         self.templates = templates
         self.runtimes = runtimes
@@ -406,6 +418,11 @@ class TestConfig:
         self.skip_build_header = skip_build_header
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
+
+        TILE_SIZES = {
+            DataFormat.Bfp8_b: 68,
+            DataFormat.Float32: 256,
+        }
 
         if formats:
             # Check if this is an outlier format combination that requires dest_acc to be enabled
@@ -430,12 +447,52 @@ class TestConfig:
                 chip_arch=TestConfig.CHIP_ARCH,
                 disable_format_inference=self.disable_format_inference,
             )
+            self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
+            self.unpack_size_a = TILE_SIZES.get(
+                self.formats_config[0].input_format, 128
+            )
+            self.unpack_size_b = TILE_SIZES.get(
+                self.formats_config[0].input_format_B, 128
+            )
         else:
             self.formats_config = None
+            self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
+
+        if (len(self.runtimes) > 0 or len(self.templates) > 0) and self.variant_stimuli:
+            itd_param = next(
+                (
+                    param
+                    for param in self.runtimes + self.templates
+                    if isinstance(param, IN_TILE_DIMS)
+                ),
+                None,
+            )
+            faces_param = next(
+                (
+                    param
+                    for param in self.runtimes + self.templates
+                    if isinstance(param, NUM_FACES)
+                ),
+                None,
+            )
+            if itd_param and faces_param:
+                temp_num_faces_A = (
+                    faces_param.num_faces_A
+                    if faces_param.num_faces_A
+                    else faces_param.num_faces
+                )
+                if itd_param.in0_r_dim <= 16:
+                    self.pack_size = (self.pack_size // faces_param.num_faces) * (
+                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+                    )
+                    self.unpack_size_a = (self.unpack_size_a // temp_num_faces_A) * (
+                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
+                    )
 
         # We need to call this here because this function generates serialisation format need for writing RTs to L1,
         # Which is needed by execution part of test infra
-        self.generate_runtime_args_struct()
+        if not TestConfig.SPEED_OF_LIGHT:
+            self.generate_runtime_args_struct()
 
         if (
             self.coverage_build == CoverageBuild.Yes
@@ -482,44 +539,13 @@ class TestConfig:
         self.runtime_arguments_struct = lines
 
     def write_runtimes_to_L1(self, location: str = "0,0"):
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Float32: 256,
-        }
-
-        if self.formats_config is None:
-            pack_size, unpack_size_a, unpack_size_b = 128, 128, 128
-        else:
-            pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
-            unpack_size_a = TILE_SIZES.get(self.formats_config[0].input_format, 128)
-            unpack_size_b = TILE_SIZES.get(self.formats_config[0].input_format, 128)
-
-        if len(self.runtimes) > 0:
-            itd_param = next(
-                (param for param in self.runtimes if isinstance(param, IN_TILE_DIMS)),
-                None,
-            )
-            faces_param = next(
-                (param for param in self.runtimes if isinstance(param, NUM_FACES)), None
-            )
-            if itd_param and faces_param:
-                temp_num_faces_A = (
-                    faces_param.num_faces_A
-                    if faces_param.num_faces_A
-                    else faces_param.num_faces
-                )
-                if itd_param.in0_r_dim <= 16:
-                    pack_size = (pack_size // faces_param.num_faces) * (
-                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                    )
-                    unpack_size_a = (unpack_size_a // temp_num_faces_A) * (
-                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                    )
+        if TestConfig.SPEED_OF_LIGHT:
+            return
 
         argument_data = [
-            pack_size,  # uint32_t TILE_SIZE_PACK;
-            unpack_size_a,  # uint32_t TILE_SIZE_UNPACK_A;
-            unpack_size_b,  # uint32_t TILE_SIZE_UNPACK_B;
+            self.pack_size,  # uint32_t TILE_SIZE_PACK;
+            self.unpack_size_a,  # uint32_t TILE_SIZE_UNPACK_A;
+            self.unpack_size_b,  # uint32_t TILE_SIZE_UNPACK_B;
         ]
 
         if not self.compile_time_formats:
@@ -580,14 +606,24 @@ class TestConfig:
 
     def generate_variant_hash(self):
         NON_COMPILATION_ARGUMENTS = [
-            "variant_stimuli",
             "run_configs",
             "variant_id",
             "runtime_arguments_struct",
             "runtime_format",
-            "runtimes",
-            "formats_config" if not self.compile_time_formats else "",
+            "passed_templates",
+            "passed_runtimes",
+            "current_run_type",
         ]
+
+        if not TestConfig.SPEED_OF_LIGHT:
+            NON_COMPILATION_ARGUMENTS += [
+                "variant_stimuli",
+                "pack_size",
+                "unpack_size_a",
+                "unpack_size_b",
+                "runtimes",
+                "formats_config" if not self.compile_time_formats else "",
+            ]
 
         temp_str = [
             str(value)
@@ -814,8 +850,7 @@ class TestConfig:
                 else ""
             ),
             '#include "tensix_types.h"',
-            "#define RUNTIME_PARAMETERS  const volatile struct RuntimeParams*",
-            "",
+            "#define RUNTIME_PARAMETERS  [[maybe_unused]] const struct RuntimeParams&",
             f"constexpr bool l1_acc_en = {self.l1_acc.value};",
             f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
         ] + (
@@ -833,13 +868,31 @@ class TestConfig:
                 f"constexpr bool is_fp32_dest_acc_en = {self.dest_acc.cpp_enum_value};"
             )
 
+        if TestConfig.SPEED_OF_LIGHT:
+            header_content.extend(
+                [
+                    f"constexpr std::uint32_t TILE_SIZE_PACK = {self.pack_size};",
+                    f"constexpr std::uint32_t TILE_SIZE_UNPACK_A = {self.unpack_size_a};",
+                    f"constexpr std::uint32_t TILE_SIZE_UNPACK_B = {self.unpack_size_b};",
+                ]
+            )
+
+            if self.variant_stimuli:
+                header_content.extend(
+                    self.variant_stimuli.generate_stimuli_header_addresses()
+                )
+
         for parameter in self.templates:
             header_content.append(parameter.convert_to_cpp())
 
         if self.compile_time_formats:
             header_content.extend(self.generate_compile_time_data_formats())
 
-        header_content.extend(self.runtime_arguments_struct)
+        if TestConfig.SPEED_OF_LIGHT:
+            header_content.append("struct RuntimeParams {};")
+        else:
+            header_content.extend(self.runtime_arguments_struct)
+
         return "\n".join(header_content)
 
     def build_elfs(self):

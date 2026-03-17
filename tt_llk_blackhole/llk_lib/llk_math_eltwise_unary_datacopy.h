@@ -26,8 +26,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
-    std::uint32_t dst_index_in_faces = dst_index << 2; // Each tile has 4 faces;
-
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
     {
         math_unpack_to_dest_math_ready();

@@ -31,12 +31,21 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
-    LLK_ASSERT(params->FULL_RT_DIM * params->FULL_CT_DIM == params->TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to params->TILE_CNT");
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT     = params.TILE_CNT;
+    const std::uint32_t FULL_CT_DIM  = params.FULL_CT_DIM;
+    const std::uint32_t FULL_RT_DIM  = params.FULL_RT_DIM;
+    const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
+    const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
+#endif
+    LLK_ASSERT(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
     constexpr std::uint32_t src = 0x65000;
     {
         ZONE_SCOPED("INIT")
@@ -49,7 +58,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
             FACE_R_DIM,
             4 /* num_faces */,
             4 /* num_faces */);
-        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, params->BLOCK_CT_DIM, FACE_R_DIM, false);
+        _llk_unpack_tilize_init_(formats.unpack_A_src, formats.unpack_A_dst, BLOCK_CT_DIM, FACE_R_DIM, false);
         PROFILER_SYNC();
     }
 
@@ -60,12 +69,12 @@ void run_kernel(const volatile struct RuntimeParams* params)
             return;
         }
 
-        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            for (std::uint32_t i = 0; i < params->BLOCK_RT_DIM; i++)
+            for (std::uint32_t i = 0; i < BLOCK_RT_DIM; i++)
             {
                 const std::uint32_t tile_row_addr = L1_ADDRESS(src + (i % 8) * 0x1000); // TODO SS<-LP use PERF_ADDRESS here
-                for (std::uint32_t j = 0; j < params->BLOCK_CT_DIM; j++)
+                for (std::uint32_t j = 0; j < BLOCK_CT_DIM; j++)
                 {
                     _llk_unpack_tilize_(tile_row_addr, j, formats.unpack_A_src, formats.unpack_A_dst, 0, FACE_R_DIM, 4, false);
                 }
@@ -86,10 +95,15 @@ const bool TILIZE = true;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
     const bool is_int_fpu_en = false;
 
@@ -120,19 +134,19 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #ifdef ARCH_BLACKHOLE
             // Due to the blackhole tilize bug mitigation
             // DVALID is set for each tile, instead of each face.
-            const std::uint32_t NUM_DVALIDS = params->TILE_CNT;
+            const std::uint32_t NUM_DVALIDS = TILE_CNT;
 #else
-            const std::uint32_t NUM_DVALIDS = params->TILE_CNT * TILE_NUM_FACES;
+            const std::uint32_t NUM_DVALIDS = TILE_CNT * TILE_NUM_FACES;
 #endif
             if constexpr (!unpack_to_dest)
             {
-                _perf_math_loop_clear_valid<true, true>(params->LOOP_FACTOR * NUM_DVALIDS);
+                _perf_math_loop_clear_valid<true, true>(LOOP_FACTOR * NUM_DVALIDS);
                 return;
             }
 
-            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < params->TILE_CNT; i++)
+                for (std::uint32_t i = 0; i < TILE_CNT; i++)
                 {
                     LLK_ASSERT(
                         (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -149,9 +163,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
             return;
         }
 
-        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            std::uint32_t remaining_tiles = params->TILE_CNT;
+            std::uint32_t remaining_tiles = TILE_CNT;
             while (remaining_tiles > 0)
             {
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
@@ -181,13 +195,17 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
-    constexpr std::uint32_t dst = 0x70000;
-    const bool UNTILIZE         = false;
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
+    const bool UNTILIZE = false;
 
     {
         ZONE_SCOPED("INIT")
@@ -213,9 +231,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < params->TILE_CNT; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     std::uint32_t tile_index = i % MAX_TILES_DEST;
                     LLK_ASSERT(
@@ -228,9 +246,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
             return;
         }
 
-        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            std::uint32_t remaining_tiles = params->TILE_CNT;
+            std::uint32_t remaining_tiles = TILE_CNT;
             while (remaining_tiles > 0)
             {
                 std::uint32_t num_tiles = std::min(remaining_tiles, MAX_TILES_DEST);
