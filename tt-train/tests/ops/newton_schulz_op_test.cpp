@@ -109,6 +109,5 @@ TEST_F(NewtonSchulzOpTest, OrthogonalityCheck) {
     auto X_2d = xt::view(X_result, 0, 0, xt::all(), xt::all());
     auto XXT = xt::linalg::dot(X_2d, xt::transpose(X_2d));
     auto I = xt::eye<float>(32);
-    auto ortho_error = xt::abs(XXT - I);
     EXPECT_TRUE(xt::allclose(XXT, I, 5e-2f, 5e-2f));
 }
