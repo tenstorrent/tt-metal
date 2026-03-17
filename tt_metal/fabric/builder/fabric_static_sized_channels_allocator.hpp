@@ -138,8 +138,8 @@ private:
             builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
 
     // Configuration parameters
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {};
     size_t channel_buffer_size_bytes = 0;
     size_t available_channel_buffering_space = 0;
     size_t max_l1_loading_size = 0;
