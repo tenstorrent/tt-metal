@@ -45,7 +45,7 @@ void MuonComposite::step() {
             continue;
         }
 
-        auto gradients = tensor_ptr->get_grad();
+        const auto gradients = tensor_ptr->get_grad();
 
         if (m_steps > 0 && m_config.momentum != 0.0F) {
             buffer = ttnn::multiply(buffer, m_config.momentum);
@@ -56,7 +56,7 @@ void MuonComposite::step() {
 
         buffer_ptr->set_value(buffer);
 
-        auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
+        const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
 
         tensor_ptr->set_value(ttnn::subtract(
             tensor_ptr->get_value(autograd::PreferredPrecision::FULL), ttnn::multiply(update_direction, m_config.lr)));

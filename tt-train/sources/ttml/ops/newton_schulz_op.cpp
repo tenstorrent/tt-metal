@@ -23,9 +23,9 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
     X = ttnn::divide(X, norm_plus_eps);
 
     auto shape = X.logical_shape();
-    uint32_t m = shape[-2];
-    uint32_t n = shape[-1];
-    bool needs_transpose = (m > n);
+    const uint32_t m = shape[-2];
+    const uint32_t n = shape[-1];
+    const bool needs_transpose = (m > n);
 
     if (steps <= 0) {
         return X;
@@ -37,7 +37,7 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
     }
 
     // Preallocate buffers: square shape [batch..., m_eff, m_eff] and X shape [batch..., m_eff, n_eff]
-    auto rank = shape.rank();
+    const auto rank = shape.rank();
     std::vector<uint32_t> mm_dims;
     for (uint32_t i = 0; i < rank; ++i) {
         mm_dims.push_back(shape[i]);
