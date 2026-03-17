@@ -2,70 +2,123 @@ name: "[tt-train] Build and Test"
 
 on:
   workflow_call:
+    inputs:
+      docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Docker image to use for build and test"
   workflow_dispatch:
 
 jobs:
-  run-tests:
-    runs-on: ["n150"]
-    env:
-      CC: clang-20
-      CXX: clang++-20
-      ARCH_NAME: wormhole_b0
-      TT_METAL_HOME: ${{ github.workspace }}
-      PYTHONPATH: ${{ github.workspace }}
-    steps:
-      - name: Setup Telemetry
-        uses: catchpoint/workflow-telemetry-action@v2
+  build-docker-image:
+    if: ${{ inputs.docker-image == '' }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
 
-      - uses: actions/checkout@v4
+  build-tt-train:
+    needs: [build-docker-image]
+    if: ${{ always() && (needs.build-docker-image.result == 'success' || needs.build-docker-image.result == 'skipped') }}
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 60
+    container:
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'
+        }}
+      env:
+        TT_METAL_HOME: /work
+        ARCH_NAME: wormhole_b0
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    outputs:
+      build-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
         with:
           submodules: recursive
           lfs: false
+          path: docker-job
 
-      - name: Clear Build Artifacts
-        run: |
-          rm -rf build
-          rm -rf build_Release
-          rm -rf built
-
-      - name: Get commit hash
-        id: commit-hash
-        run: |
-          commit=$(git rev-parse HEAD)
-          echo "Commit hash: $commit"
-          echo "commit=$commit" >> $GITHUB_OUTPUT
-
-      - name: Restore Build Cache
-        id: restore-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: build
-          key: tt-metal-build-${{ steps.commit-hash.outputs.commit }}
+      - name: Set artifact name
+        id: set-artifact-name
+        run: echo "name=tt-train-build-${{ github.run_id }}" >> $GITHUB_OUTPUT
 
       - name: Build tt-metal with tt-train
-        if: steps.restore-cache.outputs.cache-hit != 'true'
         run: |
           ./build_metal.sh --build-tt-train -b Release
 
-      - name: Update Build Cache
-        if: steps.restore-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          path: build
-          key: tt-metal-build-${{ steps.commit-hash.outputs.commit }}
+          name: ${{ steps.set-artifact-name.outputs.name }}
+          path: |
+            /work/build/lib
+            /work/build/tt-train
+          retention-days: 1
 
-      - name: Tests
+  run-tt-train-tests:
+    needs: [build-docker-image, build-tt-train]
+    if: ${{ always() && needs.build-tt-train.result == 'success' }}
+    runs-on: tt-ubuntu-2204-N150-viommu-stable
+    timeout-minutes: 45
+    container:
+      image: >-
+        harbor.ci.tenstorrent.net/${{
+          inputs.docker-image ||
+          needs.build-docker-image.outputs.ci-build-tag ||
+          'docker-image-unresolved!'
+        }}
+      env:
+        TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
+          path: docker-job
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-tt-train.outputs.build-artifact-name }}
+          path: /work/build
+
+      - name: tt-train tests
         run: |
-          cd build/tt-train
+          cd /work/build/tt-train
           ctest --no-tests=error --output-on-failure
+
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
 
   validate-pr:
     if: ${{ always() }}
     runs-on: ubuntu-latest
-    needs: [run-tests]
+    needs: [run-tt-train-tests]
     steps:
       - run: |
-          test_result="${{ needs.run-tests.result }}"
+          test_result="${{ needs.run-tt-train-tests.result }}"
           if [[ $test_result == "success" ]] ; then
             exit 0
           else
