@@ -78,6 +78,8 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
   - Full‑model mode requires tokenizer files and at least one `.safetensors` shard.
   - Random‑weights mode only requires `config.json`; tokenizer is optional.
 - `--max-new-tokens N`: Number of tokens to generate (default: 32). Greedy decoding only.
+- `--stop-at-eos`: Stop recording output tokens once EOS is generated. This is the default.
+- `--no-stop-at-eos`: Always record `max-new-tokens`, even after EOS.
 - `--cache-dir PATH`: Where to store converted TTNN weights and caches.
 - `--random-weights`: Use randomly initialized weights derived from the HF config (no safetensors).
 - `--single-layer {mlp,moe}`: With `--random-weights`, request a single‑layer run. `mlp` is supported; `moe` is not.
@@ -85,6 +87,7 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 ## Behavior and Output
 - The demo opens a mesh device based on specified system type (`TG`, `DUAL`, `QUAD`).
 - Prefill is emulated by iterating decode steps over the prompt before generating new tokens.
+- Output recording stops at EOS by default. Use `--no-stop-at-eos` for fixed-length stress or eval-style runs.
 - Prints the generated text between separators:
   ```
   ===== Generated =====
@@ -101,4 +104,4 @@ usage: DeepSeek-V3 Demo on TT-NN [-h] [--model-path PATH] [--max-new-tokens N]
 
 ## Notes
 - Converted weights are cached under `--cache-dir/weights` to speed up subsequent runs.
-- This script focuses on decode and greedy sampling for simplicity; stopping at EOS, temperature/top‑k/p are not exposed here.
+- This script focuses on decode and greedy sampling for simplicity; stopping at EOS is exposed and enabled by default, while temperature/top‑k/p are not.
