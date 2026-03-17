@@ -11,7 +11,8 @@ import pytest
 from helpers import seed_all, assert_close, make_profiles, rms_norm
 from gqa import gqa_attention_torch, gqa_attention_tt
 from mla import mla_attention_torch, mla_attention_tt
-from moe import moe_torch, moe_tt, moe_shared_experts_torch, moe_shared_experts_tt, sigmoid_topk_routing
+from moe import moe_torch, moe_tt
+from mlp import mlp_torch, mlp_tt
 
 # ---------------------------------------------------------------------------
 # Dispatch: variant string → function implementations
@@ -22,21 +23,21 @@ IMPL = {
         gqa=gqa_attention_torch,
         mla=mla_attention_torch,
         moe=moe_torch,
-        shared=moe_shared_experts_torch,
+        mlp=mlp_torch,
     ),
     "tt": dict(
         gqa=gqa_attention_tt,
         mla=mla_attention_tt,
         moe=moe_tt,
-        shared=moe_shared_experts_tt,
+        mlp=mlp_tt,
     ),
 }
 
 
 def fns(variant):
-    """Return (gqa_fn, mla_fn, moe_fn, shared_fn) for the given variant."""
+    """Return (gqa_fn, mla_fn, moe_fn, mlp_fn) for the given variant."""
     d = IMPL[variant]
-    return d["gqa"], d["mla"], d["moe"], d["shared"]
+    return d["gqa"], d["mla"], d["moe"], d["mlp"]
 
 
 # ---------------------------------------------------------------------------
@@ -61,12 +62,15 @@ def _make_decoder_weights(prof, dtype=torch.float32):
     # Attention weights
     if prof["use_mla"]:
         lat = prof["kv_latent_dim"]
+        rope_dim = prof["qk_rope_head_dim"]
+        nope_dim = hd - rope_dim
         w["attn"] = dict(
             wq=torch.randn(nq * hd, h, dtype=dtype),
-            w_kv_down=torch.randn(lat, h, dtype=dtype),
-            w_k_up=torch.randn(nkv * hd, lat, dtype=dtype),
-            w_v_up=torch.randn(nkv * hd, lat, dtype=dtype),
+            w_kv_a=torch.randn(lat + rope_dim, h, dtype=dtype),
+            kv_a_layernorm_weight=torch.ones(lat, dtype=dtype),
+            w_kv_b=torch.randn(nkv * (nope_dim + hd), lat, dtype=dtype),
             wo=torch.randn(h, nq * hd, dtype=dtype),
+            qk_rope_head_dim=rope_dim,
         )
     else:
         w["attn"] = dict(
@@ -84,6 +88,7 @@ def _make_decoder_weights(prof, dtype=torch.float32):
             w_router=torch.randn(ne, h, dtype=dtype),
             w1=torch.randn(ne, mi, h, dtype=dtype),
             w2=torch.randn(ne, h, mi, dtype=dtype),
+            w3=torch.randn(ne, mi, h, dtype=dtype),
         )
     else:
         w["ffn"] = dict(
@@ -119,9 +124,14 @@ def decoder_forward(hidden_states, profile, weights, variant="torch",
     )
 
     if profile["use_mla"]:
+        b, q_seq, _ = normed.shape
+        rope_dim = profile["qk_rope_head_dim"]
+        cos = torch.ones(b, q_seq, rope_dim, device=normed.device)
+        sin = torch.zeros(b, q_seq, rope_dim, device=normed.device)
         attn_out, present_kv = mla_fn(
             normed, **weights["attn"],
             kv_latent_dim=profile["kv_latent_dim"],
+            position_embeddings=(cos, sin),
             **attn_kwargs,
         )
     else:
@@ -173,13 +183,17 @@ def test_decoder_cache_chunking_equivalence_per_family():
         x = torch.randn(b, seq, h)
         weights = _make_decoder_weights(prof)
 
-        # Full forward with causal mask
-        causal_full = torch.tril(torch.ones(seq, seq, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
+        # Full forward with causal mask (additive: 0 = keep, -inf = mask)
+        causal_full = torch.where(
+            torch.tril(torch.ones(seq, seq)).bool(), 0.0, float("-inf"),
+        ).unsqueeze(0).unsqueeze(0)
         out_full, _ = decoder_forward(x, prof, weights, attention_mask=causal_full)
 
         # Chunk 1
         x1 = x[:, :split, :]
-        causal1 = torch.tril(torch.ones(split, split, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
+        causal1 = torch.where(
+            torch.tril(torch.ones(split, split)).bool(), 0.0, float("-inf"),
+        ).unsqueeze(0).unsqueeze(0)
         out1, cache = decoder_forward(
             x1, prof, weights, attention_mask=causal1, use_cache=True,
         )
@@ -187,10 +201,10 @@ def test_decoder_cache_chunking_equivalence_per_family():
         # Chunk 2
         x2 = x[:, split:, :]
         kv_len = seq
-        causal2 = torch.ones(seq - split, kv_len, dtype=torch.bool)
+        causal2_bool = torch.ones(seq - split, kv_len, dtype=torch.bool)
         for i in range(seq - split):
-            causal2[i, split + i + 1:] = False
-        causal2 = causal2.unsqueeze(0).unsqueeze(0)
+            causal2_bool[i, split + i + 1:] = False
+        causal2 = torch.where(causal2_bool, 0.0, float("-inf")).unsqueeze(0).unsqueeze(0)
         out2, _ = decoder_forward(
             x2, prof, weights, attention_mask=causal2,
             past_key_value=cache, use_cache=True,
@@ -217,17 +231,19 @@ def _compose_deepseek_v3_forward(x, params, variant):
     Compose a DeepSeek V3 decoder layer from primitives (MLA + MoE/dense FFN).
     params: dict with all weights/config needed for the forward pass.
     """
-    _, mla_fn, moe_fn, shared_fn = fns(variant)
+    _, mla_fn, moe_fn, mlp_fn = fns(variant)
 
     h = x
 
     # Input RMSNorm → MLA attention → residual
     normed = rms_norm(h, params["ln1_weight"], params["eps"])
     mla_kwargs = {k: params[k] for k in (
-        "wq", "w_kv_down", "w_k_up", "w_v_up", "wo",
+        "wq", "w_kv_a", "w_kv_b", "wo",
         "num_q_heads", "num_kv_heads", "kv_latent_dim",
+        "kv_a_layernorm_weight", "qk_rope_head_dim", "position_embeddings",
     )}
-    for k in ("position_embeddings", "qk_rope_head_dim", "rope_interleave"):
+    for k in ("w_q_a", "q_a_layernorm_weight", "q_a_layernorm_eps",
+              "kv_a_layernorm_eps"):
         if k in params:
             mla_kwargs[k] = params[k]
     attn_out, _ = mla_fn(normed, **mla_kwargs)
@@ -237,33 +253,22 @@ def _compose_deepseek_v3_forward(x, params, variant):
     normed2 = rms_norm(h, params["ln2_weight"], params["eps"])
 
     if params["is_dense"]:
-        ffn_out = shared_fn(
-            normed2,
-            w_gate=params["dense_gate"], w_up=params["dense_up"],
-            w_down=params["dense_down"],
-        )
+        ffn_out = mlp_fn(normed2, **params["mlp_kwargs"])
     else:
-        topk_indices, topk_weights = sigmoid_topk_routing(
-            normed2,
-            w_router=params["moe_router"],
-            top_k=params["top_k"],
-            n_group=params["n_group"],
-            topk_group=params["topk_group"],
-            e_score_correction_bias=params.get("e_score_correction_bias"),
-            routed_scaling_factor=params.get("routed_scaling_factor", 1.0),
-            norm_topk_prob=params.get("norm_topk_prob", False),
-        )
         ffn_out = moe_fn(
             normed2,
             w_router=params["moe_router"], w1=params["moe_w1"],
             w2=params["moe_w2"], w3=params["moe_w3"],
             top_k=params["top_k"],
-            precomputed_routing=(topk_indices, topk_weights),
-        )
-        ffn_out = ffn_out + shared_fn(
-            normed2,
-            w_gate=params["shared_gate"], w_up=params["shared_up"],
-            w_down=params["shared_down"],
+            gate_kwargs=dict(
+                score_func="sigmoid",
+                n_group=params["n_group"],
+                topk_group=params["topk_group"],
+                e_score_correction_bias=params.get("e_score_correction_bias"),
+                routed_scaling_factor=params.get("routed_scaling_factor", 1.0),
+                norm_topk_prob=params.get("norm_topk_prob", False),
+            ),
+            shared_mlp_kwargs=params["shared_mlp_kwargs"],
         )
 
     return h + ffn_out
@@ -279,7 +284,6 @@ def test_deepseek_v3_decoder_from_primitives(variant):
 
     Tests both dense (layer 0) and MoE (layer 1) decoder layers.
     """
-    import torch.nn as nn
     from transformers import DeepseekV3Config
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
         DeepseekV3DecoderLayer,
@@ -289,11 +293,12 @@ def test_deepseek_v3_decoder_from_primitives(variant):
     nope_dim = 8
     rope_dim = 4
     v_head_dim = 8
+    q_lora_rank = 16
     config = DeepseekV3Config(
         hidden_size=64,
         num_attention_heads=4,
         num_key_value_heads=4,
-        q_lora_rank=None,
+        q_lora_rank=q_lora_rank,
         kv_lora_rank=16,
         qk_rope_head_dim=rope_dim,
         qk_nope_head_dim=nope_dim,
@@ -326,42 +331,41 @@ def test_deepseek_v3_decoder_from_primitives(variant):
     for layer_idx in [0, 1]:
         layer = DeepseekV3DecoderLayer(config, layer_idx=layer_idx)
         layer.eval()
-        layer.self_attn.kv_a_layernorm = nn.Identity()
 
         # 1) HF reference
         hf_out = layer(x, position_embeddings=(cos, sin))
 
         # 2) Collect params/weights
         attn = layer.self_attn
-        kv_b_w = attn.kv_b_proj.weight.data
-        kv_b_reshaped = kv_b_w.view(num_heads, nope_dim + v_head_dim, config.kv_lora_rank)
-        w_k_up = kv_b_reshaped[:, :nope_dim, :].reshape(num_heads * nope_dim, config.kv_lora_rank)
-        w_v_up = kv_b_reshaped[:, nope_dim:, :].reshape(num_heads * v_head_dim, config.kv_lora_rank)
-
         is_dense = layer_idx < config.first_k_dense_replace
         params = dict(
             eps=config.rms_norm_eps,
             ln1_weight=layer.input_layernorm.weight.data,
             ln2_weight=layer.post_attention_layernorm.weight.data,
-            wq=attn.q_proj.weight.data,
-            w_kv_down=attn.kv_a_proj_with_mqa.weight.data,
-            w_k_up=w_k_up, w_v_up=w_v_up,
+            # Q LoRA: q_a_proj → q_a_layernorm → q_b_proj
+            w_q_a=attn.q_a_proj.weight.data,
+            q_a_layernorm_weight=attn.q_a_layernorm.weight.data,
+            wq=attn.q_b_proj.weight.data,
+            # KV path with layernorm
+            w_kv_a=attn.kv_a_proj_with_mqa.weight.data,
+            kv_a_layernorm_weight=attn.kv_a_layernorm.weight.data,
+            w_kv_b=attn.kv_b_proj.weight.data,
             wo=attn.o_proj.weight.data,
             num_q_heads=num_heads,
             num_kv_heads=config.num_key_value_heads,
             kv_latent_dim=config.kv_lora_rank,
             position_embeddings=(cos, sin),
             qk_rope_head_dim=rope_dim,
-            rope_interleave=True,
+
             is_dense=is_dense,
         )
 
         if is_dense:
             mlp = layer.mlp
-            params.update(
-                dense_gate=mlp.gate_proj.weight.data,
-                dense_up=mlp.up_proj.weight.data,
-                dense_down=mlp.down_proj.weight.data,
+            params["mlp_kwargs"] = dict(
+                w_gate=mlp.gate_proj.weight.data,
+                w_up=mlp.up_proj.weight.data,
+                w_down=mlp.down_proj.weight.data,
             )
         else:
             moe_mod = layer.mlp
@@ -377,9 +381,11 @@ def test_deepseek_v3_decoder_from_primitives(variant):
                 e_score_correction_bias=moe_mod.gate.e_score_correction_bias,
                 routed_scaling_factor=config.routed_scaling_factor,
                 norm_topk_prob=config.norm_topk_prob,
-                shared_gate=moe_mod.shared_experts.gate_proj.weight.data,
-                shared_up=moe_mod.shared_experts.up_proj.weight.data,
-                shared_down=moe_mod.shared_experts.down_proj.weight.data,
+                shared_mlp_kwargs=dict(
+                    w_gate=moe_mod.shared_experts.gate_proj.weight.data,
+                    w_up=moe_mod.shared_experts.up_proj.weight.data,
+                    w_down=moe_mod.shared_experts.down_proj.weight.data,
+                ),
             )
 
         # 3) Run composed forward
@@ -400,7 +406,6 @@ def test_deepseek_v3_decoder_from_primitives(variant):
 @pytest.mark.parametrize("variant", IMPL.keys())
 def test_kimi_k25_decoder_from_primitives(variant):
     """Compose Kimi K2.5 decoder (DeepSeek V3 architecture with different params)."""
-    import torch.nn as nn
     from transformers import DeepseekV3Config
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
         DeepseekV3DecoderLayer,
@@ -410,9 +415,10 @@ def test_kimi_k25_decoder_from_primitives(variant):
     nope_dim = 8
     rope_dim = 4
     v_head_dim = 8
+    q_lora_rank = 16
     config = DeepseekV3Config(
         hidden_size=64, num_attention_heads=4, num_key_value_heads=4,
-        q_lora_rank=None, kv_lora_rank=16, qk_rope_head_dim=rope_dim,
+        q_lora_rank=q_lora_rank, kv_lora_rank=16, qk_rope_head_dim=rope_dim,
         qk_nope_head_dim=nope_dim, v_head_dim=v_head_dim,
         intermediate_size=128, moe_intermediate_size=32,
         n_routed_experts=4, num_experts_per_tok=2,
@@ -435,42 +441,41 @@ def test_kimi_k25_decoder_from_primitives(variant):
     for layer_idx in [0, 1]:
         layer = DeepseekV3DecoderLayer(config, layer_idx=layer_idx)
         layer.eval()
-        layer.self_attn.kv_a_layernorm = nn.Identity()
 
         # 1) HF reference
         hf_out = layer(x, position_embeddings=(cos, sin))
 
         # 2) Collect params
         attn = layer.self_attn
-        kv_b_w = attn.kv_b_proj.weight.data
-        kv_b_reshaped = kv_b_w.view(num_heads, nope_dim + v_head_dim, config.kv_lora_rank)
-        w_k_up = kv_b_reshaped[:, :nope_dim, :].reshape(num_heads * nope_dim, config.kv_lora_rank)
-        w_v_up = kv_b_reshaped[:, nope_dim:, :].reshape(num_heads * v_head_dim, config.kv_lora_rank)
-
         is_dense = layer_idx < config.first_k_dense_replace
         params = dict(
             eps=config.rms_norm_eps,
             ln1_weight=layer.input_layernorm.weight.data,
             ln2_weight=layer.post_attention_layernorm.weight.data,
-            wq=attn.q_proj.weight.data,
-            w_kv_down=attn.kv_a_proj_with_mqa.weight.data,
-            w_k_up=w_k_up, w_v_up=w_v_up,
+            # Q LoRA: q_a_proj → q_a_layernorm → q_b_proj
+            w_q_a=attn.q_a_proj.weight.data,
+            q_a_layernorm_weight=attn.q_a_layernorm.weight.data,
+            wq=attn.q_b_proj.weight.data,
+            # KV path with layernorm
+            w_kv_a=attn.kv_a_proj_with_mqa.weight.data,
+            kv_a_layernorm_weight=attn.kv_a_layernorm.weight.data,
+            w_kv_b=attn.kv_b_proj.weight.data,
             wo=attn.o_proj.weight.data,
             num_q_heads=num_heads,
             num_kv_heads=config.num_key_value_heads,
             kv_latent_dim=config.kv_lora_rank,
             position_embeddings=(cos, sin),
             qk_rope_head_dim=rope_dim,
-            rope_interleave=True,
+
             is_dense=is_dense,
         )
 
         if is_dense:
             mlp = layer.mlp
-            params.update(
-                dense_gate=mlp.gate_proj.weight.data,
-                dense_up=mlp.up_proj.weight.data,
-                dense_down=mlp.down_proj.weight.data,
+            params["mlp_kwargs"] = dict(
+                w_gate=mlp.gate_proj.weight.data,
+                w_up=mlp.up_proj.weight.data,
+                w_down=mlp.down_proj.weight.data,
             )
         else:
             moe_mod = layer.mlp
@@ -486,9 +491,11 @@ def test_kimi_k25_decoder_from_primitives(variant):
                 e_score_correction_bias=moe_mod.gate.e_score_correction_bias,
                 routed_scaling_factor=config.routed_scaling_factor,
                 norm_topk_prob=config.norm_topk_prob,
-                shared_gate=moe_mod.shared_experts.gate_proj.weight.data,
-                shared_up=moe_mod.shared_experts.up_proj.weight.data,
-                shared_down=moe_mod.shared_experts.down_proj.weight.data,
+                shared_mlp_kwargs=dict(
+                    w_gate=moe_mod.shared_experts.gate_proj.weight.data,
+                    w_up=moe_mod.shared_experts.up_proj.weight.data,
+                    w_down=moe_mod.shared_experts.down_proj.weight.data,
+                ),
             )
 
         # 3) Run composed forward
@@ -571,9 +578,11 @@ def test_glm4_decoder_from_primitives(variant):
             position_embeddings=(cos, sin),
             rope_variant="glm4",
         ),
-        dense_gate=gate_up_w[:intermediate, :],
-        dense_up=gate_up_w[intermediate:, :],
-        dense_down=mlp.down_proj.weight.data,
+        mlp_kwargs=dict(
+            w_gate=gate_up_w[:intermediate, :],
+            w_up=gate_up_w[intermediate:, :],
+            w_down=mlp.down_proj.weight.data,
+        ),
     )
 
     # 3) Run composed forward
@@ -658,16 +667,6 @@ def test_gpt_oss_decoder_from_primitives(variant):
 # Helpers for composed decoder tests
 # ===========================================================================
 
-def _softmax_topk_routing(normed, gate_weight, top_k, normalize=True):
-    """Extract softmax→topk→renormalize routing (Mixtral/Qwen3Moe/OLMoE pattern)."""
-    flat = normed.reshape(-1, normed.shape[-1])
-    router_logits = F.linear(flat, gate_weight)
-    routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-    routing_weights, topk_indices = torch.topk(routing_weights, top_k, dim=-1)
-    if normalize:
-        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-    routing_weights = routing_weights.to(flat.dtype)
-    return topk_indices, routing_weights
 
 
 def _extract_swiglu_expert_weights(experts, ne, attr_gate="gate_proj", attr_up="up_proj", attr_down="down_proj"):
@@ -704,15 +703,17 @@ def _collect_gqa_dense_params(layer, config, position_embeddings=None, rope_vari
         ln1_weight=layer.input_layernorm.weight.data,
         ln2_weight=layer.post_attention_layernorm.weight.data,
         gqa_kwargs=gqa_kwargs,
-        dense_gate=mlp.gate_proj.weight.data,
-        dense_up=mlp.up_proj.weight.data,
-        dense_down=mlp.down_proj.weight.data,
+        mlp_kwargs=dict(
+            w_gate=mlp.gate_proj.weight.data,
+            w_up=mlp.up_proj.weight.data,
+            w_down=mlp.down_proj.weight.data,
+        ),
     )
 
 
 def _compose_gqa_dense_forward(x, params, variant):
     """Compose GQA + dense SwiGLU decoder (Llama/Qwen2 pattern, 2 RMSNorms)."""
-    gqa_fn, _, _, shared_fn = fns(variant)
+    gqa_fn, _, _, mlp_fn = fns(variant)
 
     h = x
     normed = rms_norm(h, params["ln1_weight"], params["eps"])
@@ -720,17 +721,13 @@ def _compose_gqa_dense_forward(x, params, variant):
     h = h + attn_out
 
     normed2 = rms_norm(h, params["ln2_weight"], params["eps"])
-    ffn_out = shared_fn(
-        normed2,
-        w_gate=params["dense_gate"], w_up=params["dense_up"],
-        w_down=params["dense_down"],
-    )
+    ffn_out = mlp_fn(normed2, **params["mlp_kwargs"])
     return h + ffn_out
 
 
 def _compose_glm4_forward(x, params, variant):
     """Compose GLM-4 decoder (GQA + dense SwiGLU, 4 RMSNorms with post-attn/post-mlp norms)."""
-    gqa_fn, _, _, shared_fn = fns(variant)
+    gqa_fn, _, _, mlp_fn = fns(variant)
 
     h = x
     normed = rms_norm(h, params["ln1_weight"], params["eps"])
@@ -739,11 +736,7 @@ def _compose_glm4_forward(x, params, variant):
     h = h + attn_out
 
     normed2 = rms_norm(h, params["ln2_weight"], params["eps"])
-    mlp_out = shared_fn(
-        normed2,
-        w_gate=params["dense_gate"], w_up=params["dense_up"],
-        w_down=params["dense_down"],
-    )
+    mlp_out = mlp_fn(normed2, **params["mlp_kwargs"])
     mlp_out = rms_norm(mlp_out, params["ln_post_mlp"], params["eps"])
     return h + mlp_out
 
@@ -758,15 +751,13 @@ def _compose_gqa_moe_forward(x, params, variant):
     h = h + attn_out
 
     normed2 = rms_norm(h, params["ln2_weight"], params["eps"])
-    topk_idx, rw = _softmax_topk_routing(
-        normed2, params["moe_router"], params["top_k"],
-        normalize=params.get("normalize_routing", True),
-    )
     ffn_out = moe_fn(
         normed2, w_router=params["moe_router"],
         w1=params["moe_w1"], w2=params["moe_w2"], w3=params["moe_w3"],
         top_k=params["top_k"],
-        precomputed_routing=(topk_idx, rw),
+        gate_kwargs=dict(
+            norm_topk_prob=params.get("normalize_routing", True),
+        ),
     )
     return h + ffn_out
 
@@ -780,20 +771,17 @@ def _compose_minimax_forward(x, params, variant):
     h = normed * params["alpha_attn"] + attn_out * params["beta_attn"]
 
     normed2 = rms_norm(h, params["ln2_weight"], params["eps"])
-    topk_idx, rw = _softmax_topk_routing(
-        normed2, params["moe_router"], params["top_k"])
     moe_out = moe_fn(
         normed2, w_router=params["moe_router"],
         w1=params["moe_w1"], w2=params["moe_w2"], w3=params["moe_w3"],
         top_k=params["top_k"],
-        precomputed_routing=(topk_idx, rw),
     )
     return normed2 * params["alpha_mlp"] + moe_out * params["beta_mlp"]
 
 
 def _compose_llama4_forward(x, params, variant):
     """Compose Llama4 decoder (GQA + sigmoid MoE with shared expert, scale_input)."""
-    gqa_fn, _, moe_fn, shared_fn = fns(variant)
+    gqa_fn, _, moe_fn, _ = fns(variant)
 
     h = x
     normed = rms_norm(h, params["ln1_weight"], params["eps"])
@@ -814,12 +802,8 @@ def _compose_llama4_forward(x, params, variant):
         w1=params["moe_w1"], w2=params["moe_w2"], w3=params["moe_w3"],
         top_k=params["top_k"],
         precomputed_routing=(topk_indices, routing_weights),
+        shared_mlp_kwargs=params["shared_mlp_kwargs"],
         scale_input=True,
-    )
-    ffn_out = ffn_out + shared_fn(
-        normed2,
-        w_gate=params["shared_gate"], w_up=params["shared_up"],
-        w_down=params["shared_down"],
     )
     return h + ffn_out
 
@@ -1007,9 +991,11 @@ def test_llama4_decoder_from_primitives(variant, model_name, config_overrides, s
         moe_w3=moe_mod.experts.gate_up_proj.data[:, :, mi:].permute(0, 2, 1),
         moe_w2=moe_mod.experts.down_proj.data.permute(0, 2, 1),
         top_k=config.num_experts_per_tok,
-        shared_gate=shared.gate_proj.weight.data,
-        shared_up=shared.up_proj.weight.data,
-        shared_down=shared.down_proj.weight.data,
+        shared_mlp_kwargs=dict(
+            w_gate=shared.gate_proj.weight.data,
+            w_up=shared.up_proj.weight.data,
+            w_down=shared.down_proj.weight.data,
+        ),
     )
 
     # 3) Run composed forward

@@ -54,21 +54,25 @@ def test_gqa_cache_chunking_equivalence():
         num_kv_heads=prof["num_kv_heads"],
     )
 
-    causal_full = torch.tril(torch.ones(seq, seq, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
+    causal_full = torch.where(
+        torch.tril(torch.ones(seq, seq)).bool(), 0.0, float("-inf"),
+    ).unsqueeze(0).unsqueeze(0)
     out_full, _ = gqa_attention_torch(x, **weights, **common, attention_mask=causal_full)
 
     x1 = x[:, :split, :]
-    causal1 = torch.tril(torch.ones(split, split, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
+    causal1 = torch.where(
+        torch.tril(torch.ones(split, split)).bool(), 0.0, float("-inf"),
+    ).unsqueeze(0).unsqueeze(0)
     out1, cache = gqa_attention_torch(
         x1, **weights, **common, attention_mask=causal1, use_cache=True,
     )
 
     x2 = x[:, split:, :]
     kv_len = split + (seq - split)
-    causal2 = torch.ones(seq - split, kv_len, dtype=torch.bool)
+    causal2_bool = torch.ones(seq - split, kv_len, dtype=torch.bool)
     for i in range(seq - split):
-        causal2[i, split + i + 1:] = False
-    causal2 = causal2.unsqueeze(0).unsqueeze(0)
+        causal2_bool[i, split + i + 1:] = False
+    causal2 = torch.where(causal2_bool, 0.0, float("-inf")).unsqueeze(0).unsqueeze(0)
     out2, _ = gqa_attention_torch(
         x2, **weights, **common, attention_mask=causal2, past_key_value=cache, use_cache=True,
     )

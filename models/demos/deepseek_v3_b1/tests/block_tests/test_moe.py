@@ -7,7 +7,7 @@
 import torch
 
 from helpers import seed_all, assert_close, make_profiles
-from moe import moe_torch, moe_tt, moe_shared_experts_torch, sigmoid_topk_routing
+from moe import moe_torch, moe_tt
 
 
 def _make_moe_weights(profile, dtype=torch.float32):
@@ -18,6 +18,7 @@ def _make_moe_weights(profile, dtype=torch.float32):
         w_router=torch.randn(ne, h, dtype=dtype),
         w1=torch.randn(ne, mi, h, dtype=dtype),
         w2=torch.randn(ne, h, mi, dtype=dtype),
+        w3=torch.randn(ne, mi, h, dtype=dtype),
     )
 
 
@@ -137,23 +138,19 @@ def test_moe_deepseek_v3():
     shared_kwargs = _extract_shared_expert_weights(moe_mod.shared_experts)
 
     # 3) Compose from building blocks: routing → routed experts → shared experts
-    topk_indices, topk_weights = sigmoid_topk_routing(
-        x,
-        w_router=moe_mod.gate.weight.data,
-        top_k=config.num_experts_per_tok,
-        n_group=config.n_group,
-        topk_group=config.topk_group,
-        e_score_correction_bias=moe_mod.gate.e_score_correction_bias,
-        routed_scaling_factor=config.routed_scaling_factor,
-        norm_topk_prob=config.norm_topk_prob,
-    )
-
     our_out = moe_torch(
         x, w_router=moe_mod.gate.weight.data, w1=w1, w2=w2, w3=w3,
         top_k=config.num_experts_per_tok,
-        precomputed_routing=(topk_indices, topk_weights),
+        gate_kwargs=dict(
+            score_func="sigmoid",
+            n_group=config.n_group,
+            topk_group=config.topk_group,
+            e_score_correction_bias=moe_mod.gate.e_score_correction_bias,
+            routed_scaling_factor=config.routed_scaling_factor,
+            norm_topk_prob=config.norm_topk_prob,
+        ),
+        shared_mlp_kwargs=shared_kwargs,
     )
-    our_out = our_out + moe_shared_experts_torch(x, **shared_kwargs)
 
     # 4) Compare
     assert_close(hf_out, our_out, atol=1e-5, rtol=1e-5), \

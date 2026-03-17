@@ -117,14 +117,14 @@ def make_profiles(size="tiny"):
             "deepseek_v3": dict(
                 hidden_size=64, num_q_heads=8, num_kv_heads=2, head_dim=8,
                 top_k=2, num_experts=4, moe_intermediate=128,
-                kv_latent_dim=32, max_context=256_000,
+                kv_latent_dim=32, qk_rope_head_dim=4, max_context=256_000,
                 use_mla=True, use_moe=True,
                 ffn_intermediate=128,
             ),
             "kimi_k25": dict(
                 hidden_size=64, num_q_heads=8, num_kv_heads=2, head_dim=8,
                 top_k=2, num_experts=4, moe_intermediate=128,
-                kv_latent_dim=32, max_context=256_000,
+                kv_latent_dim=32, qk_rope_head_dim=4, max_context=256_000,
                 use_mla=True, use_moe=True,
                 ffn_intermediate=128,
             ),

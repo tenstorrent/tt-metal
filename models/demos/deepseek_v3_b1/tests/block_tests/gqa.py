@@ -4,7 +4,6 @@
 
 """GQA (Grouped Query Attention) — reference implementation."""
 
-import math
 import torch
 import torch.nn.functional as F
 
@@ -37,7 +36,7 @@ def gqa_attention_torch(
     wo: [hidden, num_q_heads * head_dim]
     position_embeddings: None or (cos, sin) each [b, seq, rope_dim]
     rope_variant: "standard" (Llama/Qwen) or "glm4" (interleaved, partial)
-    attention_mask: None, bool [b,1,q,kv] (True=keep), or additive [b,1,q,kv]
+    attention_mask: None or additive [b,1,q,kv]
     past_key_value: None or (past_k, past_v) each [b, kv_heads, past_seq, hd]
 
     Returns (attn_out [b, seq, hidden], present_kv or None)
@@ -67,16 +66,12 @@ def gqa_attention_torch(
     k_exp = repeat_kv(k, n_rep)
     v_exp = repeat_kv(v, n_rep)
 
-    scale = 1.0 / math.sqrt(head_dim)
-    attn_weights = torch.matmul(q, k_exp.transpose(-2, -1)) * scale
+    scores = torch.matmul(q, k_exp.transpose(-2, -1)) * (head_dim ** -0.5)
 
     if attention_mask is not None:
-        if attention_mask.dtype == torch.bool:
-            attn_weights = attn_weights.masked_fill(~attention_mask, float("-inf"))
-        else:
-            attn_weights = attn_weights + attention_mask
+        scores = scores + attention_mask
 
-    attn_weights = F.softmax(attn_weights, dim=-1)
+    attn_weights = F.softmax(scores, dim=-1, dtype=torch.float32).type_as(hidden_states)
     attn_out = torch.matmul(attn_weights, v_exp)
     attn_out = attn_out.transpose(1, 2).contiguous().view(b, q_seq, num_q_heads * head_dim)
     attn_out = F.linear(attn_out, wo)
