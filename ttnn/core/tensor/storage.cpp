@@ -41,10 +41,7 @@ const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(
 const HostTensor& HostStorage::host_tensor() const { return tensor; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
-    auto transformed_buffer =
-        tensor.buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
-    auto transformed_tensor = HostTensor(std::move(transformed_buffer), tensor.tensor_spec(), tensor.tensor_topology());
-    return HostStorage(std::move(transformed_tensor));
+    return HostStorage(tensor.transform(callable));
 }
 
 DeviceStorage::DeviceStorage(

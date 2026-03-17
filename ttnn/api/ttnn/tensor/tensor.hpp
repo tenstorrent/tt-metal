@@ -53,6 +53,8 @@ public:
     [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
+    [[nodiscard]] Tensor(HostTensor tensor);
+
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
     [[nodiscard]] Tensor(
@@ -234,6 +236,10 @@ public:
     // Throws if the tensor is not on host.
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns the associated HostTensor.
+    const HostTensor& host_tensor() const&;
+    const HostTensor& host_tensor() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.

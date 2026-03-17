@@ -8,6 +8,18 @@
 
 namespace tt::tt_metal {
 
+const HostTensor& get_host_tensor(const Storage& storage) {
+    if (const auto* host_storage = std::get_if<HostStorage>(&storage)) {
+        return host_storage->host_tensor();
+    }
+    return std::get<HostStorage>(storage).host_tensor();
+}
+
+TensorAttributes::TensorAttributes(HostStorage storage) :
+    storage_(std::move(storage)),
+    tensor_spec_(get_host_tensor(storage_).tensor_spec()),
+    tensor_topology_(get_host_tensor(storage_).tensor_topology()) {}
+
 TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     storage_(std::move(storage)), tensor_spec_(std::move(tensor_spec)), tensor_topology_(std::move(tensor_topology)) {
     if (auto* host_storage = std::get_if<HostStorage>(&storage_)) {
