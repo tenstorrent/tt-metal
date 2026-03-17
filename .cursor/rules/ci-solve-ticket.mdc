@@ -37,6 +37,17 @@ After creating the draft PR, stop and ask the user exactly:
 
 When runs are triggered, immediately update the PR description to include links to the newly executing runs.
 
+## Workflow Run Selection Policy
+
+To avoid wasting CI capacity, default to **targeted** workflow execution:
+- Use `Custom test dispatch` (`.github/workflows/test-dispatch.yaml`) whenever possible.
+- Run only the failing test command(s) relevant to the ticket; avoid unrelated jobs.
+- Select the minimum runner label/hardware needed for that command.
+
+Broad/full workflows (for example `(T3K) T3000 e2e tests`) are exceptions and should be used only when:
+- the user explicitly asks for full-pipeline coverage, or
+- the fix impacts shared infrastructure and targeted dispatch is insufficient to validate risk.
+
 ## Required End-to-End Flow
 
 1. Resolve and inspect the issue with `gh issue view`.
@@ -56,7 +67,7 @@ When runs are triggered, immediately update the PR description to include links 
    - states local validation done and hardware limitations (if any),
    - includes a concrete CI test plan.
 9. Ask the explicit workflow permission question from the safety gate.
-10. If approved, trigger workflows and patch PR body with run URLs.
+10. If approved, trigger workflows using the run selection policy above and patch PR body with run URLs.
 11. Report status and next expected checkpoint.
 
 ## Hardware-Constrained Behavior

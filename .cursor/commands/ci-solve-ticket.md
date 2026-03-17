@@ -46,7 +46,9 @@ If no input is provided, stop and ask for the ticket.
    - Do not run any workflow unless user explicitly approves.
 
 8. **If user approves workflow runs**
-   - Trigger selected workflows with `gh workflow run ... --ref <branch>`.
+   - **Default to targeted validation via `Custom test dispatch`** (`test-dispatch.yaml`) and run only the failing test/command under investigation.
+   - Use the smallest runner label set that matches required hardware (for T3K, use the appropriate T3000 label such as `config-t3000`).
+   - Only run broad workflows (for example `(T3K) T3000 e2e tests`) if the user explicitly requests full-pipeline coverage.
    - Gather run URLs.
    - Update PR description to include links to currently executing runs.
 
