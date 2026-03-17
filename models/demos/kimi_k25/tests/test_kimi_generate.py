@@ -18,6 +18,14 @@ CPU-only (no hardware required):
                                   real mesh device needed for attribute checks).
   TestKimiGeneratorConfigVal    — Mismatched HF config fields raise ValueError
                                   *before* any hardware initialisation.
+  TestKimiFullModelReference    — ``DeepseekV3ForCausalLM(kimi_2layer_config)``
+                                  instantiates on PyTorch meta device (zero
+                                  memory) with correct lm_head/embed shapes,
+                                  layer count, expert count, and dense-vs-MoE
+                                  assignment.  Validates that the DSV3 reference
+                                  model is structurally compatible with Kimi
+                                  K2.5 architecture without needing hardware or
+                                  large RAM.
 
 Hardware (requires ``MESH_DEVICE=TG`` / ``DUAL`` / ``QUAD``):
 
@@ -28,17 +36,19 @@ Hardware (requires ``MESH_DEVICE=TG`` / ``DUAL`` / ``QUAD``):
                                   ``hf_config_short`` (384 experts, n_group=1,
                                   64 attn heads).  Pass criterion: no crash,
                                   output tensor is finite (no NaN/Inf).
+  test_full_model               — 61-layer random-weights stress test.
+                                  ``@pytest.mark.slow``; timeout=3600s.
 
 Notes
 -----
-* All CPU tests are import-only or mock-object tests — no PyTorch/TTNN needed
-  at collection time.  They are structured as ``TestCase`` classes so pytest
-  collects them correctly without any ``--no-header`` gymnastics.
+* CPU tests in ``TestKimiFullModelReference`` use PyTorch meta device, so they
+  instantiate the model with zero actual memory.  All shape/structural checks
+  run near-instantly.
 * The hardware test ``test_forward_pass`` is the key M5 deliverable: it
   exercises the full layer chain (embed → 1 dense MLA → 1 MoE → … → lm_head)
   end-to-end with random weights on real silicon.
 * PCC comparison against a reference model is **not** required here (that is
-  M6 correctness work).  We only check for finite outputs.
+  M4 correctness work).  We only check for finite outputs in smoke tests.
 """
 
 from __future__ import annotations
@@ -303,6 +313,191 @@ class TestKimiGeneratorWeightLoaderIntegration:
             "_run_kimi_forward_pass_random_weights must not pass empty state_dicts=() "
             "to get_test_weight_config"
         )
+
+
+# ============================================================================
+# CPU-only: full-model reference architecture validation
+# ============================================================================
+
+
+class TestKimiFullModelReference:
+    """CPU-only: validate DeepseekV3ForCausalLM accepts Kimi K2.5 full-model config.
+
+    These tests use PyTorch's *meta device* to instantiate the model with zero
+    memory allocation.  They confirm that the full-model architecture
+    (embedding, MoE + MLA layers, lm_head) is structurally compatible with
+    Kimi K2.5 parameters (vocab_size=163840, hidden_size=7168, 384 experts,
+    64 attn heads, n_group=1) without requiring a GPU or large RAM.
+
+    All tests soft-skip if the DSV3 reference model is unavailable.
+    """
+
+    @pytest.fixture(scope="class")
+    def cfg_2layer(self):
+        """Kimi K2.5 config with 2 transformer layers for fast CPU reference tests."""
+        from models.demos.kimi_k25.utils.config_adapter import KimiK25Config
+
+        cfg = KimiK25Config.from_fixture()
+        cfg.num_hidden_layers = 2
+        cfg.max_seq_len = 128
+        return cfg
+
+    def test_deepseek_causal_lm_importable(self):
+        """DeepseekV3ForCausalLM can be imported from the DSV3 reference module."""
+        try:
+            from models.demos.deepseek_v3.reference.modeling_deepseek import (  # noqa: F401
+                DeepseekV3ForCausalLM,
+            )
+        except ImportError:
+            pytest.skip("DSV3 reference model not importable in this environment")
+
+    def test_kimi_config_has_required_full_model_fields(self, cfg_2layer):
+        """KimiK25Config exposes all fields required by DeepseekV3ForCausalLM.__init__."""
+        required = [
+            "hidden_size",
+            "num_hidden_layers",
+            "vocab_size",
+            "num_attention_heads",
+            "n_routed_experts",
+            "num_experts_per_tok",
+            "moe_intermediate_size",
+            "intermediate_size",
+            "first_k_dense_replace",
+            "n_group",
+            "rms_norm_eps",
+            "rope_scaling",
+            "kv_lora_rank",
+            "qk_nope_head_dim",
+            "qk_rope_head_dim",
+            "v_head_dim",
+            "q_lora_rank",
+            "hidden_act",
+        ]
+        missing = [f for f in required if not hasattr(cfg_2layer, f)]
+        assert not missing, (
+            f"KimiK25Config is missing fields required by DeepseekV3ForCausalLM: {missing}"
+        )
+
+    def test_full_model_meta_device_instantiation(self, cfg_2layer):
+        """DeepseekV3ForCausalLM(kimi_2layer_config) instantiates on meta device without error."""
+        try:
+            import torch
+            from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+        except ImportError:
+            pytest.skip("torch or DSV3 reference model not importable")
+
+        with torch.device("meta"):
+            model = DeepseekV3ForCausalLM(cfg_2layer).eval()
+
+        # Basic sanity: model wraps a DeepseekV3Model
+        assert hasattr(model, "model"), "DeepseekV3ForCausalLM must have a .model attribute"
+        assert hasattr(model, "lm_head"), "DeepseekV3ForCausalLM must have a .lm_head attribute"
+
+    def test_lm_head_shape_on_meta_device(self, cfg_2layer):
+        """lm_head weight shape matches Kimi K2.5 vocab_size × hidden_size."""
+        try:
+            import torch
+            from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+        except ImportError:
+            pytest.skip("torch or DSV3 reference model not importable")
+
+        with torch.device("meta"):
+            model = DeepseekV3ForCausalLM(cfg_2layer).eval()
+
+        expected = (cfg_2layer.vocab_size, cfg_2layer.hidden_size)  # (163840, 7168)
+        actual = tuple(model.lm_head.weight.shape)
+        assert actual == expected, (
+            f"lm_head.weight shape mismatch: got {actual}, expected {expected}"
+        )
+
+    def test_embed_tokens_shape_on_meta_device(self, cfg_2layer):
+        """embed_tokens weight shape matches Kimi K2.5 vocab_size × hidden_size."""
+        try:
+            import torch
+            from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+        except ImportError:
+            pytest.skip("torch or DSV3 reference model not importable")
+
+        with torch.device("meta"):
+            model = DeepseekV3ForCausalLM(cfg_2layer).eval()
+
+        expected = (cfg_2layer.vocab_size, cfg_2layer.hidden_size)  # (163840, 7168)
+        actual = tuple(model.model.embed_tokens.weight.shape)
+        assert actual == expected, (
+            f"embed_tokens.weight shape mismatch: got {actual}, expected {expected}"
+        )
+
+    def test_layer_count_on_meta_device(self, cfg_2layer):
+        """Model has exactly cfg.num_hidden_layers=2 transformer layers."""
+        try:
+            import torch
+            from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+        except ImportError:
+            pytest.skip("torch or DSV3 reference model not importable")
+
+        with torch.device("meta"):
+            model = DeepseekV3ForCausalLM(cfg_2layer).eval()
+
+        actual = len(model.model.layers)
+        assert actual == cfg_2layer.num_hidden_layers, (
+            f"Expected {cfg_2layer.num_hidden_layers} layers, got {actual}"
+        )
+
+    def test_moe_layer_expert_count_on_meta_device(self, cfg_2layer):
+        """MoE layers have exactly 384 experts (Kimi K2.5 routed experts)."""
+        try:
+            import torch
+            from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+        except ImportError:
+            pytest.skip("torch or DSV3 reference model not importable")
+
+        with torch.device("meta"):
+            model = DeepseekV3ForCausalLM(cfg_2layer).eval()
+
+        # Layer 0 is dense (first_k_dense_replace=1); layer 1+ are MoE
+        # With 2 layers: layer 0 dense, layer 1 MoE
+        moe_layer = model.model.layers[1].mlp
+        n_experts = len(moe_layer.experts)
+        assert n_experts == cfg_2layer.n_routed_experts, (
+            f"MoE layer has {n_experts} experts; expected {cfg_2layer.n_routed_experts} (=384)"
+        )
+
+    def test_first_layer_is_dense_mlp(self, cfg_2layer):
+        """Layer 0 uses dense MLP (first_k_dense_replace=1), not MoE."""
+        try:
+            import torch
+            from models.demos.deepseek_v3.reference.modeling_deepseek import (
+                DeepseekV3ForCausalLM,
+                DeepseekV3MLP,
+            )
+        except ImportError:
+            pytest.skip("torch or DSV3 reference model not importable")
+
+        with torch.device("meta"):
+            model = DeepseekV3ForCausalLM(cfg_2layer).eval()
+
+        layer0_mlp = model.model.layers[0].mlp
+        assert isinstance(layer0_mlp, DeepseekV3MLP), (
+            f"Layer 0 MLP should be DeepseekV3MLP (dense), got {type(layer0_mlp).__name__}"
+        )
+
+    def test_prepare_model_state_dict_returns_expected_key_prefixes(self, cfg_2layer):
+        """prepare_model_state_dict returns keys with expected top-level prefixes.
+
+        This is a source-inspection test (no actual weight instantiation):
+        validates that the function uses the correct key prefixes for Kimi K2.5.
+
+        For the real execution test, use MESH_DEVICE=TG and run test_forward_pass.
+        """
+        import inspect
+
+        from models.demos.deepseek_v3.utils import hf_model_utils
+
+        src = inspect.getsource(hf_model_utils.prepare_model_state_dict)
+        # Verify the function filters keys as expected by TT weight converters
+        assert "model.embed_tokens." in src, "prepare_model_state_dict must filter embed_tokens keys"
+        assert "model.layers." in src, "prepare_model_state_dict must filter layer keys"
+        assert "lm_head." in src, "prepare_model_state_dict must filter lm_head keys"
 
 
 # ============================================================================
