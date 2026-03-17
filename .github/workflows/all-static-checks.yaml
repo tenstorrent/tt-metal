@@ -10,6 +10,7 @@ on:
 
 jobs:
   find-changed-files:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
@@ -18,6 +19,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
   pre-commit:
     name: Run Pre-commit Hooks
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,6 +46,7 @@ jobs:
             --to-ref ${{ env.PRE_COMMIT_TO_REF }}
         continue-on-error: false
   check-black:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - name: Do Nothing
@@ -51,6 +54,7 @@ jobs:
 
 
   check-spdx-licenses:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,12 +64,14 @@ jobs:
           ignore_config_file: '.github/spdx_ignore.yaml'
           verbose: 'true'
   check-metal-kernel-count:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Check kernel count in base metal is less than maximum
         run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
   check-doc:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +80,7 @@ jobs:
       - name: Run checks on docs
         run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh
   check-docs-links:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     needs: find-changed-files
     # We get rate-limited if we run too often; only run when it's useful
@@ -91,6 +98,7 @@ jobs:
           args: --verbose './README.md' './INSTALLING.md'  './docs/source/**/*.rst' './docs/source/**/*.md'
           fail: true
   check-forbidden-imports:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +109,7 @@ jobs:
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
   check-interleaved-addr-gen-usage:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -171,6 +180,7 @@ jobs:
             echo "✅ No increase in InterleavedAddrGen usages found in changed files."
           fi
   check-sweeps-workflow:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -182,6 +192,7 @@ jobs:
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   codeowners-validator:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -190,6 +201,7 @@ jobs:
           checks: "files,duppatterns,syntax"
           experimental_checks: "avoid-shadowing"
   check-symlinks-valid:
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

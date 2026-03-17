@@ -52,6 +52,7 @@ jobs:
 
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

@@ -31,6 +31,7 @@ on:
 
 jobs:
   load-test-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
@@ -83,6 +84,7 @@ jobs:
   models-sweep-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:

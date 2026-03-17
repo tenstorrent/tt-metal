@@ -25,6 +25,7 @@ on:
 
 jobs:
   generate-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -63,6 +64,7 @@ jobs:
           echo "Generated matrix: $matrix_json"
   fabric-perf-tests:
     needs: generate-matrix
+    timeout-minutes: 240
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines

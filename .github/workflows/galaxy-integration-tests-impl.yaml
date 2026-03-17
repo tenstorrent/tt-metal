@@ -22,6 +22,7 @@ on:
 
 jobs:
   load-test-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.apply-model-filter.outputs.matrix }}
@@ -74,6 +75,7 @@ jobs:
 
   galaxy-integration-tests:
     needs: load-test-matrix
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:

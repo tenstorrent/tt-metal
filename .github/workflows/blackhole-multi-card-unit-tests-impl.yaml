@@ -40,6 +40,7 @@ on:
         default: "all"
 jobs:
   generate-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
@@ -192,6 +193,7 @@ jobs:
   multi-card-unit-tests:
     needs: generate-matrix
     if: ${{ needs.generate-matrix.outputs.has_tests == 'true' }}
+    timeout-minutes: 120
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
