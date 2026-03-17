@@ -82,6 +82,7 @@ jobs:
             container_prefix: tray
             mesh_descriptor: t3k_mesh_graph_descriptor.textproto
             test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
+            # Exclude fabric_ring tests for tray: t3k tray topology and mesh descriptor are mismatched, causing these cases to fail in CI.
             test_args: "-k 'not fabric_ring'"
     runs-on:
       - topology-6u
