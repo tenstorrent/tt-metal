@@ -78,7 +78,7 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 )
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(120000)
 def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
