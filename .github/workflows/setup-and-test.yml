@@ -38,7 +38,7 @@ on:
       use_durations:
         description: "Use previously collected test durations for balanced splitting"
         required: false
-        default: true
+        default: false
         type: boolean
       log_level:
         description: "Loguru log level for test output (TRACE, DEBUG, INFO, WARNING, ERROR)"

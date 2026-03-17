@@ -366,11 +366,14 @@ def pytest_configure(config):
     with_coverage = config.getoption("--coverage", default=False)
     detailed_artefacts = config.getoption("--detailed-artefacts", default=False)
     no_debug_symbols = config.getoption("--no-debug-symbols", default=False)
+    speed_of_light = config.getoption("--speed-of-light", default=False)
+
     TestConfig.setup_build(
         Path(os.environ["LLK_HOME"]),
         with_coverage,
         detailed_artefacts,
         no_debug_symbols,
+        speed_of_light,
     )
 
     # Create directories from all processes - lock in create_directories handles race
@@ -703,6 +706,13 @@ def pytest_addoption(parser):
         default=None,
         help="Set loguru log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL). "
         "Overrides LOGURU_LEVEL env var. Default: INFO",
+    )
+
+    parser.addoption(
+        "--speed-of-light",
+        action="store_true",
+        default=False,
+        help="Should tests be compiled with everything runtime, converted to compile-time",
     )
 
     parser.addoption(

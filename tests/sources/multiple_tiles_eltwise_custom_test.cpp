@@ -19,16 +19,16 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /*num_faces */, 4 /* num_faces */);
     _llk_unpack_AB_sub_bcast_col_init_custom_<BROADCAST_TYPE>();
 
-    _llk_unpack_AB_sub_bcast_col_custom_<BROADCAST_TYPE>(L1_ADDRESS(params->buffer_A[0]), L1_ADDRESS(params->buffer_B[0]), CT_DIM);
+    _llk_unpack_AB_sub_bcast_col_custom_<BROADCAST_TYPE>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), CT_DIM);
 }
 
 #endif
@@ -39,10 +39,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_math_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -64,10 +64,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
 #ifdef ARCH_BLACKHOLE
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, false, false>(formats.pack_src, formats.pack_dst, 16 * 16 * 4);
@@ -87,9 +87,9 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_packer_wait_for_math_done_();
 
     // pack the result
-    for (int i = 0; i < params->TILE_CNT; i++)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(params->buffer_Res[i]));
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(params.buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

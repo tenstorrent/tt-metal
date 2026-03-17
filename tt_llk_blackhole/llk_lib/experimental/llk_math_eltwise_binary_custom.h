@@ -42,7 +42,7 @@ template <
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity                   = MathFidelity::LoFi,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest)
+inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces, [[maybe_unused]] const std::uint32_t acc_to_dest)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(

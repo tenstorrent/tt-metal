@@ -25,17 +25,18 @@ constexpr std::uint32_t buf_desc_id_dst   = 31; // Destination matrix output buf
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
+
     // Setup sync for unpack
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     set_ttsync_enables<TRACK_ALL>(ckernel::unpack::TRISC_ID);
     // src A input configuration
     tdma_descriptor_t tdma_desc_src_a;
-    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params->buffer_A[0]);
+    tdma_desc_src_a.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_A[0]);
     tdma_desc_src_a.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_A_src);
     tdma_desc_src_a.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_src_a.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
@@ -46,7 +47,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     // src B input configuration
     tdma_descriptor_t tdma_desc_src_b;
-    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params->buffer_B[0]);
+    tdma_desc_src_b.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_B[0]);
     tdma_desc_src_b.buf_desc.f.format       = static_cast<std::uint8_t>(formats.unpack_B_src);
     tdma_desc_src_b.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_src_b.buf_desc.f.x_dim        = FACE_C_DIM;  // Default face dimension is 16, tiny tiles not supported for quasar
@@ -77,10 +78,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_math_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
@@ -104,15 +105,15 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     tdma_descriptor_t tdma_desc_dst;
-    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params->buffer_Res[0]);
+    tdma_desc_dst.buf_desc.f.l1_addr_16B  = L1_ADDRESS(params.buffer_Res[0]);
     tdma_desc_dst.buf_desc.f.lmt_addr_16B = 0;
     tdma_desc_dst.buf_desc.f.format       = static_cast<std::uint8_t>(formats.pack_dst);
     tdma_desc_dst.buf_desc.f.x_dim        = FACE_C_DIM;

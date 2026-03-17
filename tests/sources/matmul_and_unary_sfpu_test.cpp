@@ -27,10 +27,10 @@ constexpr std::uint32_t buffer_A_tilized = 0x66000; // L1 address of buffer, pla
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig* formats_array = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats_array = params.formats;
 #endif
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -43,7 +43,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         4 /* num_faces */,
         4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(params->buffer_A[0]), L1_ADDRESS(params->buffer_B[0]), 0, 0, params->TILE_SIZE_UNPACK_A, params->TILE_SIZE_UNPACK_B);
+    _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, params.TILE_SIZE_UNPACK_A, params.TILE_SIZE_UNPACK_B);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);
@@ -72,10 +72,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 using namespace ckernel;
 using namespace ckernel::sfpu;
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig* formats_array = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats_array = params.formats;
 #endif
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
     _llk_math_matmul_init_<MATH_FIDELITY>();
@@ -118,10 +118,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig* formats_array = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats_array = params.formats;
 #endif
     int run = 0; // first L1-to-L1 run, we access the first set of formats_array in our array
 #ifdef ARCH_BLACKHOLE
@@ -142,7 +142,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     // Start of second pack kernel to perform final pack after executing matmul on tilized data
     run = 1; // second L1-to-L1 run, we access the second set of formats_array in our array
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, params->TILE_SIZE_PACK);
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en>(formats_array[run].pack_src, formats_array[run].pack_dst, params.TILE_SIZE_PACK);
 
     _llk_pack_init_<false, false>(formats_array[run].pack_dst);
 
@@ -153,7 +153,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #endif
 
     _llk_packer_wait_for_math_done_();
-    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(params->buffer_Res[0]));
+    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, L1_ADDRESS(params.buffer_Res[0]));
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }
 

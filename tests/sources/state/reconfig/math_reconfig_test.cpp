@@ -19,7 +19,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     llk::debug::tensix_dump::request();
 }
@@ -31,14 +31,14 @@ void run_kernel(const volatile struct RuntimeParams *params)
 #include "llk_math_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-    const std::uint32_t prev_a = (std::uint32_t)params->formats.unpack_A_src;
-    const std::uint32_t prev_b = (std::uint32_t)params->formats.unpack_A_dst;
-    const std::uint32_t next_a = (std::uint32_t)params->formats.pack_src;
-    const std::uint32_t next_b = (std::uint32_t)params->formats.pack_dst;
+    const std::uint32_t prev_a = (std::uint32_t)params.formats.unpack_A_src;
+    const std::uint32_t prev_b = (std::uint32_t)params.formats.unpack_A_dst;
+    const std::uint32_t next_a = (std::uint32_t)params.formats.pack_src;
+    const std::uint32_t next_b = (std::uint32_t)params.formats.pack_dst;
 
-    if (params->CONFIGURE_TEST_RUN_IDX == 0)
+    if (params.CONFIGURE_TEST_RUN_IDX == 0)
     {
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(
             /* srca_data_format */ next_a,
@@ -74,7 +74,7 @@ void run_kernel(const volatile struct RuntimeParams *params)
 
 #ifdef LLK_TRISC_PACK
 
-void run_kernel(const volatile struct RuntimeParams *params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     llk::debug::tensix_dump::request();
 }

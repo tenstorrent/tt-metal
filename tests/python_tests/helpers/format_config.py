@@ -275,36 +275,18 @@ class FormatConfig:
 
 
 FORMATS_CONFIG_STRUCT_RUNTIME = [
-    "// Formats struct",
-    "struct FormatConfig",
-    "{",
-    "    const std::uint32_t unpack_A_src;",
-    "    const std::uint32_t unpack_B_src;",
-    "    const std::uint32_t unpack_A_dst;",
-    "    const std::uint32_t unpack_B_dst;",
-    "    const std::uint32_t math;",
-    "    const std::uint32_t pack_src;",
-    "    const std::uint32_t pack_dst;",
-    "",
-    "    FormatConfig(",
-    "        std::uint32_t unpack_A_src_,",
-    "        std::uint32_t unpack_B_src_,",
-    "        std::uint32_t unpack_A_dst_,",
-    "        std::uint32_t unpack_B_dst_,",
-    "        std::uint32_t math_,",
-    "        std::uint32_t pack_src_,",
-    "        std::uint32_t pack_dst_) :",
-    "        unpack_A_src(unpack_A_src_),",
-    "        unpack_B_src(unpack_B_src_),",
-    "        unpack_A_dst(unpack_A_dst_),",
-    "        unpack_B_dst(unpack_B_dst_),",
-    "        math(math_),",
-    "        pack_src(pack_src_),",
-    "        pack_dst(pack_dst_)",
-    "    {",
-    "    }",
-    "};",
-    "",
+    """
+struct FormatConfig
+{
+    std::uint32_t unpack_A_src = 0;
+    std::uint32_t unpack_B_src = 0;
+    std::uint32_t unpack_A_dst = 0;
+    std::uint32_t unpack_B_dst = 0;
+    std::uint32_t math = 0;
+    std::uint32_t pack_src = 0;
+    std::uint32_t pack_dst = 0;
+};
+"""
 ]
 
 FORMATS_CONFIG_STRUCT_COMPILETIME = [

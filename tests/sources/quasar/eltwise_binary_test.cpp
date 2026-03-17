@@ -19,10 +19,10 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Configure buffer descriptors for both operands
     tdma_descriptor_t td_val_A, td_val_B;
@@ -34,11 +34,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     // Configure Source A buffer descriptor
     buffer_descriptor_u bd_val_A {};
-    bd_val_A.f.l1_addr_16B = params->buffer_A[0] / 16;
+    bd_val_A.f.l1_addr_16B = params.buffer_A[0] / 16;
     bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val_A.f.x_dim       = params->TEST_FACE_C_DIM;
-    bd_val_A.f.y_dim       = params->TEST_FACE_R_DIM;
-    bd_val_A.f.z_dim       = params->num_faces;
+    bd_val_A.f.x_dim       = params.TEST_FACE_C_DIM;
+    bd_val_A.f.y_dim       = params.TEST_FACE_R_DIM;
+    bd_val_A.f.z_dim       = params.num_faces;
 
     td_val_A.buf_desc        = bd_val_A;
     td_val_A.buf_desc_id     = buf_desc_id_a;
@@ -46,11 +46,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
     // Configure Source B buffer descriptor
     buffer_descriptor_u bd_val_B {};
-    bd_val_B.f.l1_addr_16B = params->buffer_B[0] / 16;
+    bd_val_B.f.l1_addr_16B = params.buffer_B[0] / 16;
     bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
-    bd_val_B.f.x_dim       = params->TEST_FACE_C_DIM;
-    bd_val_B.f.y_dim       = params->TEST_FACE_R_DIM;
-    bd_val_B.f.z_dim       = params->num_faces;
+    bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
+    bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
+    bd_val_B.f.z_dim       = params.num_faces;
 
     td_val_B.buf_desc        = bd_val_B;
     td_val_B.buf_desc_id     = buf_desc_id_b;
@@ -65,7 +65,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_unpack_binary_operands_init_(buf_desc_id_a, buf_desc_id_b, 1);
 
     // Unpack all tiles for both operands
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_unpack_binary_operands_(i, i);
     }
@@ -87,10 +87,10 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     // Setup synchronization - FPU writes to DEST, PACK reads from DEST
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -100,11 +100,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
 
     // Initialize eltwise binary operation with proper TileShape
-    TileShape tile_shape = {.num_faces = params->num_faces, .face_r_dim = params->TEST_FACE_R_DIM, .face_c_dim = params->TEST_FACE_C_DIM, .narrow_tile = false};
+    TileShape tile_shape = {.num_faces = params.num_faces, .face_r_dim = params.TEST_FACE_R_DIM, .face_c_dim = params.TEST_FACE_C_DIM, .narrow_tile = false};
     _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(tile_shape);
 
     // Perform eltwise binary operation for each tile
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_eltwise_binary_(i);
     }
@@ -121,10 +121,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
     std::uint32_t const buf_desc_id = 8;
 
@@ -134,11 +134,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
     // Configure output buffer descriptor
     buffer_descriptor_u bd_val {};
 
-    bd_val.f.l1_addr_16B = params->buffer_Res[0] / 16;
+    bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
     bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = params->TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params->TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = params->num_faces; // Match matmul pattern: set z_dim to actual params->num_faces
+    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
+    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
+    bd_val.f.z_dim       = params.num_faces; // Match matmul pattern: set z_dim to actual params.num_faces
 
     tdma_descriptor_t tdma_desc;
 
@@ -152,7 +152,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1);
 
     // Pack all result tiles
-    for (int i = 0; i < params->TILE_CNT; ++i)
+    for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_pack_<p_pacr::PACK0>(i, i);
     }

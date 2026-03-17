@@ -62,7 +62,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
     static constexpr std::uint32_t unpack_srcb = TT_OP_UNPACR(SrcB, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srca_transpose =
         TT_OP_UNPACR(SrcA, 0b10 /*This is an inc of 2, which is meant to be num_faces_c_dim*/, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    const std::uint32_t srca_end_op = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
+    [[maybe_unused]] const std::uint32_t srca_end_op = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);
 
     const std::uint32_t outerloop = transpose_of_faces ? num_faces_c_dim : num_faces_r_dim;
     const std::uint32_t innerloop = transpose_of_faces ? num_faces_r_dim : num_faces_c_dim;

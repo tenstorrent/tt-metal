@@ -26,7 +26,7 @@ static constexpr std::uint32_t MAX_TILES_DEST = is_fp32_dest_acc_en ? 4 : 8;
 static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by BLOCK_CT_DIM");
 
 // Test assumptions
-// static_assert(FULL_RT_DIM * FULL_CT_DIM == params->TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to params->TILE_CNT");
+// static_assert(FULL_RT_DIM * FULL_CT_DIM == TILE_CNT, "FULL_RT_DIM * FULL_CT_DIM must be equal to TILE_CNT");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -34,11 +34,16 @@ static_assert(FULL_CT_DIM % BLOCK_CT_DIM == 0, "FULL_CT_DIM must be divisible by
 #include "llk_unpack_common.h"
 #include "llk_unpack_untilize.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+#endif
+
     constexpr std::uint32_t TILE_SIZE = 2048 / 16; // size of tile in 16B words
 
     {
@@ -59,7 +64,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile += FULL_CT_DIM)
+        for (std::uint32_t tile = 0; tile < TILE_CNT; tile += FULL_CT_DIM)
         {
             _llk_unpack_untilize_pass_<true>(PERF_ADDRESS(PERF_INPUT_A, tile), FULL_CT_DIM);
             _llk_unpack_untilize_pass_<false>(PERF_ADDRESS(PERF_INPUT_A, tile), FULL_CT_DIM);
@@ -79,11 +84,17 @@ const bool is_int_fpu_en = false;
 
 using namespace ckernel;
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
+
     {
         ZONE_SCOPED("INIT")
 
@@ -100,11 +111,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            for (std::uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+            for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
-                std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
                 _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
@@ -129,11 +140,17 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
-#ifdef RUNTIME_FORMATS
-    const volatile FormatConfig& formats = params->formats;
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
 #endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
+
     constexpr bool UNTILIZE = false;
 
     {
@@ -154,11 +171,11 @@ void run_kernel(const volatile struct RuntimeParams* params)
     {
         ZONE_SCOPED("TILE_LOOP")
 
-        for (std::uint32_t loop = 0; loop < params->LOOP_FACTOR; loop++)
+        for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
         {
-            for (std::uint32_t block_start = 0; block_start < params->TILE_CNT; block_start += MAX_TILES_DEST)
+            for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
             {
-                std::uint32_t block_tiles = std::min(params->TILE_CNT - block_start, MAX_TILES_DEST);
+                std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
 
                 _llk_packer_wait_for_math_done_();
                 for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)

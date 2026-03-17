@@ -10,6 +10,7 @@
 #include "ckernel_sfpu.h"
 #include "llk_defs.h"
 #include "operand.h"
+#include "params.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
@@ -27,7 +28,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "llk_unpack_tilize.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Operation 0: Fused Unpack
     UNUSED const Operand buffer_A0(0x1a000, 2048);
@@ -117,7 +118,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Operation 0: Math Setup
     const std::uint32_t math_format0 = ckernel::to_underlying(DataFormat::Float16_b);
@@ -207,7 +208,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_common.h"
 #include "perf.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Operation 0: Packer
     const Operand buffer_Res0(0x1b000, 2048);
