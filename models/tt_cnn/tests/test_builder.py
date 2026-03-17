@@ -27,7 +27,7 @@ from models.tt_cnn.tt.builder import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 DEVICE_PARAMS = {"l1_small_size": 32768}
-PCC_THRESHOLD = 0.998  # Relaxed from 0.999: borderline failures observed on N300 (see #40114)
+PCC_THRESHOLD = 0.999
 
 INPUT_SIZES = [(8, 8), (16, 8)]
 SLICE_INPUT_SIZES = [(256, 128)]
@@ -68,6 +68,7 @@ UPSAMPLE_CONFIGS = [
 
 def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
     shape = (configuration.batch_size, configuration.in_channels, configuration.input_height, configuration.input_width)
+    torch.manual_seed(0)
     nchw = torch.randn(shape, dtype=torch.bfloat16).float()
 
     nhwc = torch.permute(nchw, (0, 2, 3, 1))
@@ -78,6 +79,7 @@ def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
 
 def create_pool2d_input_tensor(configuration: MaxPool2dConfiguration):
     shape = (configuration.batch_size, configuration.channels, configuration.input_height, configuration.input_width)
+    torch.manual_seed(0)
     nchw = torch.randn(shape, dtype=torch.bfloat16).float()
 
     nhwc = torch.permute(nchw, (0, 2, 3, 1)).reshape(
@@ -90,6 +92,7 @@ def create_pool2d_input_tensor(configuration: MaxPool2dConfiguration):
 
 def create_upsample_input_tensor(configuration: UpsampleConfiguration):
     shape = (configuration.batch_size, configuration.channels, configuration.input_height, configuration.input_width)
+    torch.manual_seed(0)
     nchw = torch.randn(shape, dtype=torch.bfloat16).float()
 
     nhwc = torch.permute(nchw, (0, 2, 3, 1))
@@ -934,3 +937,4 @@ def test_upsample_slicing_strategies(input_size, channels, batch_size, upsample_
         .permute(0, 3, 1, 2),
         PCC_THRESHOLD,
     )
+
