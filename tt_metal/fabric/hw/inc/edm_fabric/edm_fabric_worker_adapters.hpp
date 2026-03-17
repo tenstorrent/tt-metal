@@ -24,7 +24,10 @@
 
 namespace tt::tt_fabric {
 
-template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS>
+template <
+    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
+    uint8_t EDM_NUM_BUFFER_SLOTS,
+    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
 struct WorkerToFabricEdmSenderBase;
 
 // Type alias preserving the current name for all existing callers.
