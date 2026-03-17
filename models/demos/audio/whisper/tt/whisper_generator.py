@@ -122,9 +122,9 @@ class WhisperGenerator:
         self.cross_attn_cache_valid = False
 
         # Prefill trace (decoder-only, used during prefill with 2CQ events)
-        self.trace_id_decoder = defaultdict(lambda: None)
-        self.trace_input_decoder = defaultdict(lambda: None)
-        self.trace_output_decoder = defaultdict(lambda: None)
+        self.trace_id_prefill_decoder = defaultdict(lambda: None)
+        self.trace_input_prefill_decoder = defaultdict(lambda: None)
+        self.trace_output_prefill_decoder = defaultdict(lambda: None)
 
         # Decode trace (enlarged: embedding -> decoder -> lm_head -> argmax, persistent across generations)
         self.trace_id_decode = defaultdict(lambda: None)
@@ -249,12 +249,12 @@ class WhisperGenerator:
     def _release_decoder_trace(self):
         """Release all trace resources (for cleanup)."""
         # Release prefill traces
-        for trace_key in list(self.trace_id_decoder.keys()):
-            if self.trace_id_decoder[trace_key] is not None:
-                ttnn.release_trace(self.mesh_device, self.trace_id_decoder[trace_key])
-                self.trace_id_decoder[trace_key] = None
-                self.trace_input_decoder[trace_key] = None
-                self.trace_output_decoder[trace_key] = None
+        for trace_key in list(self.trace_id_prefill_decoder.keys()):
+            if self.trace_id_prefill_decoder[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key])
+                self.trace_id_prefill_decoder[trace_key] = None
+                self.trace_input_prefill_decoder[trace_key] = None
+                self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key] = None
                 logger.debug(f"Released prefill trace for batch size per device {trace_key}")
 
         # Release decode traces (persistent enlarged trace)
@@ -280,7 +280,7 @@ class WhisperGenerator:
             trace_key: Batch size per device key for trace lookup
             decode_pos: Host-side integer decode position for position embedding
         """
-        if self.trace_id_decoder[trace_key] is not None:
+        if self.trace_id_prefill_decoder[trace_key] is not None:
             return  # Already captured
 
         # Create decoder function that will be traced
@@ -329,26 +329,22 @@ class WhisperGenerator:
         compile_output = traced_decoder_fn(trace_key, l1_input)
         ttnn.deallocate(compile_output, force=True)
         ttnn.deallocate(l1_input)
-        logger.info("Decoder trace 2CQ Phase 1 (JIT) complete")
+        logger.info("Decoder trace 2CQ warmup complete")
 
         decoder_hidden_states = _run_2cq_preprocessing(token_id_host, decode_pos)
-        l1_input = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
-        self.op_event = ttnn.record_event(self.mesh_device, 0)
-        optimized_output = traced_decoder_fn(trace_key, l1_input)
-        ttnn.deallocate(optimized_output, force=True)
-        ttnn.deallocate(l1_input)
-        logger.info("Decoder trace 2CQ Phase 2 (optimized) complete")
-
-        decoder_hidden_states = _run_2cq_preprocessing(token_id_host, decode_pos)
-        self.trace_input_decoder[trace_key] = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+        self.trace_input_prefill_decoder[trace_key] = ttnn.to_memory_config(
+            decoder_hidden_states, ttnn.L1_MEMORY_CONFIG
+        )
         ttnn.deallocate(decoder_hidden_states)  # Free DRAM intermediate
         self.op_event = ttnn.record_event(self.mesh_device, 0)
 
         # Capture trace (decoder only)
-        self.trace_id_decoder[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        self.trace_output_decoder[trace_key] = traced_decoder_fn(trace_key, self.trace_input_decoder[trace_key])
+        self.trace_id_prefill_decoder[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key] = traced_decoder_fn(
+            trace_key, self.trace_input_prefill_decoder[trace_key]
+        )
 
-        ttnn.end_trace_capture(self.mesh_device, self.trace_id_decoder[trace_key], cq_id=0)
+        ttnn.end_trace_capture(self.mesh_device, self.trace_id_prefill_decoder[trace_key], cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
 
         logger.info(f"Persistent decoder trace 2CQ capture complete for batch size per device {trace_key}")
@@ -368,7 +364,7 @@ class WhisperGenerator:
         Returns:
             Decoder output tensor
         """
-        if self.trace_id_decoder[trace_key] is None:
+        if self.trace_id_prefill_decoder[trace_key] is None:
             raise RuntimeError("Decoder trace not captured. Call _capture_prefill_trace first.")
 
         # Q1: transfer token ID while Q0 may still be executing previous trace
@@ -393,19 +389,19 @@ class WhisperGenerator:
         decoder_hidden_states = inputs_embeds + positions
 
         # Copy to trace input L1 tensor at stable buffer address
-        self.trace_input_decoder[trace_key] = ttnn.to_memory_config(
+        self.trace_input_prefill_decoder[trace_key] = ttnn.to_memory_config(
             decoder_hidden_states,
             ttnn.L1_MEMORY_CONFIG,
-            output_tensor=self.trace_input_decoder[trace_key],
+            output_tensor=self.trace_input_prefill_decoder[trace_key],
         )
 
         # Record event before trace execution
         self.op_event = ttnn.record_event(self.mesh_device, 0)
 
         # Execute trace (non-blocking to allow Q1 overlap on next iteration)
-        ttnn.execute_trace(self.mesh_device, self.trace_id_decoder[trace_key], cq_id=0, blocking=False)
+        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key], cq_id=0, blocking=False)
 
-        return self.trace_output_decoder[trace_key]
+        return self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key]
 
     def _capture_decode_trace(self, trace_key, decode_pos, batch_size):
         """
@@ -480,21 +476,16 @@ class WhisperGenerator:
             self._reset_decode_pos(decode_pos, batch_size)
             ttnn.synchronize_device(self.mesh_device)
 
-        # Phases 1 & 2 compile and warm up kernels — only needed on first capture
+        # Warmup run to compile and warm up kernels — only needed on first capture
         if not self._decode_kernels_compiled[trace_key]:
             traced_autoregressive_step()
             ttnn.synchronize_device(self.mesh_device)
-            logger.info("On-device sampling trace Phase 1 (JIT) complete")
-            _reset_state()
-
-            traced_autoregressive_step()
-            ttnn.synchronize_device(self.mesh_device)
-            logger.info("On-device sampling trace Phase 2 (optimized) complete")
+            logger.info("On-device sampling trace warmup complete")
             _reset_state()
 
             self._decode_kernels_compiled[trace_key] = True
         else:
-            logger.info("Skipping JIT/optimized warmup phases (kernels already compiled)")
+            logger.info("Skipping warmup phase (kernels already compiled)")
 
         self.trace_id_decode[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         traced_autoregressive_step()
@@ -910,7 +901,11 @@ class WhisperGenerator:
                     input_mesh_mapper=self.input_mesh_mapper,
                 )
 
-                if self.kv_cache_per_batch_size[trace_key] and self.trace_id_decoder[trace_key] and prefill_pos > 0:
+                if (
+                    self.kv_cache_per_batch_size[trace_key]
+                    and self.trace_id_prefill_decoder[trace_key]
+                    and prefill_pos > 0
+                ):
                     # Prepare host token ID for 2CQ trace execution
                     prefill_token_host = ttnn.from_torch(
                         prefill_input.reshape(-1, prefill_input.shape[-1]),
@@ -936,7 +931,7 @@ class WhisperGenerator:
                     if prefill_pos == 0:
                         self.cross_attn_cache_valid = True
                         # Capture trace for reuse in subsequent prefill and decode iterations
-                        if self.kv_cache_per_batch_size[trace_key] and not self.trace_id_decoder[trace_key]:
+                        if self.kv_cache_per_batch_size[trace_key] and not self.trace_id_prefill_decoder[trace_key]:
                             self._capture_prefill_trace(trace_key, decode_pos=prefill_pos)
 
                 # On last prefill iteration, sample the first transcription token
@@ -1021,11 +1016,11 @@ class WhisperGenerator:
             generation_start = MAX_GEN_LEN
 
         # Release prefill trace before decode — decode uses its own separate trace
-        if self.trace_id_decoder[trace_key] is not None:
-            ttnn.release_trace(self.mesh_device, self.trace_id_decoder[trace_key])
-            self.trace_id_decoder[trace_key] = None
-            self.trace_input_decoder[trace_key] = None
-            self.trace_output_decoder[trace_key] = None
+        if self.trace_id_prefill_decoder[trace_key] is not None:
+            ttnn.release_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key])
+            self.trace_id_prefill_decoder[trace_key] = None
+            self.trace_input_prefill_decoder[trace_key] = None
+            self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key] = None
             logger.info("Released prefill trace before decode loop")
 
         # If persistent decode trace exists, write current token to device buffer
@@ -1301,7 +1296,7 @@ class WhisperGenerator:
 
     def cleanup(self):
         """Release trace resources."""
-        if self.trace_id_decoder:
+        if self.trace_id_prefill_decoder:
             self._release_decoder_trace()
             logger.info("Released decoder trace resources")
 
