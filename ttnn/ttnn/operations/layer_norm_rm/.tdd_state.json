@@ -1,0 +1,179 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads RM sticks, compute tilizes then immediately untilizes (identity passthrough), writer writes RM sticks to DRAM",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "x",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)",
+        "(1, 1, 32, 512)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "reduce_mean",
+      "description": "Add REDUCE_ROW for mean computation in compute kernel. Output is the row-wise mean broadcast back to full input shape.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_reduce_mean.py",
+      "reference_body": "x.mean(dim=-1, keepdim=True).expand_as(x)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)",
+        "(1, 1, 32, 512)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "subtract_mean",
+      "description": "Add sub(input, mean) with COL broadcast. Output is centered values (input - row_mean).",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_subtract_mean.py",
+      "reference_body": "x - x.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)",
+        "(1, 1, 32, 512)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "variance_rsqrt",
+      "description": "Add square, reduce_row for variance, add_eps+rsqrt, multiply by rstd. Full layer norm without affine transform.",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_variance_rsqrt.py",
+      "reference_body": "torch.nn.functional.layer_norm(x, [x.shape[-1]], eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)",
+        "(1, 1, 32, 512)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "affine",
+      "description": "Add optional gamma multiply (ROW broadcast) and beta add (ROW broadcast) for affine transform.",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_affine.py",
+      "reference_body": "torch.nn.functional.layer_norm(x, [x.shape[-1]], weight=gamma.squeeze(), bias=beta.squeeze(), eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)",
+        "(1, 1, 32, 512)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": ", gamma=gamma_tt, beta=beta_tt",
+      "extra_setup": "gamma = torch.randn(1, 1, 1, shape[-1])\nbeta = torch.randn(1, 1, 1, shape[-1])",
+      "extra_ttnn_setup": "gamma_tt = ttnn.from_torch(gamma, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)\nbeta_tt = ttnn.from_torch(beta, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
