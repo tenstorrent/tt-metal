@@ -694,7 +694,10 @@ class TtLlamaAttention(LightweightModule):
             # create_heads output: [1, batch(8), padded_heads(8), head_dim(128)]
             # batch is in dim 1 (8 users per device group), heads in dim 2.
             # Normalize over 5 real heads × 128 = 640 per device (globally 5120 across 8 row devices).
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.DRAM_MEMORY_CONFIG)
+            # Move to L1 INTERLEAVED (eliminates DRAM roundtrip for slice/reshape/tilize/norm ops).
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                q_heads_pre_rot_1BQD, self.model_config["OLMO_Q_NORM_L1_MEMCFG"]
+            )
             q_batch = q_heads_pre_rot_1BQD.shape[1]  # batch dimension
 
             # Slice 5 real Q heads in dim 2: [1, batch, 8, 128] → [1, batch, 5, 128]
@@ -704,11 +707,14 @@ class TtLlamaAttention(LightweightModule):
             # Reshape [1, batch, 5, 128] → [1, 1, batch, 640]: flatten heads into last dim
             q_flat = ttnn.reshape(q_real, [1, 1, q_batch, self.n_local_heads * self.head_dim])
             ttnn.deallocate(q_real)
-            q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
+            q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT, memory_config=self.model_config["OLMO_Q_NORM_L1_MEMCFG"])
 
             # Distributed global Q norm: all_gather on cluster_axis=0 (8 row devices)
             q_stats = ttnn.rms_norm_pre_all_gather(
-                q_flat, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config_hifi2
+                q_flat,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.model_config["OLMO_Q_NORM_L1_MEMCFG"],
             )
             q_stats_gathered = self._olmo_qk_norm_all_gather(q_stats, cluster_axis=0)
             ttnn.deallocate(q_stats)
@@ -718,6 +724,7 @@ class TtLlamaAttention(LightweightModule):
                 epsilon=1e-6,
                 weight=self.olmo_q_norm_weight_full_prefill,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=self.model_config["OLMO_Q_NORM_L1_MEMCFG"],
             )
             ttnn.deallocate(q_stats_gathered)
             q_flat = ttnn.to_layout(q_flat, ttnn.ROW_MAJOR_LAYOUT)

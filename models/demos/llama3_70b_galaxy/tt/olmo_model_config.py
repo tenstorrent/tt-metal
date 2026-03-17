@@ -659,13 +659,17 @@ class TtOlmoModelArgs(TtModelArgs):
             ),
         )
 
-        # ==== Decode K-norm L1 Config ====
-        # K exits llama_rs_create_heads as [1, 8, 1, 128] HEIGHT_SHARDED in L1 with [1, 128] shard.
-        # Use L1 INTERLEAVED for norm ops — K is only 8*128*2=2KB so it fits in a single L1 bank.
-        # This avoids the DRAM roundtrip while working correctly with the default norm program config.
-        # NOTE: LayerNormShardedMultiCoreProgramConfig requires a CoreGrid from origin (x=0,y=0),
-        # which conflicts with sub_core_grids starting at x=1. L1 INTERLEAVED avoids this constraint.
+        # ==== Decode QK-norm L1 Configs ====
+        # Both K and Q norm ops use L1 INTERLEAVED to avoid DRAM roundtrips.
+        # K: [1, 8, 1, 128] HEIGHT_SHARDED in L1 → move to L1 INTERLEAVED (2KB fits in one bank).
+        # Q: [1, 1, 8, 640] (row-major after reshape) → L1 INTERLEAVED before tilize (10KB fits).
+        # LayerNormShardedMultiCoreProgramConfig requires CoreGrid from origin (0,0), which
+        # conflicts with sub_core_grids starting at x=1, so we use default (single-core) program
+        # config but keep the data in L1 to eliminate the DRAM bus roundtrip.
         self.model_config["OLMO_K_NORM_L1_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1
+        )
+        self.model_config["OLMO_Q_NORM_L1_MEMCFG"] = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1
         )
 
