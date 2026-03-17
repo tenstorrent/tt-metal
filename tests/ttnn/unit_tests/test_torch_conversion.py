@@ -637,6 +637,81 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
+@pytest.mark.parametrize("enable_bf4_opt", [True, False])
+@pytest.mark.parametrize(
+    "mapper_type",
+    ["shard_1d_width", "shard_2d_width"],
+)
+def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, mapper_type, enable_bf4_opt):
+    """
+    Regression test: from_torch with a DRAM-sharded memory_config and a mesh
+    mapper that shards along the width dimension must not crash.
+
+    Root cause: TensorSpec(full_shape, ROW_MAJOR_layout + sharded_memcfg) was
+    constructed with the full pre-mesh-sharded tensor width (e.g., 24576) but
+    the shard spec was configured for per-device dimensions (shard_width = 256,
+    12 DRAM cores).  validate_shard_spec_with_tensor_shape computed
+    div_up(full_width, shard_width) > num_cores, triggering a fatal assertion.
+
+    Fix: Short-circuit with !memory_config.is_sharded() before constructing
+    the TensorSpec, so sharded configs skip the on-device fast path entirely.
+    """
+    torch.manual_seed(42)
+    mesh_shape = tuple(mesh_device.shape)
+    num_devices = mesh_shape[0] * mesh_shape[1]
+
+    dram_cores = mesh_device.dram_grid_size().x
+    per_device_width = dram_cores * ttnn.TILE_SIZE
+    per_device_height = 32
+
+    if mapper_type == "shard_1d_width":
+        full_width = per_device_width * num_devices
+        shape = (1, 1, per_device_height, full_width)
+        mesh_mapper = ShardTensorToMesh(mesh_device, dim=3)
+    elif mapper_type == "shard_2d_width":
+        full_width = per_device_width * mesh_shape[1]
+        shape = (mesh_shape[0], 1, per_device_height, full_width)
+        mesh_mapper = ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, 3))
+
+    dram_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_cores - 1, 0),
+            )
+        }
+    )
+    shard_spec = ttnn.ShardSpec(
+        dram_grid,
+        (per_device_height, per_device_width // dram_cores),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+        enable_bf4_opt=enable_bf4_opt,
+    )
+
+    assert (
+        ttnn_tensor.memory_config() == memory_config
+    ), f"Memory config mismatch: expected {memory_config}, got {ttnn_tensor.memory_config()}"
+    assert ttnn_tensor.dtype == ttnn.bfloat16
+    assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 @pytest.mark.parametrize(
     "mapper_type,ttnn_dtype,memory_config_type,enable_bf4_opt",
     [
