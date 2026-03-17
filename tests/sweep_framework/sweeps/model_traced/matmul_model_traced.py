@@ -9,31 +9,39 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from functools import partial
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-# Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
+TIMEOUT = 300
 
-# Load traced configurations from real model tests
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
 # Default: Run exact traced configs from real models with all parameter values in vectors
-model_traced_params = loader.get_suite_parameters("matmul", all_cases=False)
+model_traced_params = loader.get_suite_parameters("matmul")
 
 # Parameters provided to the test vector generator are defined here.
 parameters = {
     # Quick sample test with basic configurations for fast validation
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 32)],
+        "input_a_shape": [(1, 1, 32, 32)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_shape": [(1, 1, 32, 32)],
         "input_b_dtype": [ttnn.bfloat16],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],  # Sample uses device
+        "storage_type": ["StorageType::DEVICE"],
     },
 }
 
@@ -42,35 +50,80 @@ if model_traced_params:
     parameters["model_traced"] = model_traced_params
 
 
+def mesh_device_fixture():
+    """
+    Override default device fixture.
+    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    """
+    mesh_shape = get_mesh_shape()
+
+    if mesh_shape:
+        # Create mesh device based on env var
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        # Single device (default)
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
+
+
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
-    input_b_dtype,
-    input_b_layout,
-    input_b_memory_config,
-    output_memory_config,
+    input_b_shape=None,
+    input_b_dtype=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept traced_source, traced_machine_info, etc.
+    **kwargs,  # Accept scalar, placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple) and model_traced suite (dict)
-    if isinstance(input_shape, dict) and "self" in input_shape and "other" in input_shape:
-        # This is model_traced suite - dict with 'self' and 'other' keys
-        shape_a = input_shape["self"]
-        shape_b = input_shape["other"]
-    else:
-        # This is sample suite - use same shape for both inputs
-        if isinstance(input_shape, (tuple, list)):
-            shape_a = tuple(input_shape)
-            shape_b = tuple(input_shape)
-        else:
-            shape_a = input_shape
-            shape_b = input_shape
+    # Extract kwargs
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+
+    # Check if device is a mesh device (from fixture)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    # Don't pass output_memory_config to build_op_kwargs — it would add memory_config
+    # before we can clean up sharded configs below.
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"})
+
+    # Skip traced program_config: block dimensions (out_block_w, per_core_N, etc.) are computed
+    # for the original device grid and don't match the local device. Let ttnn auto-compute.
+    # When program_config is skipped, sharded output/memory configs are invalid because
+    # their shard specs depend on the program_config. Clear them so ttnn auto-determines.
+    if output_memory_config is not None and "SHARDED" in str(output_memory_config):
+        output_memory_config = None
+    if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
+        del op_kwargs["memory_config"]
+    if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Use output_memory_config as fallback for memory_config in op_kwargs
+    if "memory_config" not in op_kwargs and output_memory_config is not None:
+        op_kwargs["memory_config"] = output_memory_config
+
+    # V2 format provides separate shapes for each input
+    shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else shape_a
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -83,25 +136,42 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
+    # Apply activation function to golden if present (e.g., gelu_approx fused with matmul)
+    activation = kwargs.get("activation", None)
+    if activation and activation != "__ABSENT__":
+        from ttnn.operations.activations import get_golden_function_for_activation
+
+        golden_activation = get_golden_function_for_activation(activation)
+        if golden_activation is not None:
+            torch_output_tensor = golden_activation(torch_output_tensor)
+
+    # Check if storage_type is HOST - if so, don't pass device to from_torch
+    is_host = storage_type and "HOST" in str(storage_type)
+
     # Create tensors with the traced memory configs
     # If direct creation fails, try creating interleaved first then converting to sharded
     # This matches how models typically create sharded tensors
     try:
-        # Check if storage_type is HOST - if so, don't pass device to from_torch
-        is_host = storage_type and "HOST" in str(storage_type)
-
-        # Build from_torch arguments based on storage_type
-        from_torch_kwargs = {
-            "dtype": input_a_dtype,
-            "layout": input_a_layout,
-        }
-
-        # Only add device and memory_config if not HOST storage
         if not is_host:
-            from_torch_kwargs["device"] = device
-            from_torch_kwargs["memory_config"] = input_a_memory_config
-
-        input_tensor_a = ttnn.from_torch(torch_input_tensor_a, **from_torch_kwargs)
+            if is_mesh_device and input_a_tensor_placement:
+                input_tensor_a = create_tensor_on_mesh(
+                    torch_input_tensor_a,
+                    device,
+                    input_a_dtype,
+                    input_a_layout,
+                    input_a_memory_config,
+                    input_a_tensor_placement,
+                )
+            else:
+                input_tensor_a = ttnn.from_torch(
+                    torch_input_tensor_a,
+                    dtype=input_a_dtype,
+                    layout=input_a_layout,
+                    device=device,
+                    memory_config=input_a_memory_config,
+                )
+        else:
+            input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
     except RuntimeError:
         # If direct creation fails, try interleaved->sharded conversion
         input_tensor_a_interleaved = ttnn.from_torch(
@@ -136,23 +206,27 @@ def run(
         )
         input_tensor_b = input_tensor_b_interleaved
     else:
-        # Use the traced config directly if it's already INTERLEAVED
         try:
-            # Check if storage_type is HOST - if so, don't pass device to from_torch
-            is_host = storage_type and "HOST" in str(storage_type)
-
-            # Build from_torch arguments based on storage_type
-            from_torch_kwargs = {
-                "dtype": input_b_dtype,
-                "layout": input_b_layout,
-            }
-
-            # Only add device and memory_config if not HOST storage
             if not is_host:
-                from_torch_kwargs["device"] = device
-                from_torch_kwargs["memory_config"] = input_b_memory_config
-
-            input_tensor_b = ttnn.from_torch(torch_input_tensor_b, **from_torch_kwargs)
+                if is_mesh_device and input_b_tensor_placement:
+                    input_tensor_b = create_tensor_on_mesh(
+                        torch_input_tensor_b,
+                        device,
+                        input_b_dtype,
+                        input_b_layout,
+                        input_b_memory_config,
+                        input_b_tensor_placement,
+                    )
+                else:
+                    input_tensor_b = ttnn.from_torch(
+                        torch_input_tensor_b,
+                        dtype=input_b_dtype,
+                        layout=input_b_layout,
+                        device=device,
+                        memory_config=input_b_memory_config,
+                    )
+            else:
+                input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
         except RuntimeError:
             # If direct creation fails, try interleaved->sharded conversion
             input_tensor_b_interleaved = ttnn.from_torch(
@@ -168,11 +242,10 @@ def run(
                 input_tensor_b = input_tensor_b_interleaved
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
     return [pcc, e2e_perf]
