@@ -199,7 +199,7 @@ FORCE_INLINE void fill_col0_partial(volatile tt_l1_ptr uint32_t* ptr, uint32_t s
 // =============================================================================
 
 template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim,
-          uint32_t valid_reduce_dim_elements_in_tile>
+          uint32_t valid_reduce_dim_elements_in_tile, bool force_reduce_llk>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
     ASSERT(cb_id < NUM_CIRCULAR_BUFFERS);
     static_assert(
@@ -214,7 +214,8 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f) {
         "prepare_reduce_scaler only supports Float16_b (bfloat16) and Float32 formats");
 
     // Matmul-based reduce uses col-0 fill; reduce LLK uses row-0 fill
-    constexpr bool use_matmul = (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
+    constexpr bool use_matmul = !force_reduce_llk
+                                && (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
                                 && reduce_dim == ReduceDim::REDUCE_ROW;
 
     cb_reserve_back(cb_id, 1);
@@ -256,7 +257,8 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t valid_reduce_dim_elements_in_tile,
-    uint32_t reduce_factor>
+    uint32_t reduce_factor,
+    bool force_reduce_llk>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler() {
 
     // -------------------------------------------------------------------------
@@ -284,7 +286,7 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler() {
     // -------------------------------------------------------------------------
     // 2. Fill the CB with the computed scaler
     // -------------------------------------------------------------------------
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, valid_reduce_dim_elements_in_tile>(scaler_f);
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, valid_reduce_dim_elements_in_tile, force_reduce_llk>(scaler_f);
 }
 
 }  // namespace dataflow_kernel_lib

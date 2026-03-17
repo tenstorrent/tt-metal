@@ -56,7 +56,8 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_in_2");
         const uint32_t scalar_w_bits = get_arg_val<uint32_t>(1);
         float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_2>(scalar_w_f);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            scalar_w_f);
 
         constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);

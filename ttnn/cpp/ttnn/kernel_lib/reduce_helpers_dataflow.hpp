@@ -53,13 +53,18 @@ using ckernel::ReduceDim;
  *         in the tile (1-32, default 32 = full tile). When the last tile along the reduce
  *         dimension is partially filled, this specifies how many row or column elements contain
  *         valid data; the remaining positions are zeroed out so they do not affect the result.
+ * @tparam force_reduce_llk When true, forces row-0 fill (reduce LLK layout) even for
+ *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
+ *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
+ *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
  * @param scaler_f Float scaler value to fill the tile with
  */
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
-    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH>
+    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH,
+    bool force_reduce_llk = false>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
 
 /**
@@ -87,7 +92,8 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH,
-    uint32_t reduce_factor = 1>
+    uint32_t reduce_factor = 1,
+    bool force_reduce_llk = false>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler();
 
 }  // namespace dataflow_kernel_lib

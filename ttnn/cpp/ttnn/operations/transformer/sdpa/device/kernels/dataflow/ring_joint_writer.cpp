@@ -362,7 +362,10 @@ void kernel_main() {
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW>();
+        ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
+        1,
+        true>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
