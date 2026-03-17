@@ -54,61 +54,67 @@ struct ExecuteUnaryWithFloatParameter {
 
 }  // namespace operations::unary
 
-#define REGISTER_UNARY_OPERATION(op_name, op_type)                                                     \
-    inline Tensor op_name(                                                                             \
-        const Tensor& t,                                                                               \
-        const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,                             \
-        const std::optional<Tensor>& o = std::nullopt,                                                 \
-        const std::optional<CoreRangeSet>& s = std::nullopt) {                                         \
-        return operations::unary::detail::unary_impl(                                                  \
-            t, {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type}}, m, o, s); \
+#define REGISTER_UNARY_OPERATION(op_name, op_type)                                        \
+    inline Tensor op_name(                                                                \
+        const Tensor& input_tensor,                                                       \
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,    \
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,               \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {               \
+        return operations::unary::detail::unary_impl(                                     \
+            input_tensor,                                                                 \
+            {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type}}, \
+            memory_config,                                                                \
+            optional_output_tensor,                                                       \
+            sub_core_grids);                                                              \
     }
 
-#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(op_name, op_type)                                \
-    inline Tensor op_name(                                                                                       \
-        const Tensor& t,                                                                                         \
-        bool p = false,                                                                                          \
-        const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,                                       \
-        const std::optional<Tensor>& o = std::nullopt,                                                           \
-        const std::optional<CoreRangeSet>& s = std::nullopt) {                                                   \
-        return operations::unary::detail::unary_impl(                                                            \
-            t,                                                                                                   \
-            {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type, static_cast<float>(p)}}, \
-            m,                                                                                                   \
-            o,                                                                                                   \
-            s);                                                                                                  \
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(op_name, op_type)                         \
+    inline Tensor op_name(                                                                                \
+        const Tensor& input_tensor,                                                                       \
+        bool fast_and_approximate_mode = false,                                                           \
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,                    \
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,                               \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {                               \
+        return operations::unary::detail::unary_impl(                                                     \
+            input_tensor,                                                                                 \
+            {operations::unary::UnaryWithParam{                                                           \
+                operations::unary::UnaryOpType::op_type, static_cast<float>(fast_and_approximate_mode)}}, \
+            memory_config,                                                                                \
+            optional_output_tensor,                                                                       \
+            sub_core_grids);                                                                              \
     }
 
-#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(op_name, op_type)                                          \
-    inline Tensor op_name(                                                                                       \
-        const Tensor& t,                                                                                         \
-        float p,                                                                                                 \
-        const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,                                       \
-        const std::optional<Tensor>& o = std::nullopt,                                                           \
-        const std::optional<CoreRangeSet>& s = std::nullopt) {                                                   \
-        return operations::unary::detail::unary_impl(                                                            \
-            t,                                                                                                   \
-            {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type, static_cast<float>(p)}}, \
-            m,                                                                                                   \
-            o,                                                                                                   \
-            s);                                                                                                  \
+#define REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(op_name, op_type)                   \
+    inline Tensor op_name(                                                                \
+        const Tensor& input_tensor,                                                       \
+        float parameter,                                                                  \
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,    \
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,               \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {               \
+        return operations::unary::detail::unary_impl(                                     \
+            input_tensor,                                                                 \
+            {operations::unary::UnaryWithParam{                                           \
+                operations::unary::UnaryOpType::op_type, static_cast<float>(parameter)}}, \
+            memory_config,                                                                \
+            optional_output_tensor,                                                       \
+            sub_core_grids);                                                              \
     }
 
 #define UNARY_OP_SCALAR_VARIANT(op_name, op_type)                                                                 \
     inline Tensor op_name(                                                                                        \
-        const Tensor& t,                                                                                          \
-        operations::unary::ScalarVariant p,                                                                       \
-        const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,                                        \
-        const std::optional<Tensor>& o = std::nullopt) {                                                          \
+        const Tensor& input_tensor,                                                                               \
+        operations::unary::ScalarVariant parameter,                                                               \
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,                            \
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {                                     \
         return std::visit(                                                                                        \
             [&](auto param) {                                                                                     \
                 return operations::unary::detail::unary_impl(                                                     \
-                    t,                                                                                            \
+                    input_tensor,                                                                                 \
                     {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::op_type, (param)}}, \
-                    m,                                                                                            \
-                    o);                                                                                           \
+                    memory_config,                                                                                \
+                    optional_output_tensor);                                                                      \
             },                                                                                                    \
-            p);                                                                                                   \
+            parameter);                                                                                           \
     }
 
 // -----------------------------------------------------------------------------
@@ -207,76 +213,76 @@ Tensor xielu(
 ComplexTensor reciprocal(const ComplexTensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 Tensor unary_fmod(
-    const Tensor& t,
-    float p,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    float parameter,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor threshold(
-    const Tensor& t,
-    float pa,
-    float pb,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    float parameter_a,
+    float parameter_b,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor round(
-    const Tensor& t,
-    const std::optional<int32_t>& p = std::nullopt,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<int32_t>& parameter = std::nullopt,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor identity(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor abs(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor abs(const ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 Tensor eqz(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor hardmish(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor hardshrink(
-    const Tensor& t,
+    const Tensor& input_tensor,
     float lambda = 0.5f,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor logit(
-    const Tensor& t,
+    const Tensor& input_tensor,
     std::optional<float> eps = std::nullopt,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor elu(
-    const Tensor& t,
+    const Tensor& input,
     float alpha = 1.0f,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor hardtanh(
-    const Tensor& t,
+    const Tensor& input_tensor,
     float min_val = -1.0f,
     float max_val = 1.0f,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor softshrink(
-    const Tensor& t,
+    const Tensor& input_tensor,
     float lambda = 0.5f,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor deg2rad(
     const Tensor& input_tensor,
@@ -289,43 +295,43 @@ Tensor rad2deg(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor clamp_tss(
-    const Tensor& t,
+    const Tensor& input_tensor,
     float min_val,
     float max_val,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor clamp_tss(
-    const Tensor& t,
+    const Tensor& input_tensor,
     int32_t min_val,
     int32_t max_val,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor softplus(
-    const Tensor& t,
+    const Tensor& input,
     float beta,
     float threshold,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor tanh(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt,
+    const Tensor& input,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     bool approx = false);
 
 Tensor tanhshrink(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt,
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     bool /*approx*/ = false);
 
 Tensor prelu_sfpu(
-    const Tensor& t,
+    const Tensor& input,
     float value,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor where_tss(
     const Tensor& condition,
@@ -335,11 +341,11 @@ Tensor where_tss(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor selu(
-    const Tensor& t,
+    const Tensor& input_tensor,
     float scale = 1.050700987f,
     float alpha = 1.673263242f,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor bitcast(
     const Tensor& input_tensor,
@@ -355,100 +361,100 @@ Tensor rdiv(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor swish(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor power_iterative(
-    const Tensor& t,
+    const Tensor& input_tensor,
     uint32_t exponent,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor sigmoid(
-    const Tensor& t,
+    const Tensor& input,
     int vector_mode = (int32_t)operations::unary::VecMode::RC,
     operations::unary::SigmoidMode mode = operations::unary::SigmoidMode::ACCURATE,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor sigmoid_accurate(
-    const Tensor& t,
+    const Tensor& input,
     bool fast_and_approximate_mode = false,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor log_sigmoid(
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor unary_chain(
-    const Tensor& t,
-    const std::vector<operations::unary::EltwiseUnaryWithParam>& chain,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    const std::vector<operations::unary::EltwiseUnaryWithParam>& ops_chain,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 template <typename T>
 Tensor rsub_sfpu(
-    const Tensor& t,
+    const Tensor& input_tensor,
     T param,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor add_sfpu(
-    const Tensor& t,
-    float p,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    float param,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor add_sfpu(
-    float p,
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    float param,
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor mul_sfpu(
-    const Tensor& t,
-    float p,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    float param,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor mul_sfpu(
-    float p,
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    float param,
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor sub_sfpu(
-    const Tensor& t,
-    float p,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    float param,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor sub_sfpu(
-    float p,
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    float param,
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor div_sfpu(
-    const Tensor& t,
-    float p,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const Tensor& input_tensor,
+    float param,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor div_sfpu(
-    float p,
-    const Tensor& t,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    float param,
+    const Tensor& input_tensor,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 Tensor unary_with_int32_param(
     operations::unary::UnaryOpType op_type,
-    const Tensor& t,
+    const Tensor& input_tensor,
     int32_t param,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
 }  // namespace ttnn
