@@ -51,13 +51,15 @@ def generate_pack_untilize_combinations(
 
     for fmt in formats_list:
         in_fmt = fmt.input_format
-        if in_fmt != fmt.output_format:
-            continue
 
         dest_acc_modes = (
             (DestAccumulation.Yes,)
             if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
+            else (
+                (DestAccumulation.No,)
+                if in_fmt == DataFormat.Int16
+                else (DestAccumulation.No, DestAccumulation.Yes)
+            )
         )
 
         for dest_acc in dest_acc_modes:
@@ -71,7 +73,9 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-    ]
+        DataFormat.Int16,
+    ],
+    same=True,  # Input format and output format are the same
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS
