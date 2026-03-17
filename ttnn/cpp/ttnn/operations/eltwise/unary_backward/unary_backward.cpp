@@ -105,7 +105,7 @@ std::vector<Tensor> clip_bw(
     const std::optional<Tensor>& min,
     const std::optional<Tensor>& max,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return clamp_bw(grad, input, std::move(min), std::move(max), output_mem_config);
+    return clamp_bw(grad, input, min, max, output_mem_config);
 }
 
 // Hardtanh
