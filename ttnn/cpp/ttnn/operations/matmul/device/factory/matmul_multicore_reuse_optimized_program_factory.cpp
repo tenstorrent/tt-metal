@@ -44,13 +44,13 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     // Look up CB handles by buffer index
     tt_metal::CBHandle cb_src0 = 0, cb_src1 = 0, cb_output = 0;
     for (const auto& cb : program.circular_buffers()) {
-        if (cb->buffer_indices().count(tt::CBIndex::c_0)) {
+        if (cb->buffer_indices().contains(tt::CBIndex::c_0)) {
             cb_src0 = cb->id();
         }
-        if (cb->buffer_indices().count(tt::CBIndex::c_1)) {
+        if (cb->buffer_indices().contains(tt::CBIndex::c_1)) {
             cb_src1 = cb->id();
         }
-        if (cb->buffer_indices().count(tt::CBIndex::c_4)) {
+        if (cb->buffer_indices().contains(tt::CBIndex::c_4)) {
             cb_output = cb->id();
         }
     }
