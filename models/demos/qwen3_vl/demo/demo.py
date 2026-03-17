@@ -437,21 +437,13 @@ def test_demo(
                 None,
             )
         )
-        # logger.info(f"image_embeds: {image_embeds.shape}")
-        # logger.info(f"deepstack_visual_embeds: {len(deepstack_visual_embeds)}")
-        # logger.info(f"deepstack_visual_embeds[0]: {deepstack_visual_embeds[0].shape}")
         profiler.end(f"vision_model_prefill", iteration=batch_idx)
 
         # Prepare text + vision inputs for decoder model
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
-        logger.info(f"image_embeds: {image_embeds.shape}")
-        logger.info(f"deepstack_visual_embeds: {len(deepstack_visual_embeds)}")
-        logger.info(f"deepstack_visual_embeds[0]: {deepstack_visual_embeds[0].shape}")
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
         # pad to multiple of 128
-        logger.info(f"text_embeds: {text_embeds.shape}")
-        # logger.info(f"text_embeds: {text_embeds.shape}")
         text_embeds_tt = ttnn.from_torch(
             text_embeds,
             device=mesh_device,
@@ -461,7 +453,6 @@ def test_demo(
                 model_args.mesh_device, dims=(None, 2), mesh_shape=model_args.cluster_shape
             ),
         )
-        logger.info(f"text_embeds_tt: {text_embeds_tt.shape}")
         input_embeds, deepstack_visual_embeds = merge_vision_tokens_ttnn(
             inputs.input_ids,
             text_embeds_tt,
@@ -470,9 +461,6 @@ def test_demo(
             deepstack_visual_embeds=deepstack_visual_embeds,
             model_args=model_args,
         )
-        logger.info(f"input_embeds: {input_embeds.shape}")
-        logger.info(f"deepstack_visual_embeds: {len(deepstack_visual_embeds)}")
-        logger.info(f"deepstack_visual_embeds[0]: {deepstack_visual_embeds[0].shape}")
         pad_token_id = tokenizer.pad_token_id
         assert (
             model_args.max_seq_len >= max(x.shape[0] for x in input_embeds) + max_generated_tokens
@@ -490,12 +478,6 @@ def test_demo(
             pad_embedding=pad_embedding_tt,
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
-        logger.info(f"input_prefill_pt: {input_prefill_pt.shape}")
-        logger.info(f"deepstack_visual_embeds: {len(deepstack_visual_embeds)}")
-        logger.info(f"deepstack_visual_embeds[0]: {len(deepstack_visual_embeds[0])}")
-        logger.info(f"deepstack_visual_embeds[0][0]: {deepstack_visual_embeds[0][0].shape}")
-        logger.info(f"decoding_pos: {decoding_pos}")
-        logger.info(f"prefill_lens: {prefill_lens}")
         # Get user-specific rotary position embeddings
         cos, sin, rope_deltas = multimodal_rope_from_hf(inputs, reference_model, model_args, pad_token_id=pad_token_id)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)

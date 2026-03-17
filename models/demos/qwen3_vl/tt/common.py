@@ -76,7 +76,7 @@ def merge_vision_tokens_ttnn(
     input_embeds = ttnn.reshape(input_embeds, (B, S, H))
     if deepstack_visual_embeds is not None:
         for i in range(len(deepstack_visual_embeds)):
-            deepstack_visual_embeds[i] = ttnn.scatter(zeros, -1, mask_indices_tt, deepstack_visual_embeds[i])
+            deepstack_visual_embeds[i] = ttnn.scatter(zeros, 0, mask_indices_tt, deepstack_visual_embeds[i])
             deepstack_visual_embeds[i] = ttnn.reshape(deepstack_visual_embeds[i], (B, S, H))
     return input_embeds, deepstack_visual_embeds
 
