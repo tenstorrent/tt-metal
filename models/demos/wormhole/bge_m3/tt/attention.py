@@ -301,6 +301,21 @@ def _resolve_attention_config(config: BgeM3AttentionConfig) -> BgeM3AttentionCon
     if config.output_memcfg is None:
         to_set["output_memcfg"] = ttnn.DRAM_MEMORY_CONFIG
 
+    if config.qkv_compute_kernel_cfg is None:
+        to_set["qkv_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+    if config.output_compute_kernel_cfg is None:
+        to_set["output_compute_kernel_cfg"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     # Phase D: resolve single target device.
     param_devices = [
         param.device
