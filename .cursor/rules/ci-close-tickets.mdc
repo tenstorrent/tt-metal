@@ -5,34 +5,42 @@ alwaysApply: false
 
 # Close CI Maintenance Tickets
 
-Use this rule when asked to review and close no-longer-relevant CI maintenance issues for `tenstorrent/tt-metal`.
+Use this rule when asked to decide whether CI maintenance issues in `tenstorrent/tt-metal` should be closed.
 
-## Scope
+## Goal
 
-- Only evaluate issues labeled `glean CI maintenance`.
-- Evaluate all candidates first; apply close cap only at the final close step.
+Close only issues that are no longer actionable based on the latest completed run on `main`.
 
-## Execution Model
+## Required Scope
 
-- Use direct `gh` / `gh api` commands only.
-- If temporary scripts are required, place them in `.build_ci/data/ci_ticketing_temp`.
-- Before review, clear stale logs under `build_ci/ci_ticketing/close_tickets/glean_review_logs`.
+1. Review only issues labeled `glean CI maintenance`.
+2. Evaluate all candidate issues first.
+3. Apply any close-cap limit only in the final close step.
 
-## Decision Rule (Latest completed run on `main`)
+## Required Workflow
 
-Extract failing test and root-cause error from ticket body, inspect the latest finished run for that job, then:
+1. Use only direct `gh` / `gh api` commands.
+2. If you need temporary scripts, place them in `.build_ci/data/ci_ticketing_temp`.
+3. Before starting review, clear stale logs in `build_ci/ci_ticketing/close_tickets/glean_review_logs`.
+4. For each issue:
+   - Extract the failing test name and root-cause error from the issue body.
+   - Inspect the latest completed workflow run on `main` for that same job.
+   - Review failure logs manually yourself.
+5. Never write or use a script that closes tickets automatically.
 
-- Close if exact failing test is now passing, or
-- Close if exact failing test still fails but with clearly different test-level root cause.
+## Close vs Keep Open Rules
 
-Always review the failure logs yourself. Never write a script to close tickets for you
+### Close the issue if either condition is true
 
-Do not close when:
+- The exact previously failing test is now passing.
+- The exact previously failing test still fails, but the test-level root cause is clearly different.
 
-- Same root cause is still present.
-- Differences are cosmetic (timestamps, ANSI, formatting, host/runner, dynamic IDs).
-- Evidence is infrastructure-only noise (transient network/runner/process exit lines).
-- Matrix has multiple matching instances and at least one still fails with the same root cause.
+### Keep the issue open if any condition is true
+
+- The same root cause is still present.
+- The difference is cosmetic only (timestamps, ANSI, formatting, host/runner, dynamic IDs).
+- The evidence is only infrastructure noise (transient network/runner/process exit lines).
+- The job is a matrix job with multiple matching instances and at least one still fails with the same root cause.
 
 ## Output File
 
@@ -40,7 +48,7 @@ Write closed issues to:
 
 - `build_ci/ci_ticketing/close_tickets/closed_tickets.json`
 
-Each object must include:
+Each JSON object must include:
 
 - `issue_url`
 - `old_failure_message`
