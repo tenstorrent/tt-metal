@@ -1337,6 +1337,7 @@ void sdpa_ring_v2(
     }
 
     for (uint32_t q = global_q_start; q < global_q_end; q++) {
+        // DeviceZoneScopedN("Q CHUNK");
         // Use persistent accumulator state from caller (single Q-chunk)
         // or restore from DRAM (multi Q-chunk).
         AccumulatorHalf q_prev = acc_state.prev, q_cur = acc_state.cur;
@@ -1354,6 +1355,7 @@ void sdpa_ring_v2(
         uint32_t KV_chunks_processed = 0;
 
         for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+            // DeviceZoneScopedN("K CHUNK");
             // Skip KV chunks beyond logical sequence length (non-joint only)
             const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
             const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;

@@ -134,6 +134,7 @@ void kernel_main() {
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        // DeviceZoneScopedN("RING ITER");
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
