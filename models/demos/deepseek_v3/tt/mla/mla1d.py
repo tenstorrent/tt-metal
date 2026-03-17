@@ -2293,7 +2293,9 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
         dim = x.shape[3]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
-        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n)
+        # Row-batched prefill drives the fused Q/KV projection with batch on dim 1.
+        # The program config must account for that batch so fuse_batch stays disabled.
+        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n, batch=x.shape[1])
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
