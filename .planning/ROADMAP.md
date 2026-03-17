@@ -47,7 +47,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 02-01-PLAN.md — Bump MAX_NUM_VCS to 3, fix {0,0} initializers, update legacy getters and print methods
+- [x] 02-01-PLAN.md — Bump MAX_NUM_VCS to 3, fix {0,0} initializers, update legacy getters and print methods
 - [ ] 02-02-PLAN.md — Extend PerVcBufferSlots, split buffer tables, add VC2 enable predicate
 
 ### Phase 3: Channel Mapping & Allocation
@@ -106,7 +106,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Overlay Register Cleanup | 2/2 | Complete   | 2026-03-17 |
-| 2. Constants & Config Foundation | 0/2 | Not started | - |
+| 2. Constants & Config Foundation | 1/2 | In progress | - |
 | 3. Channel Mapping & Allocation | 0/2 | Not started | - |
 | 4. Builder Wiring & Flow Control | 0/3 | Not started | - |
 | 5. Connection API & Testing | 0/2 | Not started | - |

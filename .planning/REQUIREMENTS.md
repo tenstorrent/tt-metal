@@ -12,7 +12,7 @@
 
 ### Constants & Data Structures
 
-- [ ] **CNST-01**: `MAX_NUM_VCS` bumped from 2 to 3 with all dependent array initializers updated
+- [x] **CNST-01**: `MAX_NUM_VCS` bumped from 2 to 3 with all dependent array initializers updated
 - [ ] **CNST-02**: `PerVcBufferSlots` extended with vc2_sender_slots and vc2_receiver_slots fields
 - [ ] **CNST-03**: Buffer slot option tables extended from 4-field to 6-field structs
 
@@ -77,7 +77,7 @@
 |-------------|-------|--------|
 | SREG-01 | Phase 1 | Complete |
 | SREG-02 | Phase 1 | Complete |
-| CNST-01 | Phase 2 | Pending |
+| CNST-01 | Phase 2 | Complete |
 | CNST-02 | Phase 2 | Pending |
 | CNST-03 | Phase 2 | Pending |
 | CONF-01 | Phase 2 | Pending |
