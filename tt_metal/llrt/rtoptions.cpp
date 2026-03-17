@@ -68,6 +68,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
     TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
+    TT_METAL_BH_DRAM_INIT_CASE,  // Select a single Blackhole DRAM init write bucket
 
     // ========================================
     // DEBUG & TESTING
@@ -256,6 +257,47 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 }
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
+
+BlackholeDramInitCase parse_blackhole_dram_init_case(const char* value) {
+    TT_FATAL(value != nullptr, "TT_METAL_BH_DRAM_INIT_CASE must be set before parsing");
+    const std::string normalized = to_lower_copy(trim_copy(value));
+    if (normalized == "none") {
+        return BlackholeDramInitCase::None;
+    }
+    if (normalized == "dram_core_info") {
+        return BlackholeDramInitCase::DramCoreInfo;
+    }
+    if (normalized == "dram_bank_to_noc_tables") {
+        return BlackholeDramInitCase::DramBankToNocTables;
+    }
+    if (normalized == "dram_fw_binary") {
+        return BlackholeDramInitCase::DramFwBinary;
+    }
+    if (normalized == "dram_launch_msg") {
+        return BlackholeDramInitCase::DramLaunchMsg;
+    }
+    if (normalized == "dram_go_msg") {
+        return BlackholeDramInitCase::DramGoMsg;
+    }
+    if (normalized == "dram_fw_launch_rdptr") {
+        return BlackholeDramInitCase::DramFwLaunchRdptr;
+    }
+    if (normalized == "dram_fw_go_msg_index") {
+        return BlackholeDramInitCase::DramFwGoMsgIndex;
+    }
+    if (normalized == "dram_reset_pc") {
+        return BlackholeDramInitCase::DramResetPc;
+    }
+    if (normalized == "dram_cq_launch_rdptr") {
+        return BlackholeDramInitCase::DramCqLaunchRdptr;
+    }
+
+    TT_THROW(
+        "Invalid TT_METAL_BH_DRAM_INIT_CASE value '{}'. Expected one of: none, dram_core_info, "
+        "dram_bank_to_noc_tables, dram_fw_binary, dram_launch_msg, dram_go_msg, dram_fw_launch_rdptr, "
+        "dram_fw_go_msg_index, dram_reset_pc, dram_cq_launch_rdptr",
+        value);
+}
 
 }  // namespace
 
@@ -477,6 +519,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_DRAM=1
         case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_enabled(value); break;
+
+        // TT_METAL_BH_DRAM_INIT_CASE
+        // Select a single branch-local DRAM-core write bucket to execute on Blackhole.
+        // Default: unset (legacy behavior - execute all writes)
+        // Usage: export TT_METAL_BH_DRAM_INIT_CASE=dram_core_info
+        case EnvVarID::TT_METAL_BH_DRAM_INIT_CASE:
+            this->blackhole_dram_init_case = parse_blackhole_dram_init_case(value);
+            break;
         // ========================================
         // DEBUG & TESTING
         // ========================================

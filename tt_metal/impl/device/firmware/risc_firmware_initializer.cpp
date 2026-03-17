@@ -836,7 +836,10 @@ void RiscFirmwareInitializer::initialize_firmware(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
 
-    initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core, end_core);
+    if (core_type != HalProgrammableCoreType::DRAM ||
+        rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramBankToNocTables)) {
+        initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core, end_core);
+    }
     if (core_type == HalProgrammableCoreType::TENSIX) {
         initialize_worker_logical_to_virtual_tables(device_id, core_type, virtual_core, end_core.value());
     }
@@ -1014,7 +1017,8 @@ void RiscFirmwareInitializer::initialize_firmware(
         }
         case HalProgrammableCoreType::DRAM: {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
-            if (not rtoptions_.get_skip_loading_fw()) {
+            if (not rtoptions_.get_skip_loading_fw() &&
+                rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramFwBinary)) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
@@ -1035,22 +1039,32 @@ void RiscFirmwareInitializer::initialize_firmware(
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
             uint64_t go_message_index_addr =
                 hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::GO_MSG_INDEX);
-            cluster_.write_core(
-                init_launch_msg_data.data(),
-                init_launch_msg_data.size(),
-                tt_cxy_pair(device_id, virtual_core),
-                launch_addr);
-            cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramLaunchMsg)) {
+                cluster_.write_core(
+                    init_launch_msg_data.data(),
+                    init_launch_msg_data.size(),
+                    tt_cxy_pair(device_id, virtual_core),
+                    launch_addr);
+            }
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramGoMsg)) {
+                cluster_.write_core(go_msg.data(), go_msg.size(), tt_cxy_pair(device_id, virtual_core), go_addr);
+            }
             uint32_t zero = 0;
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
-            cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramFwLaunchRdptr)) {
+                cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), launch_msg_rd_ptr_addr);
+            }
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramFwGoMsgIndex)) {
+                cluster_.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            }
 
             // Write reset PC (register address, no L1 NOC offset needed)
-            cluster_.write_core(
-                &jit_build_config.fw_launch_addr_value,
-                sizeof(uint32_t),
-                tt_cxy_pair(device_id, virtual_core),
-                jit_build_config.fw_launch_addr);
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramResetPc)) {
+                cluster_.write_core(
+                    &jit_build_config.fw_launch_addr_value,
+                    sizeof(uint32_t),
+                    tt_cxy_pair(device_id, virtual_core),
+                    jit_build_config.fw_launch_addr);
+            }
             break;
         }
         default:
@@ -1171,11 +1185,13 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             dram_core_info.view().absolute_logical_x() = dram_noc.x;
             dram_core_info.view().absolute_logical_y() = dram_noc.y;
             uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
-            cluster_.write_core(
-                dram_core_info.data(),
-                dram_core_info.size(),
-                {static_cast<size_t>(device_id), virtual_dram_core},
-                core_info_addr);
+            if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramCoreInfo)) {
+                cluster_.write_core(
+                    dram_core_info.data(),
+                    dram_core_info.size(),
+                    {static_cast<size_t>(device_id), virtual_dram_core},
+                    core_info_addr);
+            }
             initialize_firmware(
                 device_id,
                 HalProgrammableCoreType::DRAM,

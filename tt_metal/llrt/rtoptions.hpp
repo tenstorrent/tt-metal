@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -64,6 +65,19 @@ enum RunTimeDebugClass {
     RunTimeDebugClassDispatch,
     RunTimeDebugClassAll,
     RunTimeDebugClassCount
+};
+
+enum class BlackholeDramInitCase {
+    None,
+    DramCoreInfo,
+    DramBankToNocTables,
+    DramFwBinary,
+    DramLaunchMsg,
+    DramGoMsg,
+    DramFwLaunchRdptr,
+    DramFwGoMsgIndex,
+    DramResetPc,
+    DramCqLaunchRdptr,
 };
 
 extern const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
@@ -208,6 +222,7 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     bool skip_loading_fw = false;
+    std::optional<BlackholeDramInitCase> blackhole_dram_init_case = std::nullopt;
 
     bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
@@ -578,6 +593,10 @@ public:
     bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
+    std::optional<BlackholeDramInitCase> get_blackhole_dram_init_case() const { return blackhole_dram_init_case; }
+    bool should_run_blackhole_dram_init_case(BlackholeDramInitCase init_case) const {
+        return !blackhole_dram_init_case.has_value() || blackhole_dram_init_case == init_case;
+    }
 
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }
     void set_jit_analytics_enabled(bool enable) { jit_analytics_enabled = enable; }

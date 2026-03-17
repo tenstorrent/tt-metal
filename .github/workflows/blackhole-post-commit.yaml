@@ -62,6 +62,11 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card fast unit tests"
+      bh-dram-init-case:
+        required: false
+        type: string
+        default: default
+        description: "Select a single Blackhole DRAM init write bucket for CI diagnostics"
       # Pre-built artifacts (optional - if provided, skips build-artifact job)
       dev-docker-image:
         required: false
@@ -148,6 +153,11 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card fast unit tests"
+      bh-dram-init-case:
+        required: false
+        type: string
+        default: default
+        description: "Select a single Blackhole DRAM init write bucket for CI diagnostics"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -160,7 +170,7 @@ run-name: >-
   || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)')
   || ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *')
   && 'Blackhole post-commit tests (P100 nightly)')
-  || 'Blackhole post-commit tests' }}
+  || 'Blackhole post-commit tests' }}${{ inputs.bh-dram-init-case != 'default' && format(' [bh-dram-init:{0}]', inputs.bh-dram-init-case) || '' }}
 
 permissions:
   actions: read
@@ -386,3 +396,4 @@ jobs:
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       fast-only: true
+      bh-dram-init-case: ${{ inputs.bh-dram-init-case }}

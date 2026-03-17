@@ -308,9 +308,12 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
     }
     if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        for (const auto& dram_core : MetalContext::instance().get_cluster().get_soc_desc(id_).get_cores(
-                 CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        if (MetalContext::instance().rtoptions().should_run_blackhole_dram_init_case(
+                tt::llrt::BlackholeDramInitCase::DramCqLaunchRdptr)) {
+            for (const auto& dram_core : MetalContext::instance().get_cluster().get_soc_desc(id_).get_cores(
+                     CoreType::DRAM, CoordSystem::TRANSLATED)) {
+                reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+            }
         }
     }
     if (watcher_lock) {

@@ -25,6 +25,10 @@ inputs:
     description: 'Enable LLK asserts'
     default: false
     type: boolean
+  bh-dram-init-case:
+    description: 'Select a single Blackhole DRAM init write bucket to enable; use default for normal behavior'
+    default: default
+    type: string
   enable-kernel-ccache:
     description: 'Enable kernel ccache for JIT compilation at runtime'
     default: false
@@ -111,6 +115,14 @@ runs:
       run: |
         echo "Enabling TT Metal LLK Asserts"
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Set up env vars for Blackhole DRAM init case
+      if: ${{ inputs.bh-dram-init-case != 'default' }}
+      working-directory: ${{ inputs.path }}
+      run: |
+        echo "Selecting Blackhole DRAM init case: ${{ inputs.bh-dram-init-case }}"
+        echo "TT_METAL_BH_DRAM_INIT_CASE=${{ inputs.bh-dram-init-case }}" >> $GITHUB_ENV
       shell: bash
 
     # Kernel ccache configuration for JIT compilation at test runtime
