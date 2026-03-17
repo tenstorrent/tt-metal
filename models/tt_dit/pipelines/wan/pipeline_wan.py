@@ -288,18 +288,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
-        self._allocate_persistent_buffers()
-
-    def _allocate_persistent_buffers(self) -> None:
-        """Allocate persistent buffers by running a pipeline pass without tracing.
-
-        This is important so they do not get allocated after trace capture, which would lead to
-        them being overwritten during trace execution. The resolution must match the resolution
-        used for traced inference.
-        """
-        logger.info("Pipeline allocation run...")
-        self.run_single_prompt(prompt="", num_inference_steps=2, seed=0, traced=False, num_frames=1)
-
     @staticmethod
     def create_pipeline(
         mesh_device,
@@ -881,6 +869,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 max_sequence_length=max_sequence_length,
                 encoder_traced=encoder_traced,
             )
+        if self._encoder_tracer is not None:
+            self._encoder_tracer.release_trace()
+            self._encoder_tracer = None
 
         # 4. Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -1041,6 +1032,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             profiler.end("denoising", profiler_iteration)
 
         self._current_timestep = None
+        if self._transformer_1_tracer is not None:
+            self._transformer_1_tracer.release_trace()
+            self._transformer_1_tracer = None
+        if self._transformer_2_tracer is not None:
+            self._transformer_2_tracer.release_trace()
+            self._transformer_2_tracer = None
+        self.transformer_1.cached_rope_features.clear()
+        self.transformer_2.cached_rope_features.clear()
+        self.dit_ccl_manager.clear_persistent_buffers()
 
         # Postprocess spatial output
         latents = current_model.postprocess_spatial_output_host(
@@ -1080,11 +1080,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 vae_decode = self._vae_tracer if vae_traced else self.tt_vae.forward
                 tt_video_BCTHW, new_logical_h = vae_decode(tt_latents_BTHWC, logical_h)
 
+            if self._vae_tracer is not None:
+                self._vae_tracer.release_trace()
+                self._vae_tracer = None
+
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
             concat_dims[self.vae_parallel_config.width_parallel.mesh_axis] = 4
             video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
+
+            self.vae_ccl_manager.clear_persistent_buffers()
 
             video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
@@ -1092,10 +1098,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         # Offload all models
         # self.maybe_free_model_hooks()
-        self.transformer_1.cached_rope_features.clear()
-        self.transformer_2.cached_rope_features.clear()
-        self.dit_ccl_manager.clear_persistent_buffers()
-        self.vae_ccl_manager.clear_persistent_buffers()
 
         if not return_dict:
             return (video,)
