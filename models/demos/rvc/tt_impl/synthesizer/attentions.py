@@ -66,6 +66,7 @@ class MultiHeadAttention:
         self.emb_rel_k: ttnn.Tensor | None = None
         self.emb_rel_v: ttnn.Tensor | None = None
         self.relative_position_cache: dict[int : ttnn.Tensor] = {}
+        self.index_cache: dict[int : ttnn.Tensor] = {}
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         q_key = "linear_q" if (f"{prefix}linear_q.weight" if prefix else "linear_q.weight") in parameters else "conv_q"
@@ -157,26 +158,27 @@ class MultiHeadAttention:
         )
         return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
 
+    def _get_rel_idx_tensor(self, length: int) -> ttnn.Tensor:
+        if length in self.index_cache:
+            return self.index_cache[length]
+        idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.uint32, device=self.device), dim=1)
+        idx_col = ttnn.unsqueeze(
+            ttnn.arange(start=length - 1, end=2 * length - 1, dtype=ttnn.uint32, device=self.device), dim=0
+        )
+        rel_idx = idx_col - idx_row
+        rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (1, 1, length, length))
+        self.index_cache[length] = rel_idx
+        return rel_idx
+
     def _relative_position_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        idx_row = ttnn.unsqueeze(
-            ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT), dim=1
-        )
-        idx_col = ttnn.unsqueeze(
-            ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT), dim=0
-        )
-        rel_idx = idx_col - idx_row + (length - 1)
-        rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
-        rel_idx = ttnn.typecast(rel_idx, ttnn.uint32)
-        x_final = ttnn_gather_fallback(x, dim=3, index=rel_idx, device=self.device)
-        return x_final
+        rel_idx = self._get_rel_idx_tensor(length)
+        out = ttnn_gather_fallback(x, dim=3, index=rel_idx, device=self.device)
+        return out
 
     def _absolute_position_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=1)
-        idx_col = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=0)
-        rel_idx = idx_col - idx_row + (length - 1)
-        rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
+        rel_idx = self._get_rel_idx_tensor(length)
         if length in self.relative_position_cache:
             out = self.relative_position_cache[length]
         else:
