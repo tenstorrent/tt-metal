@@ -170,14 +170,18 @@ void BuildEnvManager::add_build_env_locked(
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
     dev_build_env.build_env.init(build_key, dev_config, rtoptions, device_kernel_defines);
-    auto precompiled_dir =
-        precompiled::find_precompiled_dir(rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
-    if (precompiled_dir.has_value()) {
-        dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
-        dev_build_env.firmware_precompiled = true;
-    } else {
+    if (rtoptions.get_disable_precompiled_fw()) {
         dev_build_env.firmware_precompiled = false;
-        log_debug(tt::LogBuildKernels, "No pre-compiled firmware found for build key: {}", build_key);
+    } else {
+        auto precompiled_dir =
+            precompiled::find_precompiled_dir(rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
+        if (precompiled_dir.has_value()) {
+            dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
+            dev_build_env.firmware_precompiled = true;
+        } else {
+            dev_build_env.firmware_precompiled = false;
+            log_debug(tt::LogBuildKernels, "No pre-compiled firmware found for build key: {}", build_key);
+        }
     }
     dev_build_env.firmware_build_states = create_build_state(dev_build_env.build_env, dev_config, true);
     dev_build_env.kernel_build_states = create_build_state(dev_build_env.build_env, dev_config, false);
@@ -271,7 +275,7 @@ std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_out_firmware_root_path());
+        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_firmware_binary_root());
     }
     return build_env_info;
 }

@@ -21,7 +21,6 @@ from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_sta
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -207,7 +206,7 @@ def _generate_reference_case_entry(
     with torch.device("meta"):
         reference_model = DeepseekV3ForCausalLM(hf_config).eval()
     reference_model = reference_model.to_empty(device=torch.device("cpu"))
-    reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+    reference_model.load_state_dict(state_dict)
     reference_model = reference_model.to(torch.bfloat16)
 
     decode_input_caches = None

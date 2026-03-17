@@ -74,6 +74,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
+#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
@@ -417,14 +418,13 @@ KernelGroup::KernelGroup(
     std::set<NOC_MODE> noc_modes;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
-        auto processor_class = kernel->get_kernel_processor_class();
         auto num_binaries = kernel->expected_num_binaries();
         for (uint32_t i = 0; i < num_binaries; i++) {
-            auto processor_type = kernel->get_kernel_processor_type(i);
-            auto processor_index = hal.get_processor_index(
-                hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
-            kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
-            kernel_config.enables() |= 1u << processor_index;
+            std::vector<uint32_t> processor_indices = kernel->get_processor_indices_for_binary(i);
+            for (uint32_t processor_index : processor_indices) {
+                kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
+                kernel_config.enables() |= 1u << processor_index;
+            }
         }
 
         // Dynamic NOC assignment is only supported on certain core types
@@ -467,6 +467,20 @@ KernelGroup::KernelGroup(
                     }
                 },
                 kernel->config());
+        }
+
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for dmk/runtime access
+        if (auto* qk = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get())) {
+            auto config = std::get<experimental::quasar::QuasarDataMovementConfig>(qk->config());
+            const auto& dm_cores = qk->get_dm_processors();
+            for (uint32_t thread_idx = 0; thread_idx < dm_cores.size(); thread_idx++) {
+                uint32_t processor_index = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    HalProcessorClassType::DM,
+                    qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
+                kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[processor_index] = thread_idx;
+            }
         }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
