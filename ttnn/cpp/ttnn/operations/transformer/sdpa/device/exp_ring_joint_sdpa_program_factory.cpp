@@ -196,21 +196,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         std::swap(num_targets_forward, num_targets_backward);
     }
 
-    uint32_t forward_writes_expected, backward_writes_expected;
-    if (args.topology == ttnn::ccl::Topology::Linear) {
-        forward_writes_expected = num_targets_backward;
-        backward_writes_expected = num_targets_forward;
-    } else {
-        TT_FATAL(args.topology == ttnn::ccl::Topology::Ring, "Topology must be Linear or Ring");
-        forward_writes_expected = num_targets_forward;
-        backward_writes_expected = num_targets_backward;
-    }
     // Minimally use matmul fused op signaler
-    sdpa_fused_op_signaler->init_all_gather(
-        args.ring_size,
-        device_index,
-        forward_writes_expected,
-        backward_writes_expected);
+    sdpa_fused_op_signaler->init_all_gather(args.ring_size, device_index);
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
@@ -1291,6 +1278,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         uint32_t global_q_start = work.global_q_start;
         uint32_t global_q_end = work.global_q_start + work.global_q_count;
 
+        // Direction: top half of rows = backward (0), bottom half = forward (1)
+        const uint32_t direction = (core.y < args.num_workers_per_link) ? 0 : 1;
+
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
@@ -1347,7 +1337,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(chain.mcast_sender_wait);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, direction);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1359,7 +1349,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args, direction);
 
         const bool is_mux_client = (core.x >= grid_size.x - 2);
         if (is_mux_client) {
@@ -1461,7 +1451,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args, direction);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
