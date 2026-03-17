@@ -487,10 +487,6 @@ class TtDINO:
         )
         valid_ratios = torch.ones(B, len(mlvl_feats_tt), 2, dtype=torch.float32)
 
-        # Use precomputed tensors for device-only MSDeformAttn path (avoids to_torch/from_torch)
-        valid_ratios_tt = ttnn.repeat(self._valid_ratios_tt, (B, 1, 1)) if B > 1 else self._valid_ratios_tt
-        spatial_shapes_tt = self._spatial_shapes_tt
-
         logger.info(f"Pre-transformer (TT): feat_flatten [B={B}, N={N}], " f"spatial_shapes {spatial_shapes.tolist()}")
         out = {
             "feat_flatten": feat_flatten_tt,
@@ -499,10 +495,10 @@ class TtDINO:
             "level_start_index": level_start_index,
             "valid_ratios": valid_ratios,
         }
-        if valid_ratios_tt is not None:
+        if self.trace_mode:
+            valid_ratios_tt = ttnn.repeat(self._valid_ratios_tt, (B, 1, 1)) if B > 1 else self._valid_ratios_tt
             out["valid_ratios_tt"] = valid_ratios_tt
-        if spatial_shapes_tt is not None:
-            out["spatial_shapes_tt"] = spatial_shapes_tt
+            out["spatial_shapes_tt"] = self._spatial_shapes_tt
         return out
 
     def pre_transformer(
@@ -753,29 +749,48 @@ class TtDINO:
             ttnn.deallocate(output_proposals)
         ttnn.deallocate(reg_out)
 
-        # Unified device path: topk + gather (same for trace and non-trace; trace_mode only affects topk_indices return)
-        enc_cls_sliced = ttnn.slice(enc_cls, [0, 0, 0], [B, N, self.num_classes], memory_config=self._dram_cfg)
-        max_result = ttnn.max(enc_cls_sliced, dim=-1, memory_config=self._dram_cfg)
-        coarse_cls_max = max_result[0] if isinstance(max_result, (tuple, list)) else max_result
-        ttnn.deallocate(enc_cls_sliced)
-        ttnn.deallocate(enc_cls)
-        ttnn.deallocate(output_memory)
-        topk_values, topk_indices_tt = ttnn.topk(coarse_cls_max, k=self.num_queries, dim=1, largest=True, sorted=True)
-        ttnn.deallocate(topk_values)
-        ttnn.deallocate(coarse_cls_max)
-        enc_coords_sliced = ttnn.slice(enc_coords_unact, [0, 0, 0], [B, N, 4], memory_config=self._dram_cfg)
-        topk_indices_u32 = ttnn.typecast(topk_indices_tt, dtype=ttnn.uint32)
-        topk_indices_expanded = ttnn.reshape(topk_indices_u32, (B, self.num_queries, 1))
-        topk_indices_expanded = ttnn.repeat(topk_indices_expanded, (1, 1, 4))
-        topk_coords_unact = ttnn.gather(enc_coords_sliced, dim=1, index=topk_indices_expanded)
-        ttnn.deallocate(enc_coords_sliced)
-        ttnn.deallocate(enc_coords_unact)
-        ttnn.deallocate(topk_indices_expanded)
-        ttnn.deallocate(topk_indices_u32)
-        reference_points_tt = ttnn.sigmoid(topk_coords_unact)
-        ttnn.deallocate(topk_coords_unact)
-        topk_indices = ttnn.to_torch(topk_indices_tt).long() if not self.trace_mode else None
-        ttnn.deallocate(topk_indices_tt)
+        if self.trace_mode:
+            # Device-only topk + gather (for trace capture)
+            enc_cls_sliced = ttnn.slice(enc_cls, [0, 0, 0], [B, N, self.num_classes], memory_config=self._dram_cfg)
+            max_result = ttnn.max(enc_cls_sliced, dim=-1, memory_config=self._dram_cfg)
+            coarse_cls_max = max_result[0] if isinstance(max_result, (tuple, list)) else max_result
+            ttnn.deallocate(enc_cls_sliced)
+            ttnn.deallocate(enc_cls)
+            ttnn.deallocate(output_memory)
+            topk_values, topk_indices_tt = ttnn.topk(
+                coarse_cls_max, k=self.num_queries, dim=1, largest=True, sorted=True
+            )
+            ttnn.deallocate(topk_values)
+            ttnn.deallocate(coarse_cls_max)
+            enc_coords_sliced = ttnn.slice(enc_coords_unact, [0, 0, 0], [B, N, 4], memory_config=self._dram_cfg)
+            topk_indices_u32 = ttnn.typecast(topk_indices_tt, dtype=ttnn.uint32)
+            topk_indices_expanded = ttnn.reshape(topk_indices_u32, (B, self.num_queries, 1))
+            topk_indices_expanded = ttnn.repeat(topk_indices_expanded, (1, 1, 4))
+            topk_coords_unact = ttnn.gather(enc_coords_sliced, dim=1, index=topk_indices_expanded)
+            ttnn.deallocate(enc_coords_sliced)
+            ttnn.deallocate(enc_coords_unact)
+            ttnn.deallocate(topk_indices_expanded)
+            ttnn.deallocate(topk_indices_u32)
+            reference_points_tt = ttnn.sigmoid(topk_coords_unact)
+            ttnn.deallocate(topk_coords_unact)
+            topk_indices = None
+            ttnn.deallocate(topk_indices_tt)
+        else:
+            # Host float32 path for accurate topk (demo / non-trace)
+            enc_cls_t = ttnn.to_torch(enc_cls).float()[:, :N, :]
+            ttnn.deallocate(enc_cls)
+            ttnn.deallocate(output_memory)
+            topk_indices = torch.topk(enc_cls_t.max(-1)[0], k=self.num_queries, dim=1)[1]
+            enc_coords_t = ttnn.to_torch(enc_coords_unact).float()[:, :N, :]
+            ttnn.deallocate(enc_coords_unact)
+            topk_coords_unact = torch.gather(enc_coords_t, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
+            reference_points = topk_coords_unact.sigmoid()
+            reference_points_tt = ttnn.from_torch(
+                reference_points.to(torch.bfloat16),
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._dram_cfg,
+            )
 
         qemb = self._decoder_params["query_embedding"]
         qemb = ttnn.reshape(qemb, (1, self.num_queries, self.embed_dims))
@@ -831,8 +846,6 @@ class TtDINO:
 
             # Regression: reg_branch on device
             reg_out_tt = self.reg_branches_head[layer_id](hidden_state)
-            # Reference to device, inverse_sigmoid on device, then add + sigmoid on device
-            # references[0] is torch (initial); references[1:] are ttnn from decoder
             if isinstance(reference, torch.Tensor):
                 ref_tt = ttnn.from_torch(
                     reference.to(torch.bfloat16),

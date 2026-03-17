@@ -546,6 +546,7 @@ def main():
             backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
             window_size=SWIN_L_WINDOW_SIZE,
             in_channels=tuple(NECK_IN_CHANNELS),
+            trace_mode=False,
         )
 
         # ---- Process each image ----
