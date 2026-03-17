@@ -168,73 +168,65 @@ _cleanup_multihost() {
     echo "=== Diagnosing stale processes on all hosts (DRY-RUN) ===" >&2
     for host in ${hosts//,/ }; do
         echo "  Scanning $host..." >&2
-        local host_output
-        host_output=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" env TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-}" bash -s <<-'DIAG_EOF' 2>/dev/null) || true
-            current_tag="${TT_MULTIHOST_CLEANUP_TAG:-}"
-            found_any=0
+        ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" env TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-}" bash -s <<-'DIAG_EOF' 2>/dev/null && continue || found_residual=1
+		current_tag="${TT_MULTIHOST_CLEANUP_TAG:-}"
+		found_any=0
 
-            # Check for orphaned MPI daemons (prted/orted) reparented to init
-            orphan_mpi_pids=$(pgrep --parent 1 -f 'prted|orted' 2>/dev/null || true)
-            if [[ -n "$orphan_mpi_pids" ]]; then
-                echo "    [WOULD KILL] Orphaned MPI daemons (parent=1):"
-                for pid in $orphan_mpi_pids; do
-                    cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
-                    echo "      PID $pid: $cmd"
-                done
-                found_any=1
-            fi
+		# Check for orphaned MPI daemons (prted/orted) reparented to init
+		orphan_mpi_pids=$(pgrep --parent 1 -f 'prted|orted' 2>/dev/null || true)
+		if [[ -n "$orphan_mpi_pids" ]]; then
+		    echo "    [WOULD KILL] Orphaned MPI daemons (parent=1):" >&2
+		    for pid in $orphan_mpi_pids; do
+		        cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+		        echo "      PID $pid: $cmd" >&2
+		    done
+		    found_any=1
+		fi
 
-            # Check for orphaned test processes reparented to init
-            orphan_test_pids=$(pgrep --parent 1 -f 'pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true)
-            if [[ -n "$orphan_test_pids" ]]; then
-                echo "    [WOULD KILL] Orphaned test processes (parent=1):"
-                for pid in $orphan_test_pids; do
-                    cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
-                    echo "      PID $pid: $cmd"
-                done
-                found_any=1
-            fi
+		# Check for orphaned test processes reparented to init
+		orphan_test_pids=$(pgrep --parent 1 -f 'pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true)
+		if [[ -n "$orphan_test_pids" ]]; then
+		    echo "    [WOULD KILL] Orphaned test processes (parent=1):" >&2
+		    for pid in $orphan_test_pids; do
+		        cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+		        echo "      PID $pid: $cmd" >&2
+		    done
+		    found_any=1
+		fi
 
-            # Check for tagged processes from this invocation
-            if [[ -n "$current_tag" ]]; then
-                tagged_found=0
-                for pid in $(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null); do
-                    [ -r "/proc/$pid/environ" ] || continue
-                    if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Fxq "TT_MULTIHOST_CLEANUP_TAG=$current_tag"; then
-                        if [[ $tagged_found -eq 0 ]]; then
-                            echo "    [WOULD KILL] Tagged processes (TT_MULTIHOST_CLEANUP_TAG=$current_tag):"
-                            tagged_found=1
-                        fi
-                        cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
-                        echo "      PID $pid: $cmd"
-                        found_any=1
-                    fi
-                done
-            fi
+		# Check for tagged processes from this invocation
+		if [[ -n "$current_tag" ]]; then
+		    tagged_found=0
+		    for pid in $(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null); do
+		        [ -r "/proc/$pid/environ" ] || continue
+		        if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Fxq "TT_MULTIHOST_CLEANUP_TAG=$current_tag"; then
+		            if [[ $tagged_found -eq 0 ]]; then
+		                echo "    [WOULD KILL] Tagged processes (TT_MULTIHOST_CLEANUP_TAG=$current_tag):" >&2
+		                tagged_found=1
+		            fi
+		            cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+		            echo "      PID $pid: $cmd" >&2
+		            found_any=1
+		        fi
+		    done
+		fi
 
-            # Check for any other potentially stale test processes (not orphaned, not tagged)
-            other_pids=$(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true)
-            if [[ -n "$other_pids" ]]; then
-                echo "    [INFO] Other matching processes (not orphaned, may be from other runs):"
-                for pid in $other_pids; do
-                    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || echo "?")
-                    cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
-                    echo "      PID $pid (ppid=$ppid): $cmd"
-                done
-            fi
+		# Check for any other potentially stale test processes (not orphaned, not tagged)
+		other_pids=$(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true)
+		if [[ -n "$other_pids" ]]; then
+		    echo "    [INFO] Other matching processes (not orphaned, may be from other runs):" >&2
+		    for pid in $other_pids; do
+		        ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || echo "?")
+		        cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+		        echo "      PID $pid (ppid=$ppid): $cmd" >&2
+		    done
+		fi
 
-            if [[ $found_any -eq 0 ]]; then
-                echo "    No residual processes found."
-            fi
-            exit $found_any
-DIAG_EOF
-        local host_status=$?
-        if [[ -n "$host_output" ]]; then
-            echo "$host_output" >&2
-        fi
-        if [[ $host_status -ne 0 ]]; then
-            found_residual=1
-        fi
+		if [[ $found_any -eq 0 ]]; then
+		    echo "    No residual processes found." >&2
+		fi
+		exit $found_any
+	DIAG_EOF
     done
     echo "=== Diagnostic scan complete (NO PROCESSES WERE KILLED) ===" >&2
     return $found_residual
