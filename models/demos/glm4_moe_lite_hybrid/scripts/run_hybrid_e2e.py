@@ -193,7 +193,7 @@ def main() -> int:
         )
 
         # LM head
-        lm_head_torch = state["model.lm_head.weight"]
+        lm_head_torch = state["lm_head.weight"]
         lm_head_w = ttnn.as_tensor(
             lm_head_torch.transpose(-2, -1).unsqueeze(0).unsqueeze(0).contiguous(),
             device=device,
