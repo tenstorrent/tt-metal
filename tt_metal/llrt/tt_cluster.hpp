@@ -205,9 +205,7 @@ public:
 
     tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        tt_xy_pair translated_core =
-            driver_->get_soc_descriptor(target.chip).translate_chip_coord_to_translated(target_coord);
-        return driver_->get_tlb_manager(target.chip)->get_tlb_window(translated_core);
+        return driver_->get_tlb_manager(target.chip)->get_tlb_window(target_coord);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
