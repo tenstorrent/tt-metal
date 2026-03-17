@@ -286,7 +286,7 @@ def extract_failing_jobs(
 def main() -> None:
     workflow_filter = sys.argv[1] if len(sys.argv) > 1 else None
     project_root = Path(__file__).resolve().parents[2]
-    output_dir = project_root / ".auto_triage" / "output" / "ci_ticketing" / "create_tickets"
+    output_dir = project_root / "build_ci" / "ci_ticketing" / "create_tickets"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "failing_jobs.json"
 

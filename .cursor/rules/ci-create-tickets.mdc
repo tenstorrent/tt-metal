@@ -9,7 +9,7 @@ Use this rule when asked to create CI maintenance issues for `tenstorrent/tt-met
 
 ## Inputs
 
-- Candidate failures from `.auto_triage/output/ci_ticketing/create_tickets/failing_jobs.json`.
+- Candidate failures from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
 - Existing open issues in `tenstorrent/tt-metal` (especially label `glean CI maintenance`).
 
 ## Execution Model
@@ -21,7 +21,7 @@ Use this rule when asked to create CI maintenance issues for `tenstorrent/tt-met
 
 ## Required Flow
 
-1. Build candidate jobs from `.auto_triage/output/ci_ticketing/create_tickets/failing_jobs.json`.
+1. Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
 2. Deduplicate against open issues with `glean CI maintenance`.
 3. Validate each candidate from logs using `gh api`.
 4. Create issues only for deterministic failures that repeat across the latest 3 runs on `main`.
@@ -29,8 +29,8 @@ Use this rule when asked to create CI maintenance issues for `tenstorrent/tt-met
 
 ## Output Files
 
-- `.auto_triage/output/ci_ticketing/create_tickets/created_issues.jsonl`
-- `.auto_triage/output/ci_ticketing/create_tickets/created_tickets_report.json`
+- `build_ci/ci_ticketing/create_tickets/created_issues.jsonl`
+- `build_ci/ci_ticketing/create_tickets/created_tickets_report.json`
 
 ## Issue Template Requirements
 
@@ -42,4 +42,4 @@ Each issue should include:
 - Most recent failing job URL
 - All failing job instance URLs (last 3)
 - Error excerpt
-- Reproduction hint (`pytest <failing_test_path> -v`)
+- Reproduction hint
