@@ -36,8 +36,9 @@ namespace deepseek_b1_ops {
 //   No data forwarding between cores — each reads directly from DRAM.
 //   BRISC: no-op. TRISC: compressed matmul (unchanged).
 //
-// When cores_per_bank=1, pipeline_sem_id is unused and the semaphore
-// wait/signal paths compile to no-ops (core_in_bank_idx=0, is_last_in_bank=1).
+// When cores_per_bank=1, pipeline_sem_id does not participate in inter-core
+// pipelining; the NCRISC path performs a degenerate self-signal/self-wait on
+// the semaphore each batch (functionally a no-op, but not compiled away).
 // ============================================================================
 struct DRAMStreamingMatmulCompressed {
     // ========================================================================

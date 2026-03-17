@@ -44,7 +44,6 @@ _CB_ADDR_SHIFT = 4  # CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT for TRISC on Blackhole
 # MEM_MAILBOX_END = MEM_MAILBOX_BASE(96) + MEM_MAILBOX_SIZE(12896) = 12992
 _MEM_ZEROS_BASE = 12992
 _ZEROS_ADDR_SHIFTED = _MEM_ZEROS_BASE >> _CB_ADDR_SHIFT  # 812
-_ZERO_TILE_SENTINEL = 0xFFFFFF  # Sentinel for zero tiles in relative-address mode (DRAM streaming)
 
 
 def pack_tile_pairs(
@@ -59,7 +58,7 @@ def pack_tile_pairs(
         assignment_flat: 1D array of format indices (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
         base_addr_shifted: THCON-shifted base address of the weight shard (buffer_address >> 4).
         zero_tile_addr: Address to use for zero tiles (bfp0). Defaults to _ZEROS_ADDR_SHIFTED.
-            Use _ZERO_TILE_SENTINEL for relative-address mode (DRAM streaming).
+            Use 0xFFFFFF for relative-address mode (DRAM streaming).
 
     Returns:
         List of uint32, two per pair (interleaved: info0, info1, info0, info1, ...).

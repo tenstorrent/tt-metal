@@ -74,7 +74,6 @@ def _compute_subblock_metadata(
 
     iteration = 0  # global iteration index for slot rotation
     tile_idx = 0
-    debug_logged = False
     for _n in range(per_core_n):
         for sb_k in range(num_subblocks_k):
             # Compute block size for this subblock

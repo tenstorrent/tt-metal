@@ -34,6 +34,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
     UNPACK(({
         volatile uint* cfg = get_cfg_pointer();
         uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
 
         // Per-pair tile info: two uint32s loaded together.
         // Each uint32: [abs_addr:24 | fmt:8], precomputed by host.
@@ -62,13 +63,13 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
 
                 wait_for_next_context(2);
                 // TODO: investigate why we need to also configure the output data format
-                // for DRAM matmul, while SRAM matmul we dont need to.
-                reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg0_base);
+                // for DRAM matmul, while SRAM matmul we don't need to.
+                reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg2_base);
                 cfg[THCON_SEC0_REG3_Base_address_ADDR32] = t0.addr;
                 semaphore_post(semaphore::UNPACK_SYNC);
 
                 wait_for_next_context(2);
-                reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg0_base);
+                reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg2_base);
                 cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = t1.addr;
                 semaphore_post(semaphore::UNPACK_SYNC);
             }
@@ -84,12 +85,12 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
                     tile_idx += 2;
 
                     wait_for_next_context(2);
-                    reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg0_base);
+                    reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg2_base);
                     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = t0.addr;
                     semaphore_post(semaphore::UNPACK_SYNC);
 
                     wait_for_next_context(2);
-                    reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg0_base);
+                    reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg2_base);
                     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = t1.addr;
                     semaphore_post(semaphore::UNPACK_SYNC);
                 }
