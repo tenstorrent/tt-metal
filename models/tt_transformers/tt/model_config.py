@@ -104,7 +104,7 @@ class ModelOptimizations:
         70B+ models still use bfp4 MLPs and BFP8 attention in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name in ["Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+        if base_model_name in ["Llama-3.1-70B", "Llama-3.2-90B", "DeepSeek-R1-Distill-Llama-70B"]:
             logger.info(
                 f"{model_name} is >70B and large models test insensitive precision, using BFP4 MLPs and BFP8 attention even in accuracy mode"
             )

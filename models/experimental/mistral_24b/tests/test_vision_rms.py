@@ -26,7 +26,7 @@ def reference_vision_rms(model_args):
 
 
 @torch.no_grad()
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "device",
     [

@@ -284,7 +284,9 @@ def prepare_generator_args(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 _trace_region_size = (
-    100000000 if (is_blackhole() and os.environ.get("HF_MODEL", "").endswith("Qwen2.5-72B-Instruct")) else 50000000
+    100000000
+    if (is_blackhole() and os.environ.get("HF_MODEL", "").endswith(("Qwen2.5-72B-Instruct", "Qwen2.5-32B-Instruct")))
+    else 50000000
 )
 
 

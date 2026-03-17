@@ -394,7 +394,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 
 
 @torch.no_grad()
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

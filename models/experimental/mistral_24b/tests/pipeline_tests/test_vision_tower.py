@@ -17,7 +17,7 @@ from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import Mis
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [
