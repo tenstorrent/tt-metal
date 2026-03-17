@@ -10,7 +10,7 @@ Review open CI maintenance issues and close only those no longer relevant based 
 
 2. **Apply close-ticket rule**
    - Follow `.cursor/rules/ci-close-tickets.mdc`
-   - Clear stale logs under `.auto_triage/output/ci_ticketing/close_tickets/glean_review_logs`
+   - Clear stale logs under `build_ci/ci_ticketing/close_tickets/glean_review_logs`
    - For each issue, compare ticket failure vs latest completed job run on `main`
 
 3. **Decide closures**

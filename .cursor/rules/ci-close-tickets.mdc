@@ -15,8 +15,8 @@ Use this rule when asked to review and close no-longer-relevant CI maintenance i
 ## Execution Model
 
 - Use direct `gh` / `gh api` commands only.
-- If temporary scripts are required, place them in `.auto_triage/data/ci_ticketing_temp`.
-- Before review, clear stale logs under `.auto_triage/output/ci_ticketing/close_tickets/glean_review_logs`.
+- If temporary scripts are required, place them in `.build_ci/data/ci_ticketing_temp`.
+- Before review, clear stale logs under `build_ci/ci_ticketing/close_tickets/glean_review_logs`.
 
 ## Decision Rule (Latest completed run on `main`)
 
@@ -36,7 +36,7 @@ Do not close when:
 
 Write closed issues to:
 
-- `.auto_triage/output/ci_ticketing/close_tickets/closed_tickets.json`
+- `build_ci/ci_ticketing/close_tickets/closed_tickets.json`
 
 Each object must include:
 
