@@ -16,7 +16,7 @@ import ttml
 from .linear import LinearLayer
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
-from .._ttml.modules import RunMode
+from _ttml.modules import RunMode
 
 
 @dataclass
@@ -71,11 +71,7 @@ class LoraLinear(AbstractModuleBase):
 
         self.dropout_prob = config.lora_dropout
 
-        self.scaling = (
-            config.alpha / math.sqrt(config.rank)
-            if config.use_rslora
-            else config.alpha / config.rank
-        )
+        self.scaling = config.alpha / math.sqrt(config.rank) if config.use_rslora else config.alpha / config.rank
 
     def forward(self, x: Any) -> Any:
         bias = self.bias.tensor if self.bias is not None else None
@@ -114,9 +110,7 @@ class LoraModel(AbstractModuleBase):
         for name, child in list(module.named_children()):
             full_name = f"{prefix}.{name}" if prefix else name
 
-            if isinstance(child, LinearLayer) and any(
-                p.search(full_name) for p in patterns
-            ):
+            if isinstance(child, LinearLayer) and any(p.search(full_name) for p in patterns):
                 lora_linear = LoraLinear(child, config)
                 if isinstance(module, ModuleList):
                     module[int(name)] = lora_linear
@@ -128,9 +122,7 @@ class LoraModel(AbstractModuleBase):
                 self._inject(child, full_name, patterns, config)
 
     @staticmethod
-    def _unfreeze_trainable(
-        model: AbstractModuleBase, trainable_modules: list[str]
-    ) -> None:
+    def _unfreeze_trainable(model: AbstractModuleBase, trainable_modules: list[str]) -> None:
         """Unfreeze parameters whose full path starts with any of the given prefixes."""
         for param_path, tensor in model.parameters().items():
             if any(prefix in param_path for prefix in trainable_modules):

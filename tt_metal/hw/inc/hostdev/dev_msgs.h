@@ -253,6 +253,9 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthSrcL1AddrOverflow = 15,
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
+    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
+    // This transient value indicates a DM is writing error metadata, host should ignore
+    DebugSanitizeWriteInProgress = 0xDEAD,
 };
 
 struct debug_assert_msg_t {

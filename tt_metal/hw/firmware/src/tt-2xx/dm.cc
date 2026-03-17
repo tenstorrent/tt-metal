@@ -45,7 +45,7 @@ thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used)
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 thread_local uint32_t rta_count __attribute__((used));
@@ -113,9 +113,11 @@ void deassert_trisc() {
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
-// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+
+volatile experimental::TxnDFBDescriptor experimental::g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -364,12 +366,6 @@ extern "C" uint32_t _start1() {
 
                 trigger_sync_register_init();
 
-#if defined(PROFILE_KERNEL)
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    // re-init for profiler to able to run barrier in dedicated noc mode
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Need to ensure that Remapper state is cleared for next kernel launch
                 if (g_remapper_configurator.is_remapper_enabled()) {
                     g_remapper_configurator.clear_all_pairs();

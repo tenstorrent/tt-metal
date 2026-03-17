@@ -31,6 +31,8 @@
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
 #define MEM_L1_SIZE (4 * 1024 * 1024)
+// Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
+// Both require the cache coherence system. Only plain loads/stores with fences work uncached.
 #define MEM_L1_UNCACHED_BASE (MEM_L1_BASE + MEM_L1_SIZE)  // upper 4MBs bypass cache
 
 #define MEM_ETH_BASE 0x0
