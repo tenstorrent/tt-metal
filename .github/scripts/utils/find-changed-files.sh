@@ -195,7 +195,6 @@ declare -A changes=(
     [submodule-changed]=$SUBMODULE_CHANGED
     [any-code-changed]=$ANY_CODE_CHANGED
     [docs-changed]=$DOCS_CHANGED
-    [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED
     [build-workflows-changed]=$BUILD_WORKFLOWS_CHANGED
     [llk-wormhole-changed]=$LLK_WORMHOLE_CHANGED
