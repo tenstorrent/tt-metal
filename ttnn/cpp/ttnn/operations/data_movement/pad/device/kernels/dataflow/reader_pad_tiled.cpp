@@ -48,7 +48,7 @@ void kernel_main() {
         if (within_input_region) {
             cb_reserve_back(input_cb_id, 1);
             uint32_t l1_write_addr = get_write_ptr(input_cb_id);
-            uint64_t src_noc_addr = get_noc_addr(input_page_offset, s0);
+            uint64_t src_noc_addr = s0.get_noc_addr(input_page_offset);
             noc_async_read(src_noc_addr, l1_write_addr, page_size);
             noc_async_read_barrier();
             cb_push_back(input_cb_id, 1);
