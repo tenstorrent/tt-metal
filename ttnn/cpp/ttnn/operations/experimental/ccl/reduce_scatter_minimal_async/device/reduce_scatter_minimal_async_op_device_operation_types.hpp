@@ -75,14 +75,6 @@ struct ReduceScatterMinimalAsyncInputs {
     std::optional<Tensor> optional_output_tensor;
 };
 
-// Common validation function
-void reduce_scatter_common_validates(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
-
 }  // namespace ttnn::experimental::prim
+
+#include "ttnn/operations/experimental/ccl/reduce_scatter_validate_utils.hpp"

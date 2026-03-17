@@ -233,10 +233,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    // When fusing with strided reduce scatter, transposing is disabled because the RS iteration
-    // structure requires mm_N_block_wt <= slice_Wt. Transposing puts N on fewer cores (grid_size.y),
-    // which can make mm_N_block_wt > slice_Wt and violate this constraint.
-    bool transpose_core_grid = M > N && !srs_fused_op_signaler.has_value();
+    // When fusing with strided reduce scatter, transposing is disabled
+    // because it resulted in slightly lower performance on a case of interest.
+    // (This can be revisited if needed.)
+    const bool fuse_srs = srs_fused_op_signaler.has_value();
+    bool transpose_core_grid = M > N && !fuse_srs;
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -403,7 +404,6 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
-    bool fuse_srs = srs_fused_op_signaler.has_value();
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";

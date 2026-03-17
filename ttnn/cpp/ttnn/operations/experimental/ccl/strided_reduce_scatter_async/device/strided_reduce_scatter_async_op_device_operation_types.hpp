@@ -87,14 +87,6 @@ struct tensor_args_t {
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 using tensor_return_value_t = std::vector<Tensor>;
 
-// Common validation function
-void strided_reduce_scatter_common_validates(
-    const ttnn::Tensor& input_tensor,
-    ttnn::ccl::Topology topology,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    const ttnn::MemoryConfig& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor);
-
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
+
+#include "ttnn/operations/experimental/ccl/reduce_scatter_validate_utils.hpp"

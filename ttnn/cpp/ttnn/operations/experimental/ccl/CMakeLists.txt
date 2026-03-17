@@ -52,6 +52,7 @@ target_sources(
             all_gather_async/device/all_gather_via_broadcast_factory.hpp
             all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
+            reduce_scatter_validate_utils.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
@@ -64,6 +65,7 @@ target_sources(
     PRIVATE
         llama_common.cpp
         composite_common.cpp
+        reduce_scatter_validate_utils.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
