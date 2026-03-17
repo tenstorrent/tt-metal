@@ -32,6 +32,14 @@ def ttnn_randn_fallback(shape, dtype, device):
     )
 
 
+def ttnn_cumsum_fallback(x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
+    # Fallback implementation of cumsum using to_host, torch.cumsum, and from_torch.
+    x_torch = ttnn.to_torch(x)
+    cumsum_torch = torch.cumsum(x_torch, dim=dim)
+    cumsum = ttnn.from_torch(cumsum_torch, dtype=x.dtype, layout=x.layout, device=x.device())
+    return cumsum
+
+
 def _interpolate_1d(
     x: ttnn.Tensor,
     scale_factor: int | float,
@@ -363,10 +371,12 @@ class SineGen:
 
         # Expand for harmonics: [B, T*upp, H].
         harmonics = ttnn.arange(start=1, end=self.harmonic_num + 2, dtype=f0_up.dtype, device=self.device)
-        f0_harm = f0_up * harmonics
+        f0_harm = f0_up * (harmonics / self.sampling_rate)
 
         # Accumulate phase and add random initial offset per harmonic.
-        phase = ttnn.cumsum(f0_harm / self.sampling_rate, dim=1, out=f0_harm)
+        # phase = ttnn.cumsum(f0_harm, dim=1, out=f0_harm)
+        # TODO: fallback is faster than native cumsum
+        phase = ttnn_cumsum_fallback(f0_harm, dim=1)
         rand_ini = ttnn.rand((f0_up.shape[0], self.harmonic_num + 1), dtype=ttnn.bfloat16, device=self.device)
         phase = ttnn.add(phase, rand_ini, output_tensor=phase)
         phase = ttnn.multiply(phase, 2 * math.pi, output_tensor=phase)
