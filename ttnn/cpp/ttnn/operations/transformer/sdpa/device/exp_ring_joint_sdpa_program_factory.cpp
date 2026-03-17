@@ -1239,11 +1239,14 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
     // Build backward and forward termination master core sets (1 per link per direction)
+    // Backward masters: row 0 of both MUX client columns (top half = backward direction).
+    // Forward masters:  row num_workers_per_link of both MUX client columns (bottom half = forward).
+    // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
     std::vector<CoreCoord> ag_backward_master_cores, ag_forward_master_cores;
     std::set<CoreRange> ag_backward_master_ranges, ag_forward_master_ranges;
-    for (uint32_t link = 0; link < args.num_links; ++link) {
-        CoreCoord bwd_master = {grid_size.x - 2, link * args.num_workers_per_link};
-        CoreCoord fwd_master = {grid_size.x - 1, link * args.num_workers_per_link};
+    for (uint32_t col_offset = 0; col_offset < 2; ++col_offset) {
+        CoreCoord bwd_master = {grid_size.x - 2 + col_offset, 0};
+        CoreCoord fwd_master = {grid_size.x - 2 + col_offset, args.num_workers_per_link};
         ag_backward_master_cores.push_back(bwd_master);
         ag_forward_master_cores.push_back(fwd_master);
         ag_backward_master_ranges.insert(CoreRange(bwd_master));
@@ -1251,14 +1254,13 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     }
     auto fused_op_signaler_backward = all_gather_fused_op_signaler;
     auto fused_op_signaler_forward = all_gather_fused_op_signaler;
-    // Pass the full MUX client column range (not just master cores) so that
+    // Pass the full direction-half range across both MUX client columns so that
     // CreateSemaphore inside init_all_gather allocates the AG sync semaphore on ALL
-    // backward/forward MUX client workers.  This ensures every MUX client core
-    // (both term-masters and non-masters) has the same number of semaphores
-    // allocated before fabric_mux_connection_rt_args runs, keeping the
-    // termination_sync semaphore ID consistent across masters and non-masters.
-    CoreRange all_backward_clients({grid_size.x - 2, 0}, {grid_size.x - 2, grid_size.y - 1});
-    CoreRange all_forward_clients({grid_size.x - 1, 0}, {grid_size.x - 1, grid_size.y - 1});
+    // workers in each direction group.  This ensures every core (both term-masters
+    // and non-masters) has the same number of semaphores allocated before
+    // fabric_mux_connection_rt_args runs, keeping termination_sync IDs consistent.
+    CoreRange all_backward_clients({grid_size.x - 2, 0}, {grid_size.x - 1, args.num_workers_per_link - 1});
+    CoreRange all_forward_clients({grid_size.x - 2, args.num_workers_per_link}, {grid_size.x - 1, grid_size.y - 1});
     fused_op_signaler_backward.init_all_gather(
         program, mesh_device, CoreRangeSet({all_backward_clients}), ag_backward_master_cores);
     fused_op_signaler_forward.init_all_gather(
@@ -1359,35 +1361,25 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
 
-        const bool is_backward_client = (core.x == grid_size.x - 2);
-        const bool is_forward_client = (core.x == grid_size.x - 1);
-        if (is_backward_client || is_forward_client) {
-            // Determine which MUX this core connects to and its worker_id within the MUX channel
-            const uint32_t link = core.y / args.num_workers_per_link;
+        const bool is_mux_client = (core.x >= grid_size.x - 2);
+        if (is_mux_client) {
+            // Direction is determined by row half: top half = backward, bottom half = forward.
+            // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
+            const uint32_t half_within_col = core.y / args.num_workers_per_link;
+            const bool is_backward = (half_within_col == 0);
+            const uint32_t link = (core.x == grid_size.x - 1) ? 1 : 0;
             const uint32_t worker_idx = core.y % args.num_workers_per_link;
             const bool is_term_master = (worker_idx == 0);
+            const CoreCoord termination_master_logical = {core.x, half_within_col * args.num_workers_per_link};
 
             const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
                                        (link < mux_forward_logical_cores.size());
-            if (is_backward_client && link_in_range) {
-                const CoreCoord& mux_core = mux_backward_logical_cores[link];
-                const CoreCoord termination_master_logical = {core.x, link * args.num_workers_per_link};
+            if (link_in_range) {
+                const CoreCoord& mux_core =
+                    is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
+                const bool valid = is_backward ? backward_coord.has_value() : forward_coord.has_value();
                 fabric_mux_connection_rt_args(
-                    backward_coord.has_value(),
-                    is_term_master,
-                    mux_core,
-                    worker_idx,
-                    core,
-                    mux_kernel_config,
-                    program,
-                    termination_master_logical,
-                    device,
-                    writer_args);
-            } else if (is_forward_client && link_in_range) {
-                const CoreCoord& mux_core = mux_forward_logical_cores[link];
-                const CoreCoord termination_master_logical = {core.x, link * args.num_workers_per_link};
-                fabric_mux_connection_rt_args(
-                    forward_coord.has_value(),
+                    valid,
                     is_term_master,
                     mux_core,
                     worker_idx,
@@ -1425,7 +1417,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                     ag_rt_offset_set = true;
                 }
 
-                const uint32_t ag_direction = is_forward_client ? 1 : 0;
+                // Direction: top half of rows = backward (0), bottom half = forward (1).
+                const uint32_t ag_direction = is_backward ? 0 : 1;
 
                 // Tile range for this link
                 const uint32_t base_tiles = ag_single_bh_num_tiles / args.num_links;
