@@ -421,6 +421,78 @@ AFTER:
 | all_to_all_dispatch | MoE: tokens -> expert-home devices | Variable |
 | all_to_all_combine | MoE: expert results -> originating devices | Variable |
 
+### 3.8 CCL Usage in GLM4-MoE-Lite: Concrete Mapping
+
+The GLM4-MoE-Lite implementation (`models/demos/glm4_moe_lite/`) provides a concrete case study of how CCL ops map to different parts of a real MoE model. Four of the five CCL ops appear in the codebase:
+
+| CCL Op | File(s) | Call Sites | Purpose |
+|--------|---------|------------|---------|
+| `ttnn.all_reduce` | `moe_tt.py`, `attention_decode.py`, `mlp_decode.py`, `decoder_layer_tt.py`, `linear_helpers.py` | ~12 | Sum partials from TP or EP computation |
+| `ttnn.all_gather` | `model_tt.py` | 2 | Concatenate sharded vocabulary logits in LM Head |
+| `ttnn.all_to_all_dispatch` | `moe_tt.py` | 1 | Route tokens to expert-home devices (a2a path only) |
+| `ttnn.all_to_all_combine` | `moe_tt.py` | 1 | Return expert results to originating devices (a2a path only) |
+| `ttnn.reduce_scatter` | — | 0 | **Not used** in this model |
+
+**Where each op appears and why:**
+
+**`all_reduce` (the workhorse):**
+- **Attention** (`attention_decode.py`) — After the output projection `w_o`, which is row-parallel, produces partials on each device. `all_reduce` combines them into the full attention output.
+- **MLP / Shared Expert** (`mlp_decode.py`, `decoder_layer_tt.py`) — After each row-parallel FF2 matmul (for the routed MLP expert and the shared expert), partials are reduced across devices.
+- **MoE reduce path** (`moe_tt.py`) — The final step of expert-parallel MoE: each device has computed its local experts' contributions via `sparse_matmul`, and `all_reduce` sums the 8 partial results so every device has the complete MoE output.
+- **MoE a2a path** (`moe_tt.py`) — Even the a2a path uses `all_reduce` at the end on the secondary cluster axis (for 2D meshes) or when finishing the combine step.
+- **Generic TP linear** (`linear_helpers.py`) — Reusable helper that wraps a column-parallel matmul followed by `all_reduce`.
+
+**`all_gather` (LM Head only):**
+- **LM Head** (`model_tt.py`) — The vocabulary weight matrix is sharded across devices. After each device computes its logit shard, `all_gather(dim=3)` concatenates them into the full vocabulary-width logits. This is the only place `all_gather` is used.
+
+**`all_to_all_dispatch` + `all_to_all_combine` (MoE a2a path only):**
+- **MoE a2a dispatch** (`moe_tt.py` line 1385) — Sends tokens to devices owning their selected experts based on the expert mapping tensor.
+- **MoE a2a combine** (`moe_tt.py` line 1662) — Reverses the routing, sending expert computation results back to the devices that originally owned each token. Uses the opaque `dispatch_metadata` returned by `all_to_all_dispatch`.
+- These are only invoked when `dispatch_impl="a2a"`, which is NOT the default production path.
+
+**Why `reduce_scatter` is absent:**
+
+Unlike Llama3's dense MLP (which uses `reduce_scatter` to produce width-fractured output after FF2), GLM4-MoE-Lite uses `all_reduce` everywhere. This keeps the output **replicated** across devices after every reduction, which is required because:
+1. The EP reduce path needs replicated tokens for the next layer's router to produce identical results on all devices.
+2. The attention layer similarly expects replicated input.
+3. The trade-off is higher CCL data volume (full tensor replicated vs sharded), but it eliminates the need for a subsequent `all_gather` before the next consumer, simplifying the pipeline.
+
+```
+GLM4-MoE-Lite CCL flow per decoder layer (reduce path, T3K):
+
+  Input (replicated) ---> Attention
+                              |
+                         w_qkv (column-par, no CCL)
+                         RoPE, KV cache, SDPA
+                         w_o (row-par) --> partial
+                              |
+                         all_reduce  <--- CCL #1
+                              |
+                         Residual add
+                              |
+                     --> MoE Layer
+                              |
+                         Router (replicated, no CCL)
+                         scatter + remap (per-device)
+                         sparse_matmul x 3 (per-device)
+                         local aggregation
+                              |
+                         all_reduce  <--- CCL #2
+                              |
+                     --> Shared Expert (if present)
+                              |
+                         FF1+FF3 (column-par, no CCL)
+                         SiLU * multiply
+                         FF2 (row-par) --> partial
+                              |
+                         all_reduce  <--- CCL #3
+                              |
+                         Residual add --> Output (replicated)
+
+  Total CCL ops per layer: 3 all_reduce calls
+  (Plus 2 all_gather calls total in LM Head at the very end)
+```
+
 ---
 
 ## Part 4: Dense MLP vs Mixture-of-Experts on TTNN
