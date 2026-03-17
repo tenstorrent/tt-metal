@@ -158,14 +158,10 @@ def evaluate(
 
             logits = model(input_tensor, causal_mask, input_ids_np=x_np)
             if sharded_loss:
-                loss = sharded_cross_entropy_loss(
-                    logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim
-                )
+                loss = sharded_cross_entropy_loss(logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim)
             else:
                 target_tensor = create_target_tensor(y_np, dp_mapper)
-                loss = ttml.ops.loss.cross_entropy_loss(
-                    logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-                )
+                loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
             losses.append(get_loss_value(loss, distributed))
             ctx.reset_graph()
 
@@ -178,9 +174,7 @@ def evaluate(
 # =====================================================================
 
 
-def generate_text(
-    model, config, tokenizer, prompt, max_tokens, max_seq_len, device, distributed=False
-):
+def generate_text(model, config, tokenizer, prompt, max_tokens, max_seq_len, device, distributed=False):
     """Generate text using the model (greedy decoding)."""
     model.eval()
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -196,9 +190,7 @@ def generate_text(
             padded = np.zeros((1, 1, 1, max_seq_len), dtype=np.uint32)
             start_idx = max(0, len(current_tokens) - max_seq_len)
             tokens_window = current_tokens[start_idx:]
-            padded[0, 0, 0, : len(tokens_window)] = np.array(
-                tokens_window, dtype=np.uint32
-            )
+            padded[0, 0, 0, : len(tokens_window)] = np.array(tokens_window, dtype=np.uint32)
 
             input_tensor = create_input_tensor(padded)
             logits = model(input_tensor, causal_mask, input_ids_np=padded)
@@ -227,9 +219,7 @@ def generate_text(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Qwen3 training with ttml (single-device, TP, and DP+TP)"
-    )
+    parser = argparse.ArgumentParser(description="Qwen3 training with ttml (single-device, TP, and DP+TP)")
     # Model
     parser.add_argument(
         "--model_path",
@@ -249,8 +239,7 @@ def main():
         nargs=2,
         default=[1, 1],
         metavar=("ROWS", "COLS"),
-        help="Device mesh shape [rows, cols].  rows = DP degree, "
-        "cols = TP degree.  Default: 1 1 (single device).",
+        help="Device mesh shape [rows, cols].  rows = DP degree, " "cols = TP degree.  Default: 1 1 (single device).",
     )
 
     # Data
@@ -258,8 +247,7 @@ def main():
         "--dataset",
         type=str,
         default="wikitext",
-        help="Dataset: 'wikitext', a HF dataset name, path to .txt file, "
-        "(tokenized on-the-fly, no cache)",
+        help="Dataset: 'wikitext', a HF dataset name, path to .txt file, " "(tokenized on-the-fly, no cache)",
     )
 
     # Training hyperparameters
@@ -272,9 +260,7 @@ def main():
         default=1e-6,
         help="Minimum learning rate (cosine schedule floor)",
     )
-    parser.add_argument(
-        "--warmup_steps", type=int, default=50, help="Linear warmup steps"
-    )
+    parser.add_argument("--warmup_steps", type=int, default=50, help="Linear warmup steps")
     parser.add_argument(
         "--lr_schedule",
         type=str,
@@ -282,9 +268,7 @@ def main():
         choices=["cosine", "constant"],
         help="LR schedule after warmup: 'cosine' decays to min_lr, 'constant' holds at peak LR",
     )
-    parser.add_argument(
-        "--weight_decay", type=float, default=0.01, help="AdamW weight decay"
-    )
+    parser.add_argument("--weight_decay", type=float, default=0.01, help="AdamW weight decay")
     parser.add_argument("--beta1", type=float, default=0.9, help="AdamW beta1")
     parser.add_argument("--beta2", type=float, default=0.999, help="AdamW beta2")
     parser.add_argument("--eps", type=float, default=1e-8, help="AdamW epsilon")
@@ -302,9 +286,7 @@ def main():
     )
 
     # Evaluation
-    parser.add_argument(
-        "--eval_every", type=int, default=50, help="Evaluate every N optimizer steps"
-    )
+    parser.add_argument("--eval_every", type=int, default=50, help="Evaluate every N optimizer steps")
     parser.add_argument(
         "--valid_mul",
         type=int,
@@ -338,8 +320,7 @@ def main():
         "--checkpoint",
         action="store_true",
         default=False,
-        help="Enable gradient checkpointing (activation recomputation). "
-        "Trades compute for memory during backward.",
+        help="Enable gradient checkpointing (activation recomputation). " "Trades compute for memory during backward.",
     )
     parser.add_argument(
         "--track_memory",
@@ -454,14 +435,16 @@ def main():
     tb_train_writer = None
     tb_val_writer = None
     if args.save_dir:
-        from torch.utils.tensorboard import SummaryWriter
+        try:
+            from torch.utils.tensorboard import SummaryWriter
 
-        tb_train_writer = SummaryWriter(
-            log_dir=os.path.join(args.save_dir, "logs", "train")
-        )
-        tb_val_writer = SummaryWriter(
-            log_dir=os.path.join(args.save_dir, "logs", "valid")
-        )
+            tb_train_writer = SummaryWriter(log_dir=os.path.join(args.save_dir, "logs", "train"))
+            tb_val_writer = SummaryWriter(log_dir=os.path.join(args.save_dir, "logs", "valid"))
+        except ImportError:
+            print(
+                "WARNING: tensorboard is not installed — TensorBoard logging disabled. "
+                "Install with: pip install tensorboard"
+            )
 
     # ------------------------------------------------------------------
     # 1. Load HuggingFace model and tokenizer
@@ -470,9 +453,7 @@ def main():
 
     print(f"Loading HuggingFace model: {args.model_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    hf_model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.float32, trust_remote_code=True
-    )
+    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.float32, trust_remote_code=True)
     hf_config = hf_model.config
     hf_state_dict = hf_model.state_dict()
 
@@ -535,9 +516,7 @@ def main():
     # Build LoRA config (None when disabled)
     lora_config = None
     if args.lora_rank > 0:
-        lora_alpha = (
-            args.lora_alpha if args.lora_alpha is not None else float(args.lora_rank)
-        )
+        lora_alpha = args.lora_alpha if args.lora_alpha is not None else float(args.lora_rank)
         if args.lora_targets is not None:
             # Handle comma-separated targets (e.g. "q_proj,k_proj" → ["q_proj", "k_proj"])
             expanded = []
@@ -546,10 +525,7 @@ def main():
             lora_targets = [t.strip() for t in expanded if t.strip()]
             invalid = [t for t in lora_targets if t not in LORA_TARGETS_ALL]
             if invalid:
-                parser.error(
-                    f"Invalid --lora_targets: {invalid}. "
-                    f"Valid choices: {', '.join(LORA_TARGETS_ALL)}"
-                )
+                parser.error(f"Invalid --lora_targets: {invalid}. " f"Valid choices: {', '.join(LORA_TARGETS_ALL)}")
         else:
             lora_targets = list(LORA_TARGETS_ALL)
         lora_config = {
@@ -557,10 +533,7 @@ def main():
             "alpha": lora_alpha,
             "targets": lora_targets,
         }
-        print(
-            f"\nLoRA enabled: rank={args.lora_rank}, alpha={lora_alpha}, "
-            f"targets={lora_targets}"
-        )
+        print(f"\nLoRA enabled: rank={args.lora_rank}, alpha={lora_alpha}, " f"targets={lora_targets}")
 
     from utils.model_factory import create_ttml_model, load_hf_weights
     from utils.tensor_utils import tile_pad
@@ -644,40 +617,26 @@ def main():
     # Select trainable parameters
     all_params = ttml_model.parameters()
     if lora_config is not None:
-        trainable_params = {
-            name: param for name, param in all_params.items() if "lora" in name
-        }
+        trainable_params = {name: param for name, param in all_params.items() if "lora" in name}
         frozen_count = len(all_params) - len(trainable_params)
         print(
-            f"\nLoRA finetuning: {len(trainable_params)} LoRA params trainable, "
-            f"{frozen_count} base params frozen"
+            f"\nLoRA finetuning: {len(trainable_params)} LoRA params trainable, " f"{frozen_count} base params frozen"
         )
     elif args.freeze_embeddings:
         trainable_params = {
-            name: param
-            for name, param in all_params.items()
-            if "embed_tokens" not in name and "lm_head" not in name
+            name: param for name, param in all_params.items() if "embed_tokens" not in name and "lm_head" not in name
         }
         frozen_count = len(all_params) - len(trainable_params)
-        print(
-            f"\nFreezing embedding + lm_head: {frozen_count} params frozen, "
-            f"{len(trainable_params)} trainable"
-        )
+        print(f"\nFreezing embedding + lm_head: {frozen_count} params frozen, " f"{len(trainable_params)} trainable")
     else:
         trainable_params = all_params
         print(f"\nAll {len(trainable_params)} params are trainable")
 
-    non_trainable_params = {
-        name: param
-        for name, param in all_params.items()
-        if name not in trainable_params
-    }
+    non_trainable_params = {name: param for name, param in all_params.items() if name not in trainable_params}
     for name, weight in non_trainable_params.items():
         weight.tensor.set_requires_grad(False)
     if non_trainable_params:
-        print(
-            f"Set requires_grad=False for {len(non_trainable_params)} non-trainable params"
-        )
+        print(f"Set requires_grad=False for {len(non_trainable_params)} non-trainable params")
 
     print("Setting up optimizer...")
     adamw_config = ttml.optimizers.AdamWConfig.make(
@@ -743,20 +702,13 @@ def main():
     print(f"  Warmup steps: {args.warmup_steps}")
     eval_bs = micro_batch * dp_size if dp_size > 1 else micro_batch
     eval_samples = eval_batches * eval_bs
-    print(
-        f"  Validation: {args.valid_mul}x total_batch = {eval_samples} samples ({eval_batches} batches of {eval_bs})"
-    )
-    print(
-        f"  Gradient clipping: {'%.1f' % args.clip_grad_norm if use_clip else 'disabled'}"
-    )
+    print(f"  Validation: {args.valid_mul}x total_batch = {eval_samples} samples ({eval_batches} batches of {eval_bs})")
+    print(f"  Gradient clipping: {'%.1f' % args.clip_grad_norm if use_clip else 'disabled'}")
     ckpt_status = "enabled" if args.checkpoint else "disabled"
     print(f"  Gradient checkpointing: {ckpt_status}")
     print(f"  Freeze embedding/lm_head: {args.freeze_embeddings}")
     if lora_config:
-        print(
-            f"  LoRA: rank={lora_config['rank']}, alpha={lora_config['alpha']}, "
-            f"targets={lora_config['targets']}"
-        )
+        print(f"  LoRA: rank={lora_config['rank']}, alpha={lora_config['alpha']}, " f"targets={lora_config['targets']}")
     else:
         print(f"  LoRA: disabled")
     print(f"  Distributed: {mode_str}")
@@ -766,7 +718,8 @@ def main():
             f"    Checkpoints: {os.path.join(args.save_dir, 'checkpoints')} (every {args.save_every or 'final'} steps)"
         )
         print(f"    TensorBoard: {os.path.join(args.save_dir, 'logs')} (train + valid)")
-        tb_train_writer.add_text("config", f"```\n{vars(args)}\n```", 0)
+        if tb_train_writer is not None:
+            tb_train_writer.add_text("config", f"```\n{vars(args)}\n```", 0)
     if args.resume_from:
         print(f"  Resuming from: {args.resume_from} (step {resume_step})")
     if args.export_hf_dir:
@@ -833,9 +786,7 @@ def main():
         if args.lr_schedule == "constant":
             lr_now = constant_lr_schedule(step - 1, args.warmup_steps, args.lr)
         else:
-            lr_now = cosine_lr_schedule(
-                step - 1, args.warmup_steps, total_steps, args.lr, args.min_lr
-            )
+            lr_now = cosine_lr_schedule(step - 1, args.warmup_steps, total_steps, args.lr, args.min_lr)
         # Update optimizer LR
         optimizer.set_lr(lr_now)
 
@@ -874,14 +825,10 @@ def main():
 
             # Cross-entropy loss
             if args.sharded_loss:
-                loss = sharded_cross_entropy_loss(
-                    logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim
-                )
+                loss = sharded_cross_entropy_loss(logits, y_np, vocab_padded, tp_size, tp_axis=shard_dim)
             else:
                 target_tensor = create_target_tensor(y_np, dp_mapper)
-                loss = ttml.ops.loss.cross_entropy_loss(
-                    logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-                )
+                loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
             t0 = _tlog(step, "loss_compute", t0)
 
             accum_loss += get_loss_value(loss, distributed)
@@ -963,9 +910,7 @@ def main():
         if tb_train_writer is not None:
             tb_train_writer.add_scalar("loss", step_loss, step)
             tb_train_writer.add_scalar("lr", lr_now, step)
-            tb_train_writer.add_scalar(
-                "throughput/tokens_per_sec", tokens_per_sec, step
-            )
+            tb_train_writer.add_scalar("throughput/tokens_per_sec", tokens_per_sec, step)
             tb_train_writer.add_scalar("throughput/step_time_sec", step_time, step)
 
         # Update progress bar
@@ -1124,9 +1069,7 @@ def main():
             f.write(f"# Model: {args.model_path}\n")
             f.write(f"# Mode: {mode_str}\n")
             f.write(f"# Dataset: {args.dataset}\n")
-            f.write(
-                f"# Micro-batch: {micro_batch}, DP: {dp_size}, Seq len: {seq_len}\n"
-            )
+            f.write(f"# Micro-batch: {micro_batch}, DP: {dp_size}, Seq len: {seq_len}\n")
             f.write(f"# LR: {args.lr}, Warmup: {args.warmup_steps}\n")
             f.write(f"# Checkpoint: {ckpt_status}\n")
             f.write(f"# Freeze embedding/lm_head: {args.freeze_embeddings}\n")
