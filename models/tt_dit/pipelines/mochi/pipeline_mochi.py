@@ -334,6 +334,10 @@ class MochiPipeline(DiffusionPipeline):
                 },
             }
         else:
+            assert tuple(mesh_device.shape) != (
+                2,
+                2,
+            ), "Mochi 2x2 is only supported on Blackhole. Wormhole does not have enough memory for this configuration."
             default_config = {
                 (2, 4): {
                     "sp_axis": 0,
