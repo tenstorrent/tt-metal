@@ -401,7 +401,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
 
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id));
+        operation_attributes.subdevice_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id()));
 
     tt::tt_metal::Program program{};
 

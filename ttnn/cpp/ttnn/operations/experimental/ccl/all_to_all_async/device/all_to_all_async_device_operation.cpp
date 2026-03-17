@@ -180,7 +180,7 @@ ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
 
     auto subdevice_id = operation_attributes.sub_device_id;
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(subdevice_id);
+    auto sd_id = subdevice_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,

@@ -25,11 +25,9 @@ std::array<ttnn::Tensor, 2> all_to_all_dispatch(
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<uint32_t>& output_concat_dim) {
     ttnn::DeviceContext device_ctx(input_tensor);
-    auto subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    const tt::tt_metal::CoreRangeSet subdevice_core_range_set = device_ctx.get_worker_cores();
     auto* mesh_device = device_ctx.raw_mesh_device();
 
     uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, axis));

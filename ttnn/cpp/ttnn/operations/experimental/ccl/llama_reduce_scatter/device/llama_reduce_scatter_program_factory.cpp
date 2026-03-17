@@ -422,7 +422,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id));
+        operation_attributes.subdevice_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id()));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     size_t packet_size_bytes =

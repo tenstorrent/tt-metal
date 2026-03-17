@@ -1926,7 +1926,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
-    auto effective_sd_id = device_ctx.get_effective_sub_device_id(sub_device_id);
+    auto effective_sd_id = sub_device_id.value_or(device_ctx.get_current_sub_device_id());
     auto subdevice_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sd_id);
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());

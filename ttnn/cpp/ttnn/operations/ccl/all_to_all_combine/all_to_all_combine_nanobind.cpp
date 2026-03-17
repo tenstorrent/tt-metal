@@ -25,7 +25,6 @@ ttnn::Tensor all_to_all_combine_impl(
     const bool local_reduce,
     const std::optional<uint32_t> output_shard_dim,
     const std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& output_tensor,
     const std::optional<uint32_t> num_links,
@@ -40,7 +39,6 @@ ttnn::Tensor all_to_all_combine_impl(
         memory_config,
         cluster_axis,
         output_shard_dim,
-        subdevice_id,
         output_tensor);
 }
 
@@ -71,7 +69,6 @@ void bind_all_to_all_combine(nb::module_& mod) {
             topology (ttnn.Topology, optional): the topology to use when combining the tokens. Defaults to `None`, for which the topology is determined automatically.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
             cluster_axis (int, optional): the cluster axis to combine along. Defaults to `None`, though we assert out when it is not specified.
-            subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): the optional output tensor to use for the combined tokens. Defaults to `None`.
             output_shard_dim (int, optional): the dimension to shard the output tokens along. Defaults to `1`, which is the batch dimension.
 
@@ -103,7 +100,6 @@ void bind_all_to_all_combine(nb::module_& mod) {
             nb::arg("local_reduce") = false,
             nb::arg("output_shard_dim") = 1,
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("num_links") = nb::none(),

@@ -43,7 +43,6 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
-            subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
             output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens and the metadata. Defaults to `None`.
 
@@ -62,7 +61,6 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
                             num_links=num_links,
                             topology=topology,
                             memory_config=memory_config,
-                            subdevice_id=subdevice_id,
                             output_concat_dim=output_concat_dim)
         )doc";
 
@@ -80,7 +78,6 @@ void bind_all_to_all_dispatch(nb::module_& mod) {
             nb::arg("num_links") = nb::none(),
             nb::arg("topology") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
             nb::arg("output_concat_dim") = 1));
 }
 

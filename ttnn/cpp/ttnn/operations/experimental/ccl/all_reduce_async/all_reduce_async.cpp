@@ -196,12 +196,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             ttnn::Shape({1, initial_shape[0] * initial_shape[1], initial_shape[2], initial_shape[3]}));
         interleaved_tensor.deallocate();
         auto gather_tensor = composite_common::composite_all_gather(
-            reshaped_tensor,
-            composite_dim,
-            num_preferred_links.value_or(1),
-            out_memory_config,
-            worker_subdevice_id_opt,
-            std::nullopt);
+            reshaped_tensor, composite_dim, num_preferred_links.value_or(1), out_memory_config, std::nullopt);
         reshaped_tensor.deallocate();
 
         bool is_float32 = (input_tensor.dtype() == DataType::FLOAT32);
@@ -310,7 +305,6 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             composite_dim,
             num_preferred_links.value_or(1),
             change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
-            worker_subdevice_id_opt,
             cluster_axis);
         reshaped_tensor.deallocate();
 
@@ -347,7 +341,6 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             interleaved_tensor,
             dim,
             cluster_axis,
-            worker_subdevice_id_opt,
             out_memory_config,
             std::nullopt,
             std::nullopt,
@@ -384,14 +377,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             /*mesh_device*/ &mesh_device);
     } else {
         gathered = ttnn::all_gather(
-            scattered_tensor,
-            dim,
-            cluster_axis,
-            worker_subdevice_id_opt,
-            out_memory_config,
-            std::nullopt,
-            num_preferred_links,
-            topology_);
+            scattered_tensor, dim, cluster_axis, out_memory_config, std::nullopt, num_preferred_links, topology_);
     }
     scattered_tensor.deallocate();
     if (change_mem_config) {

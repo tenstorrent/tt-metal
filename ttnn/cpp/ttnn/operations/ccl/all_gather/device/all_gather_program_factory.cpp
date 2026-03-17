@@ -27,9 +27,8 @@ AllGatherDeviceOperation::AllGatherProgram::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     const ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
-    const tt::tt_metal::CoreRangeSet subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
-    const tt::tt_metal::SubDeviceId sd_id = device_ctx.get_effective_sub_device_id(operation_attributes.subdevice_id);
+    const tt::tt_metal::CoreRangeSet subdevice_core_range_set = device_ctx.get_worker_cores();
+    const tt::tt_metal::SubDeviceId sd_id = device_ctx.get_current_sub_device_id();
     auto* mesh_device = device_ctx.raw_mesh_device();
 
     // Create semaphores internally (internalized global semaphores)
@@ -97,8 +96,7 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     // Get core and subdevice related information
-    auto subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
+    auto subdevice_core_range_set = device_ctx.get_worker_cores();
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }
@@ -122,9 +120,9 @@ AllGatherDeviceOperation::AllGatherProgram::create_at(
         operation_attributes.topology,
         multidevice_semaphores,
         barrier_semaphore,
-        false,  // using_persistent_buffers - false since we always barrier in this version
-        operation_attributes.subdevice_id,
-        no_fuse,  // never fusing with this
+        false,         // using_persistent_buffers - false since we always barrier in this version
+        std::nullopt,  // sub_device_id: use context (set by decorator)
+        no_fuse,       // never fusing with this
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,

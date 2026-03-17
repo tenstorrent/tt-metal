@@ -28,8 +28,8 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
         // Ugly code: the native implementation forces the user to pre-allocate the output buffer,
         // but the composite implementation is unable to reuse it. So overwrite persistent_output_buffer
         // to point to the real output buffer internally created by the composite implementation.
-        persistent_output_buffer = composite_common::composite_all_to_all(
-            input_tensor, in_dim, out_dim, num_links, memory_config, subdevice_id);
+        persistent_output_buffer =
+            composite_common::composite_all_to_all(input_tensor, in_dim, out_dim, num_links, memory_config);
         return persistent_output_buffer;
     }
     auto input_shape = input_tensor.logical_shape();

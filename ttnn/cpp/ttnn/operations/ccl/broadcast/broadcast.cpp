@@ -17,12 +17,10 @@ ttnn::Tensor broadcast(
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<uint32_t> cluster_axis) {
     tt::tt_fabric::Topology topology_ =
         ::ttnn::ccl::get_usable_topology(input_tensor, std::optional<tt::tt_fabric::Topology>(topology), cluster_axis);
-    return ttnn::prim::broadcast(
-        input_tensor, sender_coord, num_links, memory_config, topology_, cluster_axis, subdevice_id);
+    return ttnn::prim::broadcast(input_tensor, sender_coord, num_links, memory_config, topology_, cluster_axis);
 }
 
 }  // namespace ttnn

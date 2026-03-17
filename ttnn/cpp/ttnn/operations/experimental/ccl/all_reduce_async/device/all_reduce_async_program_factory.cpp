@@ -200,7 +200,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
 
-    auto effective_sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(sub_device_id);
+    auto effective_sd_id = sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     auto sub_device_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sd_id);
 
     std::vector<CoreRange> output_cores;

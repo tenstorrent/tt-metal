@@ -39,7 +39,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             dim,
             num_links,
             memory_config,
-            subdevice_id,
             /*cluster_axis*/ std::nullopt);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
@@ -91,8 +90,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
-        return composite_common::composite_all_gather(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
+        return composite_common::composite_all_gather(input_tensor, dim, num_links, memory_config, cluster_axis);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
@@ -142,8 +140,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
-        return composite_common::composite_all_gather(
-            input_tensors, dim, num_links, memory_config, subdevice_id, cluster_axis);
+        return composite_common::composite_all_gather(input_tensors, dim, num_links, memory_config, cluster_axis);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     std::vector<Tensor> output_tensors;
@@ -204,7 +201,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
-            input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, num_preferred_links.value_or(1), memory_config, cluster_axis);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
@@ -256,7 +253,6 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
             dim,
             num_links,
             memory_config,
-            subdevice_id,
             /*cluster_axis*/ std::nullopt);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
@@ -307,8 +303,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
-        return composite_common::composite_all_gather(
-            input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
+        return composite_common::composite_all_gather(input_tensor, dim, num_links, memory_config, cluster_axis);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(
@@ -359,7 +354,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         log_debug(tt::LogOp, "Using composite_all_gather");
         TT_FATAL(!sub_core_grid.has_value(), "Composite All Gather OP does not currently support sub core grid");
         return composite_common::composite_all_gather(
-            input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
+            input_tensor, dim, num_preferred_links.value_or(1), memory_config, cluster_axis);
     }
     log_debug(tt::LogOp, "Using minimal_all_gather_async");
     return ttnn::prim::all_gather_async(

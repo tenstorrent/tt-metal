@@ -156,7 +156,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(args.sub_device_id));
+        args.sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id()));
     // auto bbox = sub_device_core_range_set.bounding_box();
     // CoreRangeSet bbox_crs(bbox);
 

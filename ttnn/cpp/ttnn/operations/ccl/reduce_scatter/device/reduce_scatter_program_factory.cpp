@@ -33,9 +33,8 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
-    auto subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
-    auto sd_id = device_ctx.get_effective_sub_device_id(operation_attributes.subdevice_id);
+    auto subdevice_core_range_set = device_ctx.get_worker_cores();
+    auto sd_id = device_ctx.get_current_sub_device_id();
     auto* mesh_device = device_ctx.raw_mesh_device();
     // create semaphores
     // 3 semaphores used for within op synchronizations
@@ -103,8 +102,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     // Get core and subdevice related information
-    const tt::tt_metal::CoreRangeSet subdevice_core_range_set =
-        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
+    const tt::tt_metal::CoreRangeSet subdevice_core_range_set = device_ctx.get_worker_cores();
     auto bbox = subdevice_core_range_set.bounding_box();
     auto first_coord = bbox.start_coord;
 
@@ -128,9 +126,9 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         operation_attributes.topology,
         multidevice_semaphores,
         barrier_semaphore,
-        false,  // since we don't have a persistent intermediate buffer option, this must be false
-        operation_attributes.subdevice_id,
-        no_fuse,  // never fusing with this
+        false,         // since we don't have a persistent intermediate buffer option, this must be false
+        std::nullopt,  // sub_device_id: use context
+        no_fuse,       // never fusing with this
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,

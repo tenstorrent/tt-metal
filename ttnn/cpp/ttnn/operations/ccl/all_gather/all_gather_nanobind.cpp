@@ -28,7 +28,6 @@ void bind_all_gather(nb::module_& mod) {
 
         Keyword Args:
             cluster_axis (int, optional): The axis on the mesh device to gather across. Defaults to `None`.
-            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
             num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
@@ -65,7 +64,6 @@ void bind_all_gather(nb::module_& mod) {
             nb::arg("dim"),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
             nb::arg("num_links") = nb::none(),
