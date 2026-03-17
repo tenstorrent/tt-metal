@@ -298,18 +298,20 @@ def run_test_forward_pass_mla2d(
             mesh_device.get_num_devices(),
         )
         if mode == "prefill":
+            row_start = (user_id // batch_size_per_row) * batch_size_per_row
+            row_end = row_start + batch_size_per_row
             assert (
                 check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
                 and check_cache_matches(
-                    tt_cache[user_id : user_id + 1, :, :seq_len],
+                    tt_cache[row_start:row_end, :, :seq_len],
                     output_cache,
                     hf_config_short.kv_lora_rank,
                     pcc_required=PCC_REQUIRED_KVPE,
                 )
                 and check_cache_unchanged(
-                    tt_cache, (slice(user_id, user_id + 1), slice(None), slice(None, seq_len), slice(None))
+                    tt_cache, (slice(row_start, row_end), slice(None), slice(None, seq_len), slice(None))
                 )
-            ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside user area"
+            ), f"MLA output for prefill {seq_len=} {user_id=} does not meet PCC requirement {PCC_REQUIRED} or KVPE Cache PCC requirement {PCC_REQUIRED_KVPE} or has been modified outside the selected row"
         else:
             assert check_output_matches(
                 tt_output_torch, reference_output, pcc_required=PCC_REQUIRED
