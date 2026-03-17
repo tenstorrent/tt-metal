@@ -13,8 +13,7 @@
 
 #include "pad.hpp"
 
-namespace ttnn::operations::data_movement {
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
@@ -333,8 +332,7 @@ ttnn::Tensor invoke_tile(
     }
     return output_tensor;
 }
-}  // namespace detail
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
 
