@@ -475,10 +475,10 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
             ),
         )
 
-    cluster_axis: int | None = None
-    num_links: int | None = 4
     worker_mode: ttnn.WorkerMode
     dispatch_algorithm: ttnn.DispatchAlgorithm
+    cluster_axis: int | None = None
+    num_links: int | None = 4
     cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
@@ -510,14 +510,13 @@ class SelectiveReduceCombineConfig(OpConfigBase):
     seq: int
     select_experts_k: int
     experts: int
-    axis: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 4
     token_parallel_core_dim: int
     data_parallel_core_dim: int
     worker_cores: list[ttnn.CoreCoord]
     mux_core_range_set: ttnn.CoreRangeset
-    output_tensor: ttnn.Tensor | None = None
+    axis: int | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    num_links: int = 4
     optional_cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
