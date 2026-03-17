@@ -37,6 +37,16 @@ Create issues only for **deterministic** CI failures that are still repeating an
 
 The **Error excerpt** in every issue body must be the **actual** failure text copied from the downloaded logs (e.g. the `##[error]` or `[  FAILED  ]` lines, or the key exception message). **Never** use generic placeholders such as "Job failed in the last 3 completed workflow runs" or "validated via extract_failing_jobs and log spot-check"—those are not error excerpts and must not appear in the issue body.
 
+### Use the terminal failure, not an earlier assertion
+
+Logs often contain multiple TT_FATAL, TT_THROW, or FAILED lines. The excerpt must be the **failure that actually caused the job to fail** (the terminal/root failure), not an earlier line that might be from a negative test or expected assertion. Prefer:
+
+- The **last** fatal or exception before the job terminates (e.g. device timeout, unhandled exception, hang).
+- The failure associated with `##[error]`, `Process completed with exit code`, or the step that is marked failed.
+- Timeouts or "device unrecoverable" over an earlier TT_FATAL in the same log.
+
+If in doubt, choose the error that occurs **closest to** the end of the failed step or the job’s exit, since that is usually the cause of the failure.
+
 ## Create vs Skip Rules
 
 ### Create an issue only if all conditions are true
