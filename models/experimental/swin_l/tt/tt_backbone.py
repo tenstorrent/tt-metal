@@ -54,11 +54,9 @@ class TtSwinLBackbone:
         self.mlp_ratio = mlp_ratio
         self.out_indices = out_indices
 
-        # Patch embedding conv (4x4 stride 4)
+        # Patch embedding conv (4x4 stride 4) — keep weights on device for reuse across runs
         self.patch_embed_weight = parameters["patch_embed"]["projection"]["weight"]
         self.patch_embed_bias = parameters["patch_embed"]["projection"]["bias"]
-        self.patch_embed_weight = ttnn.from_device(self.patch_embed_weight)
-        self.patch_embed_bias = ttnn.from_device(self.patch_embed_bias)
 
         # Build stages: each stage = list of TtSwinBlock
         self.stages = []
@@ -152,6 +150,7 @@ class TtSwinLBackbone:
             dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(nhwc)
+
         output = ttnn.reshape(output, (N, out_h, out_w, self.embed_dim))
 
         # Post-embed layer norm
@@ -166,9 +165,6 @@ class TtSwinLBackbone:
         for s in range(4):
             for block in self.stages[s]:
                 output = block(output)
-
-            if not self.trace_mode:
-                ttnn.synchronize_device(self.device)
 
             if s in self.out_indices:
                 normed = ttnn.layer_norm(

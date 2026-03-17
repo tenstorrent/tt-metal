@@ -52,6 +52,27 @@ class TtSwinAttention:
         self.shift_size = list(shift_size) if not isinstance(shift_size, list) else shift_size
         self.num_heads = num_heads
         self.attn_mask = attn_mask
+        # Pre-combine relative_position_bias + attn_mask for shifted blocks.
+        # rpb: (1, heads, seq, seq). attn_mask: (1, nW, 1, seq, seq) or similar.
+        # Reshape attn_mask to 4D (nW, 1, seq, seq) so the addition stays 4D.
+        if sum(shift_size) > 0 and attn_mask is not None:
+            seq = self.window_size[0] * self.window_size[1]
+            # attn_mask is [1, nW, 1, seq, seq]
+            # We want to reshape it to [nW, 1, seq, seq] to broadcast with [1, heads, seq, seq]
+            shape = attn_mask.shape
+            nW = int(shape[0]) * int(shape[1]) * int(shape[2])
+            attn_mask_4d = ttnn.reshape(attn_mask, (nW, 1, seq, seq))
+            combined = ttnn.add(
+                parameters["relative_position_bias"],
+                attn_mask_4d,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.combined_bias = ttnn.to_layout(combined, ttnn.TILE_LAYOUT)
+        else:
+            self.combined_bias = None
+        self._hifi2 = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, packer_l1_acc=True
+        )
 
     def __call__(self, input_tensor):
         relative_position_bias = self.parameters["relative_position_bias"]
@@ -71,11 +92,9 @@ class TtSwinAttention:
         if self.window_size[1] >= pad_W:
             shift_size[1] = 0
 
-        # cyclic shift
         if sum(shift_size) > 0:
             input_tensor = roll(input_tensor, (-shift_size[0], -shift_size[1]), [1, 2])
 
-        # partition windows
         num_windows = (pad_H // self.window_size[0]) * (pad_W // self.window_size[1])
         nH = pad_H // self.window_size[0]
         nW = pad_W // self.window_size[1]
@@ -86,17 +105,15 @@ class TtSwinAttention:
             ttnn.transpose(ttnn.reshape(input_tensor, (B, nH, wH, nW, wW, C)), 2, 3), (B * num_windows, wH * wW, C)
         )
 
-        # QKV projection
         seq_len = wH * wW
         head_dim = C // self.num_heads
+        _hifi2 = self._hifi2
 
         qkv = ttnn.linear(
             ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             self.parameters["qkv"]["weight"],
             bias=self.parameters["qkv"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, packer_l1_acc=True
-            ),
+            compute_kernel_config=_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -113,29 +130,26 @@ class TtSwinAttention:
         v = ttnn.transpose(ttnn.reshape(v, (B * num_windows, seq_len, self.num_heads, head_dim)), 1, 2)
 
         scale = head_dim**-0.5
-        q = ttnn.to_layout(q * scale, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        q = ttnn.to_layout(
+            ttnn.multiply(q, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         k = ttnn.to_layout(k, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.matmul(
             q,
             k,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False, packer_l1_acc=True
-            ),
+            compute_kernel_config=_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
 
-        # relative position bias
-        attn = ttnn.add(attn, relative_position_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # attention mask for shifted windows
-        if sum(shift_size) > 0 and self.attn_mask is not None:
-            attn = ttnn.reshape(
-                attn + self.attn_mask,
-                (B * num_windows, self.num_heads, seq_len, seq_len),
-            )
+        if self.combined_bias is not None:
+            attn = ttnn.add(attn, self.combined_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            attn = ttnn.add(attn, relative_position_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         attn = ttnn.softmax(attn, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -143,9 +157,7 @@ class TtSwinAttention:
         output = ttnn.matmul(
             attn,
             v,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=False
-            ),
+            compute_kernel_config=_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -160,9 +172,7 @@ class TtSwinAttention:
             ttnn.to_layout(output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG),
             self.parameters["proj"]["weight"],
             bias=self.parameters["proj"]["bias"],
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=False
-            ),
+            compute_kernel_config=_hifi2,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -172,11 +182,9 @@ class TtSwinAttention:
         output = ttnn.transpose(output, 2, 3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (B, pad_H, pad_W, C))
 
-        # reverse cyclic shift
         if sum(shift_size) > 0:
             output = roll(output, (shift_size[0], shift_size[1]), [1, 2])
 
-        # unpad
         if pad_b > 0 or pad_r > 0:
             output = ttnn.slice(output, [0, 0, 0, 0], [B, H, W, C], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return output

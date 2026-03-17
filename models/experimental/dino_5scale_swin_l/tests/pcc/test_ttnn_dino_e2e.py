@@ -243,6 +243,7 @@ def test_ttnn_dino_e2e_pcc(device, reset_seeds):
         backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
         window_size=SWIN_L_WINDOW_SIZE,
         in_channels=tuple(NECK_IN_CHANNELS),
+        trace_mode=True,
     )
 
     logger.info("Running full TTNN forward_image (with intermediates)...")

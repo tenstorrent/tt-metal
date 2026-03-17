@@ -108,6 +108,7 @@ def load_neck_weights(
         },
     }
 
+    params = _to_device_recursive(params, device)
     return params
 
 

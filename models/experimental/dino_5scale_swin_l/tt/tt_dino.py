@@ -333,48 +333,58 @@ class TtDINO:
         # Precompute spatial_shapes_tt and valid_ratios_tt for device-only MSDeformAttn path (encoder/decoder).
         # Precompute PE and trace metadata in __init__ (trace_mode) to avoid ttnn.arange/ttnn.full during trace.
         self._pe_cache: List[ttnn.Tensor] = []
+        self._output_proposals_cache = None
+        self._output_proposals_valid_cache = None
         from models.experimental.dino_5scale_swin_l.tt.tt_neck import DINO_NECK_LEVEL_SHAPES
 
         self._valid_ratios_tt = ttnn.full(
             (1, num_levels, 2), 1.0, dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg
         )
-        rows = []
+        spatial_shapes_torch = torch.tensor(
+            [[DINO_NECK_LEVEL_SHAPES[l][2], DINO_NECK_LEVEL_SHAPES[l][3]] for l in range(num_levels)],
+            dtype=torch.long,
+        )
+        self._spatial_shapes_tt = ttnn.from_torch(
+            spatial_shapes_torch.float().to(torch.bfloat16),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=self._dram_cfg,
+        )
+
+        # Always precompute PE and proposals via PyTorch reference (avoids expensive
+        # device-side ttnn.arange/ttnn.stack/unsqueeze ops during every forward pass).
+        N = sum(DINO_NECK_LEVEL_SHAPES[l][2] * DINO_NECK_LEVEL_SHAPES[l][3] for l in range(num_levels))
         for lvl in range(num_levels):
             _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
-            row = ttnn.stack(
-                [
-                    ttnn.full((1,), float(H), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
-                    ttnn.full((1,), float(W), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
-                ],
-                dim=-1,
-            )
-            rows.append(row)
-        self._spatial_shapes_tt = ttnn.concat(rows, dim=0)
-        for r in rows:
-            ttnn.deallocate(r)
+            pe_torch = sine_positional_encoding(
+                H, W, num_feats=embed_dims // 2, temperature=pe_temperature
+            )  # (1, 256, H, W)
+            pe_hw = pe_torch.permute(0, 2, 3, 1).reshape(1, H * W, embed_dims).to(torch.bfloat16)
 
-        if trace_mode:
-            for lvl in range(num_levels):
-                _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
-                pe = sine_positional_encoding_ttnn(
-                    device, H, W, num_feats=embed_dims // 2, temperature=pe_temperature, memory_config=self._dram_cfg
-                )
-                self._pe_cache.append(pe)
+            # Pad to tile multiple so we can store it in TILE_LAYOUT and avoid
+            # doing the pad and to_layout during the forward pass.
+            hw = H * W
+            padded_hw = _tile_aligned_hw(H, W)
+            if padded_hw > hw:
+                pe_hw = torch.nn.functional.pad(pe_hw, (0, 0, 0, padded_hw - hw))
 
-            # Precompute encoder output proposals (avoids ttnn.arange/ttnn.full in pre_decoder)
-            hw_list = [[DINO_NECK_LEVEL_SHAPES[l][2], DINO_NECK_LEVEL_SHAPES[l][3]] for l in range(num_levels)]
-            spatial_shapes = torch.tensor(hw_list, dtype=torch.long)
-            N = sum(DINO_NECK_LEVEL_SHAPES[l][2] * DINO_NECK_LEVEL_SHAPES[l][3] for l in range(num_levels))
-            dummy_mem = ttnn.from_torch(
-                torch.zeros(1, N, embed_dims, dtype=torch.bfloat16),
-                device=device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self._dram_cfg,
+            self._pe_cache.append(
+                ttnn.from_torch(pe_hw, device=device, layout=ttnn.TILE_LAYOUT, memory_config=self._dram_cfg)
             )
-            self._output_proposals_cache, self._output_proposals_valid_cache = gen_encoder_output_proposals_ttnn(
-                device, dummy_mem, spatial_shapes, 1, memory_config=self._dram_cfg
-            )
-            ttnn.deallocate(dummy_mem)
+
+        proposals_host, valid_host = gen_encoder_output_proposals(torch.zeros(1, N, embed_dims), spatial_shapes_torch)
+        self._output_proposals_cache = ttnn.from_torch(
+            proposals_host.to(torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._dram_cfg,
+        )
+        self._output_proposals_valid_cache = ttnn.from_torch(
+            valid_host.to(torch.bfloat16),
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=self._dram_cfg,
+        )
 
     def pre_transformer_tt(
         self,
@@ -420,9 +430,12 @@ class TtDINO:
             feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
             feat_padded_list.append(feat_flat_tt)
 
-            # PE on device: [1, H*W, 256] + level_embed, then pad and expand to B
-            if self.trace_mode and self._pe_cache:
+            # PE: always use precomputed cache (populated in __init__ via PyTorch reference)
+            if self._pe_cache:
                 pos_tt = self._pe_cache[lvl]
+                level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
+                pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
+                pos_tt = ttnn.repeat(pos_tt, (B, 1, 1))
             else:
                 pos_tt = sine_positional_encoding_ttnn(
                     self.device,
@@ -432,18 +445,18 @@ class TtDINO:
                     temperature=self.pe_temperature,
                     memory_config=self._dram_cfg,
                 )
-            level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
-            pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
-            if padded_hw > hw:
-                pad_count = padded_hw - hw
-                pos_tt = ttnn.pad(
-                    pos_tt,
-                    padding=[(0, 0), (0, pad_count), (0, 0)],
-                    value=0.0,
-                    memory_config=self._dram_cfg,
-                )
-            pos_tt = ttnn.repeat(pos_tt, (B, 1, 1))
-            pos_tt = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
+                level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
+                pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
+                if padded_hw > hw:
+                    pad_count = padded_hw - hw
+                    pos_tt = ttnn.pad(
+                        pos_tt,
+                        padding=[(0, 0), (0, pad_count), (0, 0)],
+                        value=0.0,
+                        memory_config=self._dram_cfg,
+                    )
+                pos_tt = ttnn.repeat(pos_tt, (B, 1, 1))
+                pos_tt = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
             pos_padded_list.append(pos_tt)
 
         # Concat on device (all levels are tile-aligned)
@@ -683,7 +696,7 @@ class TtDINO:
             else memory_tt
         )
 
-        if self.trace_mode and self._output_proposals_cache is not None:
+        if self._output_proposals_cache is not None:
             output_proposals = self._output_proposals_cache
             output_proposals_valid = self._output_proposals_valid_cache
             if B > 1:
@@ -745,7 +758,7 @@ class TtDINO:
             if i < len(reg6) - 1:
                 reg_out = ttnn.relu(reg_out)
         enc_coords_unact = ttnn.add(reg_out, output_proposals)
-        if not (self.trace_mode and B == 1):
+        if B > 1:
             ttnn.deallocate(output_proposals)
         ttnn.deallocate(reg_out)
 

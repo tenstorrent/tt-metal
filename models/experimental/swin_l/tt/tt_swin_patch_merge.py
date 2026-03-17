@@ -28,6 +28,7 @@ class TtSwinPatchMerge:
         x1 = input_tensor[..., 1::2, 0::2, :]
         x2 = input_tensor[..., 0::2, 1::2, :]
         x3 = input_tensor[..., 1::2, 1::2, :]
+        ttnn.deallocate(input_tensor)
         output = ttnn.concat([x0, x1, x2, x3], -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x0)
         ttnn.deallocate(x1)
@@ -45,7 +46,7 @@ class TtSwinPatchMerge:
             self.parameters["reduction"]["weight"],
             dtype=ttnn.bfloat16,
             compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             ),

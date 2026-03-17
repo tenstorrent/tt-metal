@@ -66,18 +66,7 @@ class TtDINONeck:
             math_approx_mode=False,
         )
 
-        # Move conv weights to host for ttnn.conv2d
-        for i in range(4):
-            self.parameters["convs"][i]["conv"]["weight"] = ttnn.from_device(
-                self.parameters["convs"][i]["conv"]["weight"]
-            )
-            self.parameters["convs"][i]["conv"]["bias"] = ttnn.from_device(self.parameters["convs"][i]["conv"]["bias"])
-        self.parameters["extra_convs"][0]["conv"]["weight"] = ttnn.from_device(
-            self.parameters["extra_convs"][0]["conv"]["weight"]
-        )
-        self.parameters["extra_convs"][0]["conv"]["bias"] = ttnn.from_device(
-            self.parameters["extra_convs"][0]["conv"]["bias"]
-        )
+        # Conv weights stay on device (loaded via _to_device_recursive) for reuse across runs
 
         # Precompute Welford reciprocals for each GN level (following SDXL VAE pattern)
         if level_shapes is None:
@@ -300,7 +289,6 @@ class TtDINONeck:
         feat3_copy = ttnn.clone(features[3], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         outputs = []
-
         for i in range(4):
             out = self._conv1x1_gn(
                 features[i],

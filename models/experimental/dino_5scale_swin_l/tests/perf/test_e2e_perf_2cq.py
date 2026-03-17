@@ -6,6 +6,7 @@ E2E performance test for DINO-5scale Swin-L with 2CQ pipeline.
 """
 
 import os
+import time
 import pytest
 import torch
 import ttnn
@@ -38,7 +39,7 @@ from models.tt_cnn.tt.pipeline import (
 )
 
 PAD_CHANNELS = 16
-NUM_MEASUREMENT_ITERS = 2
+NUM_MEASUREMENT_ITERS = 1
 
 
 def _get_ckpt_path():
@@ -132,7 +133,7 @@ def _build_model_and_inputs(device):
         backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
         window_size=SWIN_L_WINDOW_SIZE,
         in_channels=(192, 384, 768, 1536),
-        trace_mode=False,
+        trace_mode=True,
     )
     tt_inputs_host, dram_config, l1_config, input_dims, hw = _setup_sharded_input(device)
     return tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw
@@ -196,13 +197,12 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
         all_cls, all_coords = tt_model.forward_heads(hidden_states, references, return_device_tensors=True)
         cls_tt = ttnn.to_memory_config(all_cls, dram_cfg)
         coords_tt = ttnn.to_memory_config(all_coords, dram_cfg)
-        # Do NOT deallocate all_cls/all_coords: trace capture records deallocate ops.
-        # Replay would free output buffers, causing "Buffer must be allocated on device".
-        return (cls_tt, coords_tt)
+        combined = ttnn.concat([cls_tt, coords_tt], dim=-1)
+        return combined
 
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(
-            use_trace=False,
+            use_trace=True,
             num_command_queues=2,
             all_transfers_on_separate_command_queue=False,
         ),
@@ -216,12 +216,18 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
     host_inputs = [tt_inputs_host] * num_iters
-    # Skip preallocate: after trace capture, device allocations are marked unsafe.
-    # The non-preallocated path uses cpu() which allocates host memory only.
-    # pipeline.preallocate_output_tensors_on_host(num_iters)
+    pipeline.preallocate_output_tensors_on_host(num_iters)
     profiler.start("run_model_pipeline_2cqs")
+    t0 = time.perf_counter()
     pipeline.enqueue(host_inputs).pop_all()
+    t1 = time.perf_counter()
     profiler.end("run_model_pipeline_2cqs")
+    total_wall_s = t1 - t0
+    logger.info(
+        f"Pipeline: {num_iters} iters, total_wall={total_wall_s:.2f}s, "
+        f"avg_per_iter={total_wall_s/num_iters:.2f}s, "
+        f"FPS={num_iters/total_wall_s:.2f}"
+    )
     pipeline.cleanup()
 
 

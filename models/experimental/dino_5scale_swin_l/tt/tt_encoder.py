@@ -15,7 +15,7 @@ import torch
 import ttnn
 from loguru import logger
 
-UPLOAD_CHUNK_QUERIES = 2048
+UPLOAD_CHUNK_QUERIES = 4096
 
 
 def compute_sampling_locations_and_attention_weights(
@@ -94,17 +94,18 @@ def compute_sampling_locations_and_attention_weights(
 
 def split_value_into_levels(value_tt, value_spatial_shapes, num_heads, head_dim):
     bs = value_tt.shape[0]
+    num_keys = value_tt.shape[1]
+    val = ttnn.permute(value_tt, (0, 2, 1, 3))
+    val = ttnn.reshape(val, (bs * num_heads, num_keys, head_dim))
+    val = ttnn.to_layout(val, ttnn.ROW_MAJOR_LAYOUT)
+    val = ttnn.to_memory_config(val, ttnn.DRAM_MEMORY_CONFIG)
     split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
-    value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
+    value_level_list = ttnn.split(val, split_sizes, dim=1)
     value_l_tts = []
     for level, (H_, W_) in enumerate(value_spatial_shapes):
         H_, W_ = int(H_), int(W_)
         val_l = value_level_list[level]
-        val_l = ttnn.permute(val_l, (0, 2, 1, 3))
         val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
-        # Keep value levels in ROW_MAJOR once so chunk loop does not repeatedly
-        # trigger layout-side conversions around grid_sample.
-        val_l = ttnn.to_layout(val_l, ttnn.ROW_MAJOR_LAYOUT)
         val_l = ttnn.to_memory_config(val_l, ttnn.DRAM_MEMORY_CONFIG)
         value_l_tts.append(val_l)
     return value_l_tts
@@ -130,8 +131,8 @@ def multi_scale_deformable_attn_ttnn(
 
     for level in range(num_levels):
         grid = sampling_grids[:, :, :, level, :, :]
-        grid = ttnn.permute(grid, (0, 2, 3, 1, 4))
-        grid = ttnn.reshape(grid, (bs * num_heads, num_points * chunk_Q, 1, 2))
+        grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
+        grid = ttnn.reshape(grid, (bs * num_heads, chunk_Q * num_points, 1, 2))
         grid = ttnn.to_memory_config(grid, ttnn.DRAM_MEMORY_CONFIG)
         grid = ttnn.to_layout(grid, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -139,31 +140,19 @@ def multi_scale_deformable_attn_ttnn(
         ttnn.deallocate(grid)
 
         sampled = ttnn.squeeze(sampled, 2)
-        sampled = ttnn.to_layout(sampled, ttnn.TILE_LAYOUT)
-        point_chunks = ttnn.split(sampled, [chunk_Q] * num_points, dim=1)
-        ttnn.deallocate(sampled)
+        sampled = ttnn.reshape(sampled, (bs * num_heads, chunk_Q, num_points, head_dim))
 
         attn_tt = attention_weights_tt[:, :, :, level, :]
         attn_tt = ttnn.permute(attn_tt, (0, 2, 1, 3))
         attn_tt = ttnn.reshape(attn_tt, (bs * num_heads, chunk_Q, num_points))
+        attn_tt = ttnn.unsqueeze(attn_tt, -1)
         attn_tt = ttnn.to_memory_config(attn_tt, ttnn.L1_MEMORY_CONFIG)
 
-        level_out = None
-        for p in range(num_points):
-            attn_p = ttnn.slice(
-                attn_tt, [0, 0, p], [bs * num_heads, chunk_Q, p + 1], memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            weighted_p = ttnn.mul(point_chunks[p], attn_p, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(attn_p)
-            if level_out is None:
-                level_out = weighted_p
-            else:
-                level_out = ttnn.add(level_out, weighted_p, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(weighted_p)
-
+        weighted = ttnn.mul(sampled, attn_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(sampled)
         ttnn.deallocate(attn_tt)
-        for pc in point_chunks:
-            ttnn.deallocate(pc)
+        level_out = ttnn.sum(weighted, dim=-2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(weighted)
 
         if chunk_accum is None:
             chunk_accum = level_out
@@ -283,6 +272,13 @@ class TtMSDeformAttn:
         self.device = device
         self.params = params
         self.trace_mode = trace_mode
+        self._compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+            math_approx_mode=False,
+        )
 
     def __call__(
         self,
@@ -309,12 +305,29 @@ class TtMSDeformAttn:
 
         logger.info("  MSDeformAttn: linear projections on device...")
 
-        value = ttnn.linear(value, self.params["value_proj"]["weight"], bias=self.params["value_proj"]["bias"])
+        value = ttnn.linear(
+            value,
+            self.params["value_proj"]["weight"],
+            bias=self.params["value_proj"]["bias"],
+            compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         sampling_offsets_flat = ttnn.linear(
-            query, self.params["sampling_offsets"]["weight"], bias=self.params["sampling_offsets"]["bias"]
+            query,
+            self.params["sampling_offsets"]["weight"],
+            bias=self.params["sampling_offsets"]["bias"],
+            compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         attention_weights_flat = ttnn.linear(
-            query, self.params["attention_weights"]["weight"], bias=self.params["attention_weights"]["bias"]
+            query,
+            self.params["attention_weights"]["weight"],
+            bias=self.params["attention_weights"]["bias"],
+            compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         logger.info("  MSDeformAttn: value reshape on device (ROW_MAJOR)...")
@@ -389,8 +402,15 @@ class TtMSDeformAttn:
                 ttnn.deallocate(vl)
 
             output = ttnn.concat(output_chunks_device, dim=1)
-            output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
-            output = ttnn.add(output, identity)
+            output = ttnn.linear(
+                output,
+                self.params["output_proj"]["weight"],
+                bias=self.params["output_proj"]["bias"],
+                compute_kernel_config=self._compute_config,
+                core_grid=ttnn.CoreGrid(y=8, x=8),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            output = ttnn.add(output, identity, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             # Deallocate chunks only after output is fully consumed (concat may reference them)
             for c in output_chunks_device:
                 ttnn.deallocate(c)
@@ -490,9 +510,16 @@ class TtMSDeformAttn:
         )
 
         logger.info("  MSDeformAttn: output projection on device...")
-        output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
+        output = ttnn.linear(
+            output,
+            self.params["output_proj"]["weight"],
+            bias=self.params["output_proj"]["bias"],
+            compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
-        output = ttnn.add(output, identity)
+        output = ttnn.add(output, identity, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logger.info("  MSDeformAttn: done.")
         return output
 
@@ -506,13 +533,35 @@ class TtFFN:
         self.b1 = params["fc1"]["bias"]
         self.w2 = params["fc2"]["weight"]
         self.b2 = params["fc2"]["bias"]
+        self._compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+            math_approx_mode=False,
+        )
 
     def __call__(self, x, identity=None):
         if identity is None:
             identity = x
-        x = ttnn.linear(x, self.w1, bias=self.b1, activation="relu")
-        x = ttnn.linear(x, self.w2, bias=self.b2)
-        return ttnn.add(x, identity)
+        x = ttnn.linear(
+            x,
+            self.w1,
+            bias=self.b1,
+            activation="relu",
+            compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x = ttnn.linear(
+            x,
+            self.w2,
+            bias=self.b2,
+            compute_kernel_config=self._compute_config,
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.add(x, identity, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 class TtDINOEncoderLayer:
