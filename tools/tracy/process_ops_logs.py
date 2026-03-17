@@ -18,6 +18,7 @@ from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 from math import nan, isnan
+from itertools import chain
 
 import click
 from loguru import logger
@@ -98,6 +99,8 @@ OPS_CSV_HEADER = [
     "COMPUTE KERNEL HASH",
     "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
+    "PROGRAM HASH",
+    "PROGRAM CACHE HIT",
     "TENSIX DM 0 MAX KERNEL SIZE [B]",
     "TENSIX DM 1 MAX KERNEL SIZE [B]",
     "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
@@ -334,14 +337,17 @@ def import_tracy_op_logs(
                                 opData["metal_trace_id"] = traceIDs[deviceID]
                     else:  # cached device op
                         opDataList = opDataStr.split(":", 1)[-1].split(",")
-                        assert len(opDataList) > 3, "Wrong cached op info format"
+                        assert len(opDataList) > 4, "Wrong cached op info format"
                         opHash = int(opDataList[1])
                         deviceID = int(opDataList[2])
-                        opID = int(opDataList[3])
+                        programCacheHitStr = opDataList[3].strip()
+                        programCacheHit = programCacheHitStr in ("1", "true", "True")
+                        opID = int(opDataList[4])
                         assert deviceID in cached_ops, "Expected hashed op info is not found"
                         assert opHash in cached_ops[deviceID], "Expected hashed op info is not found"
                         opData = cached_ops[deviceID][opHash].copy()
                         opData["global_call_count"] = opID
+                        opData["program_cache_hit"] = programCacheHit
                         opData["metal_trace_id"] = None
                         if deviceID in traceIDs:
                             opData["metal_trace_id"] = traceIDs[deviceID]
@@ -1059,20 +1065,20 @@ def append_device_data(
         npe_stats = analyzeNoCTraces(logFolder)
         if npe_stats is not None:
             ops_found = 0
-            for device_id in host_ops_by_device:
-                for op in host_ops_by_device[device_id]:
-                    metal_trace_id = op.get("metal_trace_id", None)
-                    metal_trace_replay_session_id = op.get("metal_trace_replay_session_id", None)
-                    op_npe_stats = npe_stats.getDatapointByID(
-                        op["global_call_count"], metal_trace_id, metal_trace_replay_session_id
-                    )
-                    if op_npe_stats is not None:
-                        ops_found += 1
-                        op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
-                        op["MULTICAST NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_mcast_write_link_util, 1)
-                        op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
-                        op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
-                        op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
+            for op in chain(*host_ops_by_device.values(), trace_ops_by_augmented_id.values()):
+                global_call_count = op["global_call_count"] & ((1 << TRACE_OP_ID_BITSHIFT) - 1)
+                metal_trace_id = op.get("metal_trace_id", None)
+                metal_trace_replay_session_id = op.get("metal_trace_replay_session_id", None)
+                op_npe_stats = npe_stats.getDatapointByID(
+                    global_call_count, metal_trace_id, metal_trace_replay_session_id
+                )
+                if op_npe_stats is not None:
+                    ops_found += 1
+                    op["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
+                    op["MULTICAST NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_mcast_write_link_util, 1)
+                    op["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
+                    op["ETH BW UTIL (%)"] = op_npe_stats.result.getEthBwUtilPerCoreStr()
+                    op["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return host_ops_by_device, trace_ops_by_augmented_id
@@ -1835,6 +1841,12 @@ def generate_reports(
 
                     for kernel, kernelSize in active_op_record["kernel_info"]["kernel_sizes"].items():
                         csv_row[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
+
+                # Extract program hash and cache hit status
+                if "op_hash" in active_op_record:
+                    csv_row["PROGRAM HASH"] = active_op_record["op_hash"]
+                if "program_cache_hit" in active_op_record:
+                    csv_row["PROGRAM CACHE HIT"] = active_op_record["program_cache_hit"]
 
                 if "core_usage" in active_op_record:
                     csv_row["CORE COUNT"] = active_op_record["core_usage"]["count"]

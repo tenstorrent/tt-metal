@@ -84,7 +84,7 @@ ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
-tt::stl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 

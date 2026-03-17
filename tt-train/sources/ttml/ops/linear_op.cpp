@@ -7,7 +7,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
 #include "ttnn/types.hpp"
@@ -115,8 +115,7 @@ autograd::TensorPtr linear_op(
         ttnn_linear_backward(tensor, weight, bias, out);
     };
 
-    auto links = autograd::get_links(weight, tensor, bias);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor, bias));
     return out;
 }
 

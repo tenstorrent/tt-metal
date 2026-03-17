@@ -178,9 +178,12 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+
     // Data span in tiles, rounded up to tile boundaries
-    uint32_t Wt = Wp / TILE_WIDTH;
-    uint32_t Ht = Hp / TILE_HEIGHT;
+    uint32_t Wt = Wp / tile_width;
+    uint32_t Ht = Hp / tile_height;
 
     // Block size that maximizes dest usage depending on
     // whether fp32 accumulation is enabled
@@ -484,6 +487,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         compute_args.push_back(float32_reduction);
         compute_args.push_back(legacy_rsqrt);
         compute_args.push_back(W);
+        compute_args.push_back(tile_width);
     }
 
     // The large-tensor non-Welford reduce kernel needs
@@ -554,6 +558,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             b_dram_addr};
         if (!(use_welford && large_tensor_needed)) {
             reader_args.push_back(W);
+            reader_args.push_back(tile_width);
+            reader_args.push_back(tile_height);
         }
         if (input_is_row_major) {
             reader_args.push_back(H_logical);  // arg[10]

@@ -13,7 +13,7 @@ set_directory_properties(
 )
 
 ############################################
-# Project setup
+# Project setup stage
 ############################################
 
 # For single-config generators, default to RelWithDebInfo if unspecified
@@ -267,6 +267,7 @@ endif()
 # Build subdirectories
 ############################################################################################################################
 
+include(helper_functions)
 add_subdirectory(tt_stl)
 add_subdirectory(tools)
 add_subdirectory(tt_metal)
