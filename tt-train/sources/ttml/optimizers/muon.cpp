@@ -4,10 +4,7 @@
 
 #include "muon.hpp"
 
-#include <fmt/format.h>
-
 #include "autograd/auto_context.hpp"
-#include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/newton_schulz_op.hpp"
