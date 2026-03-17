@@ -80,9 +80,9 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
 def test_benchmark_from_torch_enable_bf4_opt(
     benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, enable_bf4_opt
 ):
-    # performacne for borrowed data must be the same
+    # performance for borrowed data must be the same
     # for enable_bf4_opt=True and enable_bf4_opt=False
-    torch_input_tensor = torch.rand((size, size), dtype=torch_dtype, device=device)
+    torch_input_tensor = torch.rand((size, size), dtype=torch_dtype)
 
     def from_torch():
         ttnn_tensor = ttnn.from_torch(
@@ -118,7 +118,7 @@ def test_from_torch_deep_seek_interleaved_moe_weights_galaxy(benchmark, mesh_dev
     torch_input_tensor = torch.rand(shape, dtype=torch.float32)
 
     def from_torch():
-        ttnn_tensor = ttnn.from_torch(
+        ttnn.from_torch(
             torch_input_tensor,
             dtype=ttnn_dtype,
             device=mesh_device,

@@ -74,12 +74,10 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
-        if (dst_dtype != DataType::BFLOAT4_B) {
-            // typecast to bfloat4_b is expected to lose precision, see
-            // https://github.com/tenstorrent/tt-metal/issues/35048
-            // user can choose to use enable_bf4_opt=True to get the best performance, but the precision will be lost.
-            enable_bf4_opt = true;
-        }
+        // typecast to bfloat4_b is expected to lose precision, see
+        // https://github.com/tenstorrent/tt-metal/issues/35048
+        // user can choose to use enable_bf4_opt=True to get the best performance, but the precision will be lost.
+        bool enable_device_typecast = dst_dtype == DataType::BFLOAT4_B ? enable_bf4_opt : true;
 
         // TODO: Remove preserve_nan_values check after
         // https://github.com/tenstorrent/tt-metal/issues/31406
@@ -89,7 +87,7 @@ Tensor create_tt_tensor_from_host_data(
         const bool construct_on_device =
             can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) && !memory_config.is_sharded() &&
             can_construct_on_device(device, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
-            enable_bf4_opt && !preserve_nan_values;
+            enable_device_typecast && !preserve_nan_values;
 
         if (mesh_mapper != nullptr) {
             return ttnn::distributed::create_distributed_tensor(

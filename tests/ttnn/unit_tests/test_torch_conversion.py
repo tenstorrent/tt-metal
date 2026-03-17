@@ -581,7 +581,7 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
         (torch.float32, ttnn.bfloat16),
     ],
 )
-def test_from_torch_fast_approx_preserves_sharded_memory_config(
+def test_from_torch_enable_bf4_opt_preserves_sharded_memory_config(
     device, enable_bf4_opt, use_mesh_mapper, torch_dtype, ttnn_dtype
 ):
     """
@@ -672,6 +672,8 @@ def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, map
         full_width = per_device_width * mesh_shape[1]
         shape = (mesh_shape[0], 1, per_device_height, full_width)
         mesh_mapper = ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, 3))
+    else:
+        raise ValueError(f"Unsupported mapper_type: {mapper_type!r}")
 
     dram_grid = ttnn.CoreRangeSet(
         {
