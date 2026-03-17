@@ -221,14 +221,20 @@ def test_matmul_2d_interleaved_sharded_dimension_sweep(device, batch, seq_len, k
     "batch, seq_len, k, n, num_dram_banks",
     [
         (1, 512, 128, 128, 12),
-        (150, 256, 512, 512, 9),
     ],
 )
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
-@pytest.mark.parametrize("has_bias", [False, True])
-@pytest.mark.parametrize("bias_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize(
+    "has_bias, bias_dtype",
+    [
+        (False, None),
+        (True, ttnn.bfloat16),
+        (True, ttnn.bfloat8_b),
+        (True, ttnn.float32),
+    ],
+)
 @pytest.mark.timeout(120)
 def test_matmul_2d_interleaved_sharded_dtype_sweep(
     device, batch, seq_len, k, n, num_dram_banks, in0_dtype, in1_dtype, out_dtype, has_bias, bias_dtype

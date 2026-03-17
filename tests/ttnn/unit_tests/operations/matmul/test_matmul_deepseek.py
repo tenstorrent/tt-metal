@@ -30,6 +30,35 @@ def pad_to_tile(dim, tile_size):
     return ((dim + tile_size - 1) // tile_size) * tile_size
 
 
+def get_tile_size_bytes(dtype):
+    """
+    Return tile size in bytes for a given TTNN dtype.
+    The values are chosen to match hardware tile formats:
+      - bfloat16 tiles: 2048B
+      - float32 tiles: 4096B
+      - bfloat8_b tiles: 1088B
+    For unknown dtypes, fall back to 2048B, which is safe for bf16‑sized tiles
+    and conservative for smaller formats.
+    """
+    # Importing dtypes via ttnn keeps this helper local to the test.
+    if dtype in (
+        ttnn.bfloat16,
+        getattr(ttnn, "float16", None),
+    ):
+        return 2048
+    # Explicit handling for fp32 accumulation / tiles.
+    if dtype in (
+        getattr(ttnn, "float32", None),
+        getattr(ttnn, "bfloat32", None),
+    ):
+        return 4096
+    # Compressed / narrower tiles such as bfloat8_b.
+    if getattr(ttnn, "bfloat8_b", None) is not None and dtype == ttnn.bfloat8_b:
+        return 1088
+    # Fallback: assume bf16‑sized tiles.
+    return 2048
+
+
 def _run_matmul_2d_interleaved_in0_sharded_in1(
     device,
     batch,
@@ -200,13 +229,22 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
     # fits inside the ~1.2MB L1 cache limit of the cores.
     max_l1_usage = 1200 * 1024
     out_block_h = in0_block_h
+
+    # Compute per‑dtype tile sizes for more accurate CB and L1 usage estimates.
+    in0_tile_bytes = get_tile_size_bytes(in0_dtype)
+    in1_tile_bytes = get_tile_size_bytes(in1_dtype)
+    out_tile_bytes = get_tile_size_bytes(out_dtype)
+
     for candidate_h in range(in0_block_h, 0, -1):
         if in0_block_h % candidate_h != 0:
             continue
-        in0_cb = candidate_h * in0_block_w * 2 * 2048
-        in1_cb = out_block_w * in0_block_w * 2 * 2048
-        interm0_cb = candidate_h * out_block_w * 4096
-        output_cb = candidate_h * out_block_w * 2048
+        # in0_cb and in1_cb depend on the input dtypes.
+        in0_cb = candidate_h * in0_block_w * 2 * in0_tile_bytes
+        in1_cb = out_block_w * in0_block_w * 2 * in1_tile_bytes
+        # interm0_cb is fp32 accumulation; use the fp32 tile size from the helper.
+        interm0_cb = candidate_h * out_block_w * get_tile_size_bytes(getattr(ttnn, "float32", ttnn.bfloat16))
+        # Output CB usage depends on the output dtype.
+        output_cb = candidate_h * out_block_w * out_tile_bytes
         total = in0_cb + in1_cb + interm0_cb + output_cb
         if total <= max_l1_usage:
             out_block_h = candidate_h
