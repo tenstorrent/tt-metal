@@ -20,6 +20,7 @@
 #include "context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
+#include "dispatch_core_common.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
@@ -190,10 +191,12 @@ void MetalContext::initialize(
     // Resolve the dispatch core axis for this context's architecture.
     // The default DispatchCoreConfig leaves axis_ unset, causing get_dispatch_core_axis()
     // to call get_default_axis() which only checks the DEFAULT context. For non-default
-    // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here.
-    dispatch_core_config_ = dispatch_core_config;
-    dispatch_core_config_.set_dispatch_core_axis(
-        resolve_dispatch_core_axis(get_cluster().arch(), get_fabric_tensix_config()));
+    // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here,
+    // but only when the caller hasn't explicitly set an axis.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    DispatchCoreAxis axis =
+        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config());
+    dispatch_core_config_.set_dispatch_core_axis(axis);
 
     num_hw_cqs_ = num_hw_cqs;
     worker_l1_size_ = worker_l1_size;

@@ -30,13 +30,11 @@ enum DispatchWorkerType : uint32_t {
 
 CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 
-// Resolve the dispatch core axis for a given architecture and fabric config.
-// BLACKHOLE without fabric tensix uses COL; everything else uses ROW.
-// Prefer this over DispatchCoreConfig::get_dispatch_core_axis() when the config's
-// axis_ may not be set, since the fallback get_default_axis() only checks the
-// DEFAULT context and fails for non-default contexts (e.g. mock devices).
+// Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
+// Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.
 // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-DispatchCoreAxis resolve_dispatch_core_axis(tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
+DispatchCoreAxis resolve_dispatch_core_axis(
+    const DispatchCoreConfig& config, tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
 
 // Helper functions to get the dispatch core config/type
 DispatchCoreConfig get_dispatch_core_config();

@@ -145,7 +145,8 @@ const core_descriptor_t& get_core_descriptor_config(
     tt_fabric::FabricTensixConfig fabric_tensix_config = env.get_fabric_tensix_config();
     bool fast_dispatch = env.get_rtoptions().get_fast_dispatch();
 
-    tt_metal::DispatchCoreAxis resolved_axis = tt_metal::resolve_dispatch_core_axis(arch, fabric_tensix_config);
+    tt_metal::DispatchCoreAxis resolved_axis =
+        tt_metal::resolve_dispatch_core_axis(dispatch_core_config, arch, fabric_tensix_config);
 
     std::unordered_map<uint8_t, std::unordered_map<bool, core_descriptor_t>>& config_by_num_cqs =
         config_by_arch[arch][product_name][dispatch_core_config][fabric_tensix_config];
@@ -322,7 +323,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
     static std::unordered_map<uint64_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
     tt_fabric::FabricTensixConfig fabric_tensix_config_phys = env.get_fabric_tensix_config();
     tt_metal::DispatchCoreAxis resolved_axis_phys =
-        tt_metal::resolve_dispatch_core_axis(env.get_cluster().arch(), fabric_tensix_config_phys);
+        tt_metal::resolve_dispatch_core_axis(dispatch_core_config, env.get_cluster().arch(), fabric_tensix_config_phys);
 
     uint64_t config_hash = ((uint8_t)(get_core_type_from_config(dispatch_core_config))) |
                            ((uint64_t)(resolved_axis_phys) << 4) | ((uint64_t)num_hw_cqs << 8) |
