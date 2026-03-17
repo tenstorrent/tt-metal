@@ -30,6 +30,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "protobuf/mesh_graph_descriptor.pb.h"
 #include "core_coord.hpp"
 #include "compressed_direction_table.hpp"
 #include "compressed_routing_path.hpp"
@@ -97,10 +98,14 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
             const auto& instance = mgd.get_instance(mesh_global_id);
             const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
             const auto& dim_types = mesh_desc->device_topology().dim_types();
-            bool has_line_dim =
-                std::any_of(dim_types.begin(), dim_types.end(), [](auto t) { return t == proto::TorusTopology::LINE; });
+            bool has_line_dim = std::any_of(
+                dim_types.begin(), dim_types.end(), [](auto t) { return t == proto::TorusTopology_Type_LINE; });
             if (has_line_dim) {
                 // Skip corner pinning for LINE topologies - corners don't align with tray positions
+                log_warning(
+                    tt::LogFabric,
+                    "Galaxy corner pinning disabled: mesh has LINE dimension(s). "
+                    "Logical mesh corners do not correspond to physical tray corners in LINE topologies.");
                 return fixed_asic_position_pinnings;
             }
         }
