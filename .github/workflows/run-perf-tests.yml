@@ -82,7 +82,7 @@ jobs:
       test_splits: 5
       pytest_markers: "perf"
       timeout_minutes: 240
-      use_durations: true
+      compile_time_args: true
 
   setup-and-test-blackhole:
     name: "🕳️ Performance tests (Blackhole)"
@@ -98,7 +98,7 @@ jobs:
       test_splits: 5
       pytest_markers: "perf"
       timeout_minutes: 240
-      use_durations: true
+      compile_time_args: true
 
   check-all-green:
     name: "✅ Check all green"
