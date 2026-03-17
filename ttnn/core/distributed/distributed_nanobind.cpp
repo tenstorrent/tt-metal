@@ -32,6 +32,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <ttnn/api/ttnn/types.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -118,7 +119,7 @@ void py_module_types(nb::module_& mod) {
     nb::class_<MeshMapperConfig::Replicate>(mod, "PlacementReplicate");
     nb::class_<MeshMapperConfig::Shard>(mod, "PlacementShard");
 
-    nb::class_<MeshDevice>(mod, "MeshDevice");
+    nb::class_<MeshDevice>(mod, "MeshDevice", nb::dynamic_attr());
     nb::class_<MeshDeviceView>(mod, "MeshDeviceView");
     nb::class_<MeshShape>(mod, "MeshShape", "Shape of a mesh device.");
     nb::class_<MeshCoordinate>(mod, "MeshCoordinate", "Coordinate within a mesh device.");
@@ -291,6 +292,12 @@ void py_module(nb::module_& mod) {
            Returns:
                CoreCoord: The compute grid size of the first device in the device mesh.
        )doc")
+        .def_prop_ro(
+          "core_grid",
+          [](const MeshDevice& device) {
+            const auto& sz = device.compute_with_storage_grid_size();
+            return ttnn::CoreGrid(sz.x, sz.y);
+          })
         .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,

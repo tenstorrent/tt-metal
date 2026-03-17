@@ -1,7 +1,7 @@
 ############################################################################################################################
 # CPM
 ############################################################################################################################
-include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/CPM.cmake)
 
 # Shadow clang-tidy for all CPM-fetched targets — mirrors third_party/CMakeLists.txt.
 # Placing a no-op .clang-tidy in the CPM cache root is insufficient (some packages
@@ -104,25 +104,7 @@ CPMAddPackage(
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
-# Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
-# warnings from vendored headers when they are included in tt-train TUs.
-# Duplicated from third_party/CMakeLists.txt — keep both until dependencies.cmake
-# can be removed (i.e. tt-train no longer supports standalone builds).
-foreach(_xtensor_target xtl xtensor xtensor-blas)
-    if(TARGET ${_xtensor_target})
-        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
-        if(_incs)
-            set_target_properties(
-                ${_xtensor_target}
-                PROPERTIES
-                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
-                        "${_incs}"
-            )
-        endif()
-    endif()
-endforeach()
-
-include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/fetch_cli11.cmake)
 
 ####################################################################################################################
 # spdlog

@@ -78,6 +78,11 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
   workflow_dispatch:
     inputs:
       runner-label:
@@ -148,6 +153,11 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card fast unit tests"
+      enable-llk-asserts:
+        required: false
+        default: false
+        type: boolean
+        description: "Enable LLK asserts"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC
@@ -274,7 +284,7 @@ jobs:
 
   run-profiler-regression:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || github.event_name == 'schedule') }}
+    if: ${{ always() && !cancelled() && inputs.run-profiler-regression != false }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     strategy:
@@ -289,9 +299,10 @@ jobs:
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || github.event_name == 'schedule') }}
+    if: ${{ always() && !cancelled() && inputs.run-umd-unit-tests != false }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
@@ -304,9 +315,10 @@ jobs:
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   models-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || github.event_name == 'schedule') }}
+    if: ${{ always() && !cancelled() && inputs.run-models-unit-tests != false }}
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
     strategy:
@@ -320,9 +332,10 @@ jobs:
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || github.event_name == 'schedule') }}
+    if: ${{ always() && !cancelled() && inputs.run-ttnn-unit-tests != false }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
@@ -335,9 +348,10 @@ jobs:
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || github.event_name == 'schedule') }}
+    if: ${{ always() && !cancelled() && inputs.run-ops-unit-tests != false }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -351,11 +365,12 @@ jobs:
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || github.event_name == 'schedule') }}
+    if: ${{ always() && !cancelled() && inputs.run-tt-cnn-unit-tests != false }}
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     strategy:
@@ -368,10 +383,11 @@ jobs:
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
-    if: ${{ always() && !cancelled() && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule' || inputs.run-blackhole-multi-card-fast-unit-tests == true) }}
+    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (inputs.run-blackhole-multi-card-fast-unit-tests != false && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule'))) }}
     needs: [resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
@@ -386,3 +402,4 @@ jobs:
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       fast-only: true
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}

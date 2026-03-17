@@ -30,9 +30,9 @@ inline uint32_t get_chunk_size(uint32_t s) {
 }
 }  // namespace
 
-namespace ttnn::operations::transformer {
+namespace ttnn::transformer {
 
-ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
+ttnn::Tensor scaled_dot_product_attention_decode(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -44,7 +44,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -91,7 +91,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
         std::nullopt);
 }
 
-ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
+ttnn::Tensor paged_scaled_dot_product_attention_decode(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -103,7 +103,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -148,7 +148,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
         std::nullopt);
 }
 
-ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
+ttnn::Tensor flash_multi_latent_attention_decode(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const std::optional<const Tensor>& input_tensor_v,
@@ -161,7 +161,7 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -216,7 +216,7 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
         head_dim_v);
 }
 
-ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
+ttnn::Tensor paged_flash_multi_latent_attention_decode(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const std::optional<const Tensor>& input_tensor_v,
@@ -229,7 +229,7 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
@@ -284,4 +284,4 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
         head_dim_v);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::transformer

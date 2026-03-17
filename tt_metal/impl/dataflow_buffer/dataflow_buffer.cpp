@@ -912,39 +912,46 @@ void ProgramImpl::finalize_single_dfb_config(
     if (config.enable_implicit_sync) {
         constexpr uint8_t TXN_IDS_PER_SIDE = 2;
 
-        auto producer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
-        dfb->producer_txn_descriptor = compute_txn_descriptor(
-            dfb->capacity,
-            config.num_producers,
-            config.num_consumers,
-            /*is_producer=*/true,
-            producer_txn_ids,
-            num_producer_tcs);
+        if (!producer_is_tensix_only) {
+            auto producer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            dfb->producer_txn_descriptor = compute_txn_descriptor(
+                dfb->capacity,
+                config.num_producers,
+                config.num_consumers,
+                /*is_producer=*/true,
+                producer_txn_ids,
+                num_producer_tcs);
+            log_info(
+                tt::LogMetal,
+                "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                dfb->id,
+                dfb->producer_txn_descriptor.txn_ids[0],
+                dfb->producer_txn_descriptor.txn_ids[1],
+                dfb->producer_txn_descriptor.num_entries_to_process_threshold,
+                dfb->producer_txn_descriptor.num_entries_per_txn_id,
+                dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        }
 
-        auto consumer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
-        dfb->consumer_txn_descriptor = compute_txn_descriptor(
-            dfb->capacity,
-            config.num_producers,
-            config.num_consumers,
-            /*is_producer=*/false,
-            consumer_txn_ids,
-            num_consumer_tcs);
-
-        log_info(
-            tt::LogMetal,
-            "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}; "
-            "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
-            dfb->id,
-            dfb->producer_txn_descriptor.txn_ids[0],
-            dfb->producer_txn_descriptor.txn_ids[1],
-            dfb->producer_txn_descriptor.num_entries_to_process_threshold,
-            dfb->producer_txn_descriptor.num_entries_per_txn_id,
-            dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc,
-            dfb->consumer_txn_descriptor.txn_ids[0],
-            dfb->consumer_txn_descriptor.txn_ids[1],
-            dfb->consumer_txn_descriptor.num_entries_to_process_threshold,
-            dfb->consumer_txn_descriptor.num_entries_per_txn_id,
-            dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        if (!consumer_is_tensix_only) {
+            auto consumer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            dfb->consumer_txn_descriptor = compute_txn_descriptor(
+                dfb->capacity,
+                config.num_producers,
+                config.num_consumers,
+                /*is_producer=*/false,
+                consumer_txn_ids,
+                num_consumer_tcs);
+            log_info(
+                tt::LogMetal,
+                "DFB {} implicit sync: "
+                "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                dfb->id,
+                dfb->consumer_txn_descriptor.txn_ids[0],
+                dfb->consumer_txn_descriptor.txn_ids[1],
+                dfb->consumer_txn_descriptor.num_entries_to_process_threshold,
+                dfb->consumer_txn_descriptor.num_entries_per_txn_id,
+                dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        }
     }
 
     dfb->configs_finalized = true;
