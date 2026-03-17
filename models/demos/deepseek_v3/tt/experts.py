@@ -13,7 +13,7 @@ import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, MulConfig
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI2,
+    COMPUTE_KERNEL_CONFIG_HIFI2_THROTTLE_LEVEL_2,
     COMPUTE_KERNEL_CONFIG_LOFI,
     dequantize,
     even_int_div,
@@ -128,7 +128,7 @@ class Experts(AbstractModule):
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2_THROTTLE_LEVEL_2,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),

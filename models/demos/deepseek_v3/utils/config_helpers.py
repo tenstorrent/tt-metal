@@ -41,6 +41,14 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+COMPUTE_KERNEL_CONFIG_HIFI2_THROTTLE_LEVEL_2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+    throttle_level=ttnn.ThrottleLevel.LEVEL_2,
+)
+
 COMPUTE_KERNEL_CONFIG_HIFI2_FP16 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
