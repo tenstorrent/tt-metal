@@ -1,7 +1,7 @@
 # Create CI Tickets
 
 ## Overview
-Create deterministic CI maintenance tickets for repeated failures on `main` in `tenstorrent/tt-metal`.
+Create deterministic CI maintenance tickets for repeated failures on `main` in `tenstorrent/tt-metal`. **Quality over quantity:** only create issues you can fully validate. There is no minimum number of issues to create.
 
 ## Steps
 1. **Prepare candidate failures**
@@ -11,17 +11,22 @@ Create deterministic CI maintenance tickets for repeated failures on `main` in `
    - Confirm candidates exist in `build_ci/ci_ticketing/create_tickets/failing_jobs.json`
    - If the user specified that they already ran extract_failing_jobs.py, just read the output without running it again.
 
-2. **Apply create-ticket rule**
-   - Follow `.cursor/rules/ci-create-tickets.mdc`
-   - Build candidates from `failing_jobs.json`
-   - Deduplicate against open issues with label `glean CI maintenance`
-   - Validate failures from logs using `gh api`
+2. **Validate each candidate before creating any issue**
+   - Follow `.cursor/rules/ci-create-tickets.mdc` in full.
+   - For **each** candidate you might create an issue for:
+     - Download the job logs for **all three** failing runs (e.g. via `gh run view <run_id> --job <job_id> --log-failed` into `build_ci/ci_ticketing/create_tickets/downloaded_logs`).
+     - Read the downloaded logs and confirm the **same** error (or same failure signature) appears in all three runs. If it does not, do not create an issue for that candidate.
+     - Extract the **actual** error excerpt from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception/failure message). Never use a generic placeholder like "Job failed in the last 3 runs" in the issue body.
+     - Delete each downloaded log file after you finish using it.
+   - Only create as many issues as you have capacity to validate in this way. Do not create issues for candidates you have not validated with downloaded logs.
 
 3. **Create issues explicitly**
-   - Create each issue with `gh issue create` (no bulk automation)
-   - Add label `glean CI maintenance`
-   - Never assign issues directly to developers
-   - Respect user cap (for example, "create up to N issues")
+   - Create each issue with `gh issue create` (no bulk automation).
+   - Add label `glean CI maintenance`.
+   - Never assign issues directly to developers.
+   - Respect user cap (e.g. "create up to N issues").
+   - Every issue body must include the **real** error excerpt from the logs, not a generic statement.
+   - **Reproduction steps** must describe how to reproduce the failure **locally** on a machine with the necessary hardware (e.g. which command or test to run, from repo root). Do not write "re-run on main" or "re-run the workflow"—that is redundant; the issue already implies it fails on main.
 
 4. **Write outputs**
    - Append created items to `build_ci/ci_ticketing/create_tickets/created_issues.jsonl`

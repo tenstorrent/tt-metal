@@ -7,39 +7,70 @@ alwaysApply: false
 
 Use this rule when asked to create CI maintenance issues for `tenstorrent/tt-metal`.
 
-## Inputs
+## Goal
+
+Create issues only for **deterministic** CI failures that are still repeating and are not already tracked. **Quality over quantity:** only create as many issues as you can properly validate. There is no minimum number of issues to create—creating zero is acceptable if you cannot validate any candidate.
+
+## Required Inputs
 
 - Candidate failures from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
-- Existing open issues in `tenstorrent/tt-metal` (especially label `glean CI maintenance`).
-
-## Execution Model
-
-- Use direct `gh` / `gh api` commands for all GitHub operations.
-- Do not script bulk issue creation. Create each issue with an explicit `gh issue create` command.
-- Never assign newly created issues directly to developers.
-- Always add label `glean CI maintenance`.
+- Existing open issues in `tenstorrent/tt-metal`, especially issues labeled `glean CI maintenance`.
 
 ## Required Flow
 
-1. Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
-2. Deduplicate against open issues with `glean CI maintenance`.
-3. Validate each candidate from logs using `gh api`.
-4. Create issues only for deterministic failures that repeat across the latest 3 runs on `main`.
-5. Enforce user-requested create cap strictly (for example, "create up to N issues").
+1. Use only direct `gh` / `gh api` commands for GitHub operations.
+2. Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
+3. Deduplicate candidates against open `glean CI maintenance` issues.
+4. Before validation, delete stale logs in `build_ci/ci_ticketing/create_tickets/downloaded_logs`.
+5. **For each candidate you might create an issue for:** download the job logs for **all three** failing runs (e.g. save to `downloaded_logs` or equivalent), then:
+   - Read the downloaded logs and confirm the **same** error or failure signature appears in all three runs. If it does not, skip creating an issue for that candidate.
+   - Extract the **actual** error text from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception message) for use in the issue body.
+   - Delete each downloaded log file after you finish using it.
+6. Create issues **only** for candidates you have validated in step 5. Do not create issues for candidates you have not validated with downloaded logs.
+7. Create issues one by one with explicit `gh issue create` commands (no scripted bulk creation).
+8. Never assign newly created issues directly to developers.
+9. Always include label `glean CI maintenance` on created issues.
+10. Enforce any user-requested create cap strictly (for example, "create up to N issues").
+
+## Error excerpt: real text only
+
+The **Error excerpt** in every issue body must be the **actual** failure text copied from the downloaded logs (e.g. the `##[error]` or `[  FAILED  ]` lines, or the key exception message). **Never** use generic placeholders such as "Job failed in the last 3 completed workflow runs" or "validated via extract_failing_jobs and log spot-check"—those are not error excerpts and must not appear in the issue body.
+
+## Create vs Skip Rules
+
+### Create an issue only if all conditions are true
+
+- You have **downloaded and read** the logs for all three failing runs for this candidate.
+- The **same** failure (or same failure signature) appears in all three runs.
+- The failure is not already covered by an open `glean CI maintenance` issue.
+- The issue is within the user-requested create cap.
+- You have a **real** error excerpt from the logs to put in the issue body.
+
+### Skip issue creation if any condition is true
+
+- You have not validated this candidate with downloaded logs for all three runs.
+- The failure is flaky or the same error does not repeat across the latest 3 runs.
+- The failure is already tracked by an open `glean CI maintenance` issue.
+- Creating it would exceed the user-requested create cap.
+- You would have to use a generic placeholder instead of a real error excerpt.
 
 ## Output Files
 
 - `build_ci/ci_ticketing/create_tickets/created_issues.jsonl`
 - `build_ci/ci_ticketing/create_tickets/created_tickets_report.json`
 
+## Reproduction steps: local only
+
+**Reproduction steps** (or "Reproduction hint") in each issue must describe **how to reproduce the failure locally** on a machine that has the necessary hardware (e.g. the same device/SKU as the failing job). Include concrete steps: e.g. checkout `main`, build if needed, and the exact command or test invocation that reproduces the failure. **Do not** write "re-run the workflow on main" or "re-run on main"—that is redundant (the issue already indicates it fails on main) and does not help someone with hardware reproduce it locally.
+
 ## Issue Template Requirements
 
-Each issue should include:
+Each issue must include:
 
 - Workflow name
 - Job name
-- Failing test path(s)
+- Failing test path(s) (if identifiable from logs)
 - Most recent failing job URL
 - All failing job instance URLs (last 3)
-- Error excerpt
-- Reproduction hint
+- **Error excerpt** (actual text from the logs; see "Error excerpt: real text only" above)
+- **Reproduction steps** (how to reproduce locally on a machine with the required hardware; see "Reproduction steps: local only" above)
