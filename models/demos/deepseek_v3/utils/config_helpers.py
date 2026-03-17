@@ -14,7 +14,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
@@ -25,7 +24,7 @@ QUAD_MESH_SHAPE = (16, 8)
 
 def is_quad_ring(mesh_device: ttnn.Device) -> bool:
     """Check whether the given mesh device has a QUAD configuration (16x8) and ring fabric topology."""
-    return tuple(mesh_device.shape) == QUAD_MESH_SHAPE and get_fabric_config() == ttnn.FabricConfig.FABRIC_1D_RING
+    return tuple(mesh_device.shape) == QUAD_MESH_SHAPE and (os.getenv("USE_TORUS_MODE") is not None)
 
 
 USERS_PER_ROW = 32
