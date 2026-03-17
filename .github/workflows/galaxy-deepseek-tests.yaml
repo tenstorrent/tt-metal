@@ -58,6 +58,7 @@ on:
         description: "Enable Tracy-based device perf for final-op-unit tests"
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
+    - cron: "30 3 * * *" # Separate daily run for final-op-unit with Tracy enabled
 
 jobs:
   build-artifact:
@@ -70,7 +71,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      tracy: ${{ inputs.enable-tracy || false }}
+      tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
@@ -80,7 +81,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: topology-6u
-      test-type: ${{ inputs.test-type || 'all' }}
+      test-type: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *' && 'final-op-unit') || inputs.test-type || 'all' }}
       recreate_weights_cache: ${{ inputs.recreate_weights_cache || 'No' }}
       new_cache_dir: ${{ inputs.new_cache_dir || '' }}
-      enable-tracy: ${{ inputs.enable-tracy || false }}
+      enable-tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
