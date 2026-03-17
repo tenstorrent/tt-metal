@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -123,7 +123,7 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             mm_block_ht (int): Matmul unit block height in tiles.
             mm_block_wt (int): Matmul unit block width in tiles.
             mm_N_full_block_wt (Optional[int]): Matmul N block width in tiles.
-            chunk_width_in_mm_blocks (Optional[int]): Chunk width in matmul blocks.
+            chunk_width_in_mm_blocks (Optional[int]): Chunk width in unit matmul blocks.
 
         Returns:
             ttnn.Tensor: the output tensor.

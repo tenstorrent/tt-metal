@@ -41,21 +41,14 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.output_mem_config,
         tensor_args.optional_output_tensor);
 
-    const auto layout = input_tensor.layout();
-    const auto dtype = input_tensor.dtype();
-
     // Validate intermediate tensor if provided
     if (tensor_args.optional_intermediate_tensor.has_value()) {
         const auto& intermediate_tensor = tensor_args.optional_intermediate_tensor.value();
 
-        TT_FATAL(intermediate_tensor.storage_type() == StorageType::DEVICE, "Intermediate tensor must be on device");
-        TT_FATAL(intermediate_tensor.layout() == layout, "Intermediate tensor layout must match input tensor layout");
-        TT_FATAL(intermediate_tensor.dtype() == dtype, "Intermediate tensor dtype must match input tensor dtype");
-        TT_FATAL(
-            intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-            "Intermediate tensor page config must match input tensor page config");
+        ttnn::experimental::ccl::validate_intermediate_tensor(
+            input_tensor, intermediate_tensor, operation_attributes.optional_intermediate_mem_config);
 
-        // Ring uses single-batch intermediate (kernels address with no batch offset).
+        // Ring kernels address with no batch offset, so the intermediate must be single-batch.
         auto expected_inter_shape = input_tensor.logical_shape();
         expected_inter_shape[0] = 1;
         TT_FATAL(
@@ -63,18 +56,6 @@ void StridedReduceScatterAsyncDeviceOperation::validate_on_program_cache_miss(
             "Intermediate tensor shape must be single-batch (batch dim 1), expected {} but got {}",
             expected_inter_shape,
             intermediate_tensor.logical_shape());
-
-        if (operation_attributes.optional_intermediate_mem_config.has_value()) {
-            TT_FATAL(
-                intermediate_tensor.memory_config() == operation_attributes.optional_intermediate_mem_config.value(),
-                "Intermediate tensor memory config must match provided intermediate_mem_config");
-        }
-
-        if (intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            TT_FATAL(
-                intermediate_tensor.memory_config().buffer_type() == BufferType::L1,
-                "DRAM block sharding not supported for intermediate tensor");
-        }
     }
 
     // Validate semaphore count

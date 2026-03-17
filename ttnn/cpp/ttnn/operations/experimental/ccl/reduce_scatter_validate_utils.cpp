@@ -105,4 +105,31 @@ void reduce_scatter_common_validates(
     }
 }
 
+void validate_intermediate_tensor(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& intermediate_tensor,
+    const std::optional<ttnn::MemoryConfig>& optional_intermediate_mem_config) {
+    TT_FATAL(intermediate_tensor.storage_type() == StorageType::DEVICE, "Intermediate tensor must be on device");
+    TT_FATAL(
+        intermediate_tensor.layout() == input_tensor.layout(),
+        "Intermediate tensor layout must match input tensor layout");
+    TT_FATAL(
+        intermediate_tensor.dtype() == input_tensor.dtype(), "Intermediate tensor dtype must match input tensor dtype");
+    TT_FATAL(
+        intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
+        "Intermediate tensor page config must match input tensor page config");
+
+    if (optional_intermediate_mem_config.has_value()) {
+        TT_FATAL(
+            intermediate_tensor.memory_config() == optional_intermediate_mem_config.value(),
+            "Intermediate tensor memory config must match provided intermediate_mem_config");
+    }
+
+    if (intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_FATAL(
+            intermediate_tensor.memory_config().buffer_type() == BufferType::L1,
+            "DRAM block sharding not supported for intermediate tensor");
+    }
+}
+
 }  // namespace ttnn::experimental::ccl

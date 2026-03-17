@@ -23,4 +23,13 @@ void reduce_scatter_common_validates(
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor);
 
+// Shared validation for an optional pre-allocated intermediate tensor: checks storage,
+// layout/dtype/page_config compatibility with input, optional mem config match, and
+// that block-sharded intermediates use L1. The caller is responsible for any additional
+// shape constraints (e.g. single-batch requirement for strided RS).
+void validate_intermediate_tensor(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& intermediate_tensor,
+    const std::optional<ttnn::MemoryConfig>& optional_intermediate_mem_config);
+
 }  // namespace ttnn::experimental::ccl

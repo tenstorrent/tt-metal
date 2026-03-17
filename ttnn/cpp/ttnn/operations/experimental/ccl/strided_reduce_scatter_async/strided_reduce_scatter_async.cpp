@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,11 +29,11 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     const std::optional<uint32_t> mm_cores_y,
     const std::optional<uint32_t> mm_N_full_block_wt,
     const std::optional<uint32_t> chunk_width_in_mm_blocks) {
-    int32_t rank = input_tensor.logical_shape().rank();
-    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+    const int32_t rank = input_tensor.logical_shape().rank();
+    const int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
     // Calculate ring size based on cluster_axis
-    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+    const uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     TT_FATAL(
         num_devices > 1, "strided_reduce_scatter_async op will only work for num_devices > 1, but has {}", num_devices);
 
@@ -43,7 +43,7 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
 
     log_debug(tt::LogOp, "strided_reduce_scatter_async: num_devices = {}, topology = Ring", num_devices);
 
-    bool using_persistent_buffers = persistent_output_buffers.has_value();
+    const bool using_persistent_buffers = persistent_output_buffers.has_value();
 
     std::optional<ttnn::Tensor> optional_intermediate_tensor = std::nullopt;
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt;
