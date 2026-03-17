@@ -706,6 +706,61 @@ Note: On N150, `--enable-trace` may not work with weight eviction. TP, head-para
 
 ---
 
+## Verifying the TP Communication Claim (T3K only)
+
+The hybrid claims ~8% improvement from replacing `all_reduce` with `reduce_scatter_minimal_async` for TP linears. Here's how to verify this on T3K.
+
+### Microbenchmark: Isolated TP Communication
+
+Directly measures `all_reduce` vs `reduce_scatter_minimal_async` at the op level, then at the TP-linear level, then projected across 47 layers:
+
+```bash
+cd /home/ubuntu/agent/agentic/tt-metal
+
+# On T3K (8 devices)
+python3 models/demos/glm4_moe_lite_hybrid/tests/benchmark_tp_communication.py --mesh-cols 8
+
+# On N300 (2 devices)
+python3 models/demos/glm4_moe_lite_hybrid/tests/benchmark_tp_communication.py --mesh-cols 2
+```
+
+The script runs three tests:
+1. **Isolated communication** — same tensor, just the reduce op, no matmul
+2. **TP linear** — `mesh_partition + matmul + reduce`, simulating one attention projection
+3. **Simulated layer** — 7 TP projections back-to-back (q_a, q_b, kv_a, kv_b2, w_o, mlp_gate, mlp_down)
+
+It prints a verdict: VERIFIED, NOT VERIFIED, or REFUTED based on whether `reduce_scatter` is measurably faster.
+
+### Macro-Level: Full Model with Different TP Reduce Strategies
+
+This is not directly switchable via env var in the current agentic code (it always uses `all_reduce`). But you can compare the profiled TP overhead:
+
+```bash
+cd /home/ubuntu/agent/agentic/tt-metal
+
+# Profile with stage breakdown to see all_reduce time
+GLM4_MOE_LITE_PROFILE=1 \
+GLM4_MOE_LITE_PROFILE_LAYER=5 \
+GLM4_MOE_LITE_PROFILE_PRINT_EVERY=1 \
+GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1 \
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 \
+GLM4_MOE_LITE_TP=1 \
+python3 models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --mesh-cols 8 \
+  --prompt "Hello" \
+  --max-new-tokens 4 \
+  --phase both \
+  --enable-trace --trace-mode sampling
+```
+
+In the stage breakdown, look for the total time in attention and MLP stages — the portion spent in `all_reduce` is the theoretical ceiling for `reduce_scatter` improvement.
+
+### Important: Single-Chip Has Zero TP Communication
+
+On your N150, TP is disabled (single device, no mesh axis to shard across). The `reduce_scatter` vs `all_reduce` difference is **exactly zero** on single-chip. This claim can only be verified on N300 (2-chip) or T3K (8-chip).
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
