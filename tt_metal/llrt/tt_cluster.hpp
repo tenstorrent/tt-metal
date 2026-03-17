@@ -27,7 +27,8 @@
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/tt_io.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -202,12 +203,11 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    // Returns a writer object which holds a pointer to a static tlb
-    // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
-    // traversals
-    umd::Writer get_static_tlb_writer(tt_cxy_pair target) const {
+    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_writer(target.chip, target_coord);
+        tt_xy_pair translated_core =
+            driver_->get_soc_descriptor(target.chip).translate_chip_coord_to_translated(target_coord);
+        return driver_->get_tlb_manager(target.chip)->get_tlb_window(translated_core);
     }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
