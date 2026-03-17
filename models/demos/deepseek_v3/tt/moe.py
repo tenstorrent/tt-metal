@@ -363,7 +363,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
         mesh_device = cfg.get("mesh_device")
@@ -404,7 +404,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return post_combine_output_tensor
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_prefill(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -914,7 +914,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward_decode(x, cfg)
+        output = cls._forward_decode(x, cfg)
 
         # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
@@ -946,7 +946,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward_prefill(x, cfg)
+        output = cls._forward_prefill(x, cfg)
 
         # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
