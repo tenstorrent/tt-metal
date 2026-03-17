@@ -106,10 +106,16 @@ class SamplingGenerator:
         Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
         """
         for key, slot in self._trace_states.items():
-            if slot["id"] is not None:
-                logger.debug(
-                    f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
-                )
+            if slot["id"] is None:
+                continue
+            logger.debug(
+                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+            )
+            try:
+                ttnn.release_trace(self.mesh_device, slot["id"])
+            except Exception as e:
+                logger.warning(f"Failed to release trace {slot['id']} : {e}")
+                continue
         self._trace_states.clear()
 
     def reset_prompt_tokens(self, prompt_tokens):
