@@ -2230,8 +2230,12 @@ class Generator(WarmupForwardMixin):
                             model_id = int(parts[1]) if len(parts) >= 2 else 0
                             try:
                                 ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
-                            except Exception:
-                                pass  # Ignore errors during cleanup
+                            except Exception as e:
+                                # Keep destructor non-fatal, but log cleanup failures for diagnosis.
+                                logger.debug(
+                                    f"Failed to release prefill trace {trace_id} for key '{trace_key}' "
+                                    f"and model_id {model_id}: {e!r}"
+                                )
 
                 # Release prefill sampling traces
                 if hasattr(self, "trace_id_prefill_sampling"):
@@ -2241,8 +2245,12 @@ class Generator(WarmupForwardMixin):
                             m_id = int(parts[-1]) if len(parts) >= 2 else 0
                             try:
                                 ttnn.release_trace(self.model_args[m_id].mesh_device, trace_id)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                # Keep destructor non-fatal, but log cleanup failures for diagnosis.
+                                logger.debug(
+                                    f"Failed to release prefill sampling trace {trace_id} for key '{trace_key}' "
+                                    f"and model_id {m_id}: {e!r}"
+                                )
 
                 # Release decode traces
                 if hasattr(self, "trace_ids_decode"):
@@ -2252,8 +2260,12 @@ class Generator(WarmupForwardMixin):
                                 if trace_id is not None:
                                     try:
                                         ttnn.release_trace(self.model_args[model_id].mesh_device, trace_id)
-                                    except Exception:
-                                        pass  # Ignore errors during cleanup
+                                    except Exception as e:
+                                        # Keep destructor non-fatal, but log cleanup failures for diagnosis.
+                                        logger.debug(
+                                            f"Failed to release decode trace {trace_id} for sampling_key "
+                                            f"'{sampling_key}' and model_id {model_id}: {e!r}"
+                                        )
 
                 # Release vision traces if present
                 if hasattr(self, "trace_ids"):
@@ -2261,10 +2273,14 @@ class Generator(WarmupForwardMixin):
                         if trace_id is not None:
                             try:
                                 ttnn.release_trace(self.mesh_device, trace_id)
-                            except Exception:
-                                pass  # Ignore errors during cleanup
-            except Exception:
-                pass  # Ignore any errors during trace cleanup
+                            except Exception as e:
+                                # Keep destructor non-fatal, but log cleanup failures for diagnosis.
+                                logger.debug(
+                                    f"Failed to release vision trace {trace_id} for model_id {model_id}: {e!r}"
+                                )
+            except Exception as e:
+                # Keep destructor non-fatal, but retain context for unexpected cleanup errors.
+                logger.debug(f"Error during trace cleanup in Generator.__del__: {e!r}")
 
         # Workaround for issue #19052
         if self.data_parallel > 1:
