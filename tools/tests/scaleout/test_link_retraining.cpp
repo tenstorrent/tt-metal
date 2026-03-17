@@ -8,6 +8,8 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/wormhole_eth.hpp>
+#include <umd/device/types/blackhole_eth.hpp>
 #include <factory_system_descriptor/utils.hpp>
 #include <gtest/gtest.h>
 #include <yaml-cpp/yaml.h>
@@ -15,7 +17,22 @@
 
 namespace tt::scaleout_tools {
 
-constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
+// WH: ETH_TRAIN_STATUS_ADDR (0x1104) in the node_info FW layout.
+//     Values: 0 = IN_PROGRESS, 1 = SUCCESS, 2 = FAIL.
+// BH: port_status field inside eth_status_t in boot_results_t, at BOOT_RESULTS_ADDR + 4 = 0x7CC04.
+//     Values: 0 = PORT_UNKNOWN (in-progress), 1 = PORT_UP (success), 2 = PORT_DOWN (fail).
+// Both architectures use the same 0/1/2 encoding, matching EthTrainingStatus::IN_PROGRESS/SUCCESS/FAIL.
+[[nodiscard]] uint32_t get_eth_train_status_addr(const tt::Cluster& cluster) {
+    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+        return tt::umd::wormhole::ETH_TRAIN_STATUS_ADDR;  // 0x1104
+    }
+    if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        // port_status is the second uint32_t in eth_status_t, located at BOOT_RESULTS_ADDR + 4.
+        return tt::umd::blackhole::BOOT_RESULTS_ADDR +
+               static_cast<uint32_t>(offsetof(tt::umd::blackhole::eth_status_t, port_status));
+    }
+    TT_THROW("Unsupported architecture for ETH training status check: {}", cluster.arch());
+}
 
 struct LinkDescriptors {
     std::string host;
@@ -34,7 +51,7 @@ struct LinkDescriptors {
 
 void set_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord, uint32_t status) {
     const std::vector<uint32_t> status_data{status};
-    cluster.write_core(chip_id, coord, status_data, ETH_TRAINING_STATUS_REG);
+    cluster.write_core(chip_id, coord, status_data, get_eth_train_status_addr(cluster));
     cluster.l1_barrier(chip_id);
 }
 
@@ -53,13 +70,12 @@ protected:
         driver_ = &cluster_->get_driver();
         distributed_context_ = context_->get_distributed_context_ptr();
 
-        // Check if running on T3K (8 WH devices)
-        auto* const cluster_desc = (*driver_)->get_cluster_description();
-        const size_t num_devices = cluster_->get_unique_chip_ids().size();
-        const auto board_type = cluster_desc->get_board_type(0);
-
-        if (num_devices != 8 || board_type != BoardType::N300) {
-            GTEST_SKIP() << "This test requires a T3K system";
+        const bool link_retrain_supported =
+            cluster_->arch() == tt::ARCH::WORMHOLE_B0 ||
+            (cluster_->arch() == tt::ARCH::BLACKHOLE &&
+             cluster_->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0));
+        if (!link_retrain_supported) {
+            GTEST_SKIP() << "Link retraining not supported on this system (requires WH or BH with ETH FW >= 1.9.0)";
         }
 
         // Initialize physical system descriptor
@@ -82,12 +98,14 @@ public:
         return *physical_system_descriptor_;
     }
     const std::unordered_map<uint64_t, ChipId>& get_asic_id_to_chip_id() const { return asic_id_to_chip_id_; }
-    std::string get_cabling_descriptor_path() const { return "tools/tests/scaleout/cabling_descriptors/t3k.textproto"; }
+    std::string get_cabling_descriptor_path() const {
+        return "/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto";
+    }
 };
 
 [[nodiscard]] uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {
     std::vector<uint32_t> status(1, 0);
-    cluster.read_core(status, sizeof(uint32_t), tt_cxy_pair(chip_id, coord), ETH_TRAINING_STATUS_REG);
+    cluster.read_core(status, sizeof(uint32_t), tt_cxy_pair(chip_id, coord), get_eth_train_status_addr(cluster));
     return status[0];
 }
 
@@ -178,7 +196,6 @@ TEST_F(DirectedRetrainingFixture, TestActiveEthRetraining) {
         driver_ref, distributed_context_, context_->rtoptions().get_target_device(), true, true);
     get_physical_system_descriptor().merge(std::move(new_psd));
 
-    // Validate connectivity after link reset
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 }
 
@@ -321,7 +338,6 @@ TEST_F(DirectedRetrainingFixture, TestOnDemandCableRestart) {
         EXPECT_EQ(get_link_training_status(get_cluster(), link.chip_id, link.coord), 1);
     }
 
-    // Validate connectivity after link resets using T3K cabling descriptor
     validate_connectivity(get_physical_system_descriptor(), get_cabling_descriptor_path());
 }
 

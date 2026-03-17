@@ -31,6 +31,7 @@
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
+#include "umd/device/utils/semver.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -1350,6 +1351,22 @@ void reset_local_ethernet_links(
         }
     }
 
+    // DEBUG: Log how many links will be reset and which ones. If this is 0 for a directed reset,
+    // the link was skipped (likely because it is cross-node and dst host != my host).
+    log_warning(
+        tt::LogDistributed,
+        "[DEBUG reset_local_ethernet_links] {} link(s) queued for local reset (my_host={})",
+        links_to_reset.size(),
+        physical_system_descriptor.my_host_name());
+    for (const auto& link : links_to_reset) {
+        log_warning(
+            tt::LogDistributed,
+            "[DEBUG reset_local_ethernet_links]   chip_id={} chan={} | {}",
+            link.chip_id,
+            link.channel,
+            link.log_message);
+    }
+
     // Perform resets on all links in vector
     send_reset_msg_to_links(links_to_reset);
 }
@@ -1610,8 +1627,18 @@ void perform_link_reset(
     uint32_t reset_asic_location,
     uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
-    TT_FATAL(link_retrain_supported, "Link reset is only supported on WORMHOLE_B0 architecture");
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const bool link_retrain_supported =
+        (cluster.arch() == tt::ARCH::WORMHOLE_B0 ||
+         (cluster.arch() == tt::ARCH::BLACKHOLE &&
+          cluster.get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0)));
+    TT_FATAL(
+        link_retrain_supported,
+        "Link reset is only supported on WORMHOLE_B0 or BLACKHOLE with ETH FW >= 1.9.0 (detected arch: {}, FW: {})",
+        cluster.arch(),
+        cluster.get_ethernet_firmware_version().has_value()
+            ? cluster.get_ethernet_firmware_version()->to_string()
+            : "unknown");
 
     tt::tt_metal::AsicTopology reset_topology =
         build_reset_topology(reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);

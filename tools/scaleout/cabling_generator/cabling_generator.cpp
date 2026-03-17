@@ -1298,8 +1298,14 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         host->set_motherboard(deployment_host.motherboard);
     }
 
-    // Add board types
+    // Only include board types and connections for hosts that are in deployment_hosts.
+    const size_t num_deployment_hosts = deployment_hosts.size();
+
+    // Add board types that are present in the deployment descriptor only
     for (const auto& [host_id, node] : host_id_to_node) {
+        if (*host_id >= num_deployment_hosts) {
+            continue;
+        }
         for (const auto& [tray_id, board] : node->boards) {
             auto* board_location = fsd.mutable_board_types()->add_board_locations();
             board_location->set_host_id(*host_id);
@@ -1308,8 +1314,11 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         }
     }
 
-    // Add ASIC connections from chip_connections
+    // Add ASIC connections (only between hosts present in deployment)
     for (const auto& [start, end] : chip_connections) {
+        if (*start.host_id >= num_deployment_hosts || *end.host_id >= num_deployment_hosts) {
+            continue;
+        }
         auto* connection = fsd.mutable_eth_connections()->add_connection();
 
         auto* endpoint_a = connection->mutable_endpoint_a();

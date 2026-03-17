@@ -1109,6 +1109,20 @@ void Cluster::disable_ethernet_cores_with_retrain() {
     }
 }
 
+void Cluster::rediscover_ethernet_links() {
+    // Update the UMD descriptor's ethernet fields in-place; cluster_desc_ raw pointer remains valid.
+    this->driver_->rediscover_ethernet_links();
+
+    // Add any newly active eth cores to routing info as IDLE (existing entries are left untouched).
+    this->initialize_ethernet_cores_router_mode();
+
+    // Rebuild from fresh descriptor state.
+    this->ethernet_sockets_.clear();
+    this->frequent_retrain_cores_.clear();
+    this->disable_ethernet_cores_with_retrain();
+    this->initialize_ethernet_sockets();
+}
+
 void Cluster::initialize_ethernet_cores_router_mode() {
     for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto& chip_id : devices) {
