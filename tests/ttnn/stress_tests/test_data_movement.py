@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from ttnn.device import get_device_core_grid, is_blackhole, is_wormhole_b0
+from ttnn.device import is_blackhole, is_wormhole_b0
 
 NUM_REPEATS = 5
 NUM_DEVICES = ttnn.distributed.get_num_pcie_devices()
@@ -82,7 +82,7 @@ def sharding_input_shape():
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
 def test_stress_reshard(mesh_device):
     input_tensor_shape = sharding_input_shape()
-    core_grid = get_device_core_grid(mesh_device)
+    core_grid = mesh_device.core_grid
 
     l1_shard_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
