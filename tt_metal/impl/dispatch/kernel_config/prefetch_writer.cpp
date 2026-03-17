@@ -7,6 +7,7 @@
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 #include <map>
+#include <utility>
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/kernel_config/fd_kernel.hpp"
@@ -44,8 +45,8 @@ PrefetchWriterKernel::PrefetchWriterKernel(
         get_max_num_eth_cores,
         get_reads_dispatch_cores) {
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
-    // Runs on the same physical core as the upstream PrefetchKernel (BRISC). Core is set in
-    // GenerateStaticConfigs() once the upstream kernel is known.
+    // Runs on the same physical core as the upstream PrefetchKernel (BRISC). The core is selected here
+    // via the dispatch core manager and is verified against the upstream kernel in GenerateDependentConfigs().
     this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
     this->kernel_type_ = FDKernelType::DISPATCH;
 }
@@ -77,7 +78,7 @@ void PrefetchWriterKernel::CreateKernel() {
     configure_kernel_variant(
         dispatch_kernel_file_names[PREFETCH_HD_WRITER],
         {},
-        defines,
+        std::move(defines),
         false,
         false,  // send_to_brisc=false => NCRISC (RISCV_1)
         false,
