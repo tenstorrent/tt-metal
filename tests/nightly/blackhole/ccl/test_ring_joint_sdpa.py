@@ -288,7 +288,7 @@ def run_ring_joint_sdpa(
 
     # Configure fabric for ring joint attention
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricConfig.FABRIC_1D_RING,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -487,7 +487,7 @@ def run_ring_joint_sdpa(
                 num_links=num_links,
                 cluster_axis=sp_axis,
                 mesh_device=mesh_device,
-                topology=Topology.Linear,
+                topology=Topology.Ring,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
                 use_column_major_ccl=True,
