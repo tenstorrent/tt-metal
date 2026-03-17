@@ -62,6 +62,13 @@ def mesh_device_fixture():
         ttnn.close_device(device)
 
 
+def _is_sharded_memory_config(mem_config):
+    """Check if a memory config uses a sharded layout."""
+    if mem_config is None:
+        return False
+    return hasattr(mem_config, "memory_layout") and "SHARDED" in str(mem_config.memory_layout)
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -69,6 +76,7 @@ def run(
     input_a_memory_config,
     input_b_shape=None,
     input_b_dtype=None,
+    input_b_layout=None,
     input_b_memory_config=None,
     output_memory_config=None,
     memory_config=None,
@@ -104,10 +112,6 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"epsilon"}, output_memory_config=output_memory_config)
     hidden_dim = shape[-1]
 
-    # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
-    if input_a_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
-        input_a_dtype = ttnn.bfloat16
-
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         shape
     )
@@ -124,14 +128,20 @@ def run(
         torch_input * torch_gamma_1d[:hidden_dim] / torch.sqrt(torch.mean(torch_input**2, dim=-1, keepdim=True) + eps)
     )
 
+    input_a_target_sharded = None
+    input_a_create_config = input_a_memory_config if input_a_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    if _is_sharded_memory_config(input_a_memory_config):
+        input_a_target_sharded = input_a_memory_config
+        input_a_create_config = ttnn.DRAM_MEMORY_CONFIG
+
     if is_mesh_device:
         input_tensor = create_tensor_on_mesh(
-            torch_input, device, input_a_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+            torch_input, device, input_a_dtype, ttnn.TILE_LAYOUT, input_a_create_config, input_a_tensor_placement
         )
         weight_tensor = create_tensor_on_mesh(
             torch_gamma_4d,
             device,
-            input_b_dtype,
+            input_b_dtype if input_b_dtype is not None else ttnn.bfloat16,
             ttnn.ROW_MAJOR_LAYOUT,
             ttnn.DRAM_MEMORY_CONFIG,
             kwargs.get("weight_tensor_placement", input_a_tensor_placement),
@@ -142,15 +152,18 @@ def run(
             dtype=input_a_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=input_a_create_config,
         )
         weight_tensor = ttnn.from_torch(
             torch_gamma_4d,
-            dtype=input_b_dtype,
+            dtype=input_b_dtype if input_b_dtype is not None else ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+    if input_a_target_sharded is not None:
+        input_tensor = ttnn.to_memory_config(input_tensor, input_a_target_sharded)
 
     # Determine n_devices from the traced stats shape
     # Stats shape is (batch..., 32 * n_devices), each device contributes a tile-width (32) of stats
@@ -170,18 +183,30 @@ def run(
     for i in range(n_devices):
         torch_stats[..., i * 32 : i * 32 + 1] = per_device_sum
 
+    input_b_target_sharded = None
+    input_b_create_config = input_b_memory_config if input_b_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    if _is_sharded_memory_config(input_b_memory_config):
+        input_b_target_sharded = input_b_memory_config
+        input_b_create_config = ttnn.DRAM_MEMORY_CONFIG
+
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", input_a_tensor_placement)
+    stats_dtype = input_b_dtype if input_b_dtype is not None else ttnn.bfloat16
+
     if is_mesh_device:
         stats_tensor = create_tensor_on_mesh(
-            torch_stats, device, ttnn.bfloat16, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+            torch_stats, device, stats_dtype, ttnn.TILE_LAYOUT, input_b_create_config, input_b_tensor_placement
         )
     else:
         stats_tensor = ttnn.from_torch(
             torch_stats,
-            dtype=ttnn.bfloat16,
+            dtype=stats_dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=input_b_create_config,
         )
+
+    if input_b_target_sharded is not None:
+        stats_tensor = ttnn.to_memory_config(stats_tensor, input_b_target_sharded)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.rms_norm_post_all_gather(
