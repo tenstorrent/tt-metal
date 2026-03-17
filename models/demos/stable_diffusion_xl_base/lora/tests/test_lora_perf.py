@@ -13,7 +13,6 @@ from diffusers import DiffusionPipeline
 
 import ttnn
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations1024x1024
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.perf.device_perf_utils import run_model_device_perf_test
@@ -33,7 +32,6 @@ def _get_diffusers_pipeline(model_location_generator, is_ci_env, is_ci_v2_env):
     return pipeline
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_lora_fuse(
     device,
     model_location_generator,
