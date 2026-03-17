@@ -61,6 +61,8 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
                 t1.packed = tile_ptr[pair * 2 + 1].packed;
 
                 wait_for_next_context(2);
+                // TODO: investigate why we need to also configure the output data format
+                // for DRAM matmul, while SRAM matmul we dont need to.
                 reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg0_base);
                 cfg[THCON_SEC0_REG3_Base_address_ADDR32] = t0.addr;
                 semaphore_post(semaphore::UNPACK_SYNC);
