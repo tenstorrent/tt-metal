@@ -33,8 +33,8 @@ namespace ttnn {
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
     const Tensor& input,
-    std::optional<float> min,
-    std::optional<float> max,
+    const std::optional<float>& min,
+    const std::optional<float>& max,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
