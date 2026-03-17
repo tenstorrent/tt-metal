@@ -116,6 +116,7 @@ void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore) &&
+        // set dcache enabled true (conservatively) - since we're in init code, the perf penalty is inconsequential
            !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
         invalidate_l1_cache();
     }
