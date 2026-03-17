@@ -181,9 +181,9 @@ class CIv2ModelDownloadUtils_:
 
         endpoint = f"{endpoint_prefix}/{model_path}"
 
-        # Extract the cut_dirs equivalent (5 levels from endpoint_prefix)
-        # For cutting 5 dirs: /mldata/model_checkpoints/pytorch/huggingface/
-        base_path_components = 5
+        # Extract the cut_dirs equivalent (4 levels from endpoint_prefix)
+        # endpoint_prefix path: /mldata/model_checkpoints/pytorch/huggingface/
+        base_path_components = 4
 
         try:
             logger.info(f"Discovering files from {endpoint}")
@@ -201,117 +201,64 @@ class CIv2ModelDownloadUtils_:
 
             logger.info(f"Found {len(files_to_download)} files, downloading with aria2c...")
 
-            # Create a temporary file with URLs and output paths for aria2c
-            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as url_file:
-                url_file_path = Path(url_file.name)
+            # Download files using aria2c - simple approach with URLs as arguments
+            from urllib.parse import urlparse
 
-                for file_url in files_to_download:
-                    # Calculate relative path by removing endpoint_prefix and cutting directories
-                    from urllib.parse import urlparse
+            for file_url in files_to_download:
+                # Calculate relative path by removing endpoint_prefix and cutting directories
+                parsed = urlparse(file_url)
+                path_parts = parsed.path.strip("/").split("/")
 
-                    parsed = urlparse(file_url)
-                    path_parts = parsed.path.strip("/").split("/")
+                # Cut the first 'base_path_components' directories
+                if len(path_parts) > base_path_components:
+                    relative_path_parts = path_parts[base_path_components:]
+                    relative_path = "/".join(relative_path_parts)
+                else:
+                    relative_path = path_parts[-1]
 
-                    # Cut the first 'base_path_components' directories
-                    if len(path_parts) > base_path_components:
-                        relative_path_parts = path_parts[base_path_components:]
-                        relative_path = "/".join(relative_path_parts)
-                    else:
-                        relative_path = path_parts[-1]
+                local_path = download_dir / relative_path
+                local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    local_path = download_dir / relative_path
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Downloading {file_url} -> {local_path}")
 
-                    logger.info(f"Will download {file_url} -> {local_path}")
-
-                    # aria2c input file format: URL\n  option=value\n\n (blank line separates entries)
-                    url_file.write(f"{file_url}\n")
-                    url_file.write(f"  dir={local_path.parent}\n")
-                    url_file.write(f"  out={local_path.name}\n")
-                    url_file.write("\n")  # Blank line to separate entries
-
-            # Log the aria2c input file for debugging
-            logger.debug(f"aria2c input file contents:\n{url_file_path.read_text()}")
-
-            try:
-                # Run aria2c with optimal settings for parallel downloads
+                # Use aria2c to download single file (similar to wget but faster)
                 aria2c_cmd = [
                     "aria2c",
-                    "--input-file",
-                    str(url_file_path),
-                    "--max-concurrent-downloads=32",  # Download up to 32 files in parallel
-                    "--max-connection-per-server=4",  # Up to 4 connections per server
-                    "--split=4",  # Split each file into 4 segments
-                    "--min-split-size=1M",  # Minimum size for splitting
-                    "--continue=true",  # Resume downloads if interrupted
-                    "--max-tries=5",  # Retry up to 5 times
-                    "--retry-wait=3",  # Wait 3 seconds between retries
-                    "--timeout=60",  # Connection timeout
-                    "--connect-timeout=30",  # Connection establishment timeout
-                    "--allow-overwrite=true",  # Overwrite existing files
-                    "--auto-file-renaming=false",  # Don't auto-rename files
-                    "--console-log-level=warn",  # Show warnings and errors
-                    "--summary-interval=10",  # Show summary every 10 seconds
-                    "--file-allocation=none",  # Faster for networked filesystems
+                    "--dir",
+                    str(local_path.parent),
+                    "--out",
+                    local_path.name,
+                    "--max-connection-per-server=4",
+                    "--split=4",
+                    "--min-split-size=1M",
+                    "--continue=true",
+                    "--max-tries=5",
+                    "--retry-wait=3",
+                    "--timeout=60",
+                    "--connect-timeout=30",
+                    "--allow-overwrite=true",
+                    "--auto-file-renaming=false",
+                    "--console-log-level=error",
+                    file_url,
                 ]
 
-                logger.info(f"Starting aria2c download with up to 32 parallel connections...")
-                logger.debug(f"aria2c input file: {url_file_path}")
+                try:
+                    subprocess.run(
+                        aria2c_cmd,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_in_s,
+                    )
+                except subprocess.CalledProcessError as err:
+                    logger.error(f"aria2c failed to download {file_url}: {err.stderr}")
+                    raise RuntimeError(f"Download failed for {file_url}: {err.stderr}")
 
-                result = subprocess.run(
-                    aria2c_cmd,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_in_s,
-                )
+            logger.info(f"Successfully downloaded all {len(files_to_download)} files")
 
-                logger.info(f"Successfully downloaded all {len(files_to_download)} files")
-
-                # Log aria2c output for debugging
-                if result.stdout:
-                    logger.debug(f"aria2c stdout: {result.stdout}")
-                if result.stderr:
-                    logger.debug(f"aria2c stderr: {result.stderr}")
-
-                # Verify files were downloaded successfully
-                missing_files = []
-                for file_url in files_to_download:
-                    from urllib.parse import urlparse
-
-                    parsed = urlparse(file_url)
-                    path_parts = parsed.path.strip("/").split("/")
-
-                    if len(path_parts) > base_path_components:
-                        relative_path_parts = path_parts[base_path_components:]
-                        relative_path = "/".join(relative_path_parts)
-                    else:
-                        relative_path = path_parts[-1]
-
-                    local_path = download_dir / relative_path
-                    if not local_path.exists():
-                        missing_files.append((file_url, local_path))
-
-                if missing_files:
-                    error_msg = f"Downloaded completed but {len(missing_files)} files are missing:\n"
-                    for url, path in missing_files[:5]:
-                        error_msg += f"  Expected: {path}\n  From URL: {url}\n"
-                    if len(missing_files) > 5:
-                        error_msg += f"  ... and {len(missing_files) - 5} more\n"
-                    raise RuntimeError(error_msg)
-
-            except subprocess.TimeoutExpired as err:
-                logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}")
-                raise err
-            except subprocess.CalledProcessError as err:
-                logger.error(f"aria2c failed with exit code {err.returncode}")
-                if err.stderr:
-                    logger.error(f"aria2c error output: {err.stderr}")
-                raise RuntimeError(f"Download failed: {err.stderr}")
-            finally:
-                # Clean up temporary URL file
-                url_file_path.unlink(missing_ok=True)
-
+        except subprocess.TimeoutExpired as err:
+            logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}")
+            raise err
         except Exception as err:
             logger.error(f"Error occurred while trying to download from {endpoint}: {err}")
             raise err
