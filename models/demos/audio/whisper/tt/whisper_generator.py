@@ -61,18 +61,15 @@ MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 
 class WhisperGenerator:
     """
-    Whisper generator with fully persistent trace support across ALL generations.
+    Whisper generator with trace support for efficient inference.
 
-    This class maintains trace artifacts as instance variables, enabling trace reuse
-    across multiple audio generations. The decoder trace is captured once on the first
-    generation and reused for ALL subsequent generations.
+    The decode trace (embedding -> decoder -> lm_head -> argmax) is captured once per
+    generation and reused for all decode iterations within that generation. It is released
+    before the next generation's prefill because prefill operations allocate L1 memory
+    that can overlap with the decode trace's intermediate buffers, corrupting it.
 
-    Key insight: The decoder trace can be fully persistent because:
-    1. cross_attn_cache is pre-allocated with stable memory addresses
-    2. encoder_hidden_states is pre-allocated with stable memory addresses
-    3. First decoder iteration (non-traced) copies new K/V into pre-allocated cache
-    4. Subsequent iterations (traced) use the pre-allocated cache at same addresses
-    5. The trace references these stable addresses across all generations
+    Pre-allocated DRAM tensors (KV cache, cross-attention cache, encoder hidden states,
+    position tensors) maintain stable addresses across generations.
     """
 
     def __init__(
@@ -577,6 +574,12 @@ class WhisperGenerator:
 
         # Invalidate cross-attention cache for new generation
         self._invalidate_cross_attn_cache()
+
+        # Release persistent decode trace
+        for trace_key in list(self.trace_id_decode.keys()):
+            if self.trace_id_decode[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
+                self.trace_id_decode[trace_key] = None
 
         # Process input features
         all_input_features = []
