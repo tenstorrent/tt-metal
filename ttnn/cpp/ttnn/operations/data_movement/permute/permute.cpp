@@ -14,8 +14,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
-namespace ttnn::operations::data_movement {
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
@@ -154,9 +153,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
     return true;
 }
 
-}  // namespace detail
-
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::detail
 
 namespace ttnn {
 
