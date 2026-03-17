@@ -17,6 +17,10 @@ from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.demos.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
 from models.demos.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
+_SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
+if _SIGNPOST_ENABLED:
+    from tracy import signpost
+
 
 def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -> None:
     if profile is None:
@@ -348,6 +352,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     use_decode_rope: bool = False,
     positions_main_tt: ttnn.Tensor | None = None,
     positions_draft_tt: ttnn.Tensor | None = None,
+    layer_idx: int = -1,
+    use_signpost: bool = False,
 ) -> ttnn.Tensor:
     """Run one decode step for a single decoder layer and update its KVPE cache.
 
@@ -430,12 +436,16 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             return t
 
     # ---- Input LayerNorm ----
+    if use_signpost:
+        signpost(f"L{layer_idx}_attn-start")
     residual = x_embed_tok
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.input_layernorm(x_embed_tok, mode="decode")
     _profile_add(profile, "norm_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KV Cache Update ----
+    if use_signpost:
+        signpost(f"L{layer_idx}_kv_update-start")
     fused_kv_branch = getattr(w, "fused_kv_branch", None)
     q_a_from_kv = kv_cache_update(
         device=device,
@@ -458,8 +468,12 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         fused_kv_branch_fn=_fused_kv_branch_forward if fused_kv_branch is not None and batch == 1 else None,
         profile=profile,
     )
+    if use_signpost:
+        signpost(f"L{layer_idx}_kv_update-end")
 
     # ---- Q Projection ----
+    if use_signpost:
+        signpost(f"L{layer_idx}_q_proj-start")
     q_kvpe = q_projection(
         device=device,
         x=x,
@@ -476,6 +490,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         profile=profile,
     )
     ttnn.deallocate(x, force=False)
+    if use_signpost:
+        signpost(f"L{layer_idx}_q_proj-end")
 
     # Clean up decode RoPE inputs if we allocated them
     if use_decode_rope and owns_decode_rope_inputs:
@@ -484,6 +500,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
                 ttnn.deallocate(t, force=False)
 
     # ---- FlashMLA + Output Projection ----
+    if use_signpost:
+        signpost(f"L{layer_idx}_flash_mla-start")
     attn_out = flash_mla_and_output(
         device=device,
         q_kvpe=q_kvpe,
@@ -496,15 +514,21 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
         tt_positions=tt_positions,
         profile=profile,
     )
+    if use_signpost:
+        signpost(f"L{layer_idx}_flash_mla-end")
 
     x_attn_out = ttnn.add(residual, attn_out, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(attn_out, force=False)
+    if use_signpost:
+        signpost(f"L{layer_idx}_attn-end")
 
     if cfg.disable_mlp:
         _profile_add(profile, "total_s", time.perf_counter() - t_layer0 if profile is not None else 0.0)
         return x_attn_out
 
     # ---- MLP ----
+    if use_signpost:
+        signpost(f"L{layer_idx}_moe-start")
     residual = x_attn_out
     t0 = time.perf_counter() if profile is not None else 0.0
     x = w.post_attention_layernorm(x_attn_out, mode="decode")
@@ -520,6 +544,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
             hparams=hparams,
             moe_runtime=moe_runtime,
             profile=profile,
+            layer_idx=layer_idx,
+            use_signpost=use_signpost,
         )
     else:
         mlp_out = dense_mlp_forward(x, w, device=device, cfg=cfg, profile=profile)
@@ -527,6 +553,8 @@ def run_decoder_layer_decode_one_step_update_cache_tt(
     x_out = ttnn.add(residual, mlp_out, memory_config=cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(mlp_out, force=False)
     ttnn.deallocate(residual, force=False)
+    if use_signpost:
+        signpost(f"L{layer_idx}_moe-end")
     _profile_add(profile, "total_s", time.perf_counter() - t_layer0 if profile is not None else 0.0)
     return x_out
 

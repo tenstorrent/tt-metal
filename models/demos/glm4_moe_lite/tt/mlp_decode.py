@@ -11,6 +11,7 @@ Extracted from decoder_layer_tt.py lines 1326-1576. Two entry points:
 from __future__ import annotations
 
 import math
+import os
 import time
 from typing import Any
 
@@ -18,6 +19,10 @@ import ttnn
 from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.demos.glm4_moe_lite.tt.linear_helpers import _DS_BATCH, dram_sharded_mlp, mlp_linear
 from models.demos.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, mesh_shape
+
+_SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
+if _SIGNPOST_ENABLED:
+    from tracy import signpost
 
 
 def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -> None:
@@ -127,6 +132,8 @@ def moe_mlp_forward(
     hparams: Glm4MoeLiteHParams,
     moe_runtime: Any,
     profile: dict[str, float] | None = None,
+    layer_idx: int = -1,
+    use_signpost: bool = False,
 ) -> ttnn.Tensor:
     """MoE MLP: shared expert (dense) + routed experts. Returns mlp_out [1,1,B,hidden]."""
     from models.demos.glm4_moe_lite.tt.moe_tt import (
@@ -160,6 +167,8 @@ def moe_mlp_forward(
                 x = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # --- Shared expert (dense SwiGLU) ---
+    if use_signpost:
+        signpost(f"L{layer_idx}_shared_expert-start")
     t0 = time.perf_counter() if profile is not None else 0.0
     if cfg.dram_sharded_mlp:
         shared_out = _run_dram_sharded_swiglu(x, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down, device=device, cfg=cfg)
@@ -183,8 +192,12 @@ def moe_mlp_forward(
         ttnn.deallocate(shared_out, force=False)
         shared_out = shared_out_reduced
     _profile_add(profile, "moe_shared_s", time.perf_counter() - t0 if profile is not None else 0.0)
+    if use_signpost:
+        signpost(f"L{layer_idx}_shared_expert-end")
 
     # --- Routing ---
+    if use_signpost:
+        signpost(f"L{layer_idx}_router-start")
     t0 = time.perf_counter() if profile is not None else 0.0
     if cfg.moe_router_impl == "cpu":
         topk_weights, topk_indices = moe_topk_cpu_reference(device=device, x=x, moe_w=w.moe, hparams=hparams)
@@ -196,8 +209,12 @@ def moe_mlp_forward(
             compute_kernel_config=mlp_compute_kernel_config,
         )
     _profile_add(profile, "moe_router_s", time.perf_counter() - t0 if profile is not None else 0.0)
+    if use_signpost:
+        signpost(f"L{layer_idx}_router-end")
 
     # --- Routed experts ---
+    if use_signpost:
+        signpost(f"L{layer_idx}_routed_experts-start")
     t0 = time.perf_counter() if profile is not None else 0.0
     expert_kwargs = dict(
         device=device,
@@ -244,8 +261,12 @@ def moe_mlp_forward(
             skip_final_reduce=_skip_shared_reduce,
         )
     _profile_add(profile, "moe_experts_s", time.perf_counter() - t0 if profile is not None else 0.0)
+    if use_signpost:
+        signpost(f"L{layer_idx}_routed_experts-end")
 
     # --- Merge shared + routed ---
+    if use_signpost:
+        signpost(f"L{layer_idx}_merge-start")
     t0 = time.perf_counter() if profile is not None else 0.0
     mlp_out = ttnn.add(shared_out, routed_out, memory_config=moe_decode_mc)
     ttnn.deallocate(shared_out, force=False)
@@ -271,4 +292,6 @@ def moe_mlp_forward(
             mlp_out = ttnn.clone(mlp_out_view, memory_config=moe_decode_mc)
 
     _profile_add(profile, "moe_merge_s", time.perf_counter() - t0 if profile is not None else 0.0)
+    if use_signpost:
+        signpost(f"L{layer_idx}_merge-end")
     return mlp_out
