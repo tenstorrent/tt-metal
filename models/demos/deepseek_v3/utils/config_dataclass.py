@@ -479,7 +479,7 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
     num_links: int | None = 4
     worker_mode: ttnn.WorkerMode
     dispatch_algorithm: ttnn.DispatchAlgorithm
-    cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
+    cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
@@ -518,7 +518,7 @@ class SelectiveReduceCombineConfig(OpConfigBase):
     worker_cores: list[ttnn.CoreCoord]
     mux_core_range_set: ttnn.CoreRangeset
     output_tensor: ttnn.Tensor | None = None
-    optional_cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
+    optional_cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass
