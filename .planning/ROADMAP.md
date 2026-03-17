@@ -31,8 +31,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 01-01-PLAN.md — Refactor StreamRegAssignments into IncrementOnWrite/Scratch tagged sub-structs
-- [ ] 01-02-PLAN.md — Templatize WorkerToFabricEdmSenderImpl on flow control stream ID
+- [x] 01-01-PLAN.md — Refactor StreamRegAssignments into IncrementOnWrite/Scratch tagged sub-structs
+- [x] 01-02-PLAN.md — Templatize WorkerToFabricEdmSenderImpl on flow control stream ID
 
 ### Phase 2: Constants & Config Foundation
 **Goal**: The fabric infrastructure supports 3 VCs in its data structures and config, with VC2 conditionally enabled based on topology and hardware, but with zero VC2 channels allocated so behavior is unchanged (independently mergeable)
@@ -44,11 +44,11 @@ Plans:
   2. PerVcBufferSlots has vc2_sender_slots and vc2_receiver_slots fields, and buffer slot option tables are 6-field structs
   3. FabricConfig exposes a VC2 enable predicate that returns true only when 2D + Blackhole + no UDM/mux + VC1 is active
   4. All existing regression tests pass unchanged (VC2 channels = 0 in all current configs)
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01-PLAN.md — Bump MAX_NUM_VCS to 3, fix {0,0} initializers, update legacy getters and print methods
+- [ ] 02-02-PLAN.md — Extend PerVcBufferSlots, split buffer tables, add VC2 enable predicate
 
 ### Phase 3: Channel Mapping & Allocation
 **Goal**: VC2 channels are mapped and allocated in L1 for both non-Z routers (sender + receiver) and Z routers (sender-only at last flat index, forwarding to VC0's receiver)
