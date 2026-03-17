@@ -792,8 +792,36 @@ def test_topology_matrix(
     _print_topology_matrix()
 
 
+_tracy_results: dict[str, dict[str, float]] = {}
+
+
+def _print_tracy_results():
+    """Print side-by-side comparison table for tracy profiling results."""
+    if not _tracy_results:
+        return
+
+    variants = sorted(_tracy_results.keys())
+
+    header = f"{'metric':<20}"
+    for v in variants:
+        header += f"  {v:>20s}"
+
+    rows = []
+    for metric in ("dispatch_us",):
+        label = metric.replace("_us", "").capitalize()
+        row = f"{label + ' (us)':<20}"
+        vals = [_tracy_results[v].get(metric, 0.0) for v in variants]
+        for val in vals:
+            row += f"  {val:>20.2f}"
+        rows.append(row)
+
+    sep = "=" * len(header)
+    table = "\n".join([sep, header, "-" * len(header)] + rows + [sep])
+    logger.info(f"\n{table}")
+
+
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, seq_len_per_chip, hidden_dim, num_experts_per_tok",
     [
         pytest.param(
             (8, 1),
@@ -801,92 +829,90 @@ def test_topology_matrix(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=15232),
             },
+            3200,
+            7168,
+            2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
-            id="8chip-ring",
+            id="8chip-ring-3200t-2e-7168d",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=3808),
+            },
+            3200,
+            1792,
+            8,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="8chip-ring-3200t-8e-1792d",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_topology_matrix_tracy(mesh_device):
-    """Single test running all topology matrix configurations once each for tracy profiling."""
+def test_topology_matrix_tracy(mesh_device, seq_len_per_chip, hidden_dim, num_experts_per_tok):
+    """Run topology matrix configurations for tracy profiling with appropriately sized payloads."""
 
     num_devices = num_chips = mesh_device.get_num_devices()
     n_routed_experts = 16
-
-    configs = [
-        {"seq_len_per_chip": 3200, "hidden_dim": 7168, "num_experts_per_tok": 2, "label": "3200t-2e-7168d"},
-        {"seq_len_per_chip": 3200, "hidden_dim": 1792, "num_experts_per_tok": 8, "label": "3200t-8e-1792d"},
-    ]
 
     topologies = [
         {"topology": ttnn.Topology.Linear, "label": "line"},
         {"topology": ttnn.Topology.Ring, "label": "ring"},
     ]
 
-    results = {}
-
     for topo in topologies:
-        for cfg in configs:
-            variant = f"{topo['label']}-{cfg['label']}"
-            logger.info(f"=== Running {variant} ===")
+        variant = f"{topo['label']}-{seq_len_per_chip}t-{num_experts_per_tok}e-{hidden_dim}d"
+        logger.info(f"=== Running {variant} ===")
 
-            experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-                cfg["seq_len_per_chip"], n_routed_experts, cfg["num_experts_per_tok"], num_chips, capacity_factor=2
-            )
+        experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+            seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor=2
+        )
 
-            x, weights, indices = initialize_test_inputs(
-                num_chips=num_chips,
-                seq_len_per_chip=cfg["seq_len_per_chip"],
-                hidden_dim=cfg["hidden_dim"],
-                n_routed_experts=n_routed_experts,
-                num_experts_per_tok=cfg["num_experts_per_tok"],
-                max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            )
+        x, weights, indices = initialize_test_inputs(
+            num_chips=num_chips,
+            seq_len_per_chip=seq_len_per_chip,
+            hidden_dim=hidden_dim,
+            n_routed_experts=n_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        )
 
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None))
-            tt_x = ttnn.from_torch(
-                x, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
-            )
-            tt_weights = ttnn.from_torch(
-                weights, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
-            )
-            tt_indices = ttnn.from_torch(
-                indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
-            )
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None))
+        tt_x = ttnn.from_torch(
+            x, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        )
+        tt_weights = ttnn.from_torch(
+            weights, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        )
+        tt_indices = ttnn.from_torch(
+            indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+        )
 
-            module = TtDispatchCombinedModule(
-                mesh_device=mesh_device,
-                num_chips=num_chips,
-                experts_per_chip=experts_per_chip,
-                n_routed_experts=n_routed_experts,
-                num_experts_per_tok=cfg["num_experts_per_tok"],
-                metadata_len=metadata_len,
-                max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-                seq_len_per_chip=cfg["seq_len_per_chip"],
-                hidden_dim=cfg["hidden_dim"],
-                cluster_axis=0,
-                num_links=2,
-                topology=topo["topology"],
-            )
+        module = TtDispatchCombinedModule(
+            mesh_device=mesh_device,
+            num_chips=num_chips,
+            experts_per_chip=experts_per_chip,
+            n_routed_experts=n_routed_experts,
+            num_experts_per_tok=num_experts_per_tok,
+            metadata_len=metadata_len,
+            max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+            seq_len_per_chip=seq_len_per_chip,
+            hidden_dim=hidden_dim,
+            cluster_axis=0,
+            num_links=2,
+            topology=topo["topology"],
+        )
 
-            module(tt_x, tt_weights, tt_indices)
-            ttnn.synchronize_device(mesh_device)
+        module(tt_x, tt_weights, tt_indices)
+        ttnn.synchronize_device(mesh_device)
 
-            durations = _extract_dispatch_only_profiler_durations(mesh_device)
-            if durations:
-                avg_us = sum(durations) / len(durations) / 1e3
-                results[variant] = avg_us
-                logger.info(f"  {variant} done (profiler: {avg_us:.2f} us)")
-            else:
-                logger.warning(f"  {variant} done (no profiler data)")
+        durations = _extract_dispatch_only_profiler_durations(mesh_device)
+        if durations:
+            avg_us = sum(durations) / len(durations) / 1e3
+            _tracy_results[variant] = {"dispatch_us": avg_us}
+            logger.info(f"  {variant} done (profiler: {avg_us:.2f} us)")
+        else:
+            logger.warning(f"  {variant} done (no profiler data)")
 
-    if results:
-        variants = list(results.keys())
-        col_w = max(len(v) for v in variants) + 2
-        header = f"{'Variant':<{col_w}}  {'Dispatch (us)':>16}"
-        sep = "=" * len(header)
-        rows = [f"{v:<{col_w}}  {results[v]:>16.2f}" for v in variants]
-        table = "\n".join([sep, header, "-" * len(header)] + rows + [sep])
-        logger.info(f"\nTopology matrix tracy results:\n{table}")
-    else:
-        logger.warning("No profiler data collected for any variant.")
+    _print_tracy_results()
