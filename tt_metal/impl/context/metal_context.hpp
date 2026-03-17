@@ -15,7 +15,6 @@
 #include "context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
-#include "context_types.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
