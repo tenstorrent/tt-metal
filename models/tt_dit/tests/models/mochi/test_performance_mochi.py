@@ -46,6 +46,7 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 def test_mochi_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
+    model_location_generator,
     model_name: str,
     image_w: int,
     image_h: int,
@@ -95,7 +96,10 @@ def test_mochi_pipeline_performance(
     logger.info(f"DiT SP axis: {sp_axis}, TP axis: {tp_axis}")
     logger.info(f"VAE SP axis: {vae_sp_axis}, TP axis: {tp_axis}")
 
-    tt_pipe = TTMochiPipeline.create_pipeline(mesh_device=mesh_device, checkpoint_name=model_name)
+    tt_pipe = TTMochiPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=model_location_generator(model_name),
+    )
 
     # Test prompts
     prompts = [
