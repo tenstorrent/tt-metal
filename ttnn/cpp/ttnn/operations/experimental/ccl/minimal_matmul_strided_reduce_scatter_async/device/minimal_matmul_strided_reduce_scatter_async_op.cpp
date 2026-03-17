@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
@@ -32,6 +33,59 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.topology == ttnn::ccl::Topology::Ring,
         "MinimalMatmulStridedReduceScatterAsync only supports Ring topology.");
+
+    // Delegate full matmul validation (dtype, layout, shape, tile alignment, config/subblock
+    // constraints, fused ternary checks, etc.).  fused_ternary_scalar lives at the fused-op
+    // level rather than inside matmul_struct, so inject it before calling.
+    MinimalMatmulParams mm_attrs = attributes.matmul_struct;
+    mm_attrs.fused_ternary_scalar = attributes.fused_ternary_scalar;
+
+    auto to_mutable_opt = [](const std::optional<const Tensor>& opt) -> std::optional<Tensor> {
+        return opt.has_value() ? std::optional<Tensor>(opt.value()) : std::nullopt;
+    };
+
+    matmul_device_operation_t::validate_on_program_cache_miss(
+        mm_attrs,
+        matmul_device_operation_t::tensor_args_t{
+            .input_tensor = tensor_args.input_tensor,
+            .weight_tensor = tensor_args.weight_tensor,
+            .bias_tensor = to_mutable_opt(tensor_args.bias),
+            .optional_input_tensor = std::nullopt,
+            .fused_ternary_input_a = to_mutable_opt(tensor_args.addcmul_input_tensor1),
+            .fused_ternary_input_b = to_mutable_opt(tensor_args.addcmul_input_tensor2),
+        });
+
+    // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
+    TT_FATAL(attributes.num_links > 0, "num_links must be greater than 0.");
+
+    constexpr uint32_t expected_semaphores = 3;
+    TT_FATAL(
+        attributes.semaphore.size() == expected_semaphores,
+        "Expected {} semaphores but got {}.",
+        expected_semaphores,
+        attributes.semaphore.size());
+
+    // MM output N = weight last dim; its tile count must divide evenly across ring devices.
+    const uint32_t N_tiles = tensor_args.weight_tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    TT_FATAL(
+        N_tiles % attributes.ring_size == 0,
+        "MM output N_tiles ({}) must be divisible by ring_size ({}).",
+        N_tiles,
+        attributes.ring_size);
+
+    // RS output memory layout must be one of the supported types.
+    const auto rs_out_layout = attributes.rs_output_mem_config.memory_layout();
+    TT_FATAL(
+        rs_out_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED ||
+            rs_out_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
+            rs_out_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
+            rs_out_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+        "Unsupported RS output memory layout.");
+    if (rs_out_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+        TT_FATAL(
+            attributes.rs_output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1,
+            "DRAM block sharding is not supported for RS output.");
+    }
 }
 
 MinimalMatmulStridedReduceScatterAsync::spec_return_value_t
