@@ -220,7 +220,7 @@ Tensor to_layout_impl(
         for (int index = 0; index < padded_output_shape.rank(); ++index) {
             padded_input_start.push_back(0);
         }
-        tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
+        tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), pad_value);
         tensor = tensor.to_layout(layout);
         return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
     }

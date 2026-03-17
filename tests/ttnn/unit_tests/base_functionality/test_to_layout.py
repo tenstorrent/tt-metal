@@ -728,6 +728,28 @@ def test_tensor_to_tile_layout_shape_verification(device, shape):
 
 @pytest.mark.parametrize("shape", [(30, 62), (17, 47), (65, 33)])
 @pytest.mark.parametrize("pad_value", [0, 1, -2, 1.5])
+def test_to_layout_pad_value_on_host(shape, pad_value):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    h, w = shape[-2], shape[-1]
+    pad_h = (ttnn.TILE_SIZE - h % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+    pad_w = (ttnn.TILE_SIZE - w % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+
+    torch_output_tensor = torch.nn.functional.pad(
+        torch_input_tensor, (0, pad_w, 0, pad_h), mode="constant", value=pad_value
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, pad_value=pad_value)
+    output_tensor = tiled.to_torch_with_padded_shape()
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [(30, 62), (17, 47), (65, 33)])
+@pytest.mark.parametrize("pad_value", [0, 1, -2, 1.5])
 def test_to_layout_pad_value_on_device(device, shape, pad_value):
     torch.manual_seed(0)
     torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
