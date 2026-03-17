@@ -27,7 +27,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RepeatConfig,
     SelectiveReduceCombineConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_ring_fabric
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -127,7 +127,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         }
 
         # optimized ops (exclusive to quad with ring fabric) require preallocated tensors for all_to_all_dispatch_metadata
-        if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_device_rows == 16:
+        if is_ring_fabric(fabric_config) and num_dispatch_device_rows == 16:
             # NOTE: these do not have to be double buffered, due to the synchronization between all_to_all_dispatch_metadata and selective_reduce_combine inside the MoE block
             batch = USERS_PER_ROW * mesh_device.shape[0]
             preallocated_all_to_all_dispatch_metadata_tensors = (
@@ -297,7 +297,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             }
 
         # configs for optimized ops (exclusive to quad with ring fabric)
-        if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and mesh_device.shape[0] == 16:
+        if is_ring_fabric(fabric_config) and mesh_device.shape[0] == 16:
             batch = USERS_PER_ROW * mesh_device.shape[0]
             seq_len = 1
 
@@ -507,7 +507,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # optimized ops are exclusive to quad with ring fabric
-        if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and cfg["num_dispatch_devices"] == 16:
+        if is_ring_fabric(cfg["fabric_config"]) and cfg["num_dispatch_devices"] == 16:
             # NOTE: can move towards removing these TMs once optimized moe_gate is integrated
             topk_experts_indices_rm = ttnn.to_layout(
                 topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -614,7 +614,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         output_chunks: list[ttnn.Tensor] = []
 
         # optimized ops are exclusive to quad with ring fabric
-        if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and cfg["num_dispatch_devices"] == 16:
+        if is_ring_fabric(cfg["fabric_config"]) and cfg["num_dispatch_devices"] == 16:
             topk_experts_indices_rm = ttnn.to_layout(
                 topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
             )
@@ -921,7 +921,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             ccl = cfg["ccl"]
             tp_size = cfg["mesh_device"].shape[1]
 
-            if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
+            if is_ring_fabric(cfg["fabric_config"]) and tp_size == 8:
                 output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     output,
                     dim=0,

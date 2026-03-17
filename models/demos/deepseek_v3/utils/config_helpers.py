@@ -22,9 +22,21 @@ NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 QUAD_MESH_SHAPE = (16, 8)
 
 
-def is_quad_ring(mesh_device: ttnn.Device) -> bool:
-    """Check whether the given mesh device has a QUAD configuration (16x8) and ring fabric topology."""
-    return tuple(mesh_device.shape) == QUAD_MESH_SHAPE and (os.getenv("USE_TORUS_MODE") is not None)
+def get_fabric_config():
+    """Get the fabric config for the model."""
+    return (
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+    )
+
+
+def is_ring_fabric(fabric_config: ttnn.FabricConfig):
+    """Check whether the given fabric config has a RING configuration"""
+    return fabric_config == ttnn.FabricConfig.FABRIC_1D_RING
+
+
+def is_quad_mesh(mesh_device: ttnn.Device) -> bool:
+    """Check whether the given mesh device has a QUAD configuration (16x8)"""
+    return tuple(mesh_device.shape) == QUAD_MESH_SHAPE
 
 
 USERS_PER_ROW = 32

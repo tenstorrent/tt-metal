@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import is_ring_fabric, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -179,7 +179,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
 
-            if cfg["moe"]["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
+            if is_ring_fabric(cfg["moe"]["fabric_config"]) and tp_size == 8:
                 summed_experts = ttnn.experimental.deepseek_moe_fast_reduce_nc(
                     combined_out,
                     dim=0,
