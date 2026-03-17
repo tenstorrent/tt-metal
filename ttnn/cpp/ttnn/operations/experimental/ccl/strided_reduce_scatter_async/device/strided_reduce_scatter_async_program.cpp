@@ -202,7 +202,7 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
 using namespace ccl;
 using ttnn::experimental::ccl::append_fabric_mux_connection_ct_args;
 using ttnn::experimental::ccl::append_fabric_mux_connection_rt_args;
-namespace detail = operations::experimental::ccl::strided_reduce_scatter_async::detail;
+namespace rs_detail = operations::experimental::ccl::strided_reduce_scatter_async::detail;
 
 StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_program_artifacts(
     tt::tt_metal::Program& program,
@@ -478,7 +478,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
-    std::vector<uint32_t> sender_reader_compile_args = detail::get_ring_reader_compile_args(
+    std::vector<uint32_t> sender_reader_compile_args = rs_detail::get_ring_reader_compile_args(
         ring_index,
         ring_size,
         input_cb_index,
@@ -533,7 +533,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
 
     // Writer
-    std::vector<uint32_t> sender_writer_compile_args = detail::get_ring_writer_compile_args(
+    std::vector<uint32_t> sender_writer_compile_args = rs_detail::get_ring_writer_compile_args(
         ring_index,
         ring_size,
         compute_output_cb_index,
@@ -596,7 +596,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
 
     // Reduce kernel
     auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-    sender_reduce_kernel_config.compile_args = detail::get_ring_reduce_compile_args(
+    sender_reduce_kernel_config.compile_args = rs_detail::get_ring_reduce_compile_args(
         input_cb_index,
         intermediate_cb_index,
         compute_output_cb_index,

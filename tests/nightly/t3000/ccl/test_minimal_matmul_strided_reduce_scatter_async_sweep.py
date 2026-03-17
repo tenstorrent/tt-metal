@@ -184,9 +184,15 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     )
 
     ##### Run the op #####
-    rs_zone_capacity = (compute_grid_size.y - mm_core_grid.y) * compute_grid_size.x
-    num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
+    # Auto-compute num_workers_per_link from available RS cores if not explicitly set.
+    # This fills the remaining rows below the MM grid (RS zone) with bidirectional workers.
+    if num_workers_per_link is None:
+        rs_zone_capacity = (compute_grid_size.y - mm_core_grid.y) * compute_grid_size.x
+        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
 
+    # NOTE: This sweep function does not perform correctness verification (no comp_pcc).
+    # It is intended for performance measurement only. Use test_minimal_matmul_strided_reduce_scatter_async
+    # for functional correctness checks.
     def run_op(i):
         (
             tt_mm_out,
@@ -226,7 +232,6 @@ def write_error_to_file(error):
         ef.flush()
 
 
-# @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("num_links", [2], ids=["2link"])
 @pytest.mark.parametrize("cluster_axis", [0], ids=["axis_0"])  # Wan is currently TP 0

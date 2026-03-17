@@ -159,7 +159,6 @@ tt::tt_metal::operation::Hash MinimalMatmulStridedReduceScatterAsync::compute_pr
         attributes.using_persistent_buffers,
         attributes.sub_device_id.has_value(),
         attributes.cluster_axis,
-        attributes.chunks_per_sync,
         attributes.num_workers_per_link,
         attributes.num_buffers_per_channel,
         attributes.chunk_width_in_mm_blocks,
@@ -198,11 +197,10 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<const Tensor>& bias,
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
     std::optional<const ttnn::experimental::prim::MinimalMatmulConfig> config,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     bool using_persistent_buffers,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
@@ -227,7 +225,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
             .config = config,
             .fused_activation = std::move(fused_activation),
             .output_mem_config = memory_config_mm,
-            .compute_kernel_config = compute_kernel_config.value()};
+            .compute_kernel_config = compute_kernel_config};
 
     auto operation_attributes = OperationType::operation_attributes_t{
         /* matmul_struct */ matmul_struct,
@@ -243,7 +241,6 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* using_persistent_buffers */ using_persistent_buffers,
         /* sub_device_id */ resolved_sub_device_id,
         /* cluster_axis */ cluster_axis,
-        /* chunks_per_sync */ chunks_per_sync,
         /* num_workers_per_link */ num_workers_per_link,
         /* num_buffers_per_channel */ num_buffers_per_channel,
         /* chunk_width_in_mm_blocks */ chunk_width_in_mm_blocks,

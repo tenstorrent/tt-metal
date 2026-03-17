@@ -19,7 +19,7 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     /* Matmul Params */
     const MinimalMatmulParams matmul_struct;
 
-    /* Fused addcmul params (applied to MM output before RS) */
+    /* Fused addcmul params (applied at the RS final write step, not in the MM kernel) */
     const std::optional<float> fused_ternary_scalar = std::nullopt;
 
     /* Reduce Scatter Params */
@@ -34,7 +34,6 @@ struct MinimalMatmulStridedReduceScatterAsyncParams {
     const bool using_persistent_buffers;
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     const std::optional<uint32_t> cluster_axis;
-    const std::optional<uint32_t> chunks_per_sync;
     const std::optional<uint32_t> num_workers_per_link;
     const std::optional<uint32_t> num_buffers_per_channel;
     const std::optional<uint32_t> chunk_width_in_mm_blocks;

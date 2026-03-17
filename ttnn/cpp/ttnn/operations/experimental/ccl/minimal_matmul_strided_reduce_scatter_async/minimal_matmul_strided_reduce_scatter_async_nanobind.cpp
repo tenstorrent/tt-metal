@@ -37,6 +37,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                const uint32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const CoreCoord reduce_scatter_core_grid_offset,
+               const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
                const std::optional<ttnn::MemoryConfig>& rs_output_mem_config,
@@ -46,11 +47,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                const std::optional<const Tensor>& bias,
                const std::optional<unary::UnaryWithParam>& fused_activation,
                const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
                bool using_persistent_buffers,
                std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-               std::optional<uint32_t> chunks_per_sync,
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> chunk_width_in_mm_blocks,
@@ -65,6 +64,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                     dim,
                     multi_device_global_semaphore,
                     reduce_scatter_core_grid_offset,
+                    compute_kernel_config,
                     num_links,
                     memory_config_mm,
                     rs_output_mem_config,
@@ -74,11 +74,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                     bias,
                     fused_activation,
                     config,
-                    compute_kernel_config,
                     barrier_semaphore,
                     using_persistent_buffers,
                     sub_device_id,
-                    chunks_per_sync,
                     num_workers_per_link,
                     num_buffers_per_channel,
                     chunk_width_in_mm_blocks,
@@ -94,6 +92,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
             nb::arg("multi_device_global_semaphore"),
             nb::arg("reduce_scatter_core_grid_offset"),
             nb::kw_only(),
+            nb::arg("compute_kernel_config"),
             nb::arg("num_links") = 1,
             nb::arg("memory_config_mm") = nb::none(),
             nb::arg("rs_output_mem_config") = nb::none(),
@@ -103,11 +102,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
             nb::arg("bias") = nb::none(),
             nb::arg("fused_activation") = nb::none(),
             nb::arg("config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("barrier_semaphore") = nb::none(),
             nb::arg("using_persistent_buffers") = false,
             nb::arg("sub_device_id") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("chunk_width_in_mm_blocks") = nb::none(),
@@ -152,11 +149,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`bias` (Optional[ttnn.Tensor]): Optional bias tensor for the matmul.
             * :attr:`fused_activation` (Optional[str]): Fused activation for the matmul.
             * :attr:`config` (Optional[MinimalMatmulConfig]): Matmul configuration.
-            * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig]): Compute kernel config.
+            * :attr:`compute_kernel_config` (DeviceComputeKernelConfig): Compute kernel configuration (required).
             * :attr:`barrier_semaphore` (Optional[GlobalSemaphore]): Barrier semaphore for RS.
             * :attr:`using_persistent_buffers` (bool): Use persistent buffers. Defaults to False.
             * :attr:`sub_device_id` (Optional[SubDeviceId]): Sub-device ID.
-            * :attr:`chunks_per_sync` (Optional[int]): Chunks per sync for RS.
             * :attr:`num_workers_per_link` (Optional[int]): Workers per link for RS.
             * :attr:`num_buffers_per_channel` (Optional[int]): Buffers per channel for RS.
             * :attr:`chunk_width_in_mm_blocks` (Optional[int]): MM output blocks per RS chunk.

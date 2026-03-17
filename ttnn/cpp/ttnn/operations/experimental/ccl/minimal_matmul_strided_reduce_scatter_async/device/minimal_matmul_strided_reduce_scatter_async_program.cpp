@@ -196,7 +196,6 @@ minimal_matmul_strided_reduce_scatter_async_program(
     // transposition is disabled when fusing with SRS (the RS iteration structure
     // requires mm_N_block_wt <= slice_Wt, which can be violated when transposing).
     // So we always use the non-transposed layout: M parallelized on y, N on x.
-    constexpr uint32_t TILE_WIDTH = 32;
     uint32_t mm_cores_y_val = config.compute_with_storage_grid_size.y;
     uint32_t mm_block_ht_val = config.M_block_size;
     uint32_t mm_block_wt_val = config.N_block_size;
