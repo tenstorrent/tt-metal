@@ -19,7 +19,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.hf_model_utils import dequantize_state_dict as _dequantize_state_dict
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -114,10 +114,16 @@ def paged_cache_from_torch(
     """
     if user_id is not None:
         torch_cache_line = torch_cache
+        batch_size_per_row = torch_cache_line.shape[0]
+        # Row-batched prefill helpers hand us one full row worth of cache lines.
+        # Expand back to the global user space and place that row at the row selected by `user_id`.
+        row_start = (user_id // batch_size_per_row) * batch_size_per_row
+        row_end = row_start + batch_size_per_row
         torch_cache = torch.zeros(
-            (mesh_shape[0] * USERS_PER_ROW, *torch_cache_line.shape[1:]), dtype=torch_cache_line.dtype
+            (mesh_shape[0] * batch_size_per_row, *torch_cache_line.shape[1:]),
+            dtype=torch_cache_line.dtype,
         )
-        torch_cache[user_id : user_id + 1] = torch_cache_line
+        torch_cache[row_start:row_end] = torch_cache_line
 
     batch_size, num_heads, seq_len, dim = torch_cache.shape
     batches_per_device = even_int_div(batch_size, mesh_shape[0] * mesh_shape[1])
