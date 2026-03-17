@@ -40,12 +40,13 @@ bool can_construct_on_device(
     DataType dst_dtype,
     const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile,
-    bool enable_bf4_opt,
+    bool enable_bfloat_opt,
     bool preserve_nan_values) {
     // typecast to bfloat4_b is expected to lose precision, see
     // https://github.com/tenstorrent/tt-metal/issues/35048
-    // user can choose to use enable_bf4_opt=True to get the best performance, but the precision will be lost.
-    bool enable_device_typecast = dst_dtype == DataType::BFLOAT4_B ? enable_bf4_opt : true;
+    // user can choose to use enable_bfloat_opt=True to get the best performance, but the precision will be lost.
+    bool enable_device_typecast =
+        (dst_dtype == DataType::BFLOAT4_B or dst_dtype == DataType::BFLOAT8_B) ? enable_bfloat_opt : true;
 
     bool res = device != nullptr &&
                // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
@@ -88,7 +89,7 @@ Tensor create_tt_tensor_from_host_data(
     std::optional<ttnn::QueueId> cq_id,
     ttnn::distributed::MeshDevice* device,
     bool preserve_nan_values,
-    bool enable_bf4_opt) {
+    bool enable_bfloat_opt) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         const bool construct_on_device = can_construct_on_device(
@@ -98,7 +99,7 @@ Tensor create_tt_tensor_from_host_data(
             dst_dtype,
             memory_config,
             optional_tile,
-            enable_bf4_opt,
+            enable_bfloat_opt,
             preserve_nan_values);
 
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
@@ -196,7 +197,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value,
     bool preserve_nan_values,
     bool col_tilize,
-    bool enable_bf4_opt) {
+    bool enable_bfloat_opt) {
     ZoneScoped;
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
@@ -272,7 +273,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         cq_id,
         device.value_or(nullptr),
         preserve_nan_values,
-        enable_bf4_opt);
+        enable_bfloat_opt);
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {

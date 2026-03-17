@@ -27,5 +27,5 @@ tt::tt_metal::Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value = std::nullopt,
     bool preserve_nan_values = false,
     bool col_tilize = false,
-    bool enable_bf4_opt = false);
+    bool enable_bfloat_opt = false);
 }  // namespace ttnn

@@ -60,7 +60,7 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
             device=device if use_device else None,
             dtype=ttnn_dtype,
             layout=ttnn_layout,
-            enable_bf4_opt=True,
+            enable_bfloat_opt=True,
         )
 
         if not use_device:
@@ -76,12 +76,12 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
 @pytest.mark.parametrize("torch_dtype", [torch.float32])
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("size", [1024])
-@pytest.mark.parametrize("enable_bf4_opt", [True, False])
-def test_benchmark_from_torch_enable_bf4_opt(
-    benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, enable_bf4_opt
+@pytest.mark.parametrize("enable_bfloat_opt", [True, False])
+def test_benchmark_from_torch_enable_bfloat_opt(
+    benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, enable_bfloat_opt
 ):
     # performance for borrowed data must be the same
-    # for enable_bf4_opt=True and enable_bf4_opt=False
+    # for enable_bfloat_opt=True and enable_bfloat_opt=False
     torch_input_tensor = torch.rand((size, size), dtype=torch_dtype)
 
     def from_torch():
@@ -90,7 +90,7 @@ def test_benchmark_from_torch_enable_bf4_opt(
             device=device if use_device else None,
             dtype=ttnn_dtype,
             layout=ttnn_layout,
-            enable_bf4_opt=enable_bf4_opt,
+            enable_bfloat_opt=enable_bfloat_opt,
         )
 
         if not use_device:
@@ -109,8 +109,10 @@ def test_benchmark_from_torch_enable_bf4_opt(
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat4_b])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-@pytest.mark.parametrize("enable_bf4_opt", [True, False])
-def test_from_torch_deep_seek_interleaved_moe_weights_galaxy(benchmark, mesh_device, shape, ttnn_dtype, enable_bf4_opt):
+@pytest.mark.parametrize("enable_bfloat_opt", [True, False])
+def test_from_torch_deep_seek_interleaved_moe_weights_galaxy(
+    benchmark, mesh_device, shape, ttnn_dtype, enable_bfloat_opt
+):
     if mesh_device.get_num_devices() != 8:
         pytest.skip("Test is only valid on T3K (8 devices)")
 
@@ -125,7 +127,7 @@ def test_from_torch_deep_seek_interleaved_moe_weights_galaxy(benchmark, mesh_dev
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-            enable_bf4_opt=enable_bf4_opt,
+            enable_bfloat_opt=enable_bfloat_opt,
         )
         ttnn.synchronize_device(mesh_device)
 

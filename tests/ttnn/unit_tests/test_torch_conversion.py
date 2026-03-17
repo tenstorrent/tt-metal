@@ -573,7 +573,7 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
     assert ttnn_tensor.memory_config().memory_layout == shard_strategy
 
 
-@pytest.mark.parametrize("enable_bf4_opt", [True, False])
+@pytest.mark.parametrize("enable_bfloat_opt", [True, False])
 @pytest.mark.parametrize("use_mesh_mapper", [True, False])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
@@ -582,13 +582,13 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
         (torch.float32, ttnn.bfloat16),
     ],
 )
-def test_from_torch_enable_bf4_opt_preserves_sharded_memory_config(
-    device, enable_bf4_opt, use_mesh_mapper, torch_dtype, ttnn_dtype
+def test_from_torch_enable_bfloat_opt_preserves_sharded_memory_config(
+    device, enable_bfloat_opt, use_mesh_mapper, torch_dtype, ttnn_dtype
 ):
     """
-    Validate that enable_bf4_opt=True preserves DRAM-sharded memory config.
+    Validate that enable_bfloat_opt=True preserves DRAM-sharded memory config.
 
-    When enable_bf4_opt is used with a mesh_mapper, the tensor is initially created
+    When enable_bfloat_opt is used with a mesh_mapper, the tensor is initially created
     on the device with a default (interleaved) memory config and then converted
     in-place. This test ensures the final tensor has the requested sharded config.
     """
@@ -627,7 +627,7 @@ def test_from_torch_enable_bf4_opt_preserves_sharded_memory_config(
         device=device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        enable_bf4_opt=enable_bf4_opt,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
     assert (
@@ -638,12 +638,12 @@ def test_from_torch_enable_bf4_opt_preserves_sharded_memory_config(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
-@pytest.mark.parametrize("enable_bf4_opt", [True, False])
+@pytest.mark.parametrize("enable_bfloat_opt", [True, False])
 @pytest.mark.parametrize(
     "mapper_type",
     ["shard_1d_width", "shard_2d_width"],
 )
-def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, mapper_type, enable_bf4_opt):
+def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, mapper_type, enable_bfloat_opt):
     """
     Regression test: from_torch with a DRAM-sharded memory_config and a mesh
     mapper that shards along the width dimension must not crash.
@@ -704,7 +704,7 @@ def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, map
         device=mesh_device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        enable_bf4_opt=enable_bf4_opt,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
     assert (
@@ -716,7 +716,7 @@ def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, map
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 @pytest.mark.parametrize(
-    "mapper_type,ttnn_dtype,memory_config_type,enable_bf4_opt",
+    "mapper_type,ttnn_dtype,memory_config_type,enable_bfloat_opt",
     [
         ("replicate", ttnn.bfloat16, "DRAM", True),
         ("replicate", ttnn.bfloat16, "DRAM", False),
@@ -735,7 +735,7 @@ def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, map
     ],
 )
 def test_from_torch_mesh_mapper_preserves_memory_config(
-    mesh_device, mapper_type, ttnn_dtype, memory_config_type, enable_bf4_opt
+    mesh_device, mapper_type, ttnn_dtype, memory_config_type, enable_bfloat_opt
 ):
     """
     Verify that from_torch with mesh_mapper on a mesh device preserves the
@@ -744,7 +744,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
     Reproduces a regression where the memory_config on the output tensor
     does not match what was passed in, observed in deepseek_v3 weight
     loading with ShardTensor2dMesh + DRAM-sharded memory config +
-    enable_bf4_opt=True.
+    enable_bfloat_opt=True.
     """
     torch.manual_seed(42)
     mesh_shape = tuple(mesh_device.shape)
@@ -803,7 +803,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
         device=mesh_device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        enable_bf4_opt=enable_bf4_opt,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
     assert (
