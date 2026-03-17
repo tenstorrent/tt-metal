@@ -45,7 +45,7 @@ thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used)
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 thread_local uint32_t rta_count __attribute__((used));

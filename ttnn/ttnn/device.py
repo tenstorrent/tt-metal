@@ -10,14 +10,8 @@ import ttnn
 from loguru import logger
 
 
-def get_device_core_grid(device):
-    compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-    return ttnn.types.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
-
-
 # TODO: Device = ttnn._ttnn.Device
 Device = ttnn._ttnn.multi_device.MeshDevice
-Device.core_grid = property(get_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
 Arch = ttnn._ttnn.device.Arch
