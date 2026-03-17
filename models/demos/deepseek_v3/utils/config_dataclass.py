@@ -513,7 +513,7 @@ class SelectiveReduceCombineConfig(OpConfigBase):
     token_parallel_core_dim: int
     data_parallel_core_dim: int
     worker_cores: list[ttnn.CoreCoord]
-    mux_core_range_set: ttnn.CoreRangeset
+    mux_core_range_set: ttnn.CoreRangeSet
     axis: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Ring
     num_links: int = 4
