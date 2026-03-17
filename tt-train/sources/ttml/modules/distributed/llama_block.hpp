@@ -16,10 +16,7 @@ namespace ttml::modules::distributed {
 class DistributedLlamaMLP : public ModuleBase {
 public:
     DistributedLlamaMLP(
-        uint32_t embedding_size,
-        float dropout_prob,
-        std::optional<uint32_t> intermediate_dim = std::nullopt,
-        bool use_fused_swiglu = false);
+        uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim = std::nullopt);
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
@@ -42,8 +39,7 @@ public:
         uint32_t num_groups,
         const ops::RotaryEmbeddingParams& rope_params,
         float dropout_prob = 0.0F,
-        std::optional<uint32_t> intermediate_dim = std::nullopt,
-        bool use_fused_swiglu = false);
+        std::optional<uint32_t> intermediate_dim = std::nullopt);
 
     autograd::TensorPtr operator()(
         const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;

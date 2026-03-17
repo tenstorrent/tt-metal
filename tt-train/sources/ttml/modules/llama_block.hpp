@@ -7,7 +7,6 @@
 #include <optional>
 
 #include "autograd/tensor.hpp"
-#include "modules/dropout_module.hpp"
 #include "modules/grouped_query_attention.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
@@ -20,16 +19,10 @@ private:
     std::shared_ptr<LinearLayer> m_w1;
     std::shared_ptr<LinearLayer> m_w3;
     std::shared_ptr<LinearLayer> m_w2;
-    std::shared_ptr<DropoutLayer> m_dropout;
     float m_dropout_prob = 0.0F;
-    bool m_use_fused = false;
 
 public:
-    LlamaMLP(
-        uint32_t embedding_size,
-        std::optional<uint32_t> intermediate_dim,
-        float dropout_prob = 0.0F,
-        bool use_fused = false);
+    LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
@@ -48,8 +41,7 @@ public:
         uint32_t num_groups,
         const ops::RotaryEmbeddingParams& rope_params,
         float dropout_prob = 0.0F,
-        std::optional<uint32_t> intermediate_dim = std::nullopt,
-        bool use_fused_swiglu = false);
+        std::optional<uint32_t> intermediate_dim = std::nullopt);
 
     autograd::TensorPtr operator()(
         const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;

@@ -17,7 +17,7 @@
 namespace ttml::modules::distributed {
 
 DistributedLlamaMLP::DistributedLlamaMLP(
-    uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim, bool use_fused_swiglu) {
+    uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim) {
     const auto& pctx = autograd::ctx().get_parallelism_context();
     auto tp_axis = pctx.get_tp_axis();
     bool use_tp = pctx.is_tp_enabled();
@@ -32,7 +32,7 @@ DistributedLlamaMLP::DistributedLlamaMLP(
     }
 
     m_dropout_prob = dropout_prob;
-    m_use_fused = use_fused_swiglu && !use_tp;
+    m_use_fused = !use_tp;
 
     if (use_tp) {
         m_w1 = std::make_shared<ColumnParallelLinear>(
@@ -78,9 +78,8 @@ DistributedLlamaBlock::DistributedLlamaBlock(
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
     float dropout_prob,
-    std::optional<uint32_t> intermediate_dim,
-    bool use_fused_swiglu) {
-    m_mlp = std::make_shared<DistributedLlamaMLP>(embedding_size, dropout_prob, intermediate_dim, use_fused_swiglu);
+    std::optional<uint32_t> intermediate_dim) {
+    m_mlp = std::make_shared<DistributedLlamaMLP>(embedding_size, dropout_prob, intermediate_dim);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_attention = std::make_shared<DistributedGroupedQueryAttention>(GQAConfig{

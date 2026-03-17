@@ -18,6 +18,15 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w3,
     float dropout_prob = 0.0F);
 
+// Baseline composite SwiGLU path (matmul + silu + mul + matmul + dropout).
+// Intended for benchmark/reference comparison with fused swiglu.
+autograd::TensorPtr swiglu_composite(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& w1,
+    const autograd::TensorPtr& w2,
+    const autograd::TensorPtr& w3,
+    float dropout_prob = 0.0F);
+
 // Backward-compatible alias for in-flight branches.
 inline autograd::TensorPtr swiglu_optimized(
     const autograd::TensorPtr& tensor,

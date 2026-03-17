@@ -12,9 +12,8 @@
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
-LlamaMLP::LlamaMLP(
-    uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob, bool use_fused) :
-    m_dropout_prob(dropout_prob), m_use_fused(use_fused) {
+LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob) :
+    m_dropout_prob(dropout_prob) {
     uint32_t multiple_of = 256;
     uint32_t hidden_size = 0U;
     if (intermediate_dim) {
@@ -26,24 +25,14 @@ LlamaMLP::LlamaMLP(
     m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
     m_w3 = std::make_shared<LinearLayer>(embedding_size, hidden_size, /*has_bias=*/false);
     m_w2 = std::make_shared<LinearLayer>(hidden_size, embedding_size, /*has_bias=*/false);
-    m_dropout = std::make_shared<DropoutLayer>(dropout_prob);
-
     create_name("llama_mlp");
     register_module(m_w1, "w1");
     register_module(m_w3, "w3");
     register_module(m_w2, "w2");
-    register_module(m_dropout, "dropout");
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
-    if (m_use_fused) {
-        return ops::swiglu(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), m_dropout_prob);
-    }
-
-    auto swished = ops::silu((*m_w1)(input));
-    auto gate = (*m_w3)(input);
-    auto x = (*m_w2)(ops::mul(swished, gate));
-    return (*m_dropout)(x);
+    return ops::swiglu(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), m_dropout_prob);
 }
 
 LlamaBlock::LlamaBlock(
@@ -52,9 +41,8 @@ LlamaBlock::LlamaBlock(
     uint32_t num_groups,
     const ops::RotaryEmbeddingParams& rope_params,
     float dropout_prob,
-    std::optional<uint32_t> intermediate_dim,
-    bool use_fused_swiglu) {
-    m_mlp = std::make_shared<LlamaMLP>(embedding_size, intermediate_dim, dropout_prob, use_fused_swiglu);
+    std::optional<uint32_t> intermediate_dim) {
+    m_mlp = std::make_shared<LlamaMLP>(embedding_size, intermediate_dim, dropout_prob);
     m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_attention = std::make_shared<GroupedQueryAttention>(GQAConfig{

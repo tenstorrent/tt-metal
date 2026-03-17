@@ -12,6 +12,8 @@
 #include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/dropout_op.hpp"
+#include "ops/linear_op.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -29,6 +31,18 @@ ttnn::Tensor flatten_leading(const ttnn::Tensor& t) {
 }
 
 }  // namespace
+
+autograd::TensorPtr swiglu_composite(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& w1,
+    const autograd::TensorPtr& w2,
+    const autograd::TensorPtr& w3,
+    float dropout_prob) {
+    auto swished = ops::silu(ops::linear_op(tensor, w1, nullptr));
+    auto gate = ops::linear_op(tensor, w3, nullptr);
+    auto x = ops::linear_op(ops::mul(swished, gate), w2, nullptr);
+    return ops::dropout(x, dropout_prob);
+}
 
 autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,
