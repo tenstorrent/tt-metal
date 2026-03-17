@@ -488,7 +488,7 @@ class MorehFullConfig(OpConfigBase):
     fill_value: int
     device: ttnn.Device
     dtype: ttnn.DataType
-    layout: ttnn.layout
+    layout: ttnn.Layout
     memory_config: ttnn.MemoryConfig
 
 
