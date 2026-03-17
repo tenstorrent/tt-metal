@@ -29,6 +29,7 @@ def run_device_perf(
     op_name="",
     has_signposts=False,
     device_analysis_types=["device_kernel_duration"],
+    op_support_count=None,
 ) -> dict:
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
@@ -41,8 +42,12 @@ def run_device_perf(
         results[f"MIN {d_col}"] = float("inf")
         results[f"MAX {d_col}"] = -float("inf")
 
+    profiler_kwargs = {}
+    if op_support_count is not None:
+        profiler_kwargs["op_support_count"] = op_support_count
+
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir, device_analysis_types)
+        run_device_profiler(command, subdir, device_analysis_types, **profiler_kwargs)
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
