@@ -72,8 +72,8 @@ void kernel_main() {
     constexpr uint32_t in2_tile_size = get_tile_size(cb_s2c_in2);
 
     // Constants for MoEGPT
-    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_H;  // 90
-    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_H;        // 90
+    constexpr uint32_t num_w0_w1_tiles_h = moe_gpt_ring::NUM_W0_W1_TILES_PLUS_BIAS_H;  // 91 (90 weight + 1 bias)
+    constexpr uint32_t num_w2_tiles_h = moe_gpt_ring::NUM_W2_TILES_PLUS_BIAS_H;        // 91 (90 weight + 1 bias)
 
     const uint32_t num_w0_w1_tiles_w = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][0];  // 7 or 8
     const uint32_t num_w2_tiles_w = moe_gpt_ring::W2_TILES_PER_CORE_A[ring_core_id];                    // 7 or 8
@@ -100,7 +100,7 @@ void kernel_main() {
     constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 10 * 2 = 20
     constexpr uint32_t w2_txns_h = (num_w2_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;  // 90 / 10 = 9
     constexpr uint32_t w2_blocks_per_four_mm2_tile = 4 * w2_txns_h / w2_txns_per_block;         // 4 * 9 / 2 = 18
-    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_BLOCKS_PER_EXPERT;               // 36
+    constexpr uint32_t w2_blocks_per_expert = moe_gpt_ring::W2_B2_BLOCKS_PER_EXPERT;            // 36
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
