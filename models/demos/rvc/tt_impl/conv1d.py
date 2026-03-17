@@ -18,6 +18,58 @@ OutputLayout = Literal["NLC", "NHWC"]
 PaddingType = int | tuple[int, int] | Literal["same"]
 
 
+params_to_config_values = {
+    (1, 512, 10): (100_000, 32),
+    (512, 512, 3): (20_000, 32),
+    (768, 768, 128): (50, 32),
+    (1, 256, 96): (100_000, 32),
+    (256, 256, 3): (20_000, 32 * 24),
+    (256, 256, 7): (20_000, 32 * 24),
+    (256, 256, 11): (20_000, 32 * 16),
+    (1, 128, 16): (100_000, 32),
+    (128, 128, 3): (90_000, 32),
+    (128, 128, 7): (90_000, 32),
+    (128, 128, 11): (90_000, 32 * 16),
+    (1, 64, 8): (200_000, 32),
+    (64, 64, 3): (200_000, 32),
+    (64, 64, 7): (200_000, 32),
+    (64, 64, 11): (200_000, 32),
+    (1, 32, 4): (400_000, 32 * 4),
+    (32, 32, 3): (400_000, 32 * 24),
+    (32, 32, 7): (400_000, 32 * 16),
+    (32, 32, 11): (400_000, 32 * 8),
+    (16, 16, 3): (50_000, 32 * 0),
+    (16, 16, 7): (50_000, 32),
+    (16, 16, 11): (50_000, 32 * 0),
+    (16, 1, 7): (50_000, 32 * 0),
+}
+
+
+@dataclass(frozen=True)
+class Conv1dConfiguration:
+    in_channels: int
+    out_channels: int
+    kernel_size: int
+    stride: int = 1
+    padding: tuple[int, int] = (0, 0)  # (padding_left, padding_right)
+    dilation: int = 1
+    groups: int = 1
+    activation: Optional[ttnn.UnaryWithParam] = None
+    activation_dtype: ttnn.DataType = ttnn.bfloat16
+    weights_dtype: ttnn.DataType = ttnn.bfloat16
+    dtype: ttnn.DataType = ttnn.bfloat16
+    output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
+    # slice_strategy: Optional[SliceStrategy] = None
+    # math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
+    # fp32_dest_acc_en: bool = False
+    # packer_l1_acc: bool = False
+    # enable_act_double_buffer: bool = False
+    # enable_weights_double_buffer: bool = False
+    # deallocate_activation: bool = True
+    # reallocate_halo_output: bool = True
+    # config_tensors_in_dram: bool = True
+
+
 def input1d_to_2d(
     input_tensor: ttnn.Tensor,
 ) -> ttnn.Tensor:
@@ -76,31 +128,6 @@ def input_shape_to_memory_config(
             continue
 
     return ttnn.DRAM_MEMORY_CONFIG
-
-
-@dataclass(frozen=True)
-class Conv1dConfiguration:
-    in_channels: int
-    out_channels: int
-    kernel_size: int
-    stride: int = 1
-    padding: tuple[int, int] = (0, 0)  # (padding_left, padding_right)
-    dilation: int = 1
-    groups: int = 1
-    activation: Optional[ttnn.UnaryWithParam] = None
-    activation_dtype: ttnn.DataType = ttnn.bfloat16
-    weights_dtype: ttnn.DataType = ttnn.bfloat16
-    dtype: ttnn.DataType = ttnn.bfloat16
-    output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
-    # slice_strategy: Optional[SliceStrategy] = None
-    # math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
-    # fp32_dest_acc_en: bool = False
-    # packer_l1_acc: bool = False
-    # enable_act_double_buffer: bool = False
-    # enable_weights_double_buffer: bool = False
-    # deallocate_activation: bool = True
-    # reallocate_halo_output: bool = True
-    # config_tensors_in_dram: bool = True
 
 
 def _normalize_conv2d_activation(activation: str | tuple[str, dict] | None) -> ttnn.UnaryWithParam | None:
@@ -163,36 +190,9 @@ def output_length_from_input_length(input_length, conv1d_config: Conv1dConfigura
     ) // conv1d_config.stride + 1
 
 
-params_to_act_block_h_override = {
-    (1, 512, 10): (100_000, 32),
-    (512, 512, 3): (20_000, 32),
-    (768, 768, 128): (50, 32),
-    (1, 256, 96): (100_000, 32),
-    (256, 256, 3): (20_000, 32 * 24),
-    (256, 256, 7): (20_000, 32 * 24),
-    (256, 256, 11): (20_000, 32 * 16),
-    (1, 128, 16): (100_000, 32),
-    (128, 128, 3): (90_000, 32),
-    (128, 128, 7): (90_000, 32),
-    (128, 128, 11): (90_000, 32 * 16),
-    (1, 64, 8): (200_000, 32),
-    (64, 64, 3): (200_000, 32),
-    (64, 64, 7): (200_000, 32),
-    (64, 64, 11): (200_000, 32),
-    (1, 32, 4): (400_000, 32 * 4),
-    (32, 32, 3): (400_000, 32 * 24),
-    (32, 32, 7): (400_000, 32 * 16),
-    (32, 32, 11): (400_000, 32 * 8),
-    (16, 16, 3): (50_000, 32 * 0),
-    (16, 16, 7): (50_000, 32),
-    (16, 16, 11): (50_000, 32 * 0),
-    (16, 1, 7): (50_000, 32 * 0),
-}
-
-
 def get_conv2d_config_values(output_length, in_channels, out_channels, kernel_size) -> tuple[int, int]:
-    if (in_channels, out_channels, kernel_size) in params_to_act_block_h_override:
-        len_per_slice, act_block_h_override = params_to_act_block_h_override[(in_channels, out_channels, kernel_size)]
+    if (in_channels, out_channels, kernel_size) in params_to_config_values:
+        len_per_slice, act_block_h_override = params_to_config_values[(in_channels, out_channels, kernel_size)]
         slice_num = (output_length + len_per_slice - 1) // len_per_slice
     else:
         act_block_h_override = 0
@@ -260,7 +260,6 @@ class Conv1d:
         dtype: ttnn.DataType | None = None,
         activation: str | tuple[str, dict] | None = None,
     ) -> None:
-        # if configuration is None:
         if device is None:
             raise ValueError("device is required")
         if in_channels is None or out_channels is None or kernel_size is None:

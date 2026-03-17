@@ -33,6 +33,9 @@ def main() -> None:
         raise RuntimeError("RVC_ASSETS_DIR is not set.")
 
     pipe = Pipeline(if_f0=True, version="v1", num="48k")
+    import time
+
+    start_time = time.time()
     audio = pipe.infer(
         args.input,
         speaker_id=args.speaker_id,
@@ -43,6 +46,8 @@ def main() -> None:
         rms_mix_rate=args.rms_mix_rate,
         protect=args.protect,
     )
+    end_time = time.time()
+    print(f"Inference took {end_time - start_time:.2f} seconds.")
     sf.write(args.output, audio, pipe.tgt_sr, subtype="PCM_16")
 
 
