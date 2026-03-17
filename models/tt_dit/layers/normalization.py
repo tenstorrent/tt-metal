@@ -42,19 +42,12 @@ class RMSNorm(Module):
             self.weight = None
             self.bias = None
 
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        *,
-        compute_kernel_config=None,
-        program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
-    ) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         return ttnn.rms_norm(
             x,
             weight=self.weight.data if self.weight is not None else None,
             bias=self.bias.data if self.bias is not None else None,
             epsilon=self.norm_eps,
-            program_config=program_config,
             compute_kernel_config=compute_kernel_config,
         )
 
