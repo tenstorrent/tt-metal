@@ -112,10 +112,9 @@ def test_mochi_diffusers_pipeline():
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, vae_mesh_shape, vae_sp_axis, vae_tp_axis, num_links",
     [
-        # VAE mesh shape = (1, 8) is more memory efficient.
         [(2, 2), 0, 1, (2, 2), 0, 1, 2],
         [(1, 8), 1, 0, (1, 8), 0, 1, 1],
-        [(2, 4), 0, 1, (1, 8), 0, 1, 1],
+        [(2, 4), 0, 1, (1, 8), 0, 1, 1],  # VAE mesh shape = (1, 8) is more memory efficient.
         [(4, 8), 1, 0, (4, 8), 0, 1, 4],  # note sp <-> tp switch for VAE for memory efficiency.
     ],
     ids=[
