@@ -1311,23 +1311,6 @@ bool MeshDeviceImpl::initialize_impl(
     return true;
 }
 
-void MeshDeviceImpl::init_command_queue_host() {
-    TT_THROW("init_command_queue_host() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_command_queue_host();
-}
-void MeshDeviceImpl::init_command_queue_device() {
-    TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->init_command_queue_device();
-}
-bool MeshDeviceImpl::compile_fabric() {
-    TT_THROW("compile_fabric() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->compile_fabric();
-}
-void MeshDeviceImpl::configure_fabric() {
-    TT_THROW("configure_fabric() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->configure_fabric();
-}
-
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }
 HalProgrammableCoreType MeshDeviceImpl::get_programmable_core_type(CoreCoord virtual_core) const {
     return reference_device()->get_programmable_core_type(virtual_core);
@@ -1574,10 +1557,6 @@ bool MeshDevice::initialize(
     return pimpl_->initialize_impl(
         this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }
-void MeshDevice::init_command_queue_host() { pimpl_->init_command_queue_host(); }
-void MeshDevice::init_command_queue_device() { pimpl_->init_command_queue_device(); }
-bool MeshDevice::compile_fabric() { return pimpl_->compile_fabric(); }
-void MeshDevice::configure_fabric() { pimpl_->configure_fabric(); }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }
 void MeshDevice::clear_program_cache() { pimpl_->clear_program_cache(); }
