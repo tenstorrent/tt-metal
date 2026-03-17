@@ -706,6 +706,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
+        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().yield(this->device_id);
     };
 
     // Condition to check if the operation should continue
