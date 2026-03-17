@@ -404,7 +404,7 @@ def build_mpi_command(
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     # Check if running in SLURM interactive session
-    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None and False:
+    if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
         logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
         mpi_launcher = "mpirun"
     else:
