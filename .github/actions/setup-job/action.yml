@@ -117,14 +117,6 @@ runs:
         echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
       shell: bash
 
-    - name: Set up env vars for Blackhole DRAM init case
-      if: ${{ inputs.bh-dram-init-case != 'default' }}
-      working-directory: ${{ inputs.path }}
-      run: |
-        echo "Selecting Blackhole DRAM init case: ${{ inputs.bh-dram-init-case }}"
-        echo "TT_METAL_BH_DRAM_INIT_CASE=${{ inputs.bh-dram-init-case }}" >> $GITHUB_ENV
-      shell: bash
-
     # Kernel ccache configuration for JIT compilation at test runtime
     # This is separate from build ccache (REDIS_USER/REDIS_PASSWORD) which caches C++ compilation
     # Different Redis backends allow:
