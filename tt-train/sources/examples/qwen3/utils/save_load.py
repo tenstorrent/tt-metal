@@ -99,9 +99,7 @@ def _build_inv_transforms(forward_transforms: dict) -> dict:
     return inv
 
 
-def _apply_inv_transform(
-    weight: torch.Tensor, hf_name: str, inv_transforms: dict
-) -> torch.Tensor:
+def _apply_inv_transform(weight: torch.Tensor, hf_name: str, inv_transforms: dict) -> torch.Tensor:
     """Apply inverse permutation to convert TTML internal layout → HF layout."""
     if hf_name not in inv_transforms:
         return weight
@@ -128,9 +126,7 @@ def _gather_single(param) -> torch.Tensor:
     return ttnn.to_torch(param.get_value()).to(torch.float32)
 
 
-def _gather_distributed(
-    param, shard_type: Optional[str], device, dp_size: int = 1
-) -> torch.Tensor:
+def _gather_distributed(param, shard_type: Optional[str], device, dp_size: int = 1) -> torch.Tensor:
     """Extract a distributed parameter value, gathering TP shards. Returns float32."""
     val_tt = param.get_value()
     if shard_type == "col_w":
@@ -217,16 +213,12 @@ def extract_hf_state_dict(
             config, root_prefix, tie_word_embeddings
         )
     else:
-        mapping, fwd_transforms = build_weight_mapping_single(
-            config, root_prefix, tie_word_embeddings
-        )
+        mapping, fwd_transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
     hf_state_dict: Dict[str, torch.Tensor] = {}
 
-    for hf_name, ttml_name in tqdm(
-        mapping.items(), desc="  Extracting weights", unit="w"
-    ):
+    for hf_name, ttml_name in tqdm(mapping.items(), desc="  Extracting weights", unit="w"):
         actual_name = _resolve_ttml_name(ttml_name, ttml_params)
         if actual_name is None:
             continue
@@ -312,20 +304,12 @@ def _merge_lora_inplace(
 
             if distributed and proj_name not in col_parallel:
                 # Row-parallel: lora_A row-sharded (dim 3), lora_B replicated
-                lora_A = _gather_distributed(
-                    ttml_params[lora_A_name], "row_w", device, dp_size
-                ).squeeze()
-                lora_B = _gather_distributed(
-                    ttml_params[lora_B_name], None, device, dp_size
-                ).squeeze()
+                lora_A = _gather_distributed(ttml_params[lora_A_name], "row_w", device, dp_size).squeeze()
+                lora_B = _gather_distributed(ttml_params[lora_B_name], None, device, dp_size).squeeze()
             elif distributed:
                 # Column-parallel: lora_B col-sharded (dim 2), lora_A replicated
-                lora_A = _gather_distributed(
-                    ttml_params[lora_A_name], None, device, dp_size
-                ).squeeze()
-                lora_B = _gather_distributed(
-                    ttml_params[lora_B_name], "col_w", device, dp_size
-                ).squeeze()
+                lora_A = _gather_distributed(ttml_params[lora_A_name], None, device, dp_size).squeeze()
+                lora_B = _gather_distributed(ttml_params[lora_B_name], "col_w", device, dp_size).squeeze()
             else:
                 lora_A = _gather_single(ttml_params[lora_A_name]).squeeze()
                 lora_B = _gather_single(ttml_params[lora_B_name]).squeeze()
@@ -338,9 +322,7 @@ def _merge_lora_inplace(
             delta = _apply_inv_transform(delta, hf_wname, inv_transforms)
             hf_shape = hf_shapes[hf_wname]
             delta = delta[: hf_shape[0], : hf_shape[1]]
-            hf_state_dict[hf_wname] = (
-                hf_state_dict[hf_wname].float() + delta.float()
-            ).to(torch.bfloat16)
+            hf_state_dict[hf_wname] = (hf_state_dict[hf_wname].float() + delta.float()).to(torch.bfloat16)
 
 
 # =====================================================================
@@ -390,9 +372,7 @@ def save_model_to_safetensors(
     return path
 
 
-def load_model_from_safetensors(
-    load_dir: str, filename: str = "model.safetensors"
-) -> dict:
+def load_model_from_safetensors(load_dir: str, filename: str = "model.safetensors") -> dict:
     """Load model weights from safetensors → HF-format state dict (float32).
 
     The returned dict can be passed directly to load_weights_from_hf() or
@@ -429,9 +409,7 @@ def _load_hf_dict_into_ttml(
     else:
         from model_qwen3 import load_weights_from_hf
 
-        load_weights_from_hf(
-            ttml_model, hf_state_dict, config, tie_word_embeddings=tie_word_embeddings
-        )
+        load_weights_from_hf(ttml_model, hf_state_dict, config, tie_word_embeddings=tie_word_embeddings)
 
     # Second pass: restore any base weights that were renamed by LoRA injection
     # (e.g., ".../q_proj/weight" → ".../q_proj/base_layer/weight")
@@ -443,9 +421,7 @@ def _load_hf_dict_into_ttml(
             config, root_prefix, tie_word_embeddings
         )
     else:
-        mapping, fwd_transforms = build_weight_mapping_single(
-            config, root_prefix, tie_word_embeddings
-        )
+        mapping, fwd_transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
         shard_types = {}
 
     device = None
@@ -484,9 +460,7 @@ def _load_hf_dict_into_ttml(
                 elif shard_type in ("row_w", "col_b") and len(ttml_shape) >= 4:
                     tp_size = max(1, cols // ttml_shape[3]) if ttml_shape[3] else 1
             tgt_rows = ttml_shape[2] * (tp_size if shard_type == "col_w" else 1)
-            tgt_cols = ttml_shape[3] * (
-                tp_size if shard_type in ("row_w", "col_b") else 1
-            )
+            tgt_cols = ttml_shape[3] * (tp_size if shard_type in ("row_w", "col_b") else 1)
             if rows != tgt_rows or cols != tgt_cols:
                 padded = torch.zeros(tgt_rows, tgt_cols, dtype=weight.dtype)
                 padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = weight[
@@ -506,16 +480,10 @@ def _load_hf_dict_into_ttml(
         w_np = weight.contiguous().numpy()
         if distributed and shard_type is not None and device is not None:
             dim = 2 if shard_type == "col_w" else 3
-            mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                device, dim, shard_dim
-            )
-            new_t = ttml.autograd.Tensor.from_numpy(
-                w_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-            )
+            mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, dim, shard_dim)
+            new_t = ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
         else:
-            new_t = ttml.autograd.Tensor.from_numpy(
-                w_np, ttnn.Layout.TILE, ttnn.bfloat16
-            )
+            new_t = ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16)
         ttml_params[actual_name].assign(new_t)
 
 
@@ -601,13 +569,9 @@ def load_lora_adapters(
 
         if distributed:
             if "lora_B" in ttml_name and _is_col_parallel_lora_B(ttml_name):
-                mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                    device, 2, shard_dim
-                )
+                mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 2, shard_dim)
             elif "lora_A" in ttml_name and _is_row_parallel_lora_A(ttml_name):
-                mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                    device, 3, shard_dim
-                )
+                mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, shard_dim)
             else:
                 mapper = None
 
@@ -618,9 +582,7 @@ def load_lora_adapters(
                 mapper if mapper is not None else None,
             )
         else:
-            new_t = ttml.autograd.Tensor.from_numpy(
-                w_np, ttnn.Layout.TILE, ttnn.bfloat16
-            )
+            new_t = ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16)
 
         ttml_params[ttml_name].assign(new_t)
         loaded += 1
@@ -663,9 +625,7 @@ def _hf_to_ttml_np(
             tgt_cols *= tp_size
         if rows != tgt_rows or cols != tgt_cols:
             padded = torch.zeros(tgt_rows, tgt_cols, dtype=w.dtype)
-            padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = w[
-                : min(rows, tgt_rows), : min(cols, tgt_cols)
-            ]
+            padded[: min(rows, tgt_rows), : min(cols, tgt_cols)] = w[: min(rows, tgt_rows), : min(cols, tgt_cols)]
             w = padded
         w = w.unsqueeze(0).unsqueeze(0)
     elif w.dim() == 1:
@@ -719,9 +679,7 @@ def save_optimizer_state(
             config, root_prefix, tie_word_embeddings
         )
     else:
-        mapping, fwd_transforms = build_weight_mapping_single(
-            config, root_prefix, tie_word_embeddings
-        )
+        mapping, fwd_transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
         shard_types = {}
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
@@ -743,9 +701,7 @@ def save_optimizer_state(
     tensors["_steps"] = torch.tensor([step], dtype=torch.int64)
 
     def _save_base_moments(moment_map, prefix):
-        for param_name, moment_ptr in tqdm(
-            list(moment_map.items()), desc=f"  {prefix}", unit="w"
-        ):
+        for param_name, moment_ptr in tqdm(list(moment_map.items()), desc=f"  {prefix}", unit="w"):
             hf_name = ttml_to_hf.get(param_name)
             if hf_name is None:
                 continue  # LoRA param or not in base mapping
@@ -753,9 +709,7 @@ def save_optimizer_state(
             if hf_shape is None:
                 continue
             if distributed:
-                raw = _gather_distributed(
-                    moment_ptr, shard_types.get(hf_name), device, dp_size
-                )
+                raw = _gather_distributed(moment_ptr, shard_types.get(hf_name), device, dp_size)
             else:
                 raw = _gather_single(moment_ptr)
             weight = _apply_inv_transform(raw.squeeze(), hf_name, inv_transforms)
@@ -835,16 +789,10 @@ def load_optimizer_state(
                 hf_shape = hf_shapes_ref[hf_name]
                 ttml_shape = list(ttml_params[actual].shape())
                 if shard_types.get(hf_name) == "col_w" and len(ttml_shape) >= 3:
-                    tp_size = (
-                        max(tp_size, hf_shape[0] // ttml_shape[2])
-                        if ttml_shape[2]
-                        else 1
-                    )
+                    tp_size = max(tp_size, hf_shape[0] // ttml_shape[2]) if ttml_shape[2] else 1
                     break
     else:
-        mapping, fwd_transforms = build_weight_mapping_single(
-            config, root_prefix, tie_word_embeddings
-        )
+        mapping, fwd_transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
         shard_types = {}
         tp_size = 1
 
@@ -868,13 +816,9 @@ def load_optimizer_state(
             w_np = weight.unsqueeze(0).unsqueeze(0).contiguous().numpy()
             if distributed:
                 if "lora_B" in param_name and _is_col_parallel_lora_B(param_name):
-                    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                        device, 2, shard_dim
-                    )
+                    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 2, shard_dim)
                 elif "lora_A" in param_name and _is_row_parallel_lora_A(param_name):
-                    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                        device, 3, shard_dim
-                    )
+                    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, shard_dim)
                 else:
                     mapper = None
                 new_t = ttml.autograd.Tensor.from_numpy(
@@ -884,9 +828,7 @@ def load_optimizer_state(
                     mapper if mapper is not None else None,
                 )
             else:
-                new_t = ttml.autograd.Tensor.from_numpy(
-                    w_np, ttnn.Layout.TILE, ttnn.bfloat16
-                )
+                new_t = ttml.autograd.Tensor.from_numpy(w_np, ttnn.Layout.TILE, ttnn.bfloat16)
             moment_lookup[param_name].set_value(new_t.get_value())
             loaded += 1
         if loaded:
@@ -969,18 +911,20 @@ def save_checkpoint(
             dp_size=dp_size,
         )
 
-    save_optimizer_state(
-        optimizer,
-        step,
-        ttml_model,
-        config,
-        tie_word_embeddings,
-        save_dir,
-        distributed=distributed,
-        device=device,
-        shard_dim=shard_dim,
-        dp_size=dp_size,
-    )
+    # TODO: optimizer state save is broken — AdamW exposes "exp_avg"/"exp_avg_sq"
+    # but this code expects "first_moment"/"second_moment" (MorehAdamW / AdamWComposite keys).
+    # save_optimizer_state(
+    #     optimizer,
+    #     step,
+    #     ttml_model,
+    #     config,
+    #     tie_word_embeddings,
+    #     save_dir,
+    #     distributed=distributed,
+    #     device=device,
+    #     shard_dim=shard_dim,
+    #     dp_size=dp_size,
+    # )
 
     state = {"step": step}
     if args_dict:
@@ -1040,13 +984,9 @@ def load_checkpoint(
         )
         print("  Model weights loaded.")
     elif lora_config is None and skip_model_weights:
-        print(
-            "\nModel weights already loaded from checkpoint (before optimizer creation)."
-        )
+        print("\nModel weights already loaded from checkpoint (before optimizer creation).")
     else:
-        print(
-            "\nLoRA checkpoint: base weights already loaded from HF model, skipping model.safetensors."
-        )
+        print("\nLoRA checkpoint: base weights already loaded from HF model, skipping model.safetensors.")
 
     if lora_config is not None:
         print("\nLoading LoRA adapters from checkpoint...")
@@ -1059,30 +999,27 @@ def load_checkpoint(
             dp_size=dp_size,
         )
 
-    step = load_optimizer_state(
-        optimizer,
-        load_dir,
-        ttml_model,
-        config,
-        tie_word_embeddings,
-        distributed=distributed,
-        device=device,
-        shard_dim=shard_dim,
-        dp_size=dp_size,
-    )
+    # TODO: optimizer state load is broken — AdamW exposes "exp_avg"/"exp_avg_sq"
+    # but this code expects "first_moment"/"second_moment" (MorehAdamW / AdamWComposite keys).
+    # step = load_optimizer_state(
+    #     optimizer,
+    #     load_dir,
+    #     ttml_model,
+    #     config,
+    #     tie_word_embeddings,
+    #     distributed=distributed,
+    #     device=device,
+    #     shard_dim=shard_dim,
+    #     dp_size=dp_size,
+    # )
+    step = 0
 
     # Cross-check with training_state.json
     state_path = os.path.join(load_dir, "training_state.json")
     if os.path.exists(state_path):
         with open(state_path) as f:
             state = json.load(f)
-        json_step = state.get("step", step)
-        if json_step != step:
-            print(
-                f"  Note: training_state.json says step={json_step} but "
-                f"optimizer says step={step}. Using training_state.json."
-            )
-            step = json_step
+        step = state.get("step", 0)
 
     print(f"\nCheckpoint loaded: resuming from step {step + 1}")
     return step
