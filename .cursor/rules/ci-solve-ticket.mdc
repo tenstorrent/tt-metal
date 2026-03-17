@@ -37,6 +37,18 @@ After creating the draft PR, stop and ask the user exactly:
 
 When runs are triggered, immediately update the PR description to include links to the newly executing runs.
 
+## Required Safety Gate (Local Hardware Test Runs)
+
+If required hardware is locally available, you must not run local hardware tests automatically.
+
+After creating the draft PR, stop and ask the user exactly:
+
+`do you want me to run the local hardware tests to validate my changes now?`
+
+- If the user says yes, run only targeted local hardware tests relevant to the failing ticket.
+- If the user says no or does not clearly approve, do not run local hardware tests.
+- If hardware is not locally available, state that constraint and continue with CI/log-driven validation.
+
 ## Workflow Run Selection Policy
 
 To avoid wasting CI capacity, default to **targeted** workflow execution:
@@ -66,9 +78,10 @@ Broad/full workflows (for example `(T3K) T3000 e2e tests`) are exceptions and sh
    - notes whether auto-triage was used and whether its hypotheses were confirmed or rejected,
    - states local validation done and hardware limitations (if any),
    - includes a concrete CI test plan.
-9. Ask the explicit workflow permission question from the safety gate.
-10. If approved, trigger workflows using the run selection policy above and patch PR body with run URLs.
-11. Report status and next expected checkpoint.
+9. If required hardware is locally available, ask the explicit local hardware-test permission question from the safety gate and run only targeted local tests if approved.
+10. Ask the explicit workflow permission question from the safety gate.
+11. If approved, trigger workflows using the run selection policy above and patch PR body with run URLs.
+12. Report status and next expected checkpoint.
 
 ## Hardware-Constrained Behavior
 

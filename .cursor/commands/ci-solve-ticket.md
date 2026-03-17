@@ -1,7 +1,7 @@
 # Solve CI Ticket
 
 ## Overview
-Take one CI issue ticket in `tenstorrent/tt-metal`, attempt a fix on a new branch from `main`, push a commit, and open a **draft PR** linked to the ticket. Stop for explicit user approval before running any workflows.
+Take one CI issue ticket in `tenstorrent/tt-metal`, attempt a fix on a new branch from `main`, push a commit, and open a **draft PR** linked to the ticket. Stop for explicit user approval before running local hardware tests or CI workflows.
 
 ## Input
 - **Required:** one issue URL or issue number (example: `https://github.com/tenstorrent/tt-metal/issues/40111` or `40111`).
@@ -40,19 +40,24 @@ If no input is provided, stop and ask for the ticket.
    - Link ticket in title/body (`Refs #<issue>` or `Closes #<issue>`).
    - Include: root-cause hypothesis, change summary, validation done, limitations, CI plan, and (if applicable) whether auto-triage hints were confirmed.
 
-7. **Mandatory safety gate before workflow runs**
+7. **Mandatory safety gate before local hardware test runs**
+   - If required hardware is locally available, stop execution and ask the user exactly:
+     - `do you want me to run the local hardware tests to validate my changes now?`
+   - Do not run local hardware tests unless the user explicitly approves.
+
+8. **Mandatory safety gate before workflow runs**
    - Stop execution and ask the user exactly:
      - `do you want me to kick off the workflow runs to test my changes now?`
    - Do not run any workflow unless user explicitly approves.
 
-8. **If user approves workflow runs**
+9. **If user approves workflow runs**
    - **Default to targeted validation via `Custom test dispatch`** (`test-dispatch.yaml`) and run only the failing test/command under investigation.
    - Use the smallest runner label set that matches required hardware (for T3K, use the appropriate T3000 label such as `config-t3000`).
    - Only run broad workflows (for example `(T3K) T3000 e2e tests`) if the user explicitly requests full-pipeline coverage.
    - Gather run URLs.
    - Update PR description to include links to currently executing runs.
 
-9. **If fix is not credible solo, hand off**
+10. **If fix is not credible solo, hand off**
    - Explicitly explain why the agent is giving up.
    - Recommend owners using `.github/CODEOWNERS`, file history, and workflow ownership context.
    - Provide an actionable handoff summary.
