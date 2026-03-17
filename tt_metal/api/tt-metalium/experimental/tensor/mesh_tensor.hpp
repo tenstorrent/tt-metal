@@ -19,9 +19,6 @@
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
-// This will be brought in at #37692
-class DeviceStorage;
-
 // Implementation details for MeshTensor
 class MeshTensorImpl;
 
@@ -63,10 +60,15 @@ public:
      */
     MeshTensor() = default;
 
-    // TODO(#38376), TODO(#38689):
-    // This should be a private constructor, external user should not be able to construct a MeshTensor
-    // directly. As this will lead to leaks of the MeshBuffer unique ownership.
-    explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    // Internal Constructor for transition.
+    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
+
+    /**
+     * Move constructor with new spec and topology.
+     * Moves the buffer from other and uses the provided spec/topology.
+     * This is meant for transition as TTNN-Tensor current has a two-step construction for HostTensor.
+     */
+    MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology);
 
     /**
      * Release ownership of the underlying device memory.
@@ -104,13 +106,6 @@ public:
     // Deallocation related:
 
     /**
-     * Check if the device tensor owns any device memory.
-     *
-     * pre-condition: The device tensor must not be in a default constructed state.
-     */
-    bool is_allocated() const;
-
-    /**
      * Return the underlying device storage MeshBuffer.
      *
      * pre-condition: The device tensor must not be in a default constructed state.
@@ -145,10 +140,6 @@ public:
      * pre-condition: The device tensor must not be in a default constructed state.
      */
     const TensorTopology& tensor_topology() const;
-
-    // DeviceStorage is meant to bridge ttnn::Tensor and MeshTensor,
-    // this should go away as part of refactoring, see: #38376
-    const DeviceStorage& get_legacy_device_storage() const;
 
     // Derivables:
 

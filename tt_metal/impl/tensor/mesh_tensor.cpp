@@ -6,28 +6,28 @@
 
 namespace tt::tt_metal {
 
-/*
+class MeshTensorImpl {
+public:
+    MeshTensorImpl(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
+        mesh_buffer_(std::move(mesh_buffer)), spec_(std::move(spec)), topology_(std::move(topology)) {}
 
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// MeshTensor::MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology)
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer() const& { return mesh_buffer_; }
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const&& { return mesh_buffer_; }
+    const TensorSpec& spec() const { return spec_; }
+    const TensorTopology& topology() const { return topology_; }
 
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// bool MeshTensor::is_allocated() const
+private:
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
+    TensorSpec spec_;
+    TensorTopology topology_;
+};
 
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const
+MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
+    impl(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
 
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// const TensorSpec& MeshTensor::tensor_spec() const
-
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// const TensorTopology& MeshTensor::tensor_topology() const
-
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// const DeviceStorage& MeshTensor::get_legacy_device_storage() const
-
-// TODO: Implement once DeviceStorage is migrated (#37692)
-// void MeshTensor::update_tensor_topology(TensorTopology tensor_topology)
+MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology) :
+    impl(std::make_unique<MeshTensorImpl>(std::move(other.impl)->mesh_buffer(), std::move(spec), std::move(topology))) {
+}
 
 distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
@@ -70,7 +70,5 @@ std::size_t MeshTensor::element_size() const {
 }
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
-
-*/
 
 }  // namespace tt::tt_metal
