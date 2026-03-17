@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
 #include "api/debug/dprint_pages.h"
@@ -67,6 +68,8 @@ void kernel_main() {
     constexpr uint32_t num_tokens_total = get_named_compile_time_arg_val("num_tokens_total");
     constexpr uint32_t height_shard_dim = get_named_compile_time_arg_val("height_shard_dim");
     constexpr uint32_t width_shard_dim = get_named_compile_time_arg_val("width_shard_dim");
+    constexpr uint32_t matmul_combine_sync_semaphore_id =
+        get_named_compile_time_arg_val("matmul_combine_sync_semaphore_id");
 
     std::array<uint32_t, 2 * height_shard_dim * width_shard_dim> output_shard_core_map = OUTPUT_SHARD_CORE_MAP;
 
@@ -121,6 +124,7 @@ void kernel_main() {
     const uint32_t width_tile_base = moe_ring::COMBINE_W_OFFSET_PER_CORE_B[ring_core_id];
     constexpr uint32_t RING_CORES_PER_COMBINE_COL = moe_ring::NUM_CORES / width_shard_dim;  // 12/4 = 3
     const uint32_t combine_core_x = ring_core_id / RING_CORES_PER_COMBINE_COL;
+    const auto combine_semaphore_addr = get_semaphore(matmul_combine_sync_semaphore_id);
 
     //-------------------------------------------------------------------------
     // Ring setup
@@ -198,6 +202,19 @@ void kernel_main() {
     // Tilize core we signal to that tilize cores can send another chunk of tiles
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
+
+    // Signal to combine cores that chunk is available
+    auto combine_semaphore_inc = [&](const uint32_t inc = 1) {
+        for (uint32_t y = 0; y < height_shard_dim; ++y) {
+            const uint32_t idx = combine_core_x + y * width_shard_dim;
+            const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
+                output_shard_core_map[2 * idx],
+                output_shard_core_map[2 * idx + 1],
+                combine_semaphore_addr,
+                /*noc_id=*/1);
+            noc_semaphore_inc(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
+        };
+    };
 
     //-------------------------------------------------------------------------
     // Expert loop
@@ -326,13 +343,12 @@ void kernel_main() {
             noc_semaphore_inc</*posted=*/true>(
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
+        combine_semaphore_inc();
     }
 
-    for (uint32_t y = 0; y < height_shard_dim; ++y) {
-        uint32_t idx = combine_core_x + y * width_shard_dim;
-        uint64_t dest_sem_noc_addr =
-            get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], semaphore_addr);
-        noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
-    }
+    // for (uint32_t expert_id = 0; expert_id< num_experts; ++expert_id){
+    //         combine_semaphore_inc(NUM_CHUNKS_PER_EXPERT[expert_id]);
+    //     }
+
     noc_async_atomic_barrier(/*noc_idx=*/1);
 }
