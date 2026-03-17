@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <optional>
 #include <cstdint>
 #include <string>
@@ -31,9 +32,9 @@ class ContextDescriptor : public MetalEnvDescriptor {
 public:
     ContextDescriptor(
         int num_cqs = 1,
-        int l1_small_size = 0,
-        int trace_region_size = 0,
-        int worker_l1_size = 0,
+        size_t l1_small_size = 0,
+        size_t trace_region_size = 0,
+        size_t worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         const std::string& mock_cluster_desc_path = "",
@@ -71,9 +72,9 @@ public:
         tt::tt_fabric::FabricManagerMode fabric_manager,
         tt::tt_fabric::FabricRouterConfig router_config = tt::tt_fabric::FabricRouterConfig{},
         int num_cqs = 1,
-        int l1_small_size = 0,
-        int trace_region_size = 0,
-        int worker_l1_size = 0,
+        size_t l1_small_size = 0,
+        size_t trace_region_size = 0,
+        size_t worker_l1_size = 0,
         const tt::tt_metal::DispatchCoreConfig& dispatch_core_config = {},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         const std::string& mock_cluster_desc_path = "") :
@@ -103,9 +104,9 @@ public:
     const llrt::RunTimeOptions& rtoptions() const { return *rtoptions_; }
 
     int num_cqs() const { return num_cqs_; }
-    int l1_small_size() const { return l1_small_size_; }
-    int trace_region_size() const { return trace_region_size_; }
-    int worker_l1_size() const { return worker_l1_size_; }
+    size_t l1_small_size() const { return l1_small_size_; }
+    size_t trace_region_size() const { return trace_region_size_; }
+    size_t worker_l1_size() const { return worker_l1_size_; }
     const DispatchCoreConfig& dispatch_core_config() const { return dispatch_core_config_; }
     const tt::stl::Span<const std::uint32_t>& l1_bank_remap() const { return l1_bank_remap_; }
 
@@ -124,9 +125,9 @@ public:
 
     // Dispatch
     int num_cqs_ = 1;
-    int l1_small_size_ = 0;
-    int trace_region_size_ = 0;
-    int worker_l1_size_ = 0;
+    size_t l1_small_size_ = 0;
+    size_t trace_region_size_ = 0;
+    size_t worker_l1_size_ = 0;
     DispatchCoreConfig dispatch_core_config_;
     tt::stl::Span<const std::uint32_t> l1_bank_remap_;
 
