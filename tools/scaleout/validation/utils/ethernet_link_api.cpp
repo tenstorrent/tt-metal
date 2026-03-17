@@ -47,6 +47,20 @@ void reset_links_wh(const std::vector<ResetLink>& links_to_reset) {
         do {
             cluster.read_core(reset_status, sizeof(uint32_t), tt_cxy_pair(link.chip_id, coord), eth_retrain_addr);
         } while (reset_status[0]);
+
+        // DEBUG: Read ETH_TRAIN_STATUS_ADDR (0x1104) immediately after RETRAIN_FORCE clears to check
+        // whether the FW has updated the training status. Expected: 1 (SUCCESS). If 0 (IN_PROGRESS),
+        // the FW either hasn't finished writing yet or doesn't update this register during forced retrains.
+        constexpr tt::tt_metal::DeviceAddr ETH_TRAIN_STATUS_ADDR = 0x1104;
+        std::vector<uint32_t> train_status = {0};
+        cluster.read_core(train_status, sizeof(uint32_t), tt_cxy_pair(link.chip_id, coord), ETH_TRAIN_STATUS_ADDR);
+        log_warning(
+            tt::LogDistributed,
+            "[DEBUG reset_links_wh] chip_id={} chan={} ETH_TRAIN_STATUS (0x1104)={} after RETRAIN_FORCE cleared "
+            "(0=IN_PROGRESS, 1=SUCCESS, 2=FAIL)",
+            link.chip_id,
+            link.channel,
+            train_status[0]);
     }
 }
 
