@@ -91,9 +91,55 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
+}
 
-    // Initializing again should throw
+TEST(DispatchContext, DoubleInitWithoutTerminateShouldThrow) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    // Initialize fast dispatch
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+
+    // Double init without terminate should throw
     EXPECT_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get()), std::runtime_error);
+
+    // Clean up
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+}
+
+TEST(DispatchContext, ReInitAfterTerminateShouldSucceed) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP()
+            << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
+    }
+
+    // First init/terminate cycle
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+
+    // Re-init after terminate should succeed (not throw)
+    EXPECT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get()));
+
+    // Clean up
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
 }
 
 // After SD -> enable FD -> disable FD, verify NOC/L1 bank tables by using an L1 buffer across the mesh.

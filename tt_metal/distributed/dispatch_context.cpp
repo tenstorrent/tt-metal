@@ -122,6 +122,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
     MetalContext::instance().set_fast_dispatch_mode(false);
+    num_fd_inits_--;
 }
 
 void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {
