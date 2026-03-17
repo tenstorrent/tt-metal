@@ -197,11 +197,14 @@ def run_test_forward_pass_decoder2d(
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
 
 
-ROW_BATCHED_PREFILL_SEQ_LEN = max(1, DEFAULT_PREFILL_SEQ_LEN // USERS_PER_ROW)
+_SCALED_ROW_BATCHED_PREFILL_SEQ_LEN = max(1, DEFAULT_PREFILL_SEQ_LEN // USERS_PER_ROW)
+ROW_BATCHED_PREFILL_SEQ_LEN = (
+    (_SCALED_ROW_BATCHED_PREFILL_SEQ_LEN + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+) * ttnn.TILE_SIZE
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     USERS_PER_ROW,
-    ROW_BATCHED_PREFILL_SEQ_LEN,  # keep total prefill token budget aligned with historical single-row coverage
+    ROW_BATCHED_PREFILL_SEQ_LEN,  # keep total prefill token budget scaled while respecting tile-aligned prefill kernels
     include_decode_random_pos_ids=True,  # include decode random position_ids case
 )
 
