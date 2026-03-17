@@ -36,14 +36,10 @@ protected:
 };
 
 // ============================================================================
-// Section 1: SwiGLU Forward Pass Test
+// Section 1: Shared reference helpers
 // ============================================================================
-// This test validates the SwiGLU forward pass implementation
-//
-// Test methodology:
-// 1. Create test tensors x, w1, w2, w3
-// 2. Compute SwiGLU forward pass
-// 3. Verify the result is finite and has expected shape
+// Contains xtensor reference implementations and reusable comparison helpers
+// for SwiGLU forward and backward validation.
 // ============================================================================
 
 namespace {
@@ -332,7 +328,7 @@ void CompareSwiGLUBackwardAgainstReference(const std::vector<uint32_t>& input_sh
 }  // namespace
 
 // ============================================================================
-// Section 2: SwiGLUForward tests
+// Section 2: Forward suite (SwiGLUForwardTest)
 // ============================================================================
 
 TEST_F(SwiGLUForwardTest, Basic_1x1x32x32) {
@@ -452,6 +448,9 @@ TEST_F(SwiGLUForwardTest, ShapeMismatch_W2WrongDimensions) {
     testing::internal::GetCapturedStdout();
 }
 
+// ============================================================================
+// Section 3: Backward suite (SwiGLUBackwardTest)
+// ============================================================================
 // Full backward equivalence against xtensor reference.
 TEST_F(SwiGLUBackwardTest, BackwardAccuracy_1x1x32x32) {
     CompareSwiGLUBackwardAgainstReference({1, 1, 32, 32}, 32);
@@ -479,13 +478,16 @@ TEST_F(SwiGLUBackwardTest, NIGHTLY_BackwardAccuracy_32x1x256x384) {
 }
 
 // ============================================================================
-// Section 3: extra elementwise-BW-focused shape coverage
+// Section 4: Backward nightly-only stress coverage
+// ============================================================================
+// Extra non-aligned and very large backward cases kept under NIGHTLY to avoid
+// inflating default test runtime.
 // ============================================================================
 
-TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAligned_1x1x32x48) {
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_1x1x32x48) {
     CompareSwiGLUBackwardAgainstReference({1, 1, 32, 48}, 48);
 }
-TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAligned_2x1x32x96) {
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_2x1x32x96) {
     CompareSwiGLUBackwardAgainstReference({2, 1, 32, 96}, 96);
 }
 TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAligned_1x1x64x160) {
