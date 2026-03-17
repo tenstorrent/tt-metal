@@ -127,16 +127,6 @@ jobs:
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-      - name: Download Qwen2.5-VL-72B model weights from LFC  
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'qwen2.5-vl-72b') }}  
-        timeout-minutes: 15  
-        run: |  
-          set -e  
-          mkdir -p /localdev/blackhole_demos/huggingface_data/Qwen  
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga \  
-            -R "index.html*" \  
-            -P /localdev/blackhole_demos/huggingface_data/Qwen \  
-            http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/Qwen/Qwen2.5-VL-72B-Instruct/
       - name: Download Flux.1-dev model weights from LFC
         if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
         timeout-minutes: 15
