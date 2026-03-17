@@ -128,6 +128,8 @@ class WhisperGenerator:
 
         # Decode trace (enlarged: embedding -> decoder -> lm_head -> argmax, persistent across generations)
         self.trace_id_decode = defaultdict(lambda: None)
+        # Track whether decode kernels have been compiled (JIT warmup done) per batch size
+        self._decode_kernels_compiled = defaultdict(bool)
 
         # 2CQ event tracking (initialized during trace capture)
         self.op_event = None
@@ -478,19 +480,22 @@ class WhisperGenerator:
             self._reset_decode_pos(decode_pos, batch_size)
             ttnn.synchronize_device(self.mesh_device)
 
-        # === Phase 1: JIT run ===
-        traced_autoregressive_step()
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info("On-device sampling trace Phase 1 (JIT) complete")
-        _reset_state()
+        # Phases 1 & 2 compile and warm up kernels — only needed on first capture
+        if not self._decode_kernels_compiled[trace_key]:
+            traced_autoregressive_step()
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("On-device sampling trace Phase 1 (JIT) complete")
+            _reset_state()
 
-        # === Phase 2: Optimized run ===
-        traced_autoregressive_step()
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info("On-device sampling trace Phase 2 (optimized) complete")
-        _reset_state()
+            traced_autoregressive_step()
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("On-device sampling trace Phase 2 (optimized) complete")
+            _reset_state()
 
-        # === Phase 3: Trace capture ===
+            self._decode_kernels_compiled[trace_key] = True
+        else:
+            logger.info("Skipping JIT/optimized warmup phases (kernels already compiled)")
+
         self.trace_id_decode[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         traced_autoregressive_step()
         ttnn.end_trace_capture(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0)
@@ -575,7 +580,8 @@ class WhisperGenerator:
         # Invalidate cross-attention cache for new generation
         self._invalidate_cross_attn_cache()
 
-        # Release persistent decode trace
+        # Release decode trace
+        # The trace is recaptured at the start of each generation's decode loop
         for trace_key in list(self.trace_id_decode.keys()):
             if self.trace_id_decode[trace_key] is not None:
                 ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
