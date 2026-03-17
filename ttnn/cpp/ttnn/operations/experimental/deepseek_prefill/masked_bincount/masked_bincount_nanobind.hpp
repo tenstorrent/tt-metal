@@ -6,10 +6,10 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::masked_bincount::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail {
 
 namespace nb = nanobind;
 
 void bind_experimental_masked_bincount_operation(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::masked_bincount::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail

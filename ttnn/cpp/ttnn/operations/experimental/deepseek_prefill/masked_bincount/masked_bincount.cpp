@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/masked_bincount_device_operation.hpp"
-#include "ttnn/operations/experimental/masked_bincount/masked_bincount.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 

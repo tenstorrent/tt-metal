@@ -7,9 +7,9 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/masked_bincount/masked_bincount.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount.hpp"
 
-namespace ttnn::operations::experimental::masked_bincount::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail {
 void bind_experimental_masked_bincount_operation(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -48,4 +48,4 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
             nb::arg("n_routed_experts")});
 }
 
-}  // namespace ttnn::operations::experimental::masked_bincount::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail

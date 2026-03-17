@@ -144,7 +144,8 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     // --- Create BRISC kernel (RISCV_0, NOC 0) ---
     tt::tt_metal::KernelHandle kernel_id_brisc = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/masked_bincount/device/kernels/reader_masked_bincount.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/device/kernels/"
+        "reader_masked_bincount.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -154,7 +155,8 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     // --- Create NCRISC kernel (RISCV_1, NOC 1) ---
     tt::tt_metal::KernelHandle kernel_id_ncrisc = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/masked_bincount/device/kernels/reader_masked_bincount.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/device/kernels/"
+        "reader_masked_bincount.cpp",
         all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
