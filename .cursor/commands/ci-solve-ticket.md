@@ -51,11 +51,15 @@ If no input is provided, stop and ask for the ticket.
    - Do not run any workflow unless user explicitly approves.
 
 9. **If user approves workflow runs**
-   - **Default to targeted validation via `Custom test dispatch`** (`test-dispatch.yaml`) and run only the failing test/command under investigation.
-   - Use the smallest runner label set that matches required hardware (for T3K, use the appropriate T3000 label such as `config-t3000`).
-   - Only run broad workflows (for example `(T3K) T3000 e2e tests`) if the user explicitly requests full-pipeline coverage.
-   - Gather run URLs.
-   - Update PR description to include links to currently executing runs.
+   - **Do not use `Custom test dispatch` by default.**
+   - Use the **official workflow** that owns the failing job (for example `(T3K) T3000 demo tests`).
+   - Before dispatch, create one temporary commit whose message starts with `[TO REVERT]` that comments out every workflow section/test matrix entry not required for the target failing test.
+   - Push the temporary commit and dispatch the official workflow so execution inherits the production workflow environment/mounts/secrets.
+   - Immediately after the workflow run is successfully queued, restore PR merge state by reverting the temporary commit (`git revert`, do not rewrite history) and push.
+   - Gather run URLs and include both:
+     - the run triggered from the temporary commit, and
+     - the restoring revert commit hash.
+   - Update PR description to include links to currently executing runs and note that workflow-pruning commit was reverted right after dispatch.
 
 10. **If fix is not credible solo, hand off**
    - Explicitly explain why the agent is giving up.
