@@ -129,8 +129,16 @@ void kernel_main() {
                     // Generate mask only when user didn't provide one.
                     // Lightweight path already has a single -inf tile fronted — skip generate_mask.
                     if constexpr (!use_provided_mask && !use_lightweight_mask) {
-                        generate_mask<is_causal, is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
-                            Sq_chunk_t, Sk_chunk_t, q_chunk, chunk_start_t_in_q_chunks, true, false, unpadded_Sk, 0);
+                        generate_mask<is_chunked, sliding_window_size, use_padded_mask, cb_mask_in>(
+                            Sq_chunk_t,
+                            Sk_chunk_t,
+                            q_chunk,
+                            chunk_start_t_in_q_chunks,
+                            true,
+                            false,
+                            unpadded_Sk,
+                            0,
+                            is_causal);
                     }
 
                     // Wait for compute to deliver output chunk
