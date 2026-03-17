@@ -52,9 +52,11 @@ After creating the draft PR, stop and ask the user exactly:
 ## Workflow Run Selection Policy
 
 To avoid wasting CI capacity, default to **targeted** workflow execution:
-- Use `Custom test dispatch` (`.github/workflows/test-dispatch.yaml`) whenever possible.
-- Run only the failing test command(s) relevant to the ticket; avoid unrelated jobs.
-- Select the minimum runner label/hardware needed for that command.
+- Use the **official workflow** that contains the failing job instead of `Custom test dispatch`.
+- Before triggering, create a temporary commit with message prefix `[TO REVERT]` that comments out every workflow section/test matrix entry unrelated to the target failing test.
+- Push that temporary commit and run the official workflow so validation inherits production workflow environment, mounts, and secrets.
+- Immediately after the workflow run is queued, revert the temporary commit with `git revert` (do not rewrite branch history) and push, so the PR returns to merge-intended content while the run continues.
+- Report both the temporary commit hash and the revert commit hash in status updates.
 
 Broad/full workflows (for example `(T3K) T3000 e2e tests`) are exceptions and should be used only when:
 - the user explicitly asks for full-pipeline coverage, or
@@ -80,7 +82,11 @@ Broad/full workflows (for example `(T3K) T3000 e2e tests`) are exceptions and sh
    - includes a concrete CI test plan.
 9. If required hardware is locally available, ask the explicit local hardware-test permission question from the safety gate and run only targeted local tests if approved.
 10. Ask the explicit workflow permission question from the safety gate.
-11. If approved, trigger workflows using the run selection policy above and patch PR body with run URLs.
+11. If approved, trigger workflows using the run selection policy above:
+   - create/push the `[TO REVERT]` workflow-pruning commit,
+   - trigger the official workflow,
+   - revert/push immediately after dispatch,
+   - patch PR body with run URL plus both temporary/revert commit hashes.
 12. Report status and next expected checkpoint.
 
 ## Hardware-Constrained Behavior
