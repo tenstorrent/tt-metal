@@ -28,6 +28,7 @@ on:
           - gemma3-small
           - dits
           - deepseek
+          - deepseek prefill
           - gpt-oss
           - tttv2 modules
       platform:
