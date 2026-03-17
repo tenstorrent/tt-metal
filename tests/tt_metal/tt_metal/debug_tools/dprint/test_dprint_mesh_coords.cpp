@@ -169,7 +169,7 @@ void DPrintMeshCoordsFixture::ExtraSetUp() {
     // because ParseAllFeatureEnv resets them to defaults on re-initialization.
     MetalContext::instance().teardown();
     CMAKE_UNIQUE_NAMESPACE::ConfigureDPrintForCoord(
-        MetalContext::instance().rtoptions(), dprint_file_name, /*row=*/0, /*col=*/0);
+        MetalContext::instance().rtoptions(), dprint_file_name, target_coord.first, target_coord.second);
 }
 
 void DPrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardown(); }
@@ -197,16 +197,10 @@ TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersAllCoords) {
         }
     }
 
-    for (size_t i = 0; i < local_coords.size(); ++i) {
-        auto [row, col] = local_coords[i];
-
-        if (i > 0) {
-            DPrintMeshFixture::TearDown();
-            MetalContext::instance().teardown();
-            CMAKE_UNIQUE_NAMESPACE::ConfigureDPrintForCoord(
-                MetalContext::instance().rtoptions(), dprint_file_name, row, col);
-            DPrintMeshFixture::SetUp();
-        }
+    for (auto [row, col] : local_coords) {
+        DPrintMeshFixture::TearDown();
+        this->target_coord = {row, col};  // set before SetUp so ExtraSetUp picks it up
+        DPrintMeshFixture::SetUp();
 
         ASSERT_FALSE(
             MetalContext::instance()
@@ -215,7 +209,6 @@ TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersAllCoords) {
                 .empty())
             << "No chip resolved for coord (" << row << "," << col << ").";
 
-        this->target_coord = {row, col};
         log_info(tt::LogTest, "Filtering test: coord ({},{})", row, col);
         CMAKE_UNIQUE_NAMESPACE::RunFilteringTest(this, this->devices_);
         MetalContext::instance().dprint_server()->clear_log_file();
