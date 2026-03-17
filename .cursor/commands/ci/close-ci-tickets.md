@@ -17,7 +17,9 @@ Review open CI maintenance issues and close only those no longer relevant based 
    - Close if exact failing test now passes, or if root cause is clearly different
    - Do not close for cosmetic differences, infra-only noise, or same root cause
    - Apply user cap (for example, "close up to N issues") only at final close step
+   - Always review the failure logs yourself. Never write a script to close tickets for you
 
 4. **Write outputs**
-   - Record closed issues in `.auto_triage/output/ci_ticketing/close_tickets/closed_tickets.json`
+   - Record closed issues in `build_ci/ci_ticketing/close_tickets/closed_tickets.json`
    - Include `issue_url`, `old_failure_message`, and `new_failure_message`
+   - Write a comment to each issue you close stating why the issue was closed and linking the run of the specific job that made you decide. The format should be something like: https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>>/job/<job-id>

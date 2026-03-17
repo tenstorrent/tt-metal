@@ -25,6 +25,8 @@ Extract failing test and root-cause error from ticket body, inspect the latest f
 - Close if exact failing test is now passing, or
 - Close if exact failing test still fails but with clearly different test-level root cause.
 
+Always review the failure logs yourself. Never write a script to close tickets for you
+
 Do not close when:
 
 - Same root cause is still present.
