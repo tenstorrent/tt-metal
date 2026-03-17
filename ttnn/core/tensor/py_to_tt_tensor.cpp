@@ -45,11 +45,7 @@ bool can_construct_on_device(
                // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
                tensor_spec.logical_shape().rank() <= 4 &&
                // Logical shape must match physical shape for the tensor to be constructed on the device.
-               tt::tt_metal::logical_matches_physical(tensor_spec) &&
-               // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
-               // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
-               // than the shape dimension.
-               !tensor_spec.memory_config().is_sharded();
+               tt::tt_metal::logical_matches_physical(tensor_spec);
 
     if (optional_tile.has_value()) {
         // on-device tiling operation expects tiles to be divisible by 32x32.
@@ -87,8 +83,11 @@ Tensor create_tt_tensor_from_host_data(
 
         // TODO: Remove preserve_nan_values check after
         // https://github.com/tenstorrent/tt-metal/issues/31406
+        // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
+        // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
+        // than the shape dimension.
         const bool construct_on_device =
-            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) &&
+            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) && !memory_config.is_sharded() &&
             can_construct_on_device(device, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
             enable_bf4_opt && !preserve_nan_values;
 
