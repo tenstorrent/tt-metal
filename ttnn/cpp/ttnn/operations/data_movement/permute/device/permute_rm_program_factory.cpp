@@ -58,7 +58,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
 
-    uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
+    uint32_t num_rows = detail::num_pages(input_tensor);
 
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -207,7 +207,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     uint32_t W_stride = output_strides[x_dim];
 
     uint32_t N = operation_attributes.dims.size();
-    uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
+    uint32_t num_rows = detail::num_pages(input_tensor);
 
     // treat the input tensor as 3D with rows * x_blocks * w_blocks
     uint32_t x_blocks = tt::div_up(X, x_block_size);
@@ -250,7 +250,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         {"x_block_size", x_block_size},
         {"w_block_size", w_block_size},
         {"element_size", input_tensor.element_size()},
-        {"input_tensor_page_size", input_tensor.logical_shape()[-1] * input_tensor.element_size()}};
+        {"input_tensor_page_size", static_cast<uint32_t>(src_buffer->aligned_page_size())}};
 
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
@@ -279,7 +279,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         {"x_block_size", x_block_size},
         {"w_block_size", w_block_size},
         {"W", W},
-        {"output_tensor_page_size", output_tensor.logical_shape()[-1] * output_tensor.element_size()}};
+        {"output_tensor_page_size", static_cast<uint32_t>(dst_buffer->aligned_page_size())}};
 
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
