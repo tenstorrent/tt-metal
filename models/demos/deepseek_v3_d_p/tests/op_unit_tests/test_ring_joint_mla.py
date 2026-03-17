@@ -143,11 +143,14 @@ def run_ring_joint_sdpa(
     is_causal=False,
     is_balanced=False,
     cache_path=None,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
+
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
-
+    print(f"full_compute_grid: {full_compute_grid}" )
+    print(f"sdpa_compute_grid: {sdpa_compute_grid}" )
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
@@ -243,7 +246,7 @@ def run_ring_joint_sdpa(
     )
 
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=math_fidelity,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
@@ -567,10 +570,16 @@ def test_mla_sdpa(
 
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
-    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size",
+    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size, math_fidelity",
     [
-        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128),
-        (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64),
+        # best is 256, 256, but OOM (need memory fixing)
+        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128, ttnn.MathFidelity.HiFi2),
+        # best is 320, 160, but OOM (need memory fixing)
+        (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64, ttnn.MathFidelity.HiFi2),
+        # best is 256, 256 but OOM (need memory fixing)
+        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128, ttnn.MathFidelity.LoFi),
+        # best is 320, 160 but OOM (need memory fixing)
+        (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64, ttnn.MathFidelity.LoFi),
     ],
 )
 @pytest.mark.timeout(1200)
@@ -635,6 +644,7 @@ def test_mla_sdpa_bh_galaxy(
     skip_check,
     is_balanced,
     reset_seeds,
+    math_fidelity
 ):
     if is_blackhole() == False:
         pytest.skip("This test only runs on Blackhole galaxy todo add galaxy")
@@ -682,4 +692,5 @@ def test_mla_sdpa_bh_galaxy(
         is_causal=True,
         is_balanced=is_balanced,
         cache_path=cache_path,
+        math_fidelity=math_fidelity,
     )
