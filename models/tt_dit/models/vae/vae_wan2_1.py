@@ -940,12 +940,21 @@ class WanResample(Module):
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
-                # No-cache full-T mode: WanCausalConv3d zero-pads temporal front (same as "Rep" boundary)
-                x_time_BTHWU = self.time_conv(x_BTHWC, logical_h)  # no cache_x → zero-padded
-                T1 = x_time_BTHWU.shape[1]
-                x_BTHW2C = ttnn.reshape(x_time_BTHWU, (B, T1, H, W, 2, C))
-                x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
-                x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
+                # Replicate cached path's "Rep" boundary behavior:
+                # - Frame 0: output directly (no time_conv), like when feat_cache is None → "Rep"
+                # - Frames 1..T-1: time_conv with zero-padded boundary
+                # This gives contexts: frame 1 = [0,0,x_1], frame 2 = [0,x_1,x_2], frame t≥3 = [x_{t-2},x_{t-1},x_t]
+                # which matches the cached path exactly.
+                x_first = x_BTHWC[:, :1, :, :, :]  # frame 0: identity (T=1)
+                if T > 1:
+                    x_rest = x_BTHWC[:, 1:, :, :, :]  # frames 1..T-1
+                    x_time_rest = self.time_conv(x_rest, logical_h)  # zero-padded: context [0,0,x_1], [0,x_1,x_2], ...
+                    T_rest = x_time_rest.shape[1]  # = T-1
+                    x_BTHW2C = ttnn.reshape(x_time_rest, (B, T_rest, H, W, 2, C))
+                    x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                    x_rest_doubled = ttnn.reshape(x_BT2HWC, (B, T_rest * 2, H, W, C))  # 2*(T-1) frames
+                    x_BTHWC = ttnn.concat([x_first, x_rest_doubled], dim=1)  # 1 + 2*(T-1) = 2*T-1 frames
+                # If T=1: x_BTHWC = x_first (unchanged), no temporal doubling, same as cached "Rep" path
 
         if self.is_upsample:
             T2 = x_BTHWC.shape[1]
