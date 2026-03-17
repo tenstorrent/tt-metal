@@ -4,11 +4,11 @@
 #SBATCH --error=pipeline_parallel_training_%j.err
 
 # Note: Manually set the workload here
-WORKLOAD="llama405b"
+WORKLOAD="llama8b"
 
 # Common environmental variables
 if [ -z "${TT_METAL_HOME:-}" ]; then
-    TT_METAL_HOME="/data/${USER}/tt-metal"
+    TT_METAL_HOME="/data/${USER}/pr_review/tt-metal"
 fi
 export TT_METAL_HOME
 export PYTHONPATH="${TT_METAL_HOME}"
@@ -25,17 +25,19 @@ done > ${HOSTFILE}
 
 # Select config and host config based on workload
 if [[ "$WORKLOAD" == "llama8b" ]]; then
+    srun tt-smi -glx_reset
     CONFIG_FILE="training_configs/training_shakespeare_llama8b_intrahost_pp4.yaml"
-    HOST_CONFIG="pp4_galaxy"
+    HOST_CONFIG="1galaxy_pp4"
 elif [[ "$WORKLOAD" == "llama70b_4stage" ]]; then
+    srun tt-smi -glx_reset
     CONFIG_FILE="training_configs/training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml"
-    HOST_CONFIG="pp4_galaxy"
+    HOST_CONFIG="4galaxy_pp4"
 elif [[ "$WORKLOAD" == "llama70b_16stage" ]]; then
     CONFIG_FILE="training_configs/training_shakespeare_llama70b_pp16_fabric_galaxy.yaml"
-    HOST_CONFIG="pp16_galaxy"
+    HOST_CONFIG="4galaxy_pp16"
 elif [[ "$WORKLOAD" == "llama405b" ]]; then
     CONFIG_FILE="training_configs/training_shakespeare_llama405b_pp_fabric.yaml"
-    HOST_CONFIG="pp16_galaxy"
+    HOST_CONFIG="4galaxy_pp16"
 else
     echo "Unknown workload: $WORKLOAD"
     exit 1

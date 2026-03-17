@@ -10,8 +10,8 @@ training_config:
   clip_grad_norm_max_norm: 1.0
   tokenizer_path: "data/tinyllama-tokenizer.json"
   tokenizer_type: "bpe"
-  model_config: "configs/model_configs/llama8b.yaml"
-  multihost_config: "configs/multihost_configs/4worker_32block_pp_fabric.yaml"
+  model_config: "model_configs/llama8b.yaml"
+  multihost_config: "multihost_configs/4worker_32block_pp_fabric.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003

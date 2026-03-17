@@ -217,7 +217,15 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
 
     for (auto& block : blocks) {
         if (runner_type == RunnerType::MemoryEfficient) {
-            out = common::transformer::memory_efficient_runner(*block, out, mask);
+            // Capture block by value (shared_ptr) to avoid object slicing.
+            // Passing *block directly would give memory_efficient_runner a ModuleBase&,
+            // whose value-capture in the grad lambda slices away the derived vtable.
+            out = common::transformer::memory_efficient_runner(
+                [block](const autograd::TensorPtr& inp, const std::optional<autograd::TensorPtr>& msk) {
+                    return (*block)(inp, msk);
+                },
+                out,
+                mask);
         } else if (runner_type == RunnerType::Default) {
             out = (*block)(out, mask);
         }
