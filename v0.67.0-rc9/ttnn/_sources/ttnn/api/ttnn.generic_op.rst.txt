@@ -1,0 +1,8 @@
+﻿ttnn.generic\_op
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.generic_op:
+
+.. autooperation:: ttnn.generic_op
