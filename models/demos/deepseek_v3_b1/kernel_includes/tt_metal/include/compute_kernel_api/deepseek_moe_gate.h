@@ -7,6 +7,9 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/transpose_wh.h"
+#include "api/debug/dprint_pages.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tensix.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_moe_gate_topk_single_face.h"
@@ -44,6 +47,51 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 
 template <bool enable_sigmoid = false, bool is_32bit = false>
 ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
+    DPRINT << "deepseek_moe_gate!!!!!!!!!!!!!!!!!!!!!!!" << ENDL();
+
+    // print the logits
+    /*
+    DPRINT << "cb_idx: " << icb0 << " tile_idx: " << 0 << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 10; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      icb0,
+                      0,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      false)
+               << ENDL();
+    }
+    */
+    // print the bias
+    /*
+    DPRINT << "cb_idx: " << icb1 << " tile_idx: " << 0 << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 10; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      icb1,
+                      0,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      false)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+    */
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
         transpose_wh_tile(icb0, 0, 0);
@@ -75,7 +123,8 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     // Transpose dest step 0 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));
-    // Sort top4 groups (SFPU)
+    // dprint_tensix_dest_reg(0);
+    //  Sort top4 groups (SFPU)
     MATH((llk_math_sfpu_deepseek_moe_gate_sort_top4_groups<APPROX, DST_ACCUM_MODE>(0)));
     // Transpose dest step 1 (FPU)
     MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));

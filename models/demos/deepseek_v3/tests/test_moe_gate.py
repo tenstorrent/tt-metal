@@ -135,12 +135,6 @@ def test_forward_pass(
         module_path=module_path,
     )
 
-    torch_input[:, :, :] = torch_input[:, 123:124, :].repeat(1, 128, 1)
-
-    reference_topk_indices[:, :] = reference_topk_indices[123:124, :].repeat(128, 1)
-
-    reference_topk_weights[:, :] = reference_topk_weights[123:124, :].repeat(128, 1)
-
     weight_config = get_test_weight_config(
         BlazeMoeGate,
         hf_config,
