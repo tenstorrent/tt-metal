@@ -378,6 +378,12 @@ def device_params(request, sdxl_l1_small_size):
 
     If the parametrized device_params dict doesn't contain 'l1_small_size',
     it will be automatically added based on the device architecture (Wormhole vs Blackhole).
+
+    NOTE: `device_params` fixture exists in conftest.py in root but this one will take precedence.
+    Fixture in conftest.py closest to the test in hierarchy will take precedence.
+    We can still set L1_SMALL_SIZE inside tests for some specific cases if needed.
+    Otherwise, when we do not specify it inside parentheses in test params, it will get set
+    inside this device_params fixture.
     """
     params = getattr(request, "param", {})
 
