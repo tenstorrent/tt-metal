@@ -661,62 +661,58 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
 
-        // #ifdef USE_MUX
-        //         // Interleaved K/V all-gather step: one phase-1 (ring_iter==0) or phase-2 step per iter.
-        //         // This prevents deadlock by ensuring cb_out is drained between AG waits.
-        //         if (do_ag) {
-        //             if (ring_iter == 0) {
-        //                 // Phase 1: send our local K/V slice to the next device
-        //                 send_local_slice(
-        //                     TensorAccessor(ag_input_k_args, k_addr_ag_rt, ag_page_size),
-        //                     TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size));
-        //                 send_local_slice(
-        //                     TensorAccessor(ag_input_v_args, v_addr_ag_rt, ag_page_size),
-        //                     TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size));
-        //                 noc_async_write_barrier();
-        //                 tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-        //                 // Signal SDPA reader that our local slice is available (direction==1 only)
-        //                 if (ag_direction == 1) {
-        //                     op_signaler.synchronize_workers_and_signal_op(ag_device_index);
-        //                 }
-        //             } else if (ag_slice_writes < ag_writes_expected) {
-        //                 // Phase 2 step: wait for next slice to arrive, signal reader, then forward it
-        //                 noc_semaphore_wait_min(out_ready_sem_ptr, ag_slice_writes + 1);
+#ifdef USE_MUX
+        // Interleaved K/V all-gather step: one phase-1 (ring_iter==0) or phase-2 step per iter.
+        // This prevents deadlock by ensuring cb_out is drained between AG waits.
+        if (do_ag) {
+            if (ring_iter == 0) {
+                // Phase 1: send our local K/V slice to the next device
+                send_local_slice(
+                    TensorAccessor(ag_input_k_args, k_addr_ag_rt, ag_page_size),
+                    TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size));
+                send_local_slice(
+                    TensorAccessor(ag_input_v_args, v_addr_ag_rt, ag_page_size),
+                    TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size));
+                noc_async_write_barrier();
+                tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
+                // Signal SDPA reader that our local slice is available (direction==1 only)
+                if (ag_direction == 1) {
+                    op_signaler.synchronize_workers_and_signal_op(ag_device_index);
+                }
+            } else if (ag_slice_writes < ag_writes_expected) {
+                // Phase 2 step: wait for next slice to arrive, signal reader, then forward it
+                noc_semaphore_wait_min(out_ready_sem_ptr, ag_slice_writes + 1);
 
-        //                 // Compute which chip's slice just arrived
-        //                 int slice_chip_id;
-        //                 uint32_t actual_slice_chip_id;
-        //                 if (ag_direction == 1) {
-        //                     slice_chip_id =
-        //                         static_cast<int>(ag_device_index) + static_cast<int>(ag_slice_writes) + 1;
-        //                     actual_slice_chip_id = (slice_chip_id >= static_cast<int>(ag_ring_size))
-        //                         ? slice_chip_id - ag_ring_size : slice_chip_id;
-        //                 } else {
-        //                     slice_chip_id =
-        //                         static_cast<int>(ag_device_index) - static_cast<int>(ag_slice_writes) - 1;
-        //                     actual_slice_chip_id = (slice_chip_id < 0)
-        //                         ? ag_ring_size + slice_chip_id : slice_chip_id;
-        //                 }
+                // Compute which chip's slice just arrived
+                int slice_chip_id;
+                uint32_t actual_slice_chip_id;
+                if (ag_direction == 1) {
+                    slice_chip_id = static_cast<int>(ag_device_index) + static_cast<int>(ag_slice_writes) + 1;
+                    actual_slice_chip_id = (slice_chip_id >= static_cast<int>(ag_ring_size))
+                                               ? slice_chip_id - ag_ring_size
+                                               : slice_chip_id;
+                } else {
+                    slice_chip_id = static_cast<int>(ag_device_index) - static_cast<int>(ag_slice_writes) - 1;
+                    actual_slice_chip_id = (slice_chip_id < 0) ? ag_ring_size + slice_chip_id : slice_chip_id;
+                }
 
-        //                 // Signal SDPA reader that this chip's K/V is now in gathered DRAM
-        //                 op_signaler.synchronize_workers_and_signal_op(actual_slice_chip_id);
+                // Signal SDPA reader that this chip's K/V is now in gathered DRAM
+                op_signaler.synchronize_workers_and_signal_op(actual_slice_chip_id);
 
-        //                 const uint32_t slice_tile_id_start = (ag_gather_dim == 3)
-        //                     ? actual_slice_chip_id * ag_input_Wt
-        //                     : actual_slice_chip_id * ag_input_Ht * ag_input_Wt;
+                const uint32_t slice_tile_id_start = (ag_gather_dim == 3)
+                                                         ? actual_slice_chip_id * ag_input_Wt
+                                                         : actual_slice_chip_id * ag_input_Ht * ag_input_Wt;
 
-        //                 forward_slice(
-        //                     TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size),
-        //                     slice_tile_id_start);
-        //                 forward_slice(
-        //                     TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size),
-        //                     slice_tile_id_start);
-        //                 noc_async_write_barrier();
-        //                 tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-        //                 ag_slice_writes++;
-        //             }
-        //         }
-        // #endif
+                forward_slice(
+                    TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size), slice_tile_id_start);
+                forward_slice(
+                    TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size), slice_tile_id_start);
+                noc_async_write_barrier();
+                tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
+                ag_slice_writes++;
+            }
+        }
+#endif
 
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
