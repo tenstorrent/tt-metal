@@ -905,8 +905,13 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     # Flatten back from [B,H,S_pad,v_head_dim] to [1,1,B*S_pad,H*v_head_dim]
     # for the output projection (token-wise linear).
-    v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
-    v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
+    use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "").strip() == "1"
+    if use_nlp_concat:
+        v = ttnn.experimental.nlp_concat_heads(v)  # [1,B,S_pad,H*v_head_dim]
+        v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
+    else:
+        v = ttnn.permute(v, (0, 2, 1, 3))  # [B,S_pad,H,v_head_dim]
+        v = ttnn.reshape(v, (1, 1, total_seq, int(num_heads * hparams.v_head_dim)))  # [1,1,B*S_pad,H*v_head_dim]
     if tp_enabled:
         attn_out = _tp_row_parallel_linear_from_replicated(v, w.w_o)  # [1,1,B*S_pad,hidden]
     else:
