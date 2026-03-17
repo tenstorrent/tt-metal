@@ -883,7 +883,6 @@ class AttentionBlock:
         assert (
             trans_mat_tensor.get_tile() == matmul_weights_tensor.get_tile()
         ), f"Qrope trans mat tensor tile ({trans_mat_tensor.get_tile()}) must be equal to matmul weights tensor tile ({matmul_weights_tensor.get_tile()})"
-        # qrope_trans_mat_cb = cb_id_context.get_cb_id(data_format, TD_32x32)  # Trans_mat CB for RoPE
         qrope_rotated_input_interm_cb = cb_id_context.get_cb_id(
             data_format, TD_1x32
         )  # Rotated input intermediate CB for RoPE
@@ -894,7 +893,6 @@ class AttentionBlock:
         )  # DKV Matmul output CB, 64 bytes (1 tile per core for rope input)
         kv_rmsnorm_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for KV Cache Branch RMSNorm
         kv_rmsnorm_gamma_cb = rmsnorm2_gamma_cb
-        # kv_rmsnorm_gamma_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Gamma CB for KV Cache Branch RMSNorm
         kv_rmsnorm_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for KV Cache Branch RMSNorm
         krope_output_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Output CB for KV Cache Branch RoPE
         krope_cos_sin_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Cos/Sin CB for RoPE
@@ -2192,11 +2190,6 @@ class AttentionBlock:
         qrope_cos_sin_cb_descriptor.format_descriptors = [qrope_cos_sin_cb_format]
         sdpa_out_interm_running_offset_qrope += qrope_cos_sin_cb_descriptor.total_size
 
-        # CB 19: Trans_mat (sharded tensor)
-        # qrope_trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-        #     qrope_trans_mat_cb, ref_trans_mat_tensor, core_ranges=full_device_grid
-        # )
-
         # CB 20: Rotated input intermediate CB — overlap with sdpa_out_interm L1 buffer
         # at offset 13888 B. This CB is consumed before SDPA runs.
         qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
@@ -2329,13 +2322,6 @@ class AttentionBlock:
             )
         ]
         sdpa_kv_cache_running_offset += kv_rmsnorm_input_cb_descriptor.total_size  # +1024 B
-
-        # CB: KV RMSNorm gamma buffer (backed by fused overlapped tensor)
-        # kv_rmsnorm_gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(
-        #     kv_rmsnorm_gamma_cb, dkv_rmsnorm_gamma_tensor, ref_gamma_fused_tensor
-        # )
-        # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].tile = kv_rmsnorm_tile_descriptor
-        # kv_rmsnorm_gamma_cb_descriptor.format_descriptors[0].page_size = kv_rmsnorm_page_size
 
         # CB 27: KV RMSNorm output buffer — overlap with sdpa_out_interm L1 buffer
         # at offset 15360 B. This CB is consumed before SDPA runs.
@@ -2760,19 +2746,6 @@ class AttentionBlock:
         ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
         sdpa_forwarder_scratch_running_offset += ccl_packet_header_cb_descriptor.total_size
         post_sdpa_cb_list.append(ccl_packet_header_cb_descriptor)
-
-        # Get from fused
-        # CB 14: SDPA local L (aliased to input tensor)
-        # sdpa_local_l_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-        #    sdpa_cb_local_l, ref_sdpa_input_l
-        # )
-        # post_sdpa_cb_list.append(sdpa_local_l_cb_descriptor)
-
-        # CB 15: SDPA local MS (aliased to input tensor)
-        # sdpa_local_ms_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-        #    sdpa_cb_local_ms, ref_sdpa_input_ms
-        # )
-        # post_sdpa_cb_list.append(sdpa_local_ms_cb_descriptor)
 
         # CB 16: SDPA neighbor L (aliased to intermediate recv buffer)
         # The recv buffer holds both L and MS data, but this CB should only
