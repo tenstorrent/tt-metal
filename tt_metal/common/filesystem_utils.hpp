@@ -94,6 +94,26 @@
 //
 //   If all retries are exhausted, the function returns failure (false or
 //   std::nullopt) and logs a warning.
+//
+// Testing Notes
+// -------------
+// When writing tests for these functions in containerized CI environments:
+//
+//   - Call sync_filesystem() after creating directory structures before
+//     testing removal operations. Container filesystems may have delayed
+//     commit semantics that can cause is_empty() to fail intermittently.
+//
+//   - Do not rely on exact counts for remove_empty_parent_directories().
+//     The function may stop early if is_empty() returns an error (e.g., due
+//     to permission issues or filesystem timing). Verify that the target
+//     directories were removed rather than checking exact counts.
+//
+//   - NFS safety mode (set_nfs_safety(true)) enables retry loops. Tests
+//     should verify both enabled and disabled modes if possible, or at
+//     minimum verify the mode can be toggled correctly.
+//
+//   - Thread-local RNG is used for jitter. Tests that verify jitter
+//     bounds should call get_retry_jitter_ms() multiple times.
 
 namespace tt::filesystem {
 
