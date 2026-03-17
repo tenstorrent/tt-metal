@@ -1112,7 +1112,7 @@ def test_attention_block(
             assert dev_eq, f"Device {device_idx} output mismatch"
 
         passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
-        max_diff = torch.max(torch.abs(torch_output_expected - received))
+        max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
