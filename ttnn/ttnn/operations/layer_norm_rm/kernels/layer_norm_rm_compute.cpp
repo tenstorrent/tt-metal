@@ -2,16 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Stage 2 (reduce_mean): tilize input, reduce row for mean, broadcast mean to output, untilize.
+// Stage 3 (subtract_mean): tilize, reduce for mean, sub(input, mean) with COL broadcast, untilize.
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/bcast.h"
-#include "api/compute/pack.h"
-#include "api/compute/reg_api.h"
-#include "api/compute/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
 
 namespace NAMESPACE {
 
@@ -30,7 +27,7 @@ void MAIN {
     constexpr uint32_t cb_reduce_scaler = 8;  // c_8: reduce scaler (1/W)
     constexpr uint32_t cb_out_rm = 16;        // c_16: untilized output for writer
     constexpr uint32_t cb_mean = 24;          // c_24: mean tile (1 tile)
-    constexpr uint32_t cb_norm = 29;          // c_29: reused as broadcast output buffer
+    constexpr uint32_t cb_centered = 25;      // c_25: centered values (2*Wt for reuse)
 
     // ========== Hardware init ==========
     compute_kernel_hw_startup(cb_input_rm, cb_reduce_scaler, cb_out_rm);
@@ -41,39 +38,25 @@ void MAIN {
         compute_kernel_lib::tilize<Wt, cb_input_rm, cb_tilized>(1);
 
         // Phase 2: Reduce row for mean: c_1 -> c_24
-        // WaitUpfrontNoPop: c_1 tiles persist (not popped) -- but we don't need them for Stage 2
-        // Actually for Stage 2 we don't reuse c_1 after reduce, so just use default WaitAndPopPerTile
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
-            cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::of(1, Wt));
+        // WaitUpfrontNoPop: c_1 tiles persist for Phase 3
+        compute_kernel_lib::
+            reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+                cb_tilized, cb_reduce_scaler, cb_mean, compute_kernel_lib::ReduceInputBlockShape::of(1, Wt));
 
-        // Now c_24 has 1 mean tile (valid data in Col0)
-        // Broadcast mean column across Wt tiles using unary_bcast<COL>
+        // Phase 3: sub(tilized_input, mean) with COL broadcast -> centered
+        // A: c_1 (Wt tiles, already waited from Phase 2 reduce, NoWaitNoPop)
+        // B: c_24 (1 tile mean, COL broadcast, WaitAndPopPerTile)
+        compute_kernel_lib::sub<
+            compute_kernel_lib::BroadcastDim::COL,
+            compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
+            compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile>(
+            cb_tilized, cb_mean, cb_centered, compute_kernel_lib::BinaryInputBlockShape::of(1, Wt));
 
-        // Wait for the mean tile
-        cb_wait_front(cb_mean, 1);
+        // Manual pop c_1 after sub (NoWaitNoPop used on A)
+        cb_pop_front(cb_tilized, Wt);
 
-        // Reserve Wt tiles in cb_norm for the broadcast result
-        cb_reserve_back(cb_norm, Wt);
-
-        // Initialize unary broadcast for COL
-        unary_bcast_init<BroadcastType::COL>(cb_mean, cb_norm);
-
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            tile_regs_acquire();
-            // Broadcast mean tile's column across all columns -> DST[0]
-            unary_bcast<BroadcastType::COL>(cb_mean, 0, 0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(0, cb_norm);
-            tile_regs_release();
-        }
-
-        cb_push_back(cb_norm, Wt);
-        cb_pop_front(cb_mean, 1);
-
-        // Phase 10: Untilize cb_norm -> c_16
-        compute_kernel_lib::untilize<Wt, cb_norm, cb_out_rm>(1);
+        // Phase 10: Untilize centered -> c_16
+        compute_kernel_lib::untilize<Wt, cb_centered, cb_out_rm>(1);
     }
 }
 
