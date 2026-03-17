@@ -128,7 +128,7 @@ def run_test_forward_pass_decoder2d(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate_weight_config,
+        force_recalculate_weight_config or module_path is None,
         test_name="test_decoder_block",
         real_weights=module_path is not None,
         layer_id=module_path,
