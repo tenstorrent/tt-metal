@@ -51,7 +51,7 @@ autograd::TensorPtr memory_efficient_runner(
     }
 
     // define grad function and copy generator (in the state before forward pass)
-    autograd::GradFunction grad = [input, mask, out, &forward_impl, generator]() mutable {
+    autograd::GradFunction grad = [input, mask, out, forward_impl, generator]() mutable {
         // detach input from existing graph
         auto input_detached = autograd::create_tensor(input->get_value());
         // enable gradients for the detached input so the graph is built during recomputation
