@@ -13,6 +13,16 @@ from models.demos.rvc.tt_impl.conv1d import Conv1d
 from models.demos.rvc.tt_impl.linear import Linear
 
 
+def ttnn_gather_fallback(x: ttnn.Tensor, dim: int, index: ttnn.Tensor, device) -> ttnn.Tensor:
+    # Fallback implementation of gather using to_host, torch.gather, and from_torch.
+    # needed since ttnn.gather is 4-8x slower than this fallback version
+    x_torch = ttnn.to_torch(x)
+    index_torch = ttnn.to_torch(index).to(torch.int64)
+    gathered_torch = torch.gather(x_torch, dim=dim, index=index_torch)
+    gathered = ttnn.from_torch(gathered_torch, dtype=x.dtype, layout=x.layout, device=device)
+    return gathered
+
+
 class MultiHeadAttention:
     def __init__(
         self,
@@ -55,6 +65,7 @@ class MultiHeadAttention:
         )
         self.emb_rel_k: ttnn.Tensor | None = None
         self.emb_rel_v: ttnn.Tensor | None = None
+        self.relative_position_cache: dict[int : ttnn.Tensor] = {}
 
     def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
         q_key = "linear_q" if (f"{prefix}linear_q.weight" if prefix else "linear_q.weight") in parameters else "conv_q"
@@ -157,7 +168,7 @@ class MultiHeadAttention:
         rel_idx = idx_col - idx_row + (length - 1)
         rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
         rel_idx = ttnn.typecast(rel_idx, ttnn.uint32)
-        x_final = ttnn.gather(x, dim=3, index=rel_idx)
+        x_final = ttnn_gather_fallback(x, dim=3, index=rel_idx, device=self.device)
         return x_final
 
     def _absolute_position_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -166,12 +177,16 @@ class MultiHeadAttention:
         idx_col = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=0)
         rel_idx = idx_col - idx_row + (length - 1)
         rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
-        out = ttnn.zeros(
-            (batch, heads, length, 2 * length - 1),
-            dtype=x.dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+        if length in self.relative_position_cache:
+            out = self.relative_position_cache[length]
+        else:
+            out = ttnn.zeros(
+                (batch, heads, length, 2 * length - 1),
+                dtype=x.dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+            )
+            self.relative_position_cache[length] = out
         out = ttnn.scatter(out, dim=3, index=rel_idx, src=x)
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
