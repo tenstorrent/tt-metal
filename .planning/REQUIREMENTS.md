@@ -7,7 +7,7 @@
 
 ### Stream Register Cleanup
 
-- [ ] **SREG-01**: Stream register assignment refactored into tagged lists -- increment-on-write and scratch usage tracked separately per stream ID (dual-use explicit)
+- [x] **SREG-01**: Stream register assignment refactored into tagged lists -- increment-on-write and scratch usage tracked separately per stream ID (dual-use explicit)
 - [x] **SREG-02**: WorkerConnectionAdapter templatized on flow control stream ID; current adapter becomes type alias with stream ID 22 hardcoded
 
 ### Constants & Data Structures
@@ -75,7 +75,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SREG-01 | Phase 1 | Pending |
+| SREG-01 | Phase 1 | Complete |
 | SREG-02 | Phase 1 | Complete |
 | CNST-01 | Phase 2 | Pending |
 | CNST-02 | Phase 2 | Pending |
