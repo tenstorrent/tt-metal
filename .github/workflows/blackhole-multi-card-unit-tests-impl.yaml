@@ -44,25 +44,8 @@ jobs:
       - name: Generate filtered matrix
         id: generate
         run: |
-          # Define all test groups as YAML (test-type: "fast" = run when fast-only; others run in full matrix)
-          # Convert to JSON for jq filtering; multi-line cmd blocks stay readable
+          # Investigation branch: run only the known-problematic fast unit test group.
           all_tests_yaml=$(cat <<'YAML_EOF'
-          - name: fabric fast unit tests (1D, 2D, system health)
-            cmd: |
-              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
-              ./build/test/tt_metal/tt_fabric/test_system_health ${{ inputs.runner-label == 'BH-DeskBox' && '--min-connections 4' || '' }}
-            timeout: 15
-            test-type: fast
-          - name: Sockets fast unit test
-            cmd: |
-              ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
-            timeout: 10
-            test-type: fast
-          - name: Host IO fast unit test (viommu only)
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
-            timeout: 10
-            test-type: fast-viommu
           - name: cpp fast unit tests (eth, single erisc)
             cmd: |
               ./build/test/tt_metal/unit_tests_eth
@@ -76,63 +59,9 @@ jobs:
               TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
               TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
             timeout: 15
-            test-type: fast
-          - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
-            cmd: |
-              pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-              pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
-            timeout: 15
-            test-type: fast
-          - name: fabric and ttnn UDM unit tests
-            cmd: |
-              ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2DUDMModeFixture.*:*ChannelTrimming*"
-              ./build/test/ttnn/unit_tests_ttnn_udm
-            timeout: 20
-            test-type: slow
-          - name: fabric stability nightly tests
-            cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
-            timeout: 15
-            test-type: slow
-          - name: ccl nightly tests
-            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
-            timeout: 60
-            test-type: slow
-          - name: ring joint attention tests
-            cmd: |
-              pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
-              pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py -svv
-            timeout: 60
-            test-type: slow
-          - name: sdpa nightly tests
-            cmd: pytest tests/nightly/blackhole/sdpa/ -svv
-            timeout: 60
-            test-type: slow
-          - name: fabric infra unit tests
-            cmd: |
-              TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
-              TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
-              TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
-            timeout: 15
-            test-type: slow
-          - name: fabric sanity benchmark
-            cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
-            timeout: 15
-            test-type: slow
           YAML_EOF
           )
-          all_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
-
-          # Filter: *-viommu test types run only when runner-label contains viommu; when fast_only, run only fast + fast-viommu (on viommu)
-          fast_only="${{ inputs.fast-only }}"
-          runner_label="${{ inputs.runner-label }}"
-          viommu_json="false"
-          if [[ "$runner_label" == *viommu* ]]; then viommu_json="true"; fi
-
-          if [ "$fast_only" == "true" ]; then
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu))]')
-          else
-            filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" '[.[] | select((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu)]')
-          fi
+          filtered_tests=$(echo "$all_tests_yaml" | ruby -r yaml -r json -e 'puts YAML.load(STDIN.read).to_json')
 
           echo "Filtered tests: $filtered_tests"
 
