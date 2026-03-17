@@ -1,0 +1,74 @@
+name: "[tt-train] Build and Test"
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  merge_group:
+
+jobs:
+  run-tests:
+    runs-on: ["n150"]
+    env:
+      CC: clang-20
+      CXX: clang++-20
+      ARCH_NAME: wormhole_b0
+      TT_METAL_HOME: ${{ github.workspace }}
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Setup Telemetry
+        uses: catchpoint/workflow-telemetry-action@v2
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          lfs: false
+
+      - name: Clear Build Artifacts
+        run: |
+          rm -rf build
+          rm -rf build_Release
+          rm -rf built
+
+      - name: Get commit hash
+        id: commit-hash
+        run: |
+          commit=$(git rev-parse HEAD)
+          echo "Commit hash: $commit"
+          echo "commit=$commit" >> $GITHUB_OUTPUT
+
+      - name: Restore Build Cache
+        id: restore-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build
+          key: tt-metal-build-${{ steps.commit-hash.outputs.commit }}
+
+      - name: Build tt-metal with tt-train
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        run: |
+          ./build_metal.sh --build-tt-train -b Release
+
+      - name: Update Build Cache
+        if: steps.restore-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build
+          key: tt-metal-build-${{ steps.commit-hash.outputs.commit }}
+
+      - name: Tests
+        run: |
+          cd build/tt-train
+          ctest --no-tests=error --output-on-failure
+
+  validate-pr:
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    needs: [run-tests]
+    steps:
+      - run: |
+          test_result="${{ needs.run-tests.result }}"
+          if [[ $test_result == "success" ]] ; then
+            exit 0
+          else
+            exit 1
+          fi

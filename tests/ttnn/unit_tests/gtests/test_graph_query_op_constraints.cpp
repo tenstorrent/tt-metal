@@ -934,7 +934,9 @@ TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
         const auto K = input_spec.logical_shape()[-1] / (num_heads * 3);
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::transformer::split_query_key_value_and_split_heads,
+            [](auto&&... args) {
+                return ttnn::transformer::split_query_key_value_and_split_heads(std::forward<decltype(args)>(args)...);
+            },
             device,
             input_spec,
             std::optional<ttnn::TensorSpec>{},  // input_tensor_kv
