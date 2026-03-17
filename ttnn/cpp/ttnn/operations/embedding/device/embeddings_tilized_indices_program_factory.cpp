@@ -80,10 +80,9 @@ EmbeddingsTilizedIndicesProgramFactory::cached_program_t EmbeddingsTilizedIndice
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
     tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{src1_cb_index, input_cb_data_format}})
+            .set_page_size(src1_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_2;
