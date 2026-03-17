@@ -4,6 +4,7 @@
 
 #include "program_descriptors.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
