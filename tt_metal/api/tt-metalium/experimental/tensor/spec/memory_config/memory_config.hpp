@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -43,6 +44,11 @@ public:
     const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return nd_shard_spec_; }
     bool created_with_nd_shard_spec() const { return created_with_nd_shard_spec_; }
+    const std::optional<std::vector<DeviceAddr>>& per_core_shard_sizes() const { return per_core_shard_sizes_; }
+    MemoryConfig& set_per_core_shard_sizes(std::vector<DeviceAddr> sizes) {
+        per_core_shard_sizes_ = std::move(sizes);
+        return *this;
+    }
 
     MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
         return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
@@ -81,6 +87,7 @@ private:
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
     bool created_with_nd_shard_spec_ = false;
+    std::optional<std::vector<DeviceAddr>> per_core_shard_sizes_ = std::nullopt;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);

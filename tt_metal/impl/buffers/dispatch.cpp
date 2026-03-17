@@ -341,11 +341,16 @@ public:
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
         this->core_page_mapping_it = core_page_mapping.begin();
-        this->address =
-            this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
-        if (this->buffer->is_dram()) {
-            this->address += this->buffer->device()->allocator()->get_bank_offset(
-                BufferType::DRAM, this->buffer->device()->dram_channel_from_logical_core(core));
+        if (this->buffer->has_per_core_addresses()) {
+            this->address = this->buffer->per_core_address(core) +
+                            core_page_mapping.device_start_page * this->buffer->aligned_page_size();
+        } else {
+            this->address =
+                this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
+            if (this->buffer->is_dram()) {
+                this->address += this->buffer->device()->allocator()->get_bank_offset(
+                    BufferType::DRAM, this->buffer->device()->dram_channel_from_logical_core(core));
+            }
         }
         if (this->are_pages_large) {
             this->core_num_pages_remaining_to_write =
@@ -700,10 +705,16 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     const uint32_t noc_xy_addr = buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
 
     // Calculate base destination address for this core
-    uint32_t dst_base_address = buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
-    if (buffer.is_dram()) {
-        dst_base_address += buffer.device()->allocator()->get_bank_offset(
-            BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
+    uint32_t dst_base_address;
+    if (buffer.has_per_core_addresses()) {
+        dst_base_address =
+            buffer.per_core_address(core) + core_page_mapping.device_start_page * buffer.aligned_page_size();
+    } else {
+        dst_base_address = buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
+        if (buffer.is_dram()) {
+            dst_base_address += buffer.device()->allocator()->get_bank_offset(
+                BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
+        }
     }
 
     // Issue wait commands once at the beginning if needed
@@ -1133,6 +1144,11 @@ bool write_to_device_buffer(
         return false;
     }
 
+    if (buffer.has_per_core_addresses()) {
+        TT_FATAL(!buffer.is_dram(), "Per-core addresses are only supported for L1 buffers");
+        TT_FATAL(is_sharded(buffer.buffer_layout()), "Per-core addresses require a sharded buffer layout");
+    }
+
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
@@ -1221,11 +1237,18 @@ bool write_to_device_buffer(
                         for (const BufferCorePageMapping& core_page_mapping :
                              buffer_page_mapping->core_page_mappings[core_id]) {
                             // Check destination L1 address alignment
-                            uint32_t dst_address =
-                                buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
-                            if (buffer.is_dram()) {
-                                dst_address += buffer.device()->allocator()->get_bank_offset(
-                                    BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                            uint32_t dst_address;
+                            if (buffer.has_per_core_addresses()) {
+                                dst_address = buffer.per_core_address(cores[core_id]) +
+                                              core_page_mapping.device_start_page * buffer.aligned_page_size();
+                            } else {
+                                dst_address = buffer.address() +
+                                              (core_page_mapping.device_start_page * buffer.aligned_page_size());
+                                if (buffer.is_dram()) {
+                                    dst_address += buffer.device()->allocator()->get_bank_offset(
+                                        BufferType::DRAM,
+                                        buffer.device()->dram_channel_from_logical_core(cores[core_id]));
+                                }
                             }
                             if (dst_address % l1_alignment != 0) {
                                 all_aligned = false;
@@ -1499,13 +1522,19 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
-    auto address = buffer.address();
-
-    if (buffer.is_dram()) {
-        address += buffer.device()->allocator()->get_bank_offset(
-            BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
+    DeviceAddr address;
+    if (buffer.has_per_core_addresses()) {
+        TT_FATAL(!buffer.is_dram(), "Per-core addresses are only supported for L1 buffers");
+        TT_FATAL(is_sharded(buffer.buffer_layout()), "Per-core addresses require a sharded buffer layout");
+        address = buffer.per_core_address(core) + core_page_mapping.device_start_page * buffer.aligned_page_size();
+    } else {
+        address = buffer.address();
+        if (buffer.is_dram()) {
+            address += buffer.device()->allocator()->get_bank_offset(
+                BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
+        }
+        address += core_page_mapping.device_start_page * buffer.aligned_page_size();
     }
-    address += core_page_mapping.device_start_page * buffer.aligned_page_size();
 
     dispatch_params.pages_per_txn = core_page_mapping.num_pages;
     dispatch_params.total_pages_to_read -= dispatch_params.pages_per_txn;

@@ -410,12 +410,17 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             [](MemoryConfig* t,
                TensorMemoryLayout memory_layout,
                BufferType buffer_type,
-               std::optional<ShardSpec> shard_spec) {
+               std::optional<ShardSpec> shard_spec,
+               std::optional<std::vector<DeviceAddr>> per_core_shard_sizes) {
                 new (t) MemoryConfig(memory_layout, buffer_type, std::move(shard_spec));
+                if (per_core_shard_sizes.has_value()) {
+                    t->set_per_core_shard_sizes(std::move(*per_core_shard_sizes));
+                }
             },
             nb::arg("memory_layout") = TensorMemoryLayout::INTERLEAVED,
             nb::arg("buffer_type") = BufferType::DRAM,
             nb::arg("shard_spec") = nb::none(),
+            nb::arg("per_core_shard_sizes") = nb::none(),
             R"doc(
                 Create MemoryConfig class.
                 If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
@@ -465,6 +470,10 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def_prop_ro("memory_layout", &MemoryConfig::memory_layout, "Memory layout of tensor data.")
         .def_prop_ro("shard_spec", &MemoryConfig::shard_spec, "Memory layout of tensor data.")
         .def_prop_ro("nd_shard_spec", &MemoryConfig::nd_shard_spec, "ND shard spec of tensor data.")
+        .def_prop_ro(
+            "per_core_shard_sizes",
+            &MemoryConfig::per_core_shard_sizes,
+            "Per-core shard sizes in bytes for per-core L1 allocation.")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 

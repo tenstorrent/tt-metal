@@ -227,8 +227,33 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
             nd_shard_spec->orientation,
             nd_shard_spec->shard_distribution_strategy);
     }
-    return BufferShardingArgs(
-        std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    if (memory_config_.per_core_shard_sizes().has_value()) {
+        TT_FATAL(
+            memory_config_.buffer_type() == BufferType::L1, "per_core_shard_sizes is only supported for L1 buffers");
+        TT_FATAL(memory_config_.is_sharded(), "per_core_shard_sizes requires a sharded memory layout");
+
+        // distribution_spec is always populated here: function returns early if !is_sharded(),
+        // and the earlier TT_FATAL ensures shard_spec or nd_shard_spec is set, both of which populate it.
+        const size_t max_shard_size_bytes =
+            distribution_spec->max_num_dev_pages_per_core() * compute_page_size_bytes(page_shape);
+
+        const auto& sizes = *memory_config_.per_core_shard_sizes();
+        for (size_t i = 0; i < sizes.size(); i++) {
+            TT_FATAL(
+                sizes[i] <= max_shard_size_bytes,
+                "per_core_shard_sizes[{}] = {} bytes exceeds max shard size {} bytes",
+                i,
+                sizes[i],
+                max_shard_size_bytes);
+        }
+    }
+
+    auto sharding_args =
+        BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    if (memory_config_.per_core_shard_sizes().has_value()) {
+        sharding_args.set_per_core_shard_sizes(*memory_config_.per_core_shard_sizes());
+    }
+    return sharding_args;
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {

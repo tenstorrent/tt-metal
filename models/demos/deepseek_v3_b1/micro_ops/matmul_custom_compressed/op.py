@@ -193,9 +193,9 @@ class MatmulCustomCompressed:
             all_cores = ttnn.corerange_to_cores(core_grid)
             num_tiles = num_tiles_k * out_w
             # fifo_rd_ptr - 1: the -1 is a HW convention for THCON address registers
-            base_addr_shifted = (data_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
             shard_data = []
             for core_coord in all_cores:
+                base_addr_shifted = (ct.get_data_l1_address_per_core(core_coord) >> _CB_ADDR_SHIFT) - 1
                 shard_assignment = ct.get_assignment_per_shard(core_coord)
                 tiles = pack_tile_pairs(shard_assignment, base_addr_shifted)
                 shard_data.extend(tiles)

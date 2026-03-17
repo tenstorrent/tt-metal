@@ -165,6 +165,7 @@ class CompressedTensor:
         memory_config=None,
         assignment_memory_config=None,
         tile_hw: int = DEFAULT_TILE_HW,
+        per_core_allocation: bool = True,
     ) -> None:
         assert (
             memory_config is not None and memory_config.is_sharded()
@@ -194,6 +195,7 @@ class CompressedTensor:
         # --- Shard mapping (populated by _pack_sharded) ---
         self._shard_mapping = []  # [(CoreCoord, [page_idx, ...]), ...] from C++
         self._core_assignment = {}  # {(x,y): int8[num_shard_pages]} format index per page on that core
+        self._per_core_shard_sizes = None  # list[int] of aligned byte sizes per core, or None if lockstep
 
         assert assignment.shape == (
             self.tiles_h,
@@ -201,7 +203,7 @@ class CompressedTensor:
         ), f"Assignment shape {assignment.shape} doesn't match tile grid ({self.tiles_h}, {self.tiles_w})"
 
         self._assignment_flat = assignment.astype(np.int8).ravel().copy()
-        self._pack_data_and_assignment(tensor, memory_config, assignment_memory_config, device)
+        self._pack_data_and_assignment(tensor, memory_config, assignment_memory_config, device, per_core_allocation)
 
     # ==================================================================
     # Public API
@@ -216,6 +218,7 @@ class CompressedTensor:
         memory_config=None,
         assignment_memory_config=None,
         quantize_fn=ttnn_quantize_fn,
+        per_core_allocation: bool = True,
     ) -> CompressedTensor:
         """Convenience: run assignment then pack in one step."""
         result = assigner.assign(tensor, quantize_fn)
@@ -225,6 +228,7 @@ class CompressedTensor:
             device=device,
             memory_config=memory_config,
             assignment_memory_config=assignment_memory_config,
+            per_core_allocation=per_core_allocation,
         )
 
     def to_torch(self) -> torch.Tensor:
@@ -254,6 +258,13 @@ class CompressedTensor:
 
     def get_data_l1_address(self) -> int:
         assert ttnn.is_tensor_storage_on_device(self.data), "Data tensor not on device"
+        return self.data.buffer_address()
+
+    def get_data_l1_address_per_core(self, core_coord) -> int:
+        """Get per-core L1 address for per_core_allocation=True tensors, else lockstep address."""
+        assert ttnn.is_tensor_storage_on_device(self.data), "Data tensor not on device"
+        if self._per_core_shard_sizes is not None:
+            return self.data.per_core_buffer_address(core_coord)
         return self.data.buffer_address()
 
     def get_assignment_l1_address(self) -> int:
@@ -288,10 +299,10 @@ class CompressedTensor:
     # Packing (top-level)
     # ==================================================================
 
-    def _pack_data_and_assignment(self, tensor, memory_config, assignment_memory_config, device):
+    def _pack_data_and_assignment(self, tensor, memory_config, assignment_memory_config, device, per_core_allocation):
         """Pack data and assignment into sharded ttnn tensors."""
         data_bytes, self._tile_mant_bits, data_memory_config, self.max_shard_size = self._pack_sharded(
-            tensor, memory_config
+            tensor, memory_config, per_core_allocation
         )
         if assignment_memory_config is not None:
             assert (
@@ -325,7 +336,7 @@ class CompressedTensor:
             memory_config=assign_mem,
         )
 
-    def _pack_sharded(self, tensor, memory_config):
+    def _pack_sharded(self, tensor, memory_config, per_core_allocation):
         """Pack tiles grouped by shard. Returns (data_torch, tile_mant_bits, mem_config, max_shard_size)."""
         data_np = self._to_2d(tensor)
         self._shard_mapping = compute_shard_page_mapping(tensor.shape, memory_config, self.tile_hw)
@@ -338,9 +349,22 @@ class CompressedTensor:
             shard_raw_sizes.append(shard_bytes)
             tile_mant_bits.extend(mant_list)
 
-        max_shard_bytes = _align(max(shard_raw_sizes), _get_alignment(memory_config.buffer_type))
-        data_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config)
-        corrected_config = self._make_sharded_mem_config(memory_config, max_shard_bytes)
+        alignment = _get_alignment(memory_config.buffer_type)
+        max_shard_bytes = _align(max(shard_raw_sizes), alignment)
+
+        if per_core_allocation:
+            # Each core gets its own aligned size — no padding to max
+            self._per_core_shard_sizes = [_align(s, alignment) for s in shard_raw_sizes]
+            data_torch = self._concat_shards_padded(
+                shard_chunks, shard_raw_sizes, None, memory_config, per_core_sizes=self._per_core_shard_sizes
+            )
+            corrected_config = self._make_sharded_mem_config(
+                memory_config, max_shard_bytes, per_core_shard_sizes=self._per_core_shard_sizes
+            )
+        else:
+            self._per_core_shard_sizes = None
+            data_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config)
+            corrected_config = self._make_sharded_mem_config(memory_config, max_shard_bytes)
 
         return data_torch, tile_mant_bits, corrected_config, max_shard_bytes
 
@@ -405,16 +429,28 @@ class CompressedTensor:
         }
 
     @staticmethod
-    def _concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config):
+    def _concat_shards_padded(shard_chunks, shard_raw_sizes, max_shard_bytes, memory_config, per_core_sizes=None):
         """Concatenate per-shard packed bytes with padding into a torch tensor.
 
         shard_chunks has one entry per core (including empty cores).
-        Tensor shape depends on layout:
+        If per_core_sizes is provided, each shard is padded to its own aligned size (per-core mode).
+        Otherwise, all shards are padded to max_shard_bytes (lockstep mode).
+        Tensor shape is always flat (1, total_bytes) in per-core mode.
+        In lockstep mode, shape depends on layout:
           HEIGHT_SHARDED: (num_cores, shard_bytes)
           WIDTH_SHARDED:  (1, num_cores * shard_bytes)
           BLOCK_SHARDED:  (grid_h, grid_w * shard_bytes)
         """
         all_bytes = []
+        if per_core_sizes is not None:
+            for packed_list, raw_size, aligned_size in zip(shard_chunks, shard_raw_sizes, per_core_sizes):
+                all_bytes.extend(packed_list)
+                pad_size = aligned_size - raw_size
+                if pad_size > 0:
+                    all_bytes.append(np.zeros(pad_size, dtype=np.uint8))
+            flat_np = np.concatenate(all_bytes)
+            return torch.from_numpy(flat_np.copy()).reshape(1, len(flat_np))
+
         for packed_list, raw_size in zip(shard_chunks, shard_raw_sizes):
             all_bytes.extend(packed_list)
             pad_size = max_shard_bytes - raw_size
@@ -439,11 +475,20 @@ class CompressedTensor:
         return torch.from_numpy(flat_np.copy()).reshape(shape)
 
     @staticmethod
-    def _make_sharded_mem_config(memory_config, shard_bytes):
-        """Build MemoryConfig with shard shape [1, shard_bytes]."""
+    def _make_sharded_mem_config(memory_config, shard_bytes, per_core_shard_sizes=None):
+        """Build MemoryConfig with shard shape [1, shard_bytes].
+
+        In per-core mode, shard_bytes is the max shard size (used as the logical shard shape
+        so ttnn is happy), and per_core_shard_sizes carries the actual per-core allocation sizes.
+        """
         ss = memory_config.shard_spec
         new_ss = ttnn.ShardSpec(ss.grid, [1, shard_bytes], ss.orientation)
-        return ttnn.MemoryConfig(memory_config.memory_layout, memory_config.buffer_type, new_ss)
+        return ttnn.MemoryConfig(
+            memory_config.memory_layout,
+            memory_config.buffer_type,
+            new_ss,
+            per_core_shard_sizes=per_core_shard_sizes,
+        )
 
     # ==================================================================
     # Unpacking
@@ -456,7 +501,7 @@ class CompressedTensor:
         mant_idx, shard_offset = 0, 0
         tiles_w, tile_hw = self.tiles_w, self.tile_hw
 
-        for _core, page_indices in self._shard_mapping:
+        for shard_idx, (_core, page_indices) in enumerate(self._shard_mapping):
             tile_offset = shard_offset
             for page_idx in page_indices:
                 mant_bits = self._tile_mant_bits[mant_idx]
@@ -467,6 +512,9 @@ class CompressedTensor:
                     out[tr * tile_hw : (tr + 1) * tile_hw, tc * tile_hw : (tc + 1) * tile_hw] = tile
                 tile_offset += size
                 mant_idx += 1
-            shard_offset += self.max_shard_size
+            if self._per_core_shard_sizes is not None:
+                shard_offset += self._per_core_shard_sizes[shard_idx]
+            else:
+                shard_offset += self.max_shard_size
 
         return torch.from_numpy(out).reshape(self.shape)
