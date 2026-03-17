@@ -584,6 +584,10 @@ void WatcherDeviceReader::Core::Dump() const {
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
     bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
 
+    if (is_dram_core) {
+        return;
+    }
+
     ValidateKernelIDs();
 
     // Whether or not watcher data is available depends on a flag set on the device.
