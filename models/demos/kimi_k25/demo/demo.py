@@ -284,19 +284,22 @@ def run_demo(
     logger.info(f"Fabric config: {fabric_config}")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
-    if enable_trace:
-        logger.info(f"Trace region size: {_TRACE_REGION_SIZE} bytes")
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=_TRACE_REGION_SIZE)
-    else:
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
-
-    tokenizer = None
-    if not random_weights:
-        logger.info(f"Loading tokenizer from '{model_path}'")
-        tokenizer = load_tokenizer(model_path)
-
+    # Keep mesh_device initialised to None so the finally block can guard
+    # cleanup correctly even if open_mesh_device or load_tokenizer raises.
+    mesh_device = None
     gen: KimiGenerator | None = None
     try:
+        if enable_trace:
+            logger.info(f"Trace region size: {_TRACE_REGION_SIZE} bytes")
+            mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=_TRACE_REGION_SIZE)
+        else:
+            mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+
+        tokenizer = None
+        if not random_weights:
+            logger.info(f"Loading tokenizer from '{model_path}'")
+            tokenizer = load_tokenizer(model_path)
+
         gen = KimiGenerator(
             mesh_device=mesh_device,
             model_path=model_path,
@@ -343,10 +346,11 @@ def run_demo(
             except Exception as exc:
                 logger.warning(f"Generator cleanup failed: {exc}")
 
-        ttnn.synchronize_device(mesh_device)
-        for submesh in mesh_device.get_submeshes():
-            ttnn.close_mesh_device(submesh)
-        ttnn.close_mesh_device(mesh_device)
+        if mesh_device is not None:
+            ttnn.synchronize_device(mesh_device)
+            for submesh in mesh_device.get_submeshes():
+                ttnn.close_mesh_device(submesh)
+            ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
