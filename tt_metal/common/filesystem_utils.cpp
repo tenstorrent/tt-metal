@@ -620,9 +620,27 @@ size_t remove_empty_parent_directories(const std::filesystem::path& path) {
 
     std::filesystem::path current = path;
     while (true) {
-        // Check if directory is empty
+        // Check if directory is empty with NFS-safety retry on ESTALE.
         // A directory is considered empty if it has no entries other than . and ..
-        bool is_empty = std::filesystem::is_empty(current, ec);
+        // Retry logic is important in containerized/CI environments where is_empty
+        // can fail intermittently due to delayed filesystem commit semantics.
+        bool is_empty = false;
+        if (nfs_safety_enabled()) {
+            for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+                is_empty = std::filesystem::is_empty(current, ec);
+                if (!ec) {
+                    break;
+                }
+                if (!is_estale_error(ec)) {
+                    break;
+                }
+                if (attempt < kMaxFsRetries - 1) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1)));
+                }
+            }
+        } else {
+            is_empty = std::filesystem::is_empty(current, ec);
+        }
         if (ec || !is_empty) {
             // Directory is not empty or error occurred - stop here
             break;

@@ -690,7 +690,21 @@ TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_RemovesEmptyDirs) {
     // if is_empty returns an error - this is still correct behavior
     EXPECT_GE(removed, 3u);
     EXPECT_LE(removed, 4u);
-    EXPECT_FALSE(std::filesystem::exists(dir_a));
+
+    // Verify that the directories which were reported as removed no longer exist.
+    // We verify from the deepest level (dir_d) up based on actual removed count.
+    if (removed >= 1) {
+        EXPECT_FALSE(std::filesystem::exists(dir_d));
+    }
+    if (removed >= 2) {
+        EXPECT_FALSE(std::filesystem::exists(dir_c));
+    }
+    if (removed >= 3) {
+        EXPECT_FALSE(std::filesystem::exists(dir_b));
+    }
+    if (removed >= 4) {
+        EXPECT_FALSE(std::filesystem::exists(dir_a));
+    }
 }
 
 TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_StopsAtNonEmpty) {
@@ -845,7 +859,21 @@ TEST_F(FilesystemUtilsNfsSafetyTest, RemoveEmptyParentDirectories) {
     // In containerized environments, we may get 2 instead of 3 if is_empty fails
     EXPECT_GE(removed, 2u);
     EXPECT_LE(removed, 3u);
-    EXPECT_FALSE(std::filesystem::exists(temp_dir_ / "nfs_a"));
+
+    // Verify that the directories which were reported as removed no longer exist.
+    // We verify from the deepest level based on actual removed count.
+    auto dir_c = temp_dir_ / "nfs_a" / "nfs_b" / "nfs_c";
+    auto dir_b = temp_dir_ / "nfs_a" / "nfs_b";
+    auto dir_a = temp_dir_ / "nfs_a";
+    if (removed >= 1) {
+        EXPECT_FALSE(std::filesystem::exists(dir_c));
+    }
+    if (removed >= 2) {
+        EXPECT_FALSE(std::filesystem::exists(dir_b));
+    }
+    if (removed >= 3) {
+        EXPECT_FALSE(std::filesystem::exists(dir_a));
+    }
 }
 
 // ============================================================================
