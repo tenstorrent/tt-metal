@@ -747,7 +747,7 @@ jobs:
           # Reconstruct from ttnn_ops_v2 schema (V2 format with per-tensor placement)
           python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
             model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json \
-            ttnn_ops_v2
+            ttnn_ops_v2_5
 
       - name: Upload master JSON artifacts
         uses: actions/upload-artifact@v4
@@ -1163,7 +1163,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    timeout-minutes: 720
+    timeout-minutes: 60
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository

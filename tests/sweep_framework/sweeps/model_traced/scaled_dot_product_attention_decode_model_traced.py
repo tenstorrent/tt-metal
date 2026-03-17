@@ -5,7 +5,13 @@
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Import helper functions from unit test
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
@@ -15,26 +21,38 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     get_chunk_size,
 )
 
-TIMEOUT = 60
+TIMEOUT = 300
 
 
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("transformer::scaled_dot_product_attention_decode", all_cases=False)
+model_traced_params = loader.get_suite_parameters("transformer::scaled_dot_product_attention_decode")
 
 
 def mesh_device_fixture():
-    """
-    Device fixture with DispatchCoreConfig to maximize available compute cores.
-    Required for operations needing large compute grids (e.g., 8x8 = 64 cores).
-    """
-    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
-    yield (device, "Wormhole with DispatchCoreConfig")
-    ttnn.close_device(device)
+    mesh_shape = get_mesh_shape()
+    if mesh_shape:
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
 
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 8, 1, 64)],
+        "input_a_shape": [(1, 8, 1, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
@@ -60,36 +78,39 @@ if model_traced_params:
 
 
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_b_dtype=None,
-    input_c_dtype=None,  # cur_pos tensor dtype
-    # curtensor layout
-    # curtensor memory config
-    scale=None,  # Extracted from arg8
-    sliding_window_size=None,  # Extracted from arg9
-    is_causal=None,  # Extracted from arg3
-    program_config_compute_grid=None,  # Extracted from arg11
-    program_config_q_chunk_size=None,  # Extracted from arg11
-    program_config_k_chunk_size=None,  # Extracted from arg11
-    compute_kernel_config_math_fidelity=None,  # Extracted from arg12
-    compute_kernel_config_math_approx_mode=None,  # Extracted from arg12
-    compute_kernel_config_fp32_dest_acc_en=None,  # Extracted from arg12
-    compute_kernel_config_packer_l1_acc=None,  # Extracted from arg12
+    input_c_dtype=None,
+    scale=None,
+    sliding_window_size=None,
+    is_causal=None,
+    program_config_compute_grid=None,
+    program_config_q_chunk_size=None,
+    program_config_k_chunk_size=None,
+    compute_kernel_config_math_fidelity=None,
+    compute_kernel_config_math_approx_mode=None,
+    compute_kernel_config_fp32_dest_acc_en=None,
+    compute_kernel_config_packer_l1_acc=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
-    **kwargs,  # Accept any extra parameters
+    **kwargs,
 ) -> list:
     torch.manual_seed(1234)  # Match unit test seed
 
+    is_mesh_device = hasattr(device, "get_num_devices")
+    output_memory_config = kwargs.get("output_memory_config", None)
+    parsed_op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
     # Handle both sample suite (tuple/list) and model_traced suite (dict with keys for multi-input ops)
-    if isinstance(input_shape, dict):
+    if isinstance(input_a_shape, dict):
         # Multi-input operation - extract individual shapes for Q and K
-        shape_q = tuple(input_shape.get("input_a", (1, 8, 1, 64)))
-        shape_k = tuple(input_shape.get("input_b", (1, 8, 2048, 64)))
+        shape_q = tuple(input_a_shape.get("input_a", (1, 8, 1, 64)))
+        shape_k = tuple(input_a_shape.get("input_b", (1, 8, 2048, 64)))
     else:
         # Convert list to tuple if needed
-        shape_q = tuple(input_shape) if isinstance(input_shape, list) else input_shape
+        shape_q = tuple(input_a_shape) if isinstance(input_a_shape, list) else input_a_shape
         # Default K shape for sample - use larger sequence length for KV cache
         b, nh, sq, d = shape_q
         # For decode, K and V have accumulated cache, use 2048 as default cache size
@@ -102,7 +123,6 @@ def run(
     b_k, nh_kv, s_kv, _ = shape_k
 
     # Use unit test's fa_rand() for realistic attention patterns
-    # This creates Gaussian + sparse outliers instead of uniform random
     Q = fa_rand(1, b, nh_q, d)
     K = fa_rand(b, nh_kv, s_kv, d)
     V = fa_rand(b, nh_kv, s_kv, d)
@@ -115,7 +135,6 @@ def run(
     if program_config_k_chunk_size is not None:
         k_chunk_size = int(program_config_k_chunk_size)
     else:
-        # Use unit test's get_chunk_size function
         k_chunk_size = get_chunk_size(cur_pos + 1, s_kv)
 
     # Calculate padded_layer_len (unit test uses this for K/V slicing)
@@ -125,7 +144,6 @@ def run(
     padded_num_heads = nearest_pow_2(nearest_n(nh_q, n=32))
 
     # PyTorch reference - EXACTLY following unit test pattern
-    # Create explicit attention mask (unit test approach)
     attn_mask = torch.zeros((b, padded_num_heads, 1, padded_layer_len))
     for i in range(b):
         start_idx = start_indices[i]
@@ -135,28 +153,28 @@ def run(
     Q_slice = Q[:, :, :nh_q, :].permute(1, 2, 0, 3)  # [1, b, nh_q, d] -> [b, nh_q, 1, d]
 
     # Slice K, V to padded_layer_len BEFORE GQA expansion (unit test approach)
-    K_slice = K[:, :, :padded_layer_len, :]  # [b, nh_kv, padded_layer_len, d]
-    V_slice = V[:, :, :padded_layer_len, :]  # [b, nh_kv, padded_layer_len, d]
+    K_slice = K[:, :, :padded_layer_len, :]
+    V_slice = V[:, :, :padded_layer_len, :]
 
     # GQA: Expand K, V heads to match Q heads if needed
     if nh_kv < nh_q and nh_q % nh_kv == 0:
         K_slice = torch.cat([K_slice[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1)
         V_slice = torch.cat([V_slice[:, i : i + 1, :, :].repeat(1, nh_q // nh_kv, 1, 1) for i in range(nh_kv)], dim=1)
 
-    attn_mask_slice = attn_mask[:, :nh_q, :, :]  # [b, nh_q, 1, padded_layer_len]
+    attn_mask_slice = attn_mask[:, :nh_q, :, :]
 
     # Compute scale
     compute_scale = d**-0.5 if scale is None else float(scale)
 
-    # PyTorch SDPA with explicit mask (unit test uses is_causal=False with explicit mask)
+    # PyTorch SDPA with explicit mask
     torch_output_ref = torch.nn.functional.scaled_dot_product_attention(
         Q_slice,
         K_slice,
         V_slice,
         attn_mask=attn_mask_slice,
         scale=compute_scale,
-        is_causal=False,  # Use explicit mask instead of implicit causal
-    )  # [b, nh_q, 1, d]
+        is_causal=False,
+    )
 
     # Reshape to match TTNN output format: [b, nh_q, 1, d] -> [1, b, nh_q, d]
     torch_output = torch_output_ref.squeeze(2).unsqueeze(0)
@@ -177,14 +195,14 @@ def run(
     tt_K = ttnn.as_tensor(
         K,
         device=device,
-        dtype=input_b_dtype or input_a_dtype,
+        dtype=input_b_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
     )
     tt_V = ttnn.as_tensor(
         V,
         device=device,
-        dtype=input_c_dtype or input_a_dtype,
+        dtype=input_c_dtype,
         layout=ttnn.TILE_LAYOUT,
         memory_config=dram_memcfg,
     )
@@ -207,26 +225,48 @@ def run(
     # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
     output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
 
-    # Build program_config if parameters are provided (from arg11)
+    # Build program_config - prefer V2 format (single dict) over V1 split params
+    # Validate that the traced grid fits the test device to avoid TT_FATAL
+    device_grid = device.compute_with_storage_grid_size()
+    device_cores = device_grid.x * device_grid.y
+
     program_config = None
-    if all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
-        # Parse compute_grid if it's a list/tuple
+    pc_dict = kwargs.get("program_config")
+    if isinstance(pc_dict, dict):
+        # Check grid size before constructing program config
+        cg = pc_dict.get("compute_with_storage_grid_size", {})
+        if isinstance(cg, dict):
+            pc_cores = int(cg.get("x", 8)) * int(cg.get("y", 8))
+        else:
+            pc_cores = 0
+        if pc_cores <= device_cores:
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
+
+            program_config = dict_to_program_config(pc_dict)
+    elif all([program_config_compute_grid, program_config_q_chunk_size, program_config_k_chunk_size]):
+        # Legacy V1 split params fallback
         if isinstance(program_config_compute_grid, (list, tuple)) and len(program_config_compute_grid) == 2:
             grid = tuple(program_config_compute_grid)
         else:
-            grid = (8, 8)  # Default fallback
+            grid = (8, 8)
 
-        program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid,
-            q_chunk_size=int(program_config_q_chunk_size),
-            k_chunk_size=int(program_config_k_chunk_size),
-            exp_approx_mode=False,  # Default
-        )
+        if grid[0] * grid[1] <= device_cores:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=int(program_config_q_chunk_size),
+                k_chunk_size=int(program_config_k_chunk_size),
+                exp_approx_mode=False,
+            )
 
-    # Build compute_kernel_config if parameters are provided (from arg12)
+    # Build compute_kernel_config - prefer V2 format (single dict) over V1 split params
     compute_kernel_config = None
-    if compute_kernel_config_math_fidelity is not None:
-        # Map string fidelity to enum
+    ckc_dict = kwargs.get("compute_kernel_config")
+    if isinstance(ckc_dict, dict) and "math_fidelity" in ckc_dict:
+        from tests.sweep_framework.master_config_loader_v2 import dict_to_compute_kernel_config
+
+        compute_kernel_config = dict_to_compute_kernel_config(ckc_dict)
+    elif compute_kernel_config_math_fidelity is not None:
+        # Legacy V1 split params fallback
         math_fidelity_map = {
             "HiFi4": ttnn.MathFidelity.HiFi4,
             "HiFi3": ttnn.MathFidelity.HiFi3,
@@ -269,10 +309,9 @@ def run(
 
     # Run TTNN operation
     output_tensor = ttnn.transformer.scaled_dot_product_attention_decode(tt_Q, tt_K, tt_V, **op_kwargs)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
 
     # Slice output to match Q heads (following unit test pattern)
-    # Output shape: [1, b, ?, d] - slice to [1, b, nh_q, d]
     output_tensor = output_tensor[:, :, :nh_q, :]
 
     e2e_perf = stop_measuring_time(start_time)
