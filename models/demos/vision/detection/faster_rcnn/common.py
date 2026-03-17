@@ -120,6 +120,7 @@ def load_torch_faster_rcnn(pretrained=True, min_size=320, max_size=320):
     else:
         model = fasterrcnn_resnet50_fpn(
             weights=None,
+            weights_backbone=None,
             num_classes=FASTER_RCNN_NUM_CLASSES,
             min_size=min_size,
             max_size=max_size,

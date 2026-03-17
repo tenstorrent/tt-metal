@@ -75,8 +75,9 @@ class TtFPN:
         top_torch = ttnn.to_torch(ttnn.from_device(top))
         nhw = top_torch.shape[2]
         c = top_torch.shape[3]
-        h_top = int(math.sqrt(nhw // self.batch_size))
-        w_top = h_top
+        spatial_top = nhw // self.batch_size
+        h_top = int(math.sqrt(spatial_top))
+        w_top = spatial_top // h_top
 
         top_4d = top_torch.reshape(self.batch_size, h_top, w_top, c).permute(0, 3, 1, 2)
         upsampled = torch.nn.functional.interpolate(top_4d, size=(target_h, target_w), mode="nearest")
@@ -101,7 +102,7 @@ class TtFPN:
         nhw = tensor.shape[2]
         spatial = nhw // self.batch_size
         h = int(math.sqrt(spatial))
-        w = h
+        w = spatial // h
         return h, w
 
     def __call__(self, features):
@@ -135,8 +136,9 @@ class TtFPN:
         p5_torch = ttnn.to_torch(ttnn.from_device(results[3]))
         nhw = p5_torch.shape[2]
         c = p5_torch.shape[3]
-        h = int(math.sqrt(nhw // self.batch_size))
-        w = h
+        spatial_p5 = nhw // self.batch_size
+        h = int(math.sqrt(spatial_p5))
+        w = spatial_p5 // h
         p5_4d = p5_torch.reshape(self.batch_size, h, w, c).permute(0, 3, 1, 2)
         p6 = torch.nn.functional.max_pool2d(p5_4d, kernel_size=1, stride=2, padding=0)
         p6_nhwc = p6.permute(0, 2, 3, 1).contiguous()

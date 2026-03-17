@@ -66,7 +66,7 @@ class TtRPNHead:
         """Run a single convolution on a feature tensor."""
         spatial = feature.shape[2] // self.batch_size
         h = int(math.sqrt(spatial))
-        w = h
+        w = spatial // h
 
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
@@ -247,6 +247,15 @@ class TtFasterRCNN:
             image_list, _ = self.torch_transform(images_tensor)
             transformed_images = image_list.tensors
             image_sizes = image_list.image_sizes
+
+            t_h, t_w = transformed_images.shape[2], transformed_images.shape[3]
+            if t_h != t_w:
+                raise ValueError(
+                    f"TTNN Faster-RCNN requires square inputs after transform, "
+                    f"got {t_h}x{t_w}. Set min_size == max_size in the model "
+                    f"config (e.g. both to {max(t_h, t_w)}) so that "
+                    f"GeneralizedRCNNTransform produces a square batch tensor."
+                )
 
             nhwc = transformed_images.permute(0, 2, 3, 1).contiguous()
             nhwc = torch.nn.functional.pad(nhwc, (0, 16 - nhwc.shape[-1]), value=0)
