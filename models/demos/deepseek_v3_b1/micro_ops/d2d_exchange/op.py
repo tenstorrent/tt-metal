@@ -123,6 +123,7 @@ class SocketInterface:
 
         if receiver_mesh.get_mesh_device():
             if downstream_socket is not None:
+                # If an existing socket is provided, assert that it is on the receiver mesh
                 assert downstream_socket.get_mesh_device().get_system_mesh_id() == receiver_mesh.get_mesh_id()
                 self.downstream_socket = downstream_socket
                 assert downstream_core_coord is None
@@ -131,6 +132,7 @@ class SocketInterface:
                 socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                 self.downstream_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
+                # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
 
         self.page_size = page_size
@@ -142,11 +144,13 @@ class SocketInterface:
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
 
         if self.local_socket:
+            # If running on a host/process where the sender and receiver meshes are the local mesh, create a local socket pair
             socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
             self.internal_socket_pair = ttnn.create_socket_pair(
                 sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config
             )
         else:
+            # If running across multiple hosts/processes create a single socket interface
             socket_config = ttnn.SocketConfig(
                 connections=[socket_connection],
                 memory_config=socket_memory_config,
@@ -189,6 +193,7 @@ class SocketInterface:
         my_downstream_socket,
         packet_header_cb_index,
     ):
+        # Upstream Socket (feeding this stage) and Downstream Socket (draining this stage) must be on my_core.
         assert my_upstream_socket.get_active_cores()[0] == my_core_coord
         assert my_downstream_socket.get_active_cores()[0] == my_core_coord
 

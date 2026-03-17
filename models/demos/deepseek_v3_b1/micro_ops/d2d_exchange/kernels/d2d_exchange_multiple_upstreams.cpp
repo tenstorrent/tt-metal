@@ -210,7 +210,7 @@ void kernel_main() {
                 break;
             }
 
-            if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1)) {
+            if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
                 DPRINT << "Processing worker idx: " << worker_idx << "\n";
                 uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
                 uint64_t dst_addr = dst_addr_base + worker_idx * upstream_page_size;
