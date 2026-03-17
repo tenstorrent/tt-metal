@@ -224,7 +224,7 @@ class TTNNPagedAttentionKVCache(Cache):
             k_cache,
             v_cache,
             page_table_tensor=page_table,
-            cur_pos_tensor=current_pos,
+            cur_pos_tensor=ttnn.slice(current_pos, [0], [1]),
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
@@ -1105,6 +1105,154 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         )
         self._kv_a_ln_eps = kv_a_ln.variance_epsilon
 
+        self._mesh_mapper = mesh_mapper
+
+        half_dim = self.qk_rope_head_dim // 2
+        perm_idx = torch.arange(half_dim).repeat_interleave(2).reshape(1, 1, 1, -1).to(torch.int32)
+        self._rope_perm_idx = ttnn.from_torch(
+            perm_idx,
+            device=self.device,
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if self.device.get_num_devices() > 1:
+            self._cos_sin_mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+        else:
+            self._cos_sin_mesh_composer = None
+
+        tile_size = 32
+        shard_h = ((self.num_heads + tile_size - 1) // tile_size) * tile_size
+        self._decode_shard_cfg = ttnn.create_sharded_memory_config(
+            shape=(shard_h, self.qk_head_dim),
+            core_grid=ttnn.CoreGrid(y=1, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+        if self.device.get_num_devices() > 1:
+            buf_shape = (1, 1, self.num_heads, self.qk_head_dim)
+            buf_torch = torch.zeros(buf_shape, dtype=torch.bfloat16)
+            self._q_decode_buf = ttnn.from_torch(
+                buf_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            self._k_decode_buf = ttnn.from_torch(
+                buf_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+            self._v_decode_buf = ttnn.from_torch(
+                buf_torch,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
+
+        config = self._fallback_torch_layer.config
+        rope_scaling = getattr(config, "rope_scaling", {}) or {}
+        rope_theta = float(rope_scaling.get("rope_theta", getattr(config, "rope_theta", 10000.0)))
+        dim = self.qk_rope_head_dim
+        max_rope_seq = min(getattr(config, "max_position_embeddings", 8192), 8192)
+        inv_freq = 1.0 / (rope_theta ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        t = torch.arange(max_rope_seq, dtype=torch.float32)
+        freqs = torch.outer(t, inv_freq)
+        cos_table = freqs.cos().repeat_interleave(2, dim=-1).unsqueeze(0).unsqueeze(0)
+        sin_table = freqs.sin().repeat_interleave(2, dim=-1).unsqueeze(0).unsqueeze(0)
+        self._rope_cos_table_torch = cos_table
+        self._rope_sin_table_torch = sin_table
+        self._rope_cos_table = ttnn.from_torch(
+            cos_table,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._rope_sin_table = ttnn.from_torch(
+            sin_table,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Flat tables for embedding lookup during decode
+        cos_table_flat = cos_table.squeeze(0).squeeze(0)
+        sin_table_flat = sin_table.squeeze(0).squeeze(0)
+        self._rope_cos_table_flat = ttnn.from_torch(
+            cos_table_flat,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._rope_sin_table_flat = ttnn.from_torch(
+            sin_table_flat,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        decode_cos = cos_table[:, :, :1, :].contiguous()
+        self._decode_cos_buf = ttnn.from_torch(
+            decode_cos,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._decode_sin_buf = ttnn.from_torch(
+            decode_cos,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        self._cur_pos_buf = ttnn.from_torch(
+            torch.zeros(32, dtype=torch.int32),
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if self.device.get_num_devices() > 1:
+            sub_device_crs = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(
+                            self.device.compute_with_storage_grid_size().x - 1,
+                            self.device.compute_with_storage_grid_size().y - 1,
+                        ),
+                    )
+                }
+            )
+            self._trace_ag_sems = [
+                [ttnn.create_global_semaphore(self.device, sub_device_crs, 0) for _ in range(2)] for _ in range(2)
+            ]
+            self._trace_barrier_sems = [ttnn.create_global_semaphore(self.device, sub_device_crs, 0) for _ in range(2)]
+            self._ag_cycle_idx = 0
+
     @property
     def _is_distributed(self):
         return (
@@ -1373,17 +1521,16 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         # --- resolve cache position to a 1-D torch int32 tensor [batch] ---
         if cache_position is None:
             cur_pos = past_key_values.get_seq_length(layer_idx)
-            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
+            cache_position_tensor = torch.tensor([cur_pos] * 32, dtype=torch.int32)
         else:
             cp = cache_position
             if isinstance(cp, TorchTTNNTensor):
                 cp = cp.to_torch
             if isinstance(cp, ttnn.Tensor):
-                mesh_composer = None
-                if hasattr(cp, "device") and cp.device() is not None and cp.device().get_num_devices() > 1:
-                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
-                cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
-            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
+                cp = ttnn.to_torch(cp, mesh_composer=self._cos_sin_mesh_composer)
+
+            val = cp.flatten()[0].item()
+            cache_position_tensor = torch.tensor([val] * 32, dtype=torch.int32)
 
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
 
@@ -1393,9 +1540,46 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             device=self.device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=self._mesh_mapper,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.copy(cur_pos_dev, self._cur_pos_buf)
+
+    def _forward_decode_paged(
+        self,
+        hidden_states: ttnn.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[ttnn.Tensor],
+        past_key_values: "TTNNPagedAttentionKVCache",
+        cache_position: Optional[torch.LongTensor],
+    ) -> tuple[ttnn.Tensor, Optional[torch.Tensor]]:
+        batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
+        layer_idx = self._fallback_torch_layer.layer_idx
+        cur_pos_tt = self._cur_pos_buf
+        self._use_trace_sems = True
+        self._ag_cycle_idx = 0
+
+        # On-device RoPE lookup
+        cur_pos_uint32 = ttnn.typecast(cur_pos_tt, ttnn.uint32)
+        # embedding expects a 1D tensor of indices, so we just take the first element
+        # but since typecast required a multiple of 32, we padded to 32.
+        # we can slice it back to 1 for the embedding lookup.
+        cur_pos_uint32_single = ttnn.slice(cur_pos_uint32, [0], [1])
+        cos_dev = ttnn.embedding(cur_pos_uint32_single, self._rope_cos_table_flat)
+        sin_dev = ttnn.embedding(cur_pos_uint32_single, self._rope_sin_table_flat)
+        # ttnn.deallocate(cur_pos_uint32)
+        # ttnn.deallocate(cur_pos_uint32_single)
+        cos_dev = ttnn.reshape(cos_dev, (1, 1, 1, self.qk_rope_head_dim))
+        sin_dev = ttnn.reshape(sin_dev, (1, 1, 1, self.qk_rope_head_dim))
+        cos_dev = ttnn.to_layout(cos_dev, ttnn.TILE_LAYOUT)
+        sin_dev = ttnn.to_layout(sin_dev, ttnn.TILE_LAYOUT)
+
+        decode_pos_embeddings = (cos_dev, sin_dev)
+        query_states, key_states, value_states, _, _ = self._project_qkv(
+            hidden_states, batch_size, seq_length, decode_pos_embeddings, rope_precomputed=True
+        )
+        ttnn.deallocate(cos_dev)
+        ttnn.deallocate(sin_dev)
 
         # --- permute B H S D  →  S B H D  (the layout paged kernels expect) ---
         query_states = ttnn.permute(query_states, (2, 0, 1, 3))
@@ -1425,12 +1609,13 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         key_states = ttnn.to_memory_config(key_states, shard_cfg)
         value_states = ttnn.to_memory_config(value_states, shard_cfg)
 
-        # --- update the on-device paged KV cache ---
+        # We need to pass a single index to paged_update_cache, so we slice the padded tensor
+        cur_pos_tt_single = ttnn.slice(cur_pos_tt, [0], [1])
         past_key_values.paged_update_on_device(
             key_states,
             value_states,
             layer_idx=layer_idx,
-            current_pos=cur_pos_tt,
+            current_pos=cur_pos_tt_single,
         )
         ttnn.deallocate(key_states)
         ttnn.deallocate(value_states)

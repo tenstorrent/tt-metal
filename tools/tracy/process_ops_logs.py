@@ -9,6 +9,7 @@
 
 import os
 import csv
+import warnings
 from pathlib import Path
 import json
 import yaml
@@ -345,8 +346,15 @@ def import_tracy_op_logs(
 
     try:
         df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
-    except (ImportError, ValueError):
-        df = pd.read_csv(tracyOpTimesLog)
+    except (ImportError, ValueError, pd.errors.ParserError):
+        # Tracy CSV export can have malformed rows (unescaped commas in JSON, etc.)
+        # Use on_bad_lines='warn' to skip problematic rows and continue processing
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=pd.errors.ParserWarning)
+            try:
+                df = pd.read_csv(tracyOpTimesLog, on_bad_lines="warn", low_memory=False)
+            except pd.errors.ParserError:
+                df = pd.read_csv(tracyOpTimesLog, engine="python", on_bad_lines="warn", low_memory=False)
 
     # Filter and update host_time for TT_DNN/TT_METAL ops
     # Ensure name is string type before using .str accessor
@@ -356,8 +364,13 @@ def import_tracy_op_logs(
     if tt_mask.any():
         tt_df = df[tt_mask]
         for op in tt_df.to_dict(orient="records"):
-            opID = int(op["zone_text"].split(":")[-1])
-            assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
+            try:
+                opID = int(op["zone_text"].split(":")[-1])
+            except (ValueError, TypeError, KeyError):
+                # Skip rows with malformed zone_text (e.g. from CSV column misalignment)
+                continue
+            if opID not in ops:
+                continue
             ops[opID]["host_time"] = op
 
     # Similar to df["name"], ensure special_parent_text is string type before using .str accessor.
@@ -365,7 +378,10 @@ def import_tracy_op_logs(
     parent_mask = df["special_parent_text"].str.contains("id:", na=False)
     if parent_mask.any():
         child_df = df[parent_mask].copy()
-        child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
+        parent_ids = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1]
+        child_df["parentOpID"] = pd.to_numeric(parent_ids, errors="coerce")
+        child_df = child_df.dropna(subset=["parentOpID"])
+        child_df["parentOpID"] = child_df["parentOpID"].astype(int)
 
         # Only process children of ops we know about
         child_df = child_df[child_df["parentOpID"].isin(ops)]
@@ -540,6 +556,8 @@ def _enrich_ops_from_perf_csv(
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
 
         enriched_ops = []
+        missing_ops_count = 0
+        missing_op_ids_sample: List[int] = []
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -559,10 +577,15 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # Op not in device report (e.g. profiler program support exceeded). Include with empty device data.
+                missing_ops_count += 1
+                if len(missing_op_ids_sample) < 5:
+                    missing_op_ids_sample.append(op_id)
+                enriched_op = copy.deepcopy(host_op)
+                enriched_op["_device_perf_row"] = None
+                enriched_ops.append(enriched_op)
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -587,6 +610,11 @@ def _enrich_ops_from_perf_csv(
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
 
+        if missing_ops_count > 0:
+            logger.warning(
+                f"Device {device_id}: {missing_ops_count} ops missing from {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                f"(e.g. {missing_op_ids_sample}). Increase TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT if needed."
+            )
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
 

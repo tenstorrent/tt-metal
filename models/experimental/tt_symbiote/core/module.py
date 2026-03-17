@@ -299,7 +299,22 @@ def run_on_devices(*allowed_archs: DeviceArch):
         def wrapper(self, *args, **kwargs):
             if not hasattr(self, "device") or self.device is None:
                 raise RuntimeError(f"{self.__class__.__name__}: No device set. ")
-            mesh_device = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
+
+            # Fallback to device shape if MESH_DEVICE is not set
+            mesh_device_env = os.environ.get("MESH_DEVICE")
+            if mesh_device_env:
+                mesh_device = MeshShapeToDeviceArch.get(mesh_device_env)
+            else:
+                # Infer from device shape
+                num_devices = self.device.get_num_devices()
+                shape = self.device.shape
+                if num_devices == 8:
+                    mesh_device = DeviceArch.T3K if shape[0] == 1 else DeviceArch.TG
+                elif num_devices == 32:
+                    mesh_device = DeviceArch.BHGLX
+                else:
+                    mesh_device = DeviceArch.T3K  # Default fallback
+
             if mesh_device is None:
                 raise RuntimeError(
                     f"{self.__class__.__name__}: Unable to determine device architecture from MESH_DEVICE environment variable."

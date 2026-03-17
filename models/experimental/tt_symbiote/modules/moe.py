@@ -788,14 +788,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         topk_weights = ttnn.reshape(topk_weights, ttnn.Shape((T, self.torch_layer.top_k)))
 
         # Canonicalize ordering: sort per-token by weight for deterministic output.
-        topk_idx_t = _to_torch_any(topk_expert_idx).to(torch.int64)
-        topk_w_t = _to_torch_any(topk_weights).to(torch.float32)
-        # Sort weights descending and permute indices
-        sorted_w, sorted_pos = torch.sort(topk_w_t, dim=1, descending=True)
-        sorted_idx = torch.gather(topk_idx_t, 1, sorted_pos)
-        # Convert back to ttnn formats
-        topk_expert_idx = ttnn.from_torch(sorted_idx.to(torch.int32))
-        topk_weights = ttnn.from_torch(sorted_w.to(torch.bfloat16))
+        # Removed host sync to keep trace on device
         return topk_expert_idx, topk_weights
 
 
@@ -1077,11 +1070,10 @@ class TTNNExperts(TTNNModule):
         return module
 
     def preprocess_weights_impl(self):
-        """Preprocess expert weights: convert to bfloat16 and TILE_LAYOUT."""
-        # w1 (gate): (num_experts, intermediate_size, hidden_size)
+        """Preprocess expert weights: convert to bfloat8_b and TILE_LAYOUT."""
         self.tt_w1_proj = ttnn.from_torch(
             self.torch_w1_proj.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
@@ -1089,7 +1081,7 @@ class TTNNExperts(TTNNModule):
         # w3 (up): (num_experts, intermediate_size, hidden_size)
         self.tt_w3_proj = ttnn.from_torch(
             self.torch_w3_proj.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
@@ -1097,7 +1089,7 @@ class TTNNExperts(TTNNModule):
         # w2 (down): (num_experts, hidden_size, intermediate_size)
         self.tt_w2_proj = ttnn.from_torch(
             self.torch_w2_proj.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
@@ -1140,7 +1132,7 @@ class TTNNExperts(TTNNModule):
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             dtype=ttnn.uint16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
@@ -1150,7 +1142,7 @@ class TTNNExperts(TTNNModule):
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 

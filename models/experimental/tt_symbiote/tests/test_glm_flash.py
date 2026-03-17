@@ -25,7 +25,6 @@ from models.experimental.tt_symbiote.core.run_config import (
     wrap_to_torch_ttnn_tensor,
 )
 from models.experimental.tt_symbiote.core.utils import tree_map
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 import transformers
@@ -139,6 +138,18 @@ def test_glm(mesh_device, max_new_tokens):
     nn_to_ttnn = {
         model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,
         model.model.layers[1].mlp.__class__: TTNNMoE,
+        model.model.layers[0].input_layernorm.__class__: TTNNDistributedRMSNorm,
+        model.model.layers[0].post_attention_layernorm.__class__: TTNNDistributedRMSNorm,
+        model.model.norm.__class__: TTNNDistributedRMSNorm,
+    }
+
+    from models.experimental.tt_symbiote.modules.linear import (
+        TTNNLinearIColShardedWRowSharded,
+    )
+
+    nn_to_ttnn2 = {
+        nn.Linear: TTNNLinearIColShardedWRowSharded,
+        model.lm_head.__class__: TTNNLinearIColShardedWRowSharded,
     }
     nn_to_ttnn2 = {nn.Linear: TTNNLinearIColShardedWRowSharded}
 
