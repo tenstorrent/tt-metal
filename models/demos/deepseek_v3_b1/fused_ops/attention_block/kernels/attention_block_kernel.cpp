@@ -143,8 +143,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_grid_end_x"),
         get_named_compile_time_arg_val("gather_reduce_grid_end_y"),
         get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
-        get_named_compile_time_arg_val("gather_reduce_half0_cb_id"),
-        get_named_compile_time_arg_val("gather_reduce_half1_cb_id"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half_size_bytes"),
     };
 
     // RMSNorm2 reader args
@@ -442,7 +442,6 @@ void kernel_main() {
     // Note: skip_local_push=1 because gather3 already pushed to CB7 (gather3_dst_cb)
     using CCLReceiverReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
-        get_named_compile_time_arg_val("ccl_receiver_l1_alignment"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in2"),
         get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_x"),
         get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_y"),
@@ -451,10 +450,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
 
-    // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-    using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-    // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
-    using DummyComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
@@ -522,8 +517,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
         get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -739,7 +733,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
-        get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
         get_named_compile_time_arg_val("sdpa_l1_alignment"),
         get_named_compile_time_arg_val("sdpa_page_size_bytes"),
         get_named_compile_time_arg_val("sdpa_slot_size"),
@@ -805,9 +798,7 @@ void kernel_main() {
 
     // CCL Sender BRISC CTArgs (sends via fabric)
     using CCLSenderWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<
-        get_named_compile_time_arg_val("ccl_sender_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_sender_packet_cb_id"),
-        get_named_compile_time_arg_val("ccl_sender_l1_alignment"),
         get_named_compile_time_arg_val("ccl_sender_input_num_tiles"),
         get_named_compile_time_arg_val("ccl_sender_page_size_bytes"),
         get_named_compile_time_arg_val("ccl_sender_payload_size_bytes"),
@@ -818,8 +809,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
         get_named_compile_time_arg_val("ccl_sender_num_connections")>;
 
-    // Dummy ReaderCTArgs - not used by BRISC but needed for Op template
-    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     if constexpr (Core::is_ccl_sender_core) {
         ccl_sender_args = {
@@ -889,8 +878,8 @@ void kernel_main() {
 
     // Gather reduce compute args
     deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_out_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -1105,6 +1094,8 @@ void kernel_main() {
         sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.swap_r1_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.swap_r2_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<0, 0, 0>;
@@ -1116,12 +1107,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
         get_named_compile_time_arg_val("ccl_receiver_cb_out0"),
         get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_temp"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
 
-    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0>;
-    // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     deepseek_compute_kernel_init();
@@ -1238,28 +1226,30 @@ void kernel_main() {
         // work / owns the current KV-cache slot. The normalized (device-local)
         // local_cur_pos is used for kv cache update and flash mla.
         volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
+        invalidate_l1_cache();
         uint32_t cur_pos = pos_ptr[0];
 
         const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
             cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
+        // The first mcast is also used to synchronize downstream ccls, so must always run.
+        // Can revisit this later
+        // ====================================================================
+        // Input core: RMSNorm + Mcast send
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+            rmsnorm(rmsnorm_args);
+        }
+
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
+        }
 
         if (!skip_attention) {
-            // ====================================================================
-            // Input core: RMSNorm + Mcast send
-            // ====================================================================
-            {
-                DeviceZoneScopedN("RMSNORM");
-                deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-                rmsnorm(rmsnorm_args);
-            }
-
-            {
-                DeviceZoneScopedN("MCAST");
-                mcast(mcast_args);
-            }
-
             // ====================================================================
             // Matmul operation
             // ====================================================================
@@ -1569,14 +1559,14 @@ void kernel_main() {
             noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
             noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
-            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
+            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs> ccl_sender_reader;
             ccl_sender_reader(ccl_sender_args);
 #elif defined(COMPILE_FOR_BRISC)
             volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
             noc_semaphore_wait(sync_sem, 2);
             noc_semaphore_set(sync_sem, 0);
-            deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
+            deepseek_b1_ops::AllReduceSender::Op<CCLSenderWriterCTArgs> ccl_sender_writer;
             ccl_sender_writer(ccl_sender_args);
 #endif
         }
@@ -1586,10 +1576,10 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
             // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
             // Should avoid this and not pop in RMSNorm
-            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
+            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs> ccl_receiver_reader;
             ccl_receiver_reader(ccl_receiver_args);
 #elif defined(COMPILE_FOR_TRISC)
-            deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
+            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverComputeCTArgs> ccl_receiver_compute;
             ccl_receiver_compute(ccl_receiver_args);
 #endif
         }
