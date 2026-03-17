@@ -13,8 +13,8 @@
 ### Constants & Data Structures
 
 - [x] **CNST-01**: `MAX_NUM_VCS` bumped from 2 to 3 with all dependent array initializers updated
-- [ ] **CNST-02**: `PerVcBufferSlots` extended with vc2_sender_slots and vc2_receiver_slots fields
-- [ ] **CNST-03**: Buffer slot option tables extended from 4-field to 6-field structs
+- [x] **CNST-02**: `PerVcBufferSlots` extended with vc2_sender_slots and vc2_receiver_slots fields
+- [x] **CNST-03**: Buffer slot option tables extended from 4-field to 6-field structs
 
 ### Channel Mapping
 
@@ -24,9 +24,9 @@
 
 ### Configuration & Enablement
 
-- [ ] **CONF-01**: `FabricConfig` updated with VC2 enable predicate: 2D + Blackhole + no UDM/mux extension
-- [ ] **CONF-02**: VC2 enablement follows existing `IntermeshVCConfig` gating pattern
-- [ ] **CONF-03**: VC2 requires VC1 to be active (VC1 requires 2D + multi-mesh)
+- [x] **CONF-01**: `FabricConfig` updated with VC2 enable predicate: 2D + Blackhole + no UDM/mux extension
+- [x] **CONF-02**: VC2 enablement follows existing `IntermeshVCConfig` gating pattern
+- [x] **CONF-03**: VC2 requires VC1 to be active (VC1 requires 2D + multi-mesh)
 
 ### Builder Integration
 
@@ -78,11 +78,11 @@
 | SREG-01 | Phase 1 | Complete |
 | SREG-02 | Phase 1 | Complete |
 | CNST-01 | Phase 2 | Complete |
-| CNST-02 | Phase 2 | Pending |
-| CNST-03 | Phase 2 | Pending |
-| CONF-01 | Phase 2 | Pending |
-| CONF-02 | Phase 2 | Pending |
-| CONF-03 | Phase 2 | Pending |
+| CNST-02 | Phase 2 | Complete |
+| CNST-03 | Phase 2 | Complete |
+| CONF-01 | Phase 2 | Complete |
+| CONF-02 | Phase 2 | Complete |
+| CONF-03 | Phase 2 | Complete |
 | CMAP-01 | Phase 3 | Pending |
 | CMAP-02 | Phase 3 | Pending |
 | CMAP-03 | Phase 3 | Pending |

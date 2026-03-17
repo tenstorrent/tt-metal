@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in-progress
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-17T03:33:00Z"
-last_activity: 2026-03-17 -- Plan 02-01 executed
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-17T03:43:10Z"
+last_activity: 2026-03-17 -- Plan 02-02 executed
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 2
-  completed_plans: 3
-  percent: 15
+  completed_plans: 4
+  percent: 30
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 ## Current Position
 
 Phase: 2 of 5 (Constants and Config Foundation)
-Plan: 1 of 2 in current phase
-Status: Plan 02-01 complete
-Last activity: 2026-03-17 -- Plan 02-01 executed
+Plan: 2 of 2 in current phase
+Status: Plan 02-02 complete (Phase 2 complete)
+Last activity: 2026-03-17 -- Plan 02-02 executed
 
-Progress: [##........] 15%
+Progress: [###.......] 30%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [##........] 15%
 *Updated after each plan completion*
 | Phase 01 P01 | 4min | 2 tasks | 3 files |
 | Phase 02 P01 | 10min | 2 tasks | 5 files |
+| Phase 02 P02 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,8 @@ Recent decisions affecting current work:
 - [01-02] Added static_assert(STREAM_ID <= 31) for compile-time range validation in WorkerToFabricEdmSenderBase
 - [Phase 01]: StreamRegAssignments restructured into IncrementOnWrite and Scratch sub-structs using hardware register semantics
 - [02-01] Fixed latent bug in test_channel_trimming_capture.cpp: CaptureResults template used num_max_receiver_channels instead of MAX_NUM_VCS
+- [02-02] Split buffer slot tables by VC config group (vc0_only, vc0_vc1, vc0_vc1_vc2) with num_active_vcs selection
+- [02-02] VC2 predicate: requires_vc1 AND Blackhole AND not UDM AND not MUX
 
 ### Pending Todos
 
@@ -77,6 +80,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T03:33:00Z
-Stopped at: Completed 02-01-PLAN.md
-Resume file: .planning/phases/02-constants-config-foundation/02-01-SUMMARY.md
+Last session: 2026-03-17T03:43:10Z
+Stopped at: Completed 02-02-PLAN.md
+Resume file: .planning/phases/02-constants-config-foundation/02-02-SUMMARY.md
