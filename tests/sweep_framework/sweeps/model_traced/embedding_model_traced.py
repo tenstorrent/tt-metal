@@ -6,15 +6,16 @@ from typing import Optional, Tuple
 from functools import partial
 
 import random
+import re
 import torch
 import ttnn
+from ttnn import ShardTensor2dMesh
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 
@@ -52,6 +53,69 @@ parameters = {
 # Only add model_traced suite if it has valid configurations
 if model_traced_params:
     parameters["model_traced"] = model_traced_params
+
+
+def _parse_mesh_shape(mesh_device_shape):
+    """Parse mesh_device_shape which may be a list, tuple, or string like '[4, 8]'."""
+    if isinstance(mesh_device_shape, (list, tuple)):
+        return tuple(int(x) for x in mesh_device_shape)
+    if isinstance(mesh_device_shape, str):
+        nums = re.findall(r"\d+", mesh_device_shape)
+        if len(nums) >= 2:
+            return tuple(int(x) for x in nums[:2])
+    return None
+
+
+def _parse_shard_dims_from_placement(tensor_placement):
+    """Extract (dim0, dim1) for ShardTensor2dMesh from tensor_placement dict.
+
+    Returns None when the field cannot be parsed.
+    """
+    if not tensor_placement:
+        return None
+    placement = tensor_placement.get("placement", "")
+    if isinstance(placement, list):
+        placement = " ".join(str(p) for p in placement)
+    dims = []
+    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+        if m.group(1) is not None:
+            dims.append(int(m.group(1)))
+        else:
+            dims.append(None)
+    return tuple(dims) if len(dims) == 2 else None
+
+
+def _create_mesh_tensor(torch_tensor, device, dtype, layout, memory_config, tensor_placement, mesh_shape):
+    """Create a TTNN tensor on a mesh device with placement matching the model trace.
+
+    Builds a global tensor by repeating the per-device tensor along shard dims,
+    then distributes with ShardTensor2dMesh so each device gets the original shape.
+    Falls back to ReplicateTensorToMesh when no shard dims are found.
+    """
+    shard_dims = _parse_shard_dims_from_placement(tensor_placement)
+    if shard_dims is not None and any(d is not None for d in shard_dims):
+        repeat_factors = [1] * torch_tensor.ndim
+        for axis_idx, sd in enumerate(shard_dims):
+            if sd is not None:
+                esd = sd if sd >= 0 else torch_tensor.ndim + sd
+                repeat_factors[esd] *= mesh_shape[axis_idx]
+        global_tensor = torch_tensor.repeat(*repeat_factors)
+        return ttnn.from_torch(
+            global_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+            mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+        )
+    return ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
 
 
 def mesh_device_fixture():
@@ -108,18 +172,21 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
-    # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
 
-    # Check if device is a mesh device (from fixture)
-    is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
+    is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"weight_tensor_placement", "padding_idx"})
 
-    # V2 format provides separate shapes
+    # The model trace captures the weight tensor under the key "weight" when
+    # passed as a keyword argument, and under "arg1" when passed positionally.
+    # The loader maps "weight" → weight_shape and "arg1" → input_b_shape.
+    # Mirror the original calling convention so the tracer records the same key.
+    use_weight_kwarg = input_b_shape is None and weight_shape is not None
+
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Weight shape can come from either input_b_shape or weight_shape parameter
     if input_b_shape is not None:
         weight_shape_actual = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
     elif weight_shape is not None:
@@ -127,49 +194,58 @@ def run(
     else:
         raise ValueError("Either input_b_shape or weight_shape must be provided")
 
-    # Extract num_embeddings from the weight shape (second-to-last dim for ND, first for 2D)
     if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
         num_embeddings = weight_shape_actual[-2]
     else:
         num_embeddings = weight_shape_actual[0]
 
-    # Generate input indices tensor (random integers in range [0, num_embeddings))
     torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)
 
-    # Determine weight dtype, layout, and memory_config
-    # Use weight_* parameters if provided, otherwise fall back to input_b_*
     weight_dtype_actual = weight_dtype if weight_dtype is not None else input_b_dtype
     weight_layout_actual = weight_layout if weight_layout is not None else input_b_layout
     weight_memory_config_actual = weight_memory_config if weight_memory_config is not None else input_b_memory_config
-    weight_tensor_placement = kwargs.get("weight_tensor_placement", input_b_tensor_placement)
 
-    # Generate weight tensor
     torch_weight_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), weight_dtype_actual
     )(weight_shape_actual)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    # torch.nn.functional.embedding requires a 2-D weight; traced configs may have higher-rank shapes like (1,1,N,D)
     torch_weight_2d = torch_weight_tensor.reshape(-1, torch_weight_tensor.shape[-1])
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight_2d).squeeze()
 
-    # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
+
+    # Derive mesh shape from tensor placements for correct distribution
+    mesh_shape = None
+    if is_mesh_device:
+        for tp in [input_a_tensor_placement, weight_tensor_placement]:
+            if tp:
+                mesh_shape = _parse_mesh_shape(tp.get("mesh_device_shape"))
+                if mesh_shape:
+                    break
 
     # Create input tensor (indices)
     if not is_host:
-        if is_mesh_device and input_a_tensor_placement:
-            # Use mesh with placement
-            input_tensor = create_tensor_on_mesh(
+        if is_mesh_device and mesh_shape and input_a_tensor_placement:
+            input_tensor = _create_mesh_tensor(
                 torch_input_tensor,
                 device,
                 input_a_dtype,
                 input_a_layout,
                 input_a_memory_config,
                 input_a_tensor_placement,
+                mesh_shape,
+            )
+        elif is_mesh_device:
+            input_tensor = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
         else:
-            # Regular single-device tensor
             input_tensor = ttnn.from_torch(
                 torch_input_tensor,
                 dtype=input_a_dtype,
@@ -178,23 +254,30 @@ def run(
                 memory_config=input_a_memory_config,
             )
     else:
-        # Host storage
         input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_a_dtype, layout=input_a_layout)
 
     # Create weight tensor
     if not is_host:
-        if is_mesh_device and weight_tensor_placement:
-            # Use mesh with placement
-            weight_tensor = create_tensor_on_mesh(
+        if is_mesh_device and mesh_shape and weight_tensor_placement:
+            weight_tensor = _create_mesh_tensor(
                 torch_weight_tensor,
                 device,
                 weight_dtype_actual,
                 weight_layout_actual,
                 weight_memory_config_actual,
                 weight_tensor_placement,
+                mesh_shape,
+            )
+        elif is_mesh_device:
+            weight_tensor = ttnn.from_torch(
+                torch_weight_tensor,
+                dtype=weight_dtype_actual,
+                layout=weight_layout_actual,
+                device=device,
+                memory_config=weight_memory_config_actual,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
             )
         else:
-            # Regular single-device tensor
             weight_tensor = ttnn.from_torch(
                 torch_weight_tensor,
                 dtype=weight_dtype_actual,
@@ -203,7 +286,6 @@ def run(
                 memory_config=weight_memory_config_actual,
             )
     else:
-        # Host storage
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
@@ -215,7 +297,11 @@ def run(
     if layout is not None:
         emb_kwargs["layout"] = layout
     emb_kwargs.update(op_kwargs)
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **emb_kwargs)
+
+    if use_weight_kwarg:
+        output_tensor = ttnn.embedding(input_tensor, weight=weight_tensor, **emb_kwargs)
+    else:
+        output_tensor = ttnn.embedding(input_tensor, weight_tensor, **emb_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()
