@@ -1,16 +1,10 @@
 name: "Nightly tt-metal L2 tests"
 
-run-name: "Nightly tt-metal L2 tests${{ inputs.enable-watcher && ' with watcher' || '' }}"
-
 on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
-      enable-watcher:
-        default: false
-        type: boolean
-        description: "Enable watcher"
       architecture:
         description: 'Architectures to test: ["blackhole"], ["wormhole_b0"], or both (default)'
         required: false
@@ -102,19 +96,6 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
-  determine-watcher:
-    runs-on: ubuntu-latest
-    outputs:
-      enable-watcher: ${{ steps.check.outputs.enable-watcher }}
-    steps:
-      - id: check
-        run: |
-          if [[ "${{ inputs.enable-watcher }}" == "true" ]]; then
-            echo "enable-watcher=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enable-watcher=false" >> "$GITHUB_OUTPUT"
-          fi
-
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -267,7 +248,7 @@ jobs:
           echo "matrix-blackhole-only=$matrix_bh" >> $GITHUB_OUTPUT
 
   tt-metal-l2-tests:
-    needs: [build-artifact, generate-arch-matrix, determine-watcher]
+    needs: [build-artifact, generate-arch-matrix]
     if: ${{ needs.generate-arch-matrix.outputs.matrix-l2-tests != '[]' }}
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
@@ -282,7 +263,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ needs.determine-watcher.outputs.enable-watcher == 'true' }}
       # Test group selection - default to all enabled for scheduled runs
       run_conv_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',conv,') }}
       run_matmul_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',matmul,') }}
