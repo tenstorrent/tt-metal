@@ -48,7 +48,7 @@ void kernel_main() {
                 // bmm will generate C's tiles C=A*B, MN=MK*KN, in row major order, we just read them from CB and write
                 // out to DRAM
 #ifdef ARCH_QUASAR
-                DPRINT << "writer " << writer_id << " wait_front: dfb" << ENDL();
+                DPRINT << "writer " << writer_id << " wait_front: dfb from " << dfb.get_read_ptr() << ENDL();
                 dfb.wait_front(onetile);
                 uint32_t l1_read_addr = dfb.get_read_ptr();
                 DPRINT << "writer " << writer_id << " async_write_tile: dfb" << ENDL();

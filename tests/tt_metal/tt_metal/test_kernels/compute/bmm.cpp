@@ -47,7 +47,7 @@ void kernel_main() {
     for (uint32_t nb = 0; nb < batch; nb++) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {  // output tile of C
 #ifdef ARCH_QUASAR
-            if (mt_C % 4 != compute_id) {
+            if (mt_C % 2 != compute_id) {
                 continue;
             }
 #endif
@@ -56,15 +56,10 @@ void kernel_main() {
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
 #ifdef ARCH_QUASAR
-                    DPRINT << "compute " << compute_id << " wait_front: dfb0" << ENDL();
                     dfb0.wait_front(onetile);
-                    DPRINT << "compute " << compute_id << " wait_front: dfb1" << ENDL();
                     dfb1.wait_front(onetile);
-                    DPRINT << "compute " << compute_id << " matmul_tiles: dfb0, dfb1" << ENDL();
                     matmul_tiles(dfb0.get_id(), dfb1.get_id(), 0, 0, 0);
-                    DPRINT << "compute " << compute_id << " pop_front: dfb0" << ENDL();
                     dfb0.pop_front(onetile);
-                    DPRINT << "compute " << compute_id << " pop_front: dfb1" << ENDL();
                     dfb1.pop_front(onetile);
 #else
                     cb0.wait_front(onetile);

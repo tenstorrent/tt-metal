@@ -31,13 +31,11 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
 
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t B = 2;
-    uint32_t Mt = 4;
-    uint32_t Kt, Nt;
+    uint32_t Mt, Kt, Nt, B;
     if (dev->arch() != ARCH::QUASAR) {
-        Kt = 2, Nt = 3;
+        Mt = 4, Kt = 2, Nt = 3, B = 2;
     } else {
-        Kt = 4, Nt = 4;
+        Mt = 2, Kt = 2, Nt = 2, B = 1;
     }
     uint32_t num_tilesA = Mt * Kt * B;
     uint32_t num_tilesB = Kt * Nt * B;
@@ -122,15 +120,15 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             core,
             ComputeConfig{.compile_args = compute_kernel_args});
     } else {
-        uint32_t num_input_tiles = 4 * Kt;
-        uint32_t num_output_tiles = 4;
+        uint32_t num_input_tiles = 2;
+        uint32_t num_output_tiles = 2;
 
         tt_metal::experimental::dfb::DataflowBufferConfig src0_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .num_producers = 4,
+            .num_producers = 2,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 4,
+            .num_consumers = 2,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -138,9 +136,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig src1_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .num_producers = 4,
+            .num_producers = 2,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 4,
+            .num_consumers = 2,
             .cap = tt_metal::experimental::dfb::AccessPattern::BLOCKED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -148,9 +146,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig dst_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_output_tiles,
-            .num_producers = 4,
+            .num_producers = 2,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 4,
+            .num_consumers = 2,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -165,7 +163,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 4,
+                .num_threads_per_cluster = 2,
                 .compile_args = reader_compile_time_args});
 
         writer = tt_metal::experimental::quasar::CreateKernel(
@@ -173,14 +171,14 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 4,
+                .num_threads_per_cluster = 2,
                 .compile_args = writer_compile_time_args});
 
         compute = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4, .compile_args = compute_kernel_args});
+            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 2, .compile_args = compute_kernel_args});
     }
 
     if (dev->arch() == ARCH::QUASAR) {

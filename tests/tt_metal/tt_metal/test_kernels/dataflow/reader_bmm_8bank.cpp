@@ -64,7 +64,7 @@ void kernel_main() {
                     // Read A's tile at (mt, kt)
                     {
 #ifdef ARCH_QUASAR
-                        DPRINT << "reader " << reader_id << " reserve_back: dfb0" << ENDL();
+                        DPRINT << "reader " << reader_id << " reserve_back: dfb0 to " << dfb0.get_write_ptr() << ENDL();
                         dfb0.reserve_back(onetile);
                         uint32_t l1_write_addr_in0 = dfb0.get_write_ptr();
                         noc_async_read_tile(itileA, s0, l1_write_addr_in0);
@@ -82,7 +82,7 @@ void kernel_main() {
 
                     {  // Read B's tile at (kt, nt)
 #ifdef ARCH_QUASAR
-                        DPRINT << "reader " << reader_id << " reserve_back: dfb1" << ENDL();
+                        DPRINT << "reader " << reader_id << " reserve_back: dfb1 to " << dfb1.get_write_ptr() << ENDL();
                         dfb1.reserve_back(onetile);
                         uint32_t l1_write_addr_in1 = dfb1.get_write_ptr();
                         noc_async_read_tile(itileB, s1, l1_write_addr_in1);

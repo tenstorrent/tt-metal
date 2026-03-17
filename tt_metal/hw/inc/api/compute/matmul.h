@@ -141,6 +141,7 @@ ALWI void matmul_tiles(
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst)));
 #else
     MATH((llk_math_matmul_tile(idst)));
+    DPRINT << "matmul tiles" << ENDL();
 #endif
 }
 

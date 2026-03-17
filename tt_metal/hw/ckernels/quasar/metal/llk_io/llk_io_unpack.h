@@ -20,6 +20,7 @@ inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_ti
     uint32_t tc_id = experimental::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
 
     TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
+    DPRINT << "llk_wait_tiles: dfb_id " << dfb_id << "tc_id: " << tc_id << ENDL();
 }
 
 /**
@@ -34,6 +35,7 @@ inline void llk_pop_tiles(const std::int32_t dfb_id, const std::int32_t num_tile
 
     // Wait until selected unpackers are reading from L1
     TT_POP_TILES(UNPACK_SEL, num_tiles, tc_id);
+    DPRINT << "llk_pop_tiles: dfb_id " << dfb_id << "tc_id: " << tc_id << ENDL();
 
     // Update the DFB buffer information
     const std::uint32_t num_words = num_tiles * local_dfb_interface.stride_size;
