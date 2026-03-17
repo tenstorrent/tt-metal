@@ -6,9 +6,10 @@
 
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
-
+import math
 import torch
 from torch.nn import functional as F
+import ttnn
 
 try:
     from transformers.integrations.sdpa_attention import sdpa_attention_forward
@@ -16,7 +17,6 @@ except ImportError:
     sdpa_attention_forward = None
     print("Could not import sdpa_attention_forward from transformers.integrations.sdpa_attention. ")
 
-import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
@@ -1047,3 +1047,279 @@ class TTNNSAMAttention(TTNNModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return self._forward_core(x)
+
+
+class TTNNNoTPAttention(TTNNModule):
+    """
+    No Tensor Parallelism Attention using TTNN operations.
+
+    Implements multi-head self-attention with QKV projection and scaled dot product attention.
+    """
+
+    def __init__(self, num_heads, n_local_heads, head_dim, max_seq_len, use_flash_attention):
+        """
+        Initialize attention layer.
+
+        Args:
+            cfg: Configuration dict with num_attention_heads, hidden_size, etc.
+            weights: PyTorch weights dict (optional)
+            device: TTNN device
+        """
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.n_local_heads = n_local_heads
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+        self.use_flash_attention = use_flash_attention
+        self.hidden_size = self.head_dim * self.num_heads
+        self.torch_layer_cp = None
+
+    @classmethod
+    def from_torch(cls, NoTPAttention):
+        """Create TTNN module from PyTorch equivalent."""
+        new_Attn = cls(
+            NoTPAttention.num_heads,
+            NoTPAttention.n_local_heads,
+            NoTPAttention.head_dim,
+            NoTPAttention.max_seq_len,
+            NoTPAttention.use_flash_attention,
+        )
+        new_Attn._fallback_torch_layer = NoTPAttention
+        new_Attn.torch_layer_cp = NoTPAttention
+        return new_Attn
+
+    def preprocess_weights_impl(self):
+        """Convert PyTorch weights to TTNN format (called once)."""
+        # Load QKV projection weights
+        qkv_weight = self.torch_layer_cp.qkv_proj.weight.data  # (hidden_size * 3, hidden_size)
+        qkv_bias = None
+        if self.torch_layer_cp.qkv_proj.bias is not None:
+            qkv_bias = self.torch_layer_cp.qkv_proj.bias.data
+
+        # Split into Q, K, V
+        q_weight = qkv_weight[: self.hidden_size, :].T  # (hidden_size, hidden_size)
+        k_weight = qkv_weight[self.hidden_size : 2 * self.hidden_size, :].T
+        v_weight = qkv_weight[2 * self.hidden_size :, :].T
+
+        # Convert to TTNN
+        self.q_weight = ttnn.from_torch(
+            q_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.k_weight = ttnn.from_torch(
+            k_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.v_weight = ttnn.from_torch(
+            v_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if qkv_bias is not None:
+            q_bias = qkv_bias[: self.hidden_size]
+            k_bias = qkv_bias[self.hidden_size : 2 * self.hidden_size]
+            v_bias = qkv_bias[2 * self.hidden_size :]
+
+            self.q_bias = self.tensor_1d_to_2d_ttnn(q_bias)
+            self.k_bias = self.tensor_1d_to_2d_ttnn(k_bias)
+            self.v_bias = self.tensor_1d_to_2d_ttnn(v_bias)
+        else:
+            self.q_bias = None
+            self.k_bias = None
+            self.v_bias = None
+
+        # Output projection
+        out_weight = self.torch_layer_cp.out_proj.weight.data.T  # (hidden_size, hidden_size)
+        self.out_weight = ttnn.from_torch(
+            out_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        out_bias = self.torch_layer_cp.out_proj.bias.data
+        if out_bias is not None:
+            self.out_bias = self.tensor_1d_to_2d_ttnn(out_bias)
+        else:
+            self.out_bias = None
+
+    def tensor_1d_to_2d_ttnn(self, tensor_1d: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat16) -> ttnn.Tensor:
+        """
+        Convert 1D PyTorch tensor to 2D TTNN tensor (1, N) for bias operations.
+
+        Args:
+            tensor_1d: 1D PyTorch tensor
+            device: TTNN device
+            dtype: TTNN data type
+
+        Returns:
+            2D TTNN tensor of shape (1, N)
+        """
+        tensor_2d = tensor_1d.unsqueeze(0)
+        return ttnn.from_torch(
+            tensor_2d,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def move_weights_to_device_impl(self):
+        """Move preprocessed weights to device."""
+        self.q_weight = ttnn.to_device(self.q_weight, self.device)
+        self.k_weight = ttnn.to_device(self.k_weight, self.device)
+        self.v_weight = ttnn.to_device(self.v_weight, self.device)
+        self.out_weight = ttnn.to_device(self.out_weight, self.device)
+
+        if self.q_bias is not None and self.k_bias is not None and self.v_bias is not None:
+            self.q_bias = ttnn.to_device(self.q_bias, self.device)
+            self.k_bias = ttnn.to_device(self.k_bias, self.device)
+            self.v_bias = ttnn.to_device(self.v_bias, self.device)
+        if self.out_bias is not None:
+            self.out_bias = ttnn.to_device(self.out_bias, self.device)
+
+    def deallocate_weights_impl(self):
+        """Deallocate device memory."""
+
+        ttnn.deallocate(self.q_weight)
+        ttnn.deallocate(self.k_weight)
+        ttnn.deallocate(self.v_weight)
+        ttnn.deallocate(self.out_weight)
+        if self.q_bias is not None and self.k_bias is not None and self.v_bias is not None:
+            ttnn.deallocate(self.q_bias)
+            ttnn.deallocate(self.k_bias)
+            ttnn.deallocate(self.v_bias)
+        if self.out_bias is not None:
+            ttnn.deallocate(self.out_bias)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Forward pass of attention.
+
+        Args:
+            x: TTNN tensor (batch_size, seq_len, hidden_size)
+
+        Returns:
+            TTNN tensor (batch_size, seq_len, hidden_size)
+        """
+        if isinstance(x, TorchTTNNTensor):
+            x = x.to_ttnn
+            x = ttnn.to_device(x, device=self.device)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        bsz, seqlen, _ = x.shape
+
+        # QKV projections
+        query = ttnn.linear(
+            x,
+            self.q_weight,
+            bias=self.q_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        key = ttnn.linear(
+            x,
+            self.k_weight,
+            bias=self.k_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        value = ttnn.linear(
+            x,
+            self.v_weight,
+            bias=self.v_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Reshape to (batch_size, seqlen, num_heads, head_dim)
+        query = ttnn.reshape(query, (bsz, seqlen, self.num_heads, self.head_dim))
+        key = ttnn.reshape(key, (bsz, seqlen, self.num_heads, self.head_dim))
+        value = ttnn.reshape(value, (bsz, seqlen, self.num_heads, self.head_dim))
+
+        # Permute to (batch_size, num_heads, seqlen, head_dim)
+        query = ttnn.permute(query, (0, 2, 1, 3))
+        key = ttnn.permute(key, (0, 2, 1, 3))
+        value = ttnn.permute(value, (0, 2, 1, 3))
+
+        # Scaled dot product attention
+        scale = 1.0 / math.sqrt(self.head_dim)
+
+        try:
+            # Configure SDPA (chunk sizes must be multiples of TILE_SIZE=32)
+            TILE_SIZE = 32
+            chunk_size = max(128, ((seqlen + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE)
+
+            device_grid = self.device.compute_with_storage_grid_size()
+            grid_x = min(8, device_grid.x)
+            grid_y = min(8, device_grid.y)
+
+            sdpa_cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(grid_x, grid_y),
+                q_chunk_size=chunk_size,
+                k_chunk_size=chunk_size,
+                exp_approx_mode=False,
+            )
+
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+
+            attention_output = ttnn.transformer.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                scale=scale,
+                is_causal=False,
+                program_config=sdpa_cfg,
+                compute_kernel_config=compute_kernel_config,
+            )
+
+            # Permute back to (batch_size, seqlen, num_heads, head_dim)
+            attention_output = ttnn.permute(attention_output, (0, 2, 1, 3))
+
+            # Reshape to (batch_size, seqlen, hidden_size)
+            attention_output = ttnn.reshape(attention_output, (bsz, seqlen, self.hidden_size))
+        except RuntimeError:
+            q_torch = ttnn.to_torch(query).float()
+            k_torch = ttnn.to_torch(key).float()
+            v_torch = ttnn.to_torch(value).float()
+            attn_out_torch = torch.nn.functional.scaled_dot_product_attention(
+                q_torch, k_torch, v_torch, scale=scale
+            ).to(torch.bfloat16)
+            attn_out_torch = attn_out_torch.permute(0, 2, 1, 3).reshape(bsz, seqlen, self.hidden_size)
+            attention_output = ttnn.from_torch(
+                attn_out_torch,
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        # Output projection
+        output = ttnn.linear(
+            attention_output,
+            self.out_weight,
+            bias=self.out_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Cleanup
+        ttnn.deallocate(query)
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
+        ttnn.deallocate(attention_output)
+
+        output = ttnn.to_torch(output)
+
+        return output

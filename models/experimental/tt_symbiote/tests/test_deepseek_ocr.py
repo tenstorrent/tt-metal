@@ -9,7 +9,6 @@ TTNNDeepseekV2MoE, LlamaAttention, and leaf-op replacements alongside
 the ImageEncoderViT wrapper.
 """
 
-import os
 import torch
 from torch import nn
 from transformers import AutoModel, AutoTokenizer
@@ -20,77 +19,12 @@ from models.experimental.tt_symbiote.modules.attention import LlamaAttention, TT
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC
 from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoE
-from models.experimental.tt_symbiote.tests.deepseek_ocr_vision_model.ttnn_symbiote_vit_model import TTNNVitModel
+from models.experimental.tt_symbiote.modules.conv import TTNNVitModel
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.conv import TTNNImageEncoderViT
 from tqdm import tqdm
-from torch.nn import functional as F
-
-
-def get_abs_pos_sam(abs_pos, tgt_size):
-    dtype = abs_pos.dtype
-    src_size = abs_pos.size(1)
-    if src_size != tgt_size:
-        old_pos_embed = abs_pos.permute(0, 3, 1, 2).to(torch.float32)
-        new_pos_embed = F.interpolate(
-            old_pos_embed,
-            size=(tgt_size, tgt_size),
-            mode="bicubic",
-            antialias=True,
-            align_corners=False,
-        ).to(dtype)
-        return new_pos_embed.permute(0, 2, 3, 1)
-    return abs_pos
-
-
-class LayerNorm2d(nn.Module):
-    def __init__(self, old_layer) -> None:
-        super().__init__()
-        self.weight = old_layer.weight
-        self.bias = old_layer.bias
-        self.eps = old_layer.eps
-
-    @classmethod
-    def from_torch(cls, old_layer):
-        return cls(old_layer)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        u = x.mean(3, keepdim=True)
-        s = (x - u).pow(2).mean(3, keepdim=True)
-        x = (x - u) / torch.sqrt(s + self.eps)
-        x = self.weight * x + self.bias
-        return x
-
-
-class ImageEncoderViT(nn.Module):
-    def __init__(self, old_layer) -> None:
-        super().__init__()
-        self.img_size = old_layer.img_size
-        self.patch_embed = old_layer.patch_embed
-        self.pos_embed = old_layer.pos_embed
-        self.blocks = old_layer.blocks
-        self.neck = nn.Sequential(
-            *[l if isinstance(l, nn.Conv2d) else LayerNorm2d(l) for l in old_layer.neck.children()]
-        )
-        self.net_2 = old_layer.net_2
-        self.net_3 = old_layer.net_3
-
-    @classmethod
-    def from_torch(cls, old_layer):
-        return cls(old_layer)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.patch_embed(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
-        if self.pos_embed is not None:
-            x = x + get_abs_pos_sam(self.pos_embed, x.size(1))
-        for blk in self.blocks:
-            x = blk(x)
-        x = self.neck(x)
-        x2 = self.net_2(x)
-        x3 = self.net_3(x2)
-        return x3.permute(0, 3, 1, 2)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
@@ -109,7 +43,6 @@ def test_deepseek_ocr(device):
 
     # Module-level replacements (nn_to_nn): custom wrappers that rewrite forward()
     nn_to_nn = {
-        # model.model.sam_model.__class__: ImageEncoderViT,
         model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
     }
 
@@ -130,8 +63,7 @@ def test_deepseek_ocr(device):
     }
 
     prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-    test_dir = os.path.dirname(os.path.abspath(__file__))
-    image_file = os.path.join(test_dir, "deepseek_ocr_vision_model", "test.png")
+    image_file = "test.png"
     output_path = "output_deepseek_ocr/"
 
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)

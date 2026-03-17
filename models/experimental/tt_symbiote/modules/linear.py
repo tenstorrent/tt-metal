@@ -4,12 +4,14 @@
 
 """Linear layer implementations for TTNN."""
 
-from torch import nn
 import torch
-from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+from torch import nn
 import ttnn
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
+
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
+from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
 
 @trace_enabled
@@ -307,3 +309,173 @@ class TTNNViTIntermediate(TTNNLinearGelu):
         new_intermediate._fallback_torch_layer = torch_vit_intermediate
         new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
         return new_intermediate
+
+
+class TTNNNoTPFeedForward(TTNNModule):
+    """
+    No Tensor Parallelism Feed Forward using TTNN operations.
+
+    Implements two linear layers with quick_gelu activation.
+    """
+
+    def __init__(
+        self,
+        dim: int = 1024,
+        hidden_dim: int = 4096,
+    ):
+        """
+        Initialize feedforward layer.
+
+        Args:
+            cfg: Configuration dict
+            dim: Input/output dimension
+            hidden_dim: Hidden dimension
+            weights: PyTorch weights dict (optional)
+            device: TTNN device
+        """
+        super().__init__()
+
+        self.dim = dim
+        self.hidden_dim = hidden_dim
+        self.torch_layer_cp = None
+
+    @classmethod
+    def from_torch(cls, NoTPFeedForward):
+        """Create TTNN module from PyTorch equivalent."""
+        new_TPFeedForward = cls(NoTPFeedForward.fc1.in_features, NoTPFeedForward.fc1.out_features)
+        new_TPFeedForward.torch_layer_cp = NoTPFeedForward
+        new_TPFeedForward._fallback_torch_layer = NoTPFeedForward
+        return new_TPFeedForward
+
+    def preprocess_weights_impl(self):
+        """Convert PyTorch weights to TTNN format (called once)."""
+        # FC1 weights
+        fc1_weight = self.torch_layer_cp.fc1.weight.data.T  # (hidden_dim, dim)
+        self.fc1_weight = ttnn.from_torch(
+            fc1_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if self.torch_layer_cp.fc1.bias is not None:
+            fc1_bias = self.torch_layer_cp.fc1.bias.data
+            self.fc1_bias = self.tensor_1d_to_2d_ttnn(fc1_bias)
+        else:
+            self.fc1_bias = None
+
+        # FC2 weights
+        fc2_weight = self.torch_layer_cp.fc2.weight.data.T  # (dim, hidden_dim)
+        self.fc2_weight = ttnn.from_torch(
+            fc2_weight,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        if self.torch_layer_cp.fc2.bias is not None:
+            fc2_bias = self.torch_layer_cp.fc2.bias.data
+            self.fc2_bias = self.tensor_1d_to_2d_ttnn(fc2_bias)
+        else:
+            self.fc2_bias = None
+
+    def tensor_1d_to_2d_ttnn(self, tensor_1d: torch.Tensor, dtype: ttnn.DataType = ttnn.bfloat16) -> ttnn.Tensor:
+        """
+        Convert 1D PyTorch tensor to 2D TTNN tensor (1, N) for bias operations.
+
+        Args:
+            tensor_1d: 1D PyTorch tensor
+            device: TTNN device
+            dtype: TTNN data type
+
+        Returns:
+            2D TTNN tensor of shape (1, N)
+        """
+        tensor_2d = tensor_1d.unsqueeze(0)
+        return ttnn.from_torch(
+            tensor_2d,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def move_weights_to_device_impl(self):
+        """Move preprocessed weights to device."""
+
+        self.fc1_weight = ttnn.to_device(self.fc1_weight, self.device)
+        self.fc2_weight = ttnn.to_device(self.fc2_weight, self.device)
+        if self.fc1_bias is not None:
+            self.fc1_bias = ttnn.to_device(self.fc1_bias, self.device)
+        if self.fc2_bias is not None:
+            self.fc2_bias = ttnn.to_device(self.fc2_bias, self.device)
+
+    def deallocate_weights_impl(self):
+        """Deallocate device memory."""
+
+        ttnn.deallocate(self.fc1_weight)
+        ttnn.deallocate(self.fc2_weight)
+        if self.fc1_bias is not None:
+            ttnn.deallocate(self.fc1_bias)
+        if self.fc2_bias is not None:
+            ttnn.deallocate(self.fc2_bias)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Forward pass of feedforward layer.
+
+        Args:
+            x: TTNN tensor (batch_size, seq_len, dim)
+
+        Returns:
+            TTNN tensor (batch_size, seq_len, dim)
+        """
+        if isinstance(x, TorchTTNNTensor):
+            x = x.to_ttnn
+            x = ttnn.to_device(x, device=self.device)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        # FC1
+        output = ttnn.linear(
+            x,
+            self.fc1_weight,
+            bias=self.fc1_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Quick GELU
+        output = self.quick_gelu_ttnn(output)
+
+        # FC2
+        output = ttnn.linear(
+            output,
+            self.fc2_weight,
+            bias=self.fc2_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        output = ttnn.to_torch(output)
+        return output
+
+    def quick_gelu_ttnn(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Quick GELU activation: x * sigmoid(1.702 * x)
+
+        Args:
+            x: TTNN tensor
+
+        Returns:
+            TTNN tensor with quick_gelu applied
+        """
+        # Compute 1.702 * x
+        scaled = ttnn.multiply(x, 1.702)
+        # Compute sigmoid(1.702 * x)
+        sigmoid_output = ttnn.sigmoid(scaled)
+        # Compute x * sigmoid(1.702 * x)
+        result = ttnn.multiply(x, sigmoid_output)
+
+        ttnn.deallocate(scaled)
+        ttnn.deallocate(sigmoid_output)
+
+        return result
