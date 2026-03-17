@@ -200,7 +200,9 @@ def create_tensor_on_mesh(
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
         try:
-            actual_mesh = mesh_device.shape()
+            actual_mesh = mesh_device.shape
+            if callable(actual_mesh):
+                actual_mesh = actual_mesh()
             actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
         except Exception:
             actual_rows, actual_cols = 1, 1

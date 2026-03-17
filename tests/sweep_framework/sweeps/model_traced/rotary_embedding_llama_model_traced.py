@@ -43,8 +43,11 @@ For other models, RoPE parameters can be provided explicitly via:
 - rope_type: Scaling algorithm ("default", "linear", "llama3", "yarn", "longrope")
 """
 
+import re
+
 import torch
 import ttnn
+from ttnn import ShardTensor2dMesh
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Import helper functions for proper cos/sin generation and transformation matrix.
@@ -64,7 +67,42 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
 )
+
+
+def _parse_mesh_shape(mesh_device_shape):
+    """Parse mesh_device_shape which may be a list, tuple, or string like '[4, 8]'."""
+    if isinstance(mesh_device_shape, (list, tuple)):
+        return tuple(int(x) for x in mesh_device_shape)
+    if isinstance(mesh_device_shape, str):
+        nums = re.findall(r"\d+", mesh_device_shape)
+        if len(nums) >= 2:
+            return tuple(int(x) for x in nums[:2])
+    return None
+
+
+def _parse_shard_dims_from_placement(tensor_placement):
+    """Extract (dim0, dim1) for ShardTensor2dMesh from a traced tensor_placement dict.
+
+    Returns None when the field cannot be parsed or placement is all-Replicate.
+    """
+    if not tensor_placement:
+        return None
+    placement = tensor_placement.get("placement", "")
+    if isinstance(placement, list):
+        placement = " ".join(str(p) for p in placement)
+    if "PlacementShard" not in placement:
+        return None
+    dims = []
+    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+        if m.group(1) is not None:
+            dims.append(int(m.group(1)))
+        else:
+            dims.append(None)
+    return tuple(dims) if len(dims) == 2 else None
+
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -349,6 +387,9 @@ def run(
 
     is_mesh_device = hasattr(device, "get_num_devices")
     input_a_tensor_placement = _kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = _kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = _kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = _kwargs.get("input_d_tensor_placement", None)
     op_kwargs = build_op_kwargs(_kwargs, output_memory_config=output_memory_config)
 
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
@@ -513,7 +554,7 @@ def run(
     # --- Create TTNN Tensors ---
     if is_decode_mode:
         # --- Decode Mode: Create sharded tensors ---
-        # Get core grid for sharding
+        # Get core grid for sharding (per-device; batch = per-device head/batch count)
         core_grid = device.compute_with_storage_grid_size()
         batch_grid = ttnn.num_cores_to_corerangeset(batch, core_grid, row_wise=True)
 
@@ -537,42 +578,87 @@ def run(
             use_height_and_width_as_shard_shape=True,
         )
 
-        # Convert tensors to device as interleaved first, then shard
-        input_tensor_interleaved = ttnn.from_torch(
-            torch_input_tensor,
-            dtype=input_a_dtype,
-            layout=input_a_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_interleaved, shard_mem_config)
+        if is_mesh_device and input_a_tensor_placement:
+            # For model-traced decode configs on a 2D mesh: each tensor has its own
+            # placement (shard dims). Use create_tensor_on_mesh to build the global
+            # tensor (by repeating the per-device tensor on sharded axes) and
+            # distribute it with ShardTensor2dMesh. Then move to HEIGHT_SHARDED.
+            input_tensor_interleaved = create_tensor_on_mesh(
+                torch_input_tensor,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                ttnn.DRAM_MEMORY_CONFIG,
+                input_a_tensor_placement,
+            )
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_interleaved, shard_mem_config)
 
-        cos_cache_interleaved = ttnn.from_torch(
-            torch_cos_cache,
-            dtype=input_b_dtype,
-            layout=input_b_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        cos_cache_tt = ttnn.interleaved_to_sharded(cos_cache_interleaved, shard_mem_config)
+            cos_cache_interleaved = create_tensor_on_mesh(
+                torch_cos_cache,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                ttnn.DRAM_MEMORY_CONFIG,
+                input_b_tensor_placement or input_a_tensor_placement,
+            )
+            cos_cache_tt = ttnn.interleaved_to_sharded(cos_cache_interleaved, shard_mem_config)
 
-        sin_cache_interleaved = ttnn.from_torch(
-            torch_sin_cache,
-            dtype=input_c_dtype,
-            layout=input_c_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        sin_cache_tt = ttnn.interleaved_to_sharded(sin_cache_interleaved, shard_mem_config)
+            sin_cache_interleaved = create_tensor_on_mesh(
+                torch_sin_cache,
+                device,
+                input_c_dtype,
+                input_c_layout,
+                ttnn.DRAM_MEMORY_CONFIG,
+                input_c_tensor_placement or input_a_tensor_placement,
+            )
+            sin_cache_tt = ttnn.interleaved_to_sharded(sin_cache_interleaved, shard_mem_config)
 
-        trans_mat_interleaved = ttnn.from_torch(
-            torch_trans_mat,
-            dtype=input_d_dtype,
-            layout=input_d_layout,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
+            trans_mat_interleaved = create_tensor_on_mesh(
+                torch_trans_mat,
+                device,
+                input_d_dtype,
+                input_d_layout,
+                ttnn.DRAM_MEMORY_CONFIG,
+                input_d_tensor_placement or input_a_tensor_placement,
+            )
+            trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
+        else:
+            # Single-device decode: convert tensors to device as interleaved first, then shard
+            input_tensor_interleaved = ttnn.from_torch(
+                torch_input_tensor,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_interleaved, shard_mem_config)
+
+            cos_cache_interleaved = ttnn.from_torch(
+                torch_cos_cache,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            cos_cache_tt = ttnn.interleaved_to_sharded(cos_cache_interleaved, shard_mem_config)
+
+            sin_cache_interleaved = ttnn.from_torch(
+                torch_sin_cache,
+                dtype=input_c_dtype,
+                layout=input_c_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            sin_cache_tt = ttnn.interleaved_to_sharded(sin_cache_interleaved, shard_mem_config)
+
+            trans_mat_interleaved = ttnn.from_torch(
+                torch_trans_mat,
+                dtype=input_d_dtype,
+                layout=input_d_layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            trans_mat_tt = ttnn.interleaved_to_sharded(trans_mat_interleaved, trans_mat_mem_config)
 
     else:
         # --- Prefill Mode: Use interleaved memory ---
@@ -586,13 +672,28 @@ def run(
                 input_a_tensor_placement,
             )
             cos_cache_tt = create_tensor_on_mesh(
-                torch_cos_cache, device, input_b_dtype, input_b_layout, input_b_memory_config, input_a_tensor_placement
+                torch_cos_cache,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement or input_a_tensor_placement,
             )
             sin_cache_tt = create_tensor_on_mesh(
-                torch_sin_cache, device, input_c_dtype, input_c_layout, input_c_memory_config, input_a_tensor_placement
+                torch_sin_cache,
+                device,
+                input_c_dtype,
+                input_c_layout,
+                input_c_memory_config,
+                input_c_tensor_placement or input_a_tensor_placement,
             )
             trans_mat_tt = create_tensor_on_mesh(
-                torch_trans_mat, device, input_d_dtype, input_d_layout, input_d_memory_config, input_a_tensor_placement
+                torch_trans_mat,
+                device,
+                input_d_dtype,
+                input_d_layout,
+                input_d_memory_config,
+                input_d_tensor_placement or input_a_tensor_placement,
             )
         else:
             input_tensor_a = ttnn.from_torch(
