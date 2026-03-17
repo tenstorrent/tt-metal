@@ -1652,6 +1652,7 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool is_last_ring_iter = true) {
     uint32_t KV_chunks_processed_in_iter = 0;
+    const uint32_t q_per_core = iter_q_end - iter_q_start;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
@@ -2020,7 +2021,6 @@ void sdpa_inner_loop(
 
         // When q_per_core == 1, Q is identical across ring iterations so we keep it
         // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
-        const uint32_t q_per_core = iter_q_end - iter_q_start;
         if (q_per_core > 1 || is_last_ring_iter) {
             cb_pop_front(cb_q_in, q_chunk_tiles);
         }

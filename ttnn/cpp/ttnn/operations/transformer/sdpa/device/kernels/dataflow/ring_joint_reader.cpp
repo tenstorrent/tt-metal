@@ -157,6 +157,10 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
+    // Tracks whether Q has been pushed for q_per_core == 1 optimization.
+    // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
+    bool q_pushed = false;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -234,8 +238,8 @@ void kernel_main() {
             const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
-            // fronted in the CB, so we only need to read it once on ring_iter 0.
-            const bool need_q_read = (q_per_core > 1) || (ring_iter == 0);
+            // fronted in the CB, so we only need to read it once on the first active ring iteration.
+            const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 /**
@@ -357,6 +361,7 @@ void kernel_main() {
                             false /*transpose*/
                         );
                     }
+                    q_pushed = true;
                 }
 
                 // V: either read locally (injector or not participant) or receive from previous core
