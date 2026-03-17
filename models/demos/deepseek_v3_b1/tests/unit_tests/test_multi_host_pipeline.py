@@ -624,9 +624,6 @@ def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, toke
                 torch_input, dtype=ttnn_dtype_from_torch_dtype(token_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
             )
             torch_output = torch.zeros(1, embedding_shape[3], dtype=embedding_dtype)
-            output_tensor = ttnn.from_torch(
-                torch_output, dtype=ttnn_dtype_from_torch_dtype(embedding_dtype), layout=ttnn.ROW_MAJOR_LAYOUT
-            )
             pipeline_block.write_token(input_tensor)
 
         logger.info(f"{vocab_size} token lookups verified successfully over multi-host pipeline")

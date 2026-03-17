@@ -83,6 +83,11 @@ class HostInterface:
             assert h2d_socket and d2h_socket, "Loopback mode requires both H2D and D2H sockets"
             if h2d_socket.get_active_cores()[0] != d2h_socket.get_active_cores()[0]:
                 raise ValueError("Expected Host <-> Device Communication for Blitz Decode to be on the same core.")
+        else:
+            if self.h2d_socket:
+                assert self.h2d_downstream_core is not None
+            if self.d2h_socket:
+                assert self.d2h_upstream_core is not None
 
         self.mesh_device = self.h2d_socket.get_mesh_device() if self.h2d_socket else self.d2h_socket.get_mesh_device()
 
@@ -326,15 +331,21 @@ class HostInterface:
 
         if self.h2d_socket:
             h2d_kernel = self._create_h2d_kernel()
-            h2d_cb_descriptors = self._create_cb_descriptors(
-                self.h2d_mesh_core_coord, h2d_fabric_node_id != my_downstream_fabric_node_id
+            h2d_uses_fabric = (
+                h2d_fabric_node_id is not None
+                and my_downstream_fabric_node_id is not None
+                and h2d_fabric_node_id != my_downstream_fabric_node_id
             )
+            h2d_cb_descriptors = self._create_cb_descriptors(self.h2d_mesh_core_coord, h2d_uses_fabric)
 
         if self.d2h_socket:
             d2h_kernel = self._create_d2h_kernel()
-            d2h_cb_descriptors = self._create_cb_descriptors(
-                self.d2h_mesh_core_coord, d2h_fabric_node_id != my_upstream_fabric_node_id
+            d2h_uses_fabric = (
+                d2h_fabric_node_id is not None
+                and my_upstream_fabric_node_id is not None
+                and d2h_fabric_node_id != my_upstream_fabric_node_id
             )
+            d2h_cb_descriptors = self._create_cb_descriptors(self.d2h_mesh_core_coord, d2h_uses_fabric)
 
         same_device = (
             self.h2d_socket
@@ -379,7 +390,7 @@ class HostInterface:
             h2d_rt_args_ref = h2d_program.kernels[0].runtime_args[self.h2d_mesh_core_coord.core_coord.x][
                 self.h2d_mesh_core_coord.core_coord.y
             ]
-            if h2d_fabric_node_id != my_downstream_fabric_node_id:
+            if h2d_uses_fabric:
                 for idx in range(self.num_fwd_links):
                     fwd_fabric_args = ttnn.setup_fabric_connection(
                         h2d_fabric_node_id,
@@ -399,7 +410,7 @@ class HostInterface:
                 self.d2h_mesh_core_coord.core_coord.y
             ]
 
-            if d2h_fabric_node_id != my_upstream_fabric_node_id:
+            if d2h_uses_fabric:
                 for idx in range(self.num_bwd_links):
                     bwd_fabric_args = ttnn.setup_fabric_connection(
                         d2h_fabric_node_id,
@@ -429,10 +440,16 @@ class HostInterface:
         return ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
     def get_downstream_socket(self):
-        return self.downstream_socket_pair[1]
+        if self.downstream_socket_pair is not None:
+            return self.downstream_socket_pair[1]
+        else:
+            raise ValueError("Downstream socket not available")
 
     def get_upstream_socket(self):
-        return self.upstream_socket_pair[0]
+        if self.upstream_socket_pair is not None:
+            return self.upstream_socket_pair[0]
+        else:
+            raise ValueError("Upstream socket not available")
 
     def terminate(self, sync_devices):
         if self.h2d_socket:

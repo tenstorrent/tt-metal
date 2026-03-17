@@ -145,17 +145,18 @@ class PipelineBlock:
         embedding_tensor,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
-        assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
-        assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to first pipeline stage"
         assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
 
         h2d_device_coord = pipeline_config[self.my_mesh_id].entry_node_coord
-        d2h_device_coord = pipeline_config[self.num_procs].exit_node_coord
 
         embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
 
+        if self.initialize_loopback:
+            assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
+            assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to first pipeline stage"
+            assert d2h_socket_fifo_size >= d2h_socket_page_size
+
         assert h2d_socket_fifo_size >= token_size_bytes
-        assert d2h_socket_fifo_size >= d2h_socket_page_size
         assert downstream_d2d_socket_page_size == embedding_size_bytes
         assert upstream_d2d_socket_page_size == d2h_socket_page_size
 
@@ -168,6 +169,7 @@ class PipelineBlock:
         )
 
         if self.initialize_loopback:
+            d2h_device_coord = pipeline_config[self.num_procs].exit_node_coord
             self.d2h_socket = ttnn.D2HSocket(
                 mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
             )
@@ -177,7 +179,7 @@ class PipelineBlock:
             self.d2h_socket,
             token_size_bytes,
             d2h_socket_page_size,
-            core_to_core_socket_buffer_size=downstream_d2d_socket_page_size,
+            core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
             h2d_downstream_core=ttnn.MeshCoreCoord(
                 pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
             ),
@@ -223,6 +225,7 @@ class PipelineBlock:
     ):
         assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to last pipeline stage"
         assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to last pipeline stage"
+        assert d2h_socket_fifo_size >= d2h_socket_page_size
 
         d2h_device_coord = pipeline_config[self.num_procs - 1].exit_node_coord
         d2h_upstream_core = (
@@ -339,7 +342,10 @@ class PipelineBlock:
         self.d2h_socket.read_tensor(output_tensor)
 
     def get_upstream_socket(self):
-        return self.exit_socket_interface.get_upstream_socket()
+        if hasattr(self, "exit_socket_interface"):
+            return self.exit_socket_interface.get_upstream_socket()
+        elif hasattr(self, "host_io"):
+            return self.host_io.get_upstream_socket()
 
     def get_downstream_socket(self):
         return self.entry_socket_interface.get_downstream_socket()
