@@ -138,7 +138,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 inline Tensor digamma(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
     return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>::invoke(t, m);
 }
-Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt);
 inline Tensor multigammaln(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
     return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>::invoke(
         t, m);

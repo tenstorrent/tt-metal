@@ -14,7 +14,6 @@ namespace ttnn::operations::unary {
 
 enum class UnaryCompositeOpType {
     DIGAMMA,
-    LGAMMA,
     MULTIGAMMALN,
     VAR_HW,
     STD_HW,

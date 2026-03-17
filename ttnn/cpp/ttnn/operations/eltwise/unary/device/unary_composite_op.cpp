@@ -176,13 +176,6 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
     return result;
 }
 
-Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(
-        (x.dtype() == DataType::FLOAT32 || x.dtype() == DataType::BFLOAT16),
-        "LGAMMA supports float32 or bfloat16 inputs");
-    return ttnn::operations::unary::ExecuteUnary<unary::UnaryOpType::LGAMMA>::invoke(x, output_mem_config);
-}
-
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
 Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
@@ -513,12 +506,3 @@ Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& out
 }
 
 }  // namespace ttnn::operations::unary
-
-namespace ttnn {
-Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m) {
-    if (t.dtype() == DataType::BFLOAT16) {
-        return ttnn::operations::unary::_lgamma_fast(t, m);
-    }
-    return ttnn::operations::unary::_lgamma(t, m);
-}
-}  // namespace ttnn
