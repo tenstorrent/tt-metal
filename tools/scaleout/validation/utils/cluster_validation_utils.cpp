@@ -1351,22 +1351,6 @@ void reset_local_ethernet_links(
         }
     }
 
-    // DEBUG: Log how many links will be reset and which ones. If this is 0 for a directed reset,
-    // the link was skipped (likely because it is cross-node and dst host != my host).
-    log_warning(
-        tt::LogDistributed,
-        "[DEBUG reset_local_ethernet_links] {} link(s) queued for local reset (my_host={})",
-        links_to_reset.size(),
-        physical_system_descriptor.my_host_name());
-    for (const auto& link : links_to_reset) {
-        log_warning(
-            tt::LogDistributed,
-            "[DEBUG reset_local_ethernet_links]   chip_id={} chan={} | {}",
-            link.chip_id,
-            link.channel,
-            link.log_message);
-    }
-
     // Perform resets on all links in vector
     send_reset_msg_to_links(links_to_reset);
 }
