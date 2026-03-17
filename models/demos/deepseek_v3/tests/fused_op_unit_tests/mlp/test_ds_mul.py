@@ -18,7 +18,11 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.test_utils import (
     measure_perf_us,
 )
 from models.demos.deepseek_v3.tt.mlp.mlp import MLP
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    even_int_div,
+    get_activation_sharding_core_counts_for_dram_matmul,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -89,14 +93,6 @@ def ds_mul_ttnn(
     # Allow test to override memory_config if needed (e.g., when inputs are in DRAM)
     if output_mem_config is not None:
         mul_cfg["memory_config"] = output_mem_config
-        # When using DRAM output, we need to apply SILU separately
-        if output_mem_config == ttnn.DRAM_MEMORY_CONFIG:
-            mul_cfg.pop("input_tensor_a_activations", None)
-            # Apply SILU before mul for DRAM output
-            if mode == "decode":
-                w1_out = ttnn.silu(w1_out)
-            else:  # prefill
-                w1_out = ttnn.silu(w1_out, memory_config=output_mem_config)
 
     # Call the MLP wrapper
     return MLP._fwd_mul(w1_out, w3_out, mul_cfg)
@@ -132,7 +128,7 @@ def _run_ds_mul_test(
 
     # Use DRAM output since inputs are in DRAM (unit test simplification)
     # In actual MLP forward, inputs would be L1_WIDTH_SHARDED from linear ops
-    tt_output = ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_output = ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode)
 
     # Collect output from all devices and compare
     tt_output_torch = ttnn.to_torch(
@@ -162,7 +158,7 @@ def _run_ds_mul_test(
         perf_profiler.start(step_name)
 
         def op_fn():
-            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode)
 
         perf_us = measure_perf_us(
             mesh_device,
@@ -217,7 +213,7 @@ def _run_ds_mul_test(
         from tracy import signpost
 
         def op_fn():
-            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode, output_mem_config=ttnn.DRAM_MEMORY_CONFIG)
+            return ds_mul_ttnn(tt_w1_out, tt_w3_out, run_config, mode)
 
         for _ in range(PERF_WARMUP_ITERS):
             output = op_fn()
@@ -254,6 +250,7 @@ def _build_mul_inputs(
     force_recalculate_weight_config: bool,
     mode: str,
     seq_len: int,
+    fabric_config: ttnn.FabricConfig,
 ):
     from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 
@@ -265,7 +262,7 @@ def _build_mul_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -294,14 +291,24 @@ def _build_mul_inputs(
     # Compute reference output before sharding
     ref_output = ds_mul_reference(torch_w1_out, torch_w3_out)
 
-    # Convert to TTNN tensors - always start in DRAM, then reshard if needed
-    # This matches how the MLP module receives inputs (from previous ops in DRAM or already sharded)
+    # For decode, use the same L1 width-sharded memory config the linear ops produce.
+    # For prefill, linear ops output to DRAM.
+    if mode == "decode":
+        hidden_dim_per_device = even_int_div(hidden_dim, mesh_width)
+        max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
+        inner_num_cores = max(get_activation_sharding_core_counts_for_dram_matmul(hidden_dim_per_device, max_num_cores))
+        input_memory_config = MLP._get_decode_activation_memory_config(
+            hidden_dim_per_device, inner_num_cores, mesh_device
+        )
+    else:
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+
     tt_w1_out = ttnn.from_torch(
         torch_w1_out,
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -310,7 +317,7 @@ def _build_mul_inputs(
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=input_memory_config,
         layout=ttnn.TILE_LAYOUT,
     )
 
@@ -357,6 +364,7 @@ def test_ds_mul(
     expected_perf_us,
     program_cache_enabled,
     trace_mode,
+    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -386,6 +394,7 @@ def test_ds_mul(
         force_recalculate_weight_config,
         mode,
         seq_len,
+        device_params["fabric_config"],
     )
     _run_ds_mul_test(
         mesh_device,
@@ -471,6 +480,7 @@ def test_ds_mul_single_device(
     expected_perf_us,
     program_cache_enabled,
     trace_mode,
+    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -510,7 +520,7 @@ def test_ds_mul_single_device(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, device_params["fabric_config"])
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,

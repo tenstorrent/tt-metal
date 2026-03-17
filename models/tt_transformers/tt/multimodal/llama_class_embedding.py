@@ -49,5 +49,6 @@ class TtLlamaClassEmbedding(LightweightModule):
             x = ttnn.tilize_with_val_padding(x, output_tensor_shape=output_shape, pad_value=0)
         else:
             x = ttnn.tilize(x)  # Convert back to TILE_LAYOUT
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)  # Convert back to TILE_LAYOUT
 
         return x

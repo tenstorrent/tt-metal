@@ -21,7 +21,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     OpConfigBase,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
+    COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
     USERS_PER_ROW,
     dram_sharded_weight_config,
@@ -93,7 +93,7 @@ class LMHead(AbstractModule):
                     weight_tensor,
                     shard_dims=(-1, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=dram_sharded_weight_config(
                         hidden_dim,
@@ -186,7 +186,7 @@ class LMHead(AbstractModule):
                 program_config=get_dram_sharded_matmul_config(
                     USERS_PER_ROW, hidden_dim, even_int_div(vocab_size, num_devices), input_num_cores, output_num_cores
                 ),
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -238,7 +238,7 @@ class LMHead(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -261,7 +261,6 @@ class LMHead(AbstractModule):
     @staticmethod
     def _fwd_linear(x: ttnn.Tensor, cfg: dict, program_config: Any = None) -> ttnn.Tensor:
         """Wrapper for lm_head linear projection.
-        Matches: forward_decode line 267, forward_prefill line 315-316
 
         Args:
             x: Input tensor
@@ -281,7 +280,7 @@ class LMHead(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         mesh_scatter(x, **cfg["mesh_scatter"])
-        output = ttnn.linear(x, **cfg["linear"])
+        output = cls._fwd_linear(x, cfg)
 
         assert output.memory_config() == cfg["output_memory_config"]
 
@@ -329,8 +328,8 @@ class LMHead(AbstractModule):
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [1, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
 
-        output = ttnn.linear(
-            x, program_config=cls._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"]), **cfg["linear"]
+        output = cls._fwd_linear(
+            x, cfg, program_config=cls._get_prefill_pc(seq_len=effective_seq_len, **cfg["linear_pc_gen"])
         )
         ttnn.deallocate(x)
 
