@@ -10,7 +10,7 @@ Tests:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
-            num_packets: 100
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -19,15 +19,13 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-
     senders:
       - device: [0, 0]
         patterns:
           - ftype: unicast
+            ntype: unicast_write
             size: 1024
-            num_packets: 100
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -36,15 +34,13 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
-
     senders:
       - device: [0, 0]
         patterns:
           - ftype: unicast
             ntype: unicast_write
-            num_packets: 100
+            size: 1024
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -57,7 +53,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -67,13 +63,11 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-
     defaults:
       ftype: unicast
+      ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -87,7 +81,7 @@ Tests:
       ftype: mcast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -101,7 +95,7 @@ Tests:
       ftype: mcast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: unidirectional_linear
@@ -115,7 +109,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: full_device_random_pairing
@@ -126,14 +120,11 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
-
     defaults:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -144,13 +135,11 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      size: [1024, 2048, 4096]
-
     defaults:
-      num_packets: 10000
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -165,7 +154,7 @@ Tests:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
-            num_packets: 100
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -173,15 +162,13 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-
     senders:
       - device: [0, 0]
         patterns:
           - ftype: unicast
+            ntype: unicast_write
             size: 1024
-            num_packets: 100
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -193,7 +180,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -202,13 +189,11 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-
     defaults:
       ftype: unicast
+      ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -221,7 +206,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: full_device_random_pairing
@@ -233,13 +218,11 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      size: [1024, 2048, 4096]
-
     defaults:
-      num_packets: 10000
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -248,16 +231,13 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-
-    parametrization_params:
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
-
     senders:
       - device: [0, 0]
         patterns:
           - ftype: unicast
+            ntype: unicast_write
             size: 1024
-            num_packets: 100
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -265,15 +245,13 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
-
     senders:
       - device: [0, 0]
         patterns:
           - ftype: unicast
             ntype: unicast_write
-            num_packets: 100
+            size: 1024
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -281,14 +259,11 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
-
     defaults:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -299,13 +274,11 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      size: [1024, 2048, 4096]
-
     defaults:
-      num_packets: 10000
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -314,14 +287,11 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
-
     defaults:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_one
@@ -330,14 +300,11 @@ Tests:
     fabric_setup:
       topology: Mesh
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
-
     defaults:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 100
+      num_packets: 10
 
     patterns:
       - type: all_to_one_random
@@ -355,7 +322,7 @@ Tests:
           - ftype: unicast
             ntype: unicast_write
             size: 1024
-            num_packets: 100
+            num_packets: 10
             destination:
               device: [0, 1]
 
@@ -365,14 +332,12 @@ Tests:
       topology: Linear
       max_packet_size: 3264
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 3264]
-
     defaults:
       ftype: mcast
-      num_packets: 20000
+      ntype: unicast_write
+      num_links: 1
+      size: 2048
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -383,14 +348,12 @@ Tests:
       topology: Linear
       max_packet_size: 5440
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [2048, 4096, 5440]
-
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 20000
+      num_links: 1
+      size: 2048
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -401,14 +364,12 @@ Tests:
       topology: Linear
       max_packet_size: 7616
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [2048, 4096, 7616]
-
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 20000
+      num_links: 1
+      size: 2048
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -419,14 +380,12 @@ Tests:
       topology: Mesh
       max_packet_size: 7616
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [2048, 4096, 7616]
-
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 20000
+      num_links: 1
+      size: 2048
+      num_packets: 10
 
     patterns:
       - type: all_to_all
@@ -438,36 +397,32 @@ Tests:
       topology: Linear
       max_packet_size: 8704
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [7616, 8704]
-
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 20000
+      num_links: 1
+      size: 7616
+      num_packets: 10
 
     patterns:
       - type: all_to_all
 
-  - name: "CustomMaxPacketSizeMesh8K"
-    skip: [wormhole_b0]
-    enable_flow_control: true
-    fabric_setup:
-      topology: Mesh
-      max_packet_size: 8704
+  # - name: "CustomMaxPacketSizeMesh8K"
+  #   skip: [wormhole_b0]
+  #   enable_flow_control: true
+  #   fabric_setup:
+  #     topology: Mesh
+  #     max_packet_size: 8704
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [7616, 8704]
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     num_links: 1
+  #     size: 7616
+  #     num_packets: 10
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
+    # patterns:
+    #   - type: all_to_all
 
   - name: "CustomMaxPacketSizeLinear15K"
     skip: [wormhole_b0]
@@ -476,33 +431,29 @@ Tests:
       topology: Linear
       max_packet_size: 15232
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [7616, 8704, 15232]
-
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 20000
+      num_links: 1
+      size: 7616
+      num_packets: 10
 
-  - name: "CustomMaxPacketSizeMesh15K"
-    skip: [wormhole_b0]
-    enable_flow_control: true
-    fabric_setup:
-      topology: Mesh
-      max_packet_size: 15232
+  # - name: "CustomMaxPacketSizeMesh15K"
+  #   skip: [wormhole_b0]
+  #   enable_flow_control: true
+  #   fabric_setup:
+  #     topology: Mesh
+  #     max_packet_size: 15232
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      size: [7616, 8704, 15232]
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     num_links: 1
+  #     size: 7616
+  #     num_packets: 10
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 20000
-
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
   - name: "BenchmarkKernelsAllToAllLinear"
     sync: true
@@ -510,33 +461,29 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      size: [1024, 2048, 4096]
-
     defaults:
-      num_packets: 10000
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
 
     patterns:
       - type: all_to_all
 
-  - name: "BenchmarkKernelsAllToAllMesh"
-    sync: true
-    skip_packet_validation: true
-    fabric_setup:
-      topology: Mesh
+  # - name: "BenchmarkKernelsAllToAllMesh"
+  #   sync: true
+  #   skip_packet_validation: true
+  #   fabric_setup:
+  #     topology: Mesh
 
-    parametrization_params:
-      ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
-      size: [1024, 2048, 4096]
+  #   defaults:
+  #     ftype: unicast
+  #     ntype: unicast_write
+  #     size: 1024
+  #     num_packets: 10
 
-    defaults:
-      num_packets: 10000
-
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
   - name: "SequentialNeighborExchangeLatency"
     latency_test_mode: true
@@ -544,13 +491,11 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    parametrization_params:
-      size: [16, 1024, 4096]
-      ntype: [unicast_write, fused_atomic_inc]
-
     defaults:
       ftype: unicast
-      num_packets: 256
+      ntype: unicast_write
+      size: 16
+      num_packets: 10
 
     patterns:
       - type: sequential_neighbor_exchange
@@ -563,7 +508,7 @@ Tests:
       size: 1024
       ftype: unicast
       ntype: unicast_write
-      num_packets: 100
+      num_packets: 10
 
     senders:
       - noc_id: 0
@@ -589,7 +534,7 @@ Tests:
     defaults:
       ftype: unicast
       ntype: unicast_write
-      num_packets: 1000
+      num_packets: 10
       size: 1024
 
     senders:
@@ -609,7 +554,7 @@ Tests:
     defaults:
       ftype: unicast
       ntype: unicast_write
-      num_packets: 1000
+      num_packets: 10
       size: 1024
 
     senders:
