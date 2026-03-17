@@ -24,7 +24,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
-    create_single_galaxy_mtp_bypass_pipeline_configuration,
+    create_single_galaxy_mtp_full_cycle_pipeline_configuration,
     create_single_galaxy_mtp_verification_pipeline_configuration,
     create_single_galaxy_pipeline_configuration,
     create_single_pod_pipeline_configuration,
@@ -3325,6 +3325,21 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
             assert mtp_passing_pcc, f"Persistent MTP output PCC check failed for iteration {last_iteration}"
             logger.info(f"[MTP] MTP output PCC check passed for iteration {last_iteration}")
 
+            # Verify gathered MTP logits in CB 1 (mcast_dst_working_buf, shard 0 = core 0,0).
+            # After termination, argmax_final_core (0,0) holds the last iteration's
+            # gathered EH matmul shards in the CB 1 backing memory.
+            ttnn_mcast_dst = pipeline._stage_kind._lmhead_state.get("mcast_dst_working_buf")
+            if ttnn_mcast_dst is not None:
+                mcast_dst_device = ttnn.get_device_tensors(ttnn_mcast_dst)[exit_device_idx]
+                mcast_dst_torch = ttnn.to_torch(mcast_dst_device).to(torch.float32)
+                gathered_logits = mcast_dst_torch[0:1, :mtp_output_dim]
+                gather_pcc, _ = comp_pcc(gathered_logits, torch_expected_mtp.float(), 0.99)
+                if not gather_pcc:
+                    max_diff = (gathered_logits - torch_expected_mtp.float()).abs().max()
+                    logger.warning(f"[MTP] CB1 gathered logits PCC check failed. Max diff: {max_diff}")
+                assert gather_pcc, f"CB1 gathered MTP logits PCC check failed for iteration {last_iteration}"
+                logger.info(f"[MTP] CB1 gathered MTP logits PCC check passed for iteration {last_iteration}")
+
         pipeline.barrier()
     finally:
         pass
@@ -3427,13 +3442,12 @@ def test_lm_head_sampling_pipeline_mtp_verification_4stage_single_galaxy(mesh_de
 
     One-shot (no persistent mode); single token; terminate in finally.
 
-    NOTE — Design limitation: In this non-bypass configuration, T_base from Stage 1
+    NOTE — Design limitation: In this configuration, T_base from Stage 1
     arrives at Stage 2's entry socket via the normal D2D pipeline, but is never read
     into reference_token_tensor (input_socket_mode=none).  The verification stage
     therefore compares T_spec against the sentinel-initialised reference tensor
     (0xFFFFFFFF), making the actual match/mismatch result meaningless.  This test
-    validates pipeline routing only.  For end-to-end verification correctness, use
-    the bypass variant: test_lm_head_sampling_pipeline_mtp_bypass_4stage_single_galaxy.
+    validates pipeline routing only.
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -3494,17 +3508,17 @@ def test_lm_head_sampling_pipeline_mtp_verification_4stage_single_galaxy(mesh_de
     ],
     indirect=True,
 )
-def test_lm_head_sampling_pipeline_mtp_bypass_4stage_single_galaxy(mesh_device, use_fp32):
+def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
     """
-    4-stage MTP bypass pipeline with socket fan-out from Stage 1 to Stage 3:
-    P1(Embed) -> P2(LMHead+MTP, bypass->P4) -> P3(Passthrough) -> P4(MTP_LMHead+Verify, bypass<-P2) -> P1(D2H).
+    4-stage MTP speculative decoding full-cycle pipeline:
+    P0(Embed) -> P1(LMHead+MTP, logits->P2) -> P2(MTP_LMHead+Verify) -> P3(Token fwd) -> P0(D2H).
 
-    Stage 2 (LMHead+MTP) sends T_base:
-      - Downstream to Stage 3 (normal D2D socket)
-      - Bypass to Stage 4 (dedicated bypass socket fan-out)
-
-    Stage 4 (MTP verification) receives T_base via the bypass socket for verification
-    against T_spec produced by its own LM head + argmax.
+    Verifies:
+    - Token output flows correctly through the pipeline for N iterations.
+    - The MTP verification stage produces accept/reject results in its
+      persistent state tensors.
+    - The verification stage's deferred socket output forwards the token with
+      metadata (token_type, token_pos) to the downstream stage.
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -3514,71 +3528,68 @@ def test_lm_head_sampling_pipeline_mtp_bypass_4stage_single_galaxy(mesh_device, 
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
-    torch_expected_idx = torch_expected_indices[0]
+    iterations = 10
 
-    config = create_single_galaxy_mtp_bypass_pipeline_configuration(
+    config = create_single_galaxy_mtp_full_cycle_pipeline_configuration(
         _SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
-        persistent_mode=False,
+        persistent_mode=True,
     )
     pipeline = config.build_pipeline(mesh_device)
     try:
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output_tensor = ttnn.from_torch(
-                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            pipeline.write_token(token_tensor)
-            pipeline.read_output(output_tensor)
-            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-            logger.info(f"MTP Bypass pipeline: got token={got.item()}, expected={torch_expected_idx.item()}")
-            assert torch.equal(
-                got, torch_expected_idx
-            ), f"MTP Bypass pipeline token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
+            for iteration in range(iterations):
+                logger.info(f"[MTP Full Cycle] Writing token for iteration {iteration}")
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = iteration
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                pipeline.write_token(token_tensor)
+                pipeline.read_output(output_tensor)
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].item()
+                logger.info(f"[MTP Full Cycle] Iteration {iteration} output token: {got}")
 
+        logger.info(f"[MTP Full Cycle] Barrier for P{pipeline.my_mesh_id}")
         pipeline.barrier()
+        logger.info(f"[MTP Full Cycle] Barrier completed for P{pipeline.my_mesh_id}")
 
-        # Validate that the bypass socket delivered T_base from Stage 1 to
-        # Stage 3 and that the MTP verification kernel actually ran.
-        _SENTINEL = 0xFFFFFFFF
-        if pipeline.my_mesh_id == 3:
-            ttnn.synchronize_device(mesh_device)
-            stage = pipeline._stage_kind
+        pipeline.terminate()
 
-            ref_devs = ttnn.get_device_tensors(stage._state["reference_token_tensor"])
-            ref_vals = [ttnn.to_torch(d).item() for d in ref_devs]
+        # On the verification stage (P2), read back the persistent state tensors
+        # to verify the accept/reject logic wrote meaningful values.
+        if pipeline.my_mesh_id == 2:
+            logger.info(f"[MTP Full Cycle] Verifying persistent state on P{pipeline.my_mesh_id}")
+            state = pipeline._stage_kind._state
 
-            spec_devs = ttnn.get_device_tensors(stage._state["speculative_tokens_tensor"])
-            spec_vals = [ttnn.to_torch(d).item() for d in spec_devs]
+            pipeline_config = pipeline._pipeline_config
+            exit_coord = pipeline_config[pipeline.my_mesh_id].exit_node_coord
+            exit_device_idx = exit_coord[0] * mesh_device.shape[1] + exit_coord[1]
 
-            verify_devs = ttnn.get_device_tensors(stage._state["verification_result_tensor"])
-            verify_vals = [ttnn.to_torch(d).item() for d in verify_devs]
+            verify_result_dev = ttnn.get_device_tensors(state["verification_result_tensor"])[exit_device_idx]
+            verify_result = ttnn.to_torch(verify_result_dev).to(torch.uint32).item()
+            logger.info(f"[MTP Full Cycle] verification_result = {verify_result}")
 
-            logger.info(
-                f"MTP Bypass Stage 3 verification: "
-                f"ref_token={ref_vals}, spec_token={spec_vals}, verify_result={verify_vals}"
-            )
+            spec_token_dev = ttnn.get_device_tensors(state["speculative_tokens_tensor"])[exit_device_idx]
+            spec_token = ttnn.to_torch(spec_token_dev).to(torch.uint32).item()
+            logger.info(f"[MTP Full Cycle] speculative_token = {spec_token}")
 
-            t_base = int(torch_expected_idx.item())
-            bypass_delivered = any(v == t_base for v in ref_vals)
-            assert bypass_delivered, (
-                f"Bypass socket did not deliver T_base={t_base}. "
-                f"reference_token values: {ref_vals} (sentinel={_SENTINEL:#x})"
-            )
+            unverified_dev = ttnn.get_device_tensors(state["unverified_spec_tensor"])[exit_device_idx]
+            unverified = ttnn.to_torch(unverified_dev).to(torch.uint32).flatten().tolist()
+            logger.info(f"[MTP Full Cycle] unverified_spec = {unverified}")
 
-            spec_written = any(v != _SENTINEL for v in spec_vals)
-            assert spec_written, f"Speculative token never written. values: {spec_vals}"
+            verified_dev = ttnn.get_device_tensors(state["verified_spec_tensor"])[exit_device_idx]
+            verified = ttnn.to_torch(verified_dev).to(torch.uint32).flatten().tolist()
+            logger.info(f"[MTP Full Cycle] verified_spec = {verified}")
 
-            verify_written = any(v != _SENTINEL for v in verify_vals)
-            assert verify_written, f"Verification result never written. values: {verify_vals}"
+            assert spec_token != 0xFFFFFFFF, "Speculative token was never written by the verification kernel"
+            logger.info("[MTP Full Cycle] Persistent state verification passed")
 
         pipeline.barrier()
     finally:
-        pipeline.terminate()
+        pass

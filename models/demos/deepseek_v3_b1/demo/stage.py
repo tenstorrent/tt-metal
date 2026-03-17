@@ -42,9 +42,13 @@ num_dram_banks = 8
 mtp_n_per_core = mtp_output_dim // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
-# Bypass fan-out: core used by the d2d_exchange relay for the
-# Stage 1 → Stage 3 bypass socket (must differ from PIPELINE_CORE_COORD).
-BYPASS_D2D_CORE = ttnn.CoreCoord(11, 1)
+# MTP logits relay: core used by the d2d_exchange relay for
+# Stage 1 → Stage 2 MTP logits socket (must differ from PIPELINE_CORE_COORD).
+MTP_LOGITS_D2D_CORE = ttnn.CoreCoord(11, 2)
+
+# MTP logits page/fifo sizing (7168 bf16 = 14336 bytes)
+MTP_LOGITS_PAGE_SIZE_BYTES = mtp_padded_dim * 2
+MTP_LOGITS_FIFO_SIZE = MTP_LOGITS_PAGE_SIZE_BYTES * 2
 
 
 @dataclass
@@ -67,7 +71,7 @@ class StageKind(ABC):
         """Post-creation setup (tensor allocation, etc). Default: no-op."""
 
     def run_auxiliary_sockets(self) -> None:
-        """Start auxiliary (bypass) d2d_exchange kernels. Default: no-op."""
+        """Start auxiliary d2d_exchange kernels. Default: no-op."""
 
     def terminate_auxiliary(self) -> None:
         """Terminate auxiliary sockets. Default: no-op."""
@@ -196,13 +200,10 @@ class MTPVerificationLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        bypass_source_mesh_id: int | None = None,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
-        self._bypass_source_mesh_id = bypass_source_mesh_id
-        self._bypass_socket_interface: SocketInterface | None = None
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -211,7 +212,7 @@ class MTPVerificationLMHeadStage(StageKind):
         pipeline_config = ctx.pipeline_config
         entry_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].entry_node_coord,
-            MTPVerificationLMHeadStage.ARGMAX_FINAL_CORE,
+            MTPVerificationLMHeadStage.LMHEAD_INPUT_CORE,
         )
         exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord,
@@ -342,16 +343,26 @@ class MTPVerificationLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Verification tensors — all on argmax_final_core.
-        # Initialised to 0xFFFFFFFF so tests can distinguish "kernel wrote 0"
-        # from "kernel never wrote".
+        # Verification tensors — all on input_core (mcast_core_grid) so the
+        # verification logic runs locally on the core that receives the token
+        # and controls the mcast, enabling future skip optimization.
         _SENTINEL = 0xFFFFFFFF
+        max_spec_depth = 8
+        input_core_scalar_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(mcast_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+        )
         reference_token_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 1), _SENTINEL, dtype=torch.uint32),
+            torch.full((num_devices, 1, 3), _SENTINEL, dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=output_index_mem_config,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(mcast_core_grid, (1, 3), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
             mesh_mapper=mesh_mapper,
         )
         verification_result_tensor = ttnn.from_torch(
@@ -359,7 +370,7 @@ class MTPVerificationLMHeadStage(StageKind):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=output_index_mem_config,
+            memory_config=input_core_scalar_mem_config,
             mesh_mapper=mesh_mapper,
         )
         speculative_tokens_tensor = ttnn.from_torch(
@@ -367,7 +378,45 @@ class MTPVerificationLMHeadStage(StageKind):
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=output_index_mem_config,
+            memory_config=input_core_scalar_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+        spec_state_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(mcast_core_grid, (1, max_spec_depth), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        unverified_spec_tensor = ttnn.from_torch(
+            torch.full((num_devices, 1, max_spec_depth), _SENTINEL, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=spec_state_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+        verified_spec_tensor = ttnn.from_torch(
+            torch.full((num_devices, 1, max_spec_depth), _SENTINEL, dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=spec_state_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Staging buffer on argmax_final_core: input_core NOC-writes the
+        # 7-uint32 verification output page here, then argmax_final_core
+        # pushes it to the socket CB for BRISC to send downstream.
+        verify_output_staging_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, 1, 8), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(argmax_final_core_grid, (1, 8), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
             mesh_mapper=mesh_mapper,
         )
 
@@ -393,7 +442,11 @@ class MTPVerificationLMHeadStage(StageKind):
             "reference_token_tensor": reference_token_tensor,
             "verification_result_tensor": verification_result_tensor,
             "speculative_tokens_tensor": speculative_tokens_tensor,
-            "lmhead_input_socket": pipeline_block.get_downstream_socket(),
+            "unverified_spec_tensor": unverified_spec_tensor,
+            "verified_spec_tensor": verified_spec_tensor,
+            "verify_output_staging_tensor": verify_output_staging_tensor,
+            "max_spec_depth": max_spec_depth,
+            "token_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
             "out_ready_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
             "barrier_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
@@ -403,34 +456,6 @@ class MTPVerificationLMHeadStage(StageKind):
         }
         if self._persistent_mode:
             self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
-
-        # [BYPASS] Create bypass receiver socket from a non-adjacent upstream stage.
-        if self._bypass_source_mesh_id is not None:
-            source_id = self._bypass_source_mesh_id
-            bypass_send_core = ttnn.MeshCoreCoord(pipeline_config[source_id].exit_node_coord, BYPASS_D2D_CORE)
-            bypass_recv_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, BYPASS_D2D_CORE)
-            bypass_downstream_core = ttnn.MeshCoreCoord(
-                pipeline_config[my_mesh_id].entry_node_coord, cls.ARGMAX_FINAL_CORE
-            )
-            self._bypass_socket_interface = SocketInterface(
-                page_size=TOKEN_PAGE_SIZE_BYTES,
-                socket_fifo_size=TOKEN_FIFO_SIZE,
-                data_size_per_transfer=TOKEN_PAGE_SIZE_BYTES,
-                send_core_coord=bypass_send_core,
-                recv_core_coord=bypass_recv_core,
-                downstream_core_coord=bypass_downstream_core,
-                sender_mesh=MeshWrapper(mesh_id=source_id),
-                receiver_mesh=MeshWrapper(mesh_device),
-            )
-            self._state["bypass_socket_input"] = self._bypass_socket_interface.get_downstream_socket()
-
-    def run_auxiliary_sockets(self) -> None:
-        if self._bypass_socket_interface is not None:
-            self._bypass_socket_interface.run()
-
-    def terminate_auxiliary(self) -> None:
-        if self._bypass_socket_interface is not None:
-            self._bypass_socket_interface.terminate(False)
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state
@@ -457,7 +482,6 @@ class MTPVerificationLMHeadStage(StageKind):
             fabric_scratch_tensor=d["scratch_buffer"],
             fp32_dest_acc_en=self._fp32_dest_acc_en,
             skip_ccl=False,
-            socket_input=d["lmhead_input_socket"],
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
@@ -466,7 +490,11 @@ class MTPVerificationLMHeadStage(StageKind):
             reference_token_tensor=d["reference_token_tensor"],
             verification_result_tensor=d["verification_result_tensor"],
             speculative_tokens_tensor=d["speculative_tokens_tensor"],
-            bypass_socket_input=d.get("bypass_socket_input"),
+            unverified_spec_tensor=d["unverified_spec_tensor"],
+            verified_spec_tensor=d["verified_spec_tensor"],
+            mtp_max_spec_depth=d["max_spec_depth"],
+            token_input_socket=d["token_input_socket"],
+            verify_output_staging_tensor=d["verify_output_staging_tensor"],
         )
 
 
@@ -492,15 +520,15 @@ class LMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         mtp_weights: DeepSeekV3MTPWeights | None = None,
-        bypass_target_mesh_id: int | None = None,
+        mtp_logits_target_mesh_id: int | None = None,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._mtp_weights = mtp_weights
         self._enable_mtp = mtp_weights is not None
-        self._bypass_target_mesh_id = bypass_target_mesh_id
-        self._bypass_socket_interface: SocketInterface | None = None
+        self._mtp_logits_target_mesh_id = mtp_logits_target_mesh_id
+        self._mtp_logits_socket_interface: SocketInterface | None = None
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -778,48 +806,33 @@ class LMHeadStage(StageKind):
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
             self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
 
-        # [BYPASS] Create bypass sender socket to a non-adjacent downstream stage.
-        if self._bypass_target_mesh_id is not None:
-            target_id = self._bypass_target_mesh_id
-            bypass_send_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, BYPASS_D2D_CORE)
-            bypass_recv_core = ttnn.MeshCoreCoord(pipeline_config[target_id].entry_node_coord, BYPASS_D2D_CORE)
-            bypass_upstream_core = ttnn.MeshCoreCoord(
+        # [MTP LOGITS] Create sender socket for MTP logits to a downstream stage.
+        if self._mtp_logits_target_mesh_id is not None and self._enable_mtp:
+            target_id = self._mtp_logits_target_mesh_id
+            logits_send_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, MTP_LOGITS_D2D_CORE)
+            logits_recv_core = ttnn.MeshCoreCoord(pipeline_config[target_id].entry_node_coord, MTP_LOGITS_D2D_CORE)
+            logits_upstream_core = ttnn.MeshCoreCoord(
                 pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
             )
-            self._bypass_socket_interface = SocketInterface(
-                page_size=TOKEN_PAGE_SIZE_BYTES,
-                socket_fifo_size=TOKEN_FIFO_SIZE,
-                data_size_per_transfer=TOKEN_PAGE_SIZE_BYTES,
-                send_core_coord=bypass_send_core,
-                recv_core_coord=bypass_recv_core,
-                upstream_core_coord=bypass_upstream_core,
+            self._mtp_logits_socket_interface = SocketInterface(
+                page_size=MTP_LOGITS_PAGE_SIZE_BYTES,
+                socket_fifo_size=MTP_LOGITS_FIFO_SIZE,
+                data_size_per_transfer=MTP_LOGITS_PAGE_SIZE_BYTES,
+                send_core_coord=logits_send_core,
+                recv_core_coord=logits_recv_core,
+                upstream_core_coord=logits_upstream_core,
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(mesh_id=target_id),
             )
-
-            bypass_staging_shape = (1, TOKEN_PAGE_SIZE_BYTES // 4)
-            bypass_staging_mem = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(argmax_final_core_grid, bypass_staging_shape, ttnn.ShardOrientation.ROW_MAJOR),
-            )
-            self._lmhead_state["bypass_staging_tensor"] = ttnn.from_torch(
-                torch.zeros((num_devices, *bypass_staging_shape), dtype=torch.uint32),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh_device,
-                memory_config=bypass_staging_mem,
-                mesh_mapper=mesh_mapper,
-            )
-            self._lmhead_state["bypass_socket_output"] = self._bypass_socket_interface.get_upstream_socket()
+            self._lmhead_state["mtp_logits_socket_output"] = self._mtp_logits_socket_interface.get_upstream_socket()
 
     def run_auxiliary_sockets(self) -> None:
-        if self._bypass_socket_interface is not None:
-            self._bypass_socket_interface.run()
+        if self._mtp_logits_socket_interface is not None:
+            self._mtp_logits_socket_interface.run()
 
     def terminate_auxiliary(self) -> None:
-        if self._bypass_socket_interface is not None:
-            self._bypass_socket_interface.terminate(False)
+        if self._mtp_logits_socket_interface is not None:
+            self._mtp_logits_socket_interface.terminate(False)
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._lmhead_state
@@ -859,6 +872,5 @@ class LMHeadStage(StageKind):
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             enable_mtp=self._enable_mtp,
             eh_subblock_k=d.get("eh_subblock_k"),
-            bypass_socket_output=d.get("bypass_socket_output"),
-            bypass_staging_tensor=d.get("bypass_staging_tensor"),
+            mtp_logits_socket_output=d.get("mtp_logits_socket_output"),
         )

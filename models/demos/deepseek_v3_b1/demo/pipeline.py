@@ -101,17 +101,20 @@ def create_single_galaxy_mtp_verification_pipeline_configuration(
     )
 
 
-def create_single_galaxy_mtp_bypass_pipeline_configuration(
+def create_single_galaxy_mtp_full_cycle_pipeline_configuration(
     weight_provider: WeightProvider,
     *,
     fp32_dest_acc_en: bool = True,
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
-    """4-stage pipeline with bypass fan-out from Stage 1 → Stage 3:
-    Embed -> LMHead+MTP(bypass→3) -> Passthrough -> MTP_LMHead+Verify(bypass←1) -> loopback.
+    """4-stage single-galaxy MTP full speculative decoding cycle:
+    Embed -> LMHead+MTP (logits→P2) -> MTP_LMHead+Verify -> Token fwd -> loopback.
 
-    Stage 1 sends T_base to both Stage 2 (normal) and Stage 3 (bypass).
-    Stage 3 receives T_base from bypass for verification."""
+    Stage 1 sends MTP logits to Stage 2 via a dedicated D2D socket and forwards
+    T_base through the standard pipeline path. Stage 2 runs its own LM head on
+    the incoming activation, verifies its T_spec against the reference token
+    stored in persistent state, and forwards the verification result downstream.
+    """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
@@ -122,18 +125,14 @@ def create_single_galaxy_mtp_bypass_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             mtp_weights=weight_provider.load_mtp_weights(device),
-            # bypass_target_mesh_id=3,
+            mtp_logits_target_mesh_id=2,
         )
 
     def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.TOKEN)
-
-    def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return MTPVerificationLMHeadStage(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
-            bypass_source_mesh_id=1,
         )
 
     return PipelineConfiguration(
@@ -141,7 +140,7 @@ def create_single_galaxy_mtp_bypass_pipeline_configuration(
             0: stage_0,
             1: stage_1,
             2: stage_2,
-            3: stage_3,
+            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
         }
     )
 
@@ -333,7 +332,7 @@ class Pipeline:
         self._stage_kind.setup(self._ctx, self._pipeline_block)
 
     def start_pipeline(self) -> None:
-        """Phase 3: Start pipeline block kernels (socket interfaces + auxiliary bypass sockets)."""
+        """Phase 3: Start pipeline block kernels (socket interfaces + auxiliary sockets)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_pipeline()")
         self._pipeline_block.run()

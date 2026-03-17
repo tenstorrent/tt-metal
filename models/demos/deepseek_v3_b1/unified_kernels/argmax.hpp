@@ -47,7 +47,8 @@ struct Sampling {
         uint32_t SocketPageSizeBytes = 0,
         uint32_t ScoresCBId = 0xFFFFFFFF,
         uint32_t ScoresNumPages = 0,
-        uint32_t GatherCBId = 0xFFFFFFFF>
+        uint32_t GatherCBId = 0xFFFFFFFF,
+        uint32_t DeferSocketOutput = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
@@ -76,6 +77,7 @@ struct Sampling {
         static constexpr uint32_t scores_cb_id = ScoresCBId;
         static constexpr uint32_t scores_num_pages = ScoresNumPages;
         static constexpr uint32_t gather_cb_id = GatherCBId;
+        static constexpr bool defer_socket_output = DeferSocketOutput == 1;
     };
 
     template <
@@ -429,11 +431,14 @@ struct Sampling {
                 if constexpr (!CTArgs::mesh_mode) {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                     output_ptr[0] = global_best_index;
-                    if constexpr (CTArgs::socket_mode != 0) {
+                    if constexpr (CTArgs::socket_mode != 0 && !CTArgs::defer_socket_output) {
                         cb_reserve_back(CTArgs::socket_cb_id, 1);
                         auto d2h_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                         d2h_ptr[0] = global_best_index;
+                        d2h_ptr[1] = 0;  // token_type: BASE
+                        d2h_ptr[2] = 0;  // token_pos: 0
+                        d2h_ptr[3] = 1;  // num_tokens: always 1 for non-verification stages
                         cb_push_back(CTArgs::socket_cb_id, 1);
                     }
                 } else {
@@ -463,11 +468,14 @@ struct Sampling {
                             stage2_best_index);
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
-                        if constexpr (CTArgs::socket_mode != 0) {
+                        if constexpr (CTArgs::socket_mode != 0 && !CTArgs::defer_socket_output) {
                             cb_reserve_back(CTArgs::socket_cb_id, 1);
                             auto d2h_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                             d2h_ptr[0] = stage2_best_index;
+                            d2h_ptr[1] = 0;  // token_type: BASE
+                            d2h_ptr[2] = 0;  // token_pos: 0
+                            d2h_ptr[3] = 1;  // num_tokens: always 1 for non-verification stages
                             cb_push_back(CTArgs::socket_cb_id, 1);
                         }
                     }

@@ -229,11 +229,14 @@ class LMHeadSampling:
         reference_token_tensor=None,
         verification_result_tensor=None,
         speculative_tokens_tensor=None,
+        unverified_spec_tensor=None,
+        verified_spec_tensor=None,
         verify_ready_semaphore=None,
         eh_subblock_k=None,
-        bypass_socket_output=None,
-        bypass_staging_tensor=None,
-        bypass_socket_input=None,
+        mtp_logits_socket_output=None,
+        mtp_max_spec_depth=8,
+        token_input_socket=None,
+        verify_output_staging_tensor=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -295,6 +298,8 @@ class LMHeadSampling:
         assert not (
             enable_mtp and enable_mtp_verification
         ), "enable_mtp and enable_mtp_verification are mutually exclusive"
+        has_mtp_logits_socket_output = enable_mtp and mtp_logits_socket_output is not None
+        has_token_input_socket = enable_mtp_verification and token_input_socket is not None
         socket_mode_none = 0
         socket_mode_d2h = 1
         socket_mode_d2d = 2
@@ -542,6 +547,8 @@ class LMHeadSampling:
         mcast_eh_data_sender_semaphore_id = 5
         mcast_eh_data_receiver_semaphore_id = 6
         mtp_done_semaphore_id = 7
+        verify_argmax_done_semaphore_id = 8
+        verify_output_ready_semaphore_id = 9
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -681,6 +688,26 @@ class LMHeadSampling:
 
                 # All cores = mcast grid (sender is already included)
                 all_cores = mcast_grid_set
+
+                # Pre-compute CB 1 backing address for BRISC mcast and MTP logits gather
+                mcast_receiver_data_addr = (
+                    int(ttnn.get_device_tensors(mcast_dst_working_buf_tensor)[device_idx].buffer_address())
+                    if mcast_dst_working_buf_tensor is not None
+                    else 0
+                )
+
+                # Pre-compute MTP logits gather metadata (always when enable_mtp)
+                eh_output_tile_size = 0
+                eh_shard_size_bytes = 0
+                num_eh_matmul_cores = 0
+                mtp_eh_shard_base_addr = 0
+                eh_core_phys_list = []
+                if enable_mtp:
+                    eh_output_tile_size = out_tile.get_tile_size(data_format)
+                    eh_shard_size_bytes = eh_out_w_per_core * eh_output_tile_size
+                    num_eh_matmul_cores = len(eh_worker_cores)
+                    mtp_eh_shard_base_addr = int(output_mtp_tensors_per_device[device_idx].buffer_address())
+                    eh_core_phys_list = [device.worker_core_from_logical_core(c) for c in eh_worker_cores]
 
                 if enable_argmax:
                     if indices_tensor_device.memory_config().shard_spec.grid != argmax_core_grid:
@@ -969,8 +996,6 @@ class LMHeadSampling:
                     # [MTP]
                     ("enable_mtp", 1 if enable_mtp else 0),
                     ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
-                    ("has_bypass_socket_output", 1 if bypass_socket_output is not None else 0),
-                    ("has_bypass_socket_input", 1 if bypass_socket_input is not None else 0),
                     # MTP matmul, embedding, rmsnorm CBs
                     ("matmul_eh_in0", mcast_eh_dst_cb),
                     ("matmul_eh_in1", matmul_eh_cb),
@@ -1017,6 +1042,26 @@ class LMHeadSampling:
                     ("sender_noc_y", int(core_noc_y) if enable_mtp else 0),
                     ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp else 0),
                     ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp else 0),
+                    # [MTP Logits Socket]
+                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
+                    ("mtp_logits_num_eh_cores", num_eh_matmul_cores if enable_mtp else 0),
+                    ("mtp_logits_eh_shard_size", eh_shard_size_bytes if enable_mtp else 0),
+                    # [Argmax socket deferral for verification stage]
+                    ("argmax_defer_socket_output", 1 if enable_mtp_verification else 0),
+                    # [MTP Verification speculative depth]
+                    ("mtp_max_spec_depth", mtp_max_spec_depth if enable_mtp_verification else 0),
+                    # [Token input socket]
+                    ("has_token_input_socket", 1 if has_token_input_socket else 0),
+                    ("token_input_page_size", socket_page_size_bytes if has_token_input_socket else 0),
+                    # [Cross-core verification semaphores]
+                    (
+                        "verify_argmax_done_semaphore_id",
+                        verify_argmax_done_semaphore_id if enable_mtp_verification else 0,
+                    ),
+                    (
+                        "verify_output_ready_semaphore_id",
+                        verify_output_ready_semaphore_id if enable_mtp_verification else 0,
+                    ),
                 ]
 
                 # ================================================================
@@ -1055,8 +1100,6 @@ class LMHeadSampling:
                     # [MTP] Second mcast (EH projection input)
                     ("enable_mtp", 1 if enable_mtp else 0),
                     ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
-                    ("has_bypass_socket_output", 1 if bypass_socket_output is not None else 0),
-                    ("has_bypass_socket_input", 1 if bypass_socket_input is not None else 0),
                     ("mcast_eh_dest_noc_start_x", mcast_dest_noc_start.x if enable_mtp else 0),
                     ("mcast_eh_dest_noc_start_y", mcast_dest_noc_start.y if enable_mtp else 0),
                     ("mcast_eh_dest_noc_end_x", mcast_dest_noc_end.x if enable_mtp else 0),
@@ -1069,6 +1112,21 @@ class LMHeadSampling:
                     ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp else 0),
                     ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp else 0),
                     ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp else 0),
+                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
+                    ("mtp_logits_num_eh_cores", 0),
+                    ("mtp_logits_eh_shard_size", 0),
+                    ("argmax_defer_socket_output", 1 if enable_mtp_verification else 0),
+                    ("mtp_max_spec_depth", mtp_max_spec_depth if enable_mtp_verification else 0),
+                    ("has_token_input_socket", 1 if has_token_input_socket else 0),
+                    ("token_input_page_size", 0),
+                    (
+                        "verify_argmax_done_semaphore_id",
+                        verify_argmax_done_semaphore_id if enable_mtp_verification else 0,
+                    ),
+                    (
+                        "verify_output_ready_semaphore_id",
+                        verify_output_ready_semaphore_id if enable_mtp_verification else 0,
+                    ),
                 ]
 
                 # ================================================================
@@ -1097,8 +1155,6 @@ class LMHeadSampling:
                     # h_rmsnorm writes first half (h_tiles), e_rmsnorm writes second half (e_tiles)
                     ("enable_mtp", 1 if enable_mtp else 0),
                     ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
-                    ("has_bypass_socket_output", 1 if bypass_socket_output is not None else 0),
-                    ("has_bypass_socket_input", 1 if bypass_socket_input is not None else 0),
                     ("rmsnorm_h_input_cb", rmsnorm_input_cb),
                     ("rmsnorm_h_gamma_cb", h_gamma_cb),
                     ("rmsnorm_h_output_cb", mcast_eh_src_cb),
@@ -1125,6 +1181,21 @@ class LMHeadSampling:
                     ),
                     ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp else 0),
                     ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp else 0),
+                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
+                    ("mtp_logits_num_eh_cores", 0),
+                    ("mtp_logits_eh_shard_size", 0),
+                    ("argmax_defer_socket_output", 1 if enable_mtp_verification else 0),
+                    ("mtp_max_spec_depth", mtp_max_spec_depth if enable_mtp_verification else 0),
+                    ("has_token_input_socket", 1 if has_token_input_socket else 0),
+                    ("token_input_page_size", 0),
+                    (
+                        "verify_argmax_done_semaphore_id",
+                        verify_argmax_done_semaphore_id if enable_mtp_verification else 0,
+                    ),
+                    (
+                        "verify_output_ready_semaphore_id",
+                        verify_output_ready_semaphore_id if enable_mtp_verification else 0,
+                    ),
                 ]
 
                 # ================================================================
@@ -1152,14 +1223,26 @@ class LMHeadSampling:
                             mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
                             int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
                         ]
-                    # [BYPASS SEND] bypass sender socket config + staging buffer addr
-                    if bypass_socket_output is not None:
-                        bypass_staging_devs = ttnn.get_device_tensors(bypass_staging_tensor)
+                    # [MTP LOGITS GATHER] staging (CB1) + EH shard base + core coords
+                    if enable_mtp:
                         ncrisc_bcast_common_args += [
-                            int(bypass_socket_output.get_config_buffer_address()),
-                            int(bypass_staging_devs[device_idx].buffer_address()),
+                            mcast_receiver_data_addr,
+                            mtp_eh_shard_base_addr,
                         ]
-                    # [MTP Verification] reference token addr, verification result addr, speculative token addr
+                        ncrisc_bcast_common_args += [int(p.x) for p in eh_core_phys_list]
+                        ncrisc_bcast_common_args += [int(p.y) for p in eh_core_phys_list]
+                    # [MTP LOGITS SOCKET] socket config addr (only when socket is present)
+                    if has_mtp_logits_socket_output:
+                        ncrisc_bcast_common_args += [
+                            int(mtp_logits_socket_output.get_config_buffer_address()),
+                        ]
+                    # [TOKEN INPUT SOCKET] config addr for receiving T_base via D2D
+                    if has_token_input_socket:
+                        ncrisc_bcast_common_args += [
+                            int(token_input_socket.get_config_buffer_address()),
+                        ]
+                    # [MTP Verification] reference token addr, verification result addr, speculative token addr,
+                    # unverified spec addr, verified spec addr
                     if enable_mtp_verification:
                         ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
                         verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
@@ -1169,11 +1252,29 @@ class LMHeadSampling:
                             int(verify_result_dev.buffer_address()),
                             int(spec_tokens_dev.buffer_address()),
                         ]
-                    # [BYPASS RECV] bypass receiver socket config addr
-                    if bypass_socket_input is not None:
-                        ncrisc_bcast_common_args += [
-                            int(bypass_socket_input.get_config_buffer_address()),
-                        ]
+                        if unverified_spec_tensor is not None:
+                            unverified_dev = ttnn.get_device_tensors(unverified_spec_tensor)[device_idx]
+                            ncrisc_bcast_common_args.append(int(unverified_dev.buffer_address()))
+                        else:
+                            ncrisc_bcast_common_args.append(0)
+                        if verified_spec_tensor is not None:
+                            verified_dev = ttnn.get_device_tensors(verified_spec_tensor)[device_idx]
+                            ncrisc_bcast_common_args.append(int(verified_dev.buffer_address()))
+                        else:
+                            ncrisc_bcast_common_args.append(0)
+                        # Cross-core verification: staging buffer addr, argmax output addr,
+                        # argmax noc coords, input_core noc coords
+                        if verify_output_staging_tensor is not None:
+                            staging_dev = ttnn.get_device_tensors(verify_output_staging_tensor)[device_idx]
+                            ncrisc_bcast_common_args.append(int(staging_dev.buffer_address()))
+                        else:
+                            ncrisc_bcast_common_args.append(0)
+                        ncrisc_bcast_common_args.append(int(output_index_tensor_device.buffer_address()))
+                        ncrisc_bcast_common_args.append(int(final_core_phys.x))
+                        ncrisc_bcast_common_args.append(int(final_core_phys.y))
+                        input_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
+                        ncrisc_bcast_common_args.append(int(input_core_phys.x))
+                        ncrisc_bcast_common_args.append(int(input_core_phys.y))
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
@@ -1253,14 +1354,26 @@ class LMHeadSampling:
                             mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
                             int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
                         ]
-                    # [BYPASS SEND] bypass sender socket config + staging buffer addr
-                    if bypass_socket_output is not None:
-                        bypass_staging_devs = ttnn.get_device_tensors(bypass_staging_tensor)
+                    # [MTP LOGITS GATHER] staging (CB1) + EH shard base + core coords
+                    if enable_mtp:
                         ncrisc_bcast_common_args += [
-                            int(bypass_socket_output.get_config_buffer_address()),
-                            int(bypass_staging_devs[device_idx].buffer_address()),
+                            mcast_receiver_data_addr,
+                            mtp_eh_shard_base_addr,
                         ]
-                    # [MTP Verification] reference token addr, verification result addr, speculative token addr
+                        ncrisc_bcast_common_args += [int(p.x) for p in eh_core_phys_list]
+                        ncrisc_bcast_common_args += [int(p.y) for p in eh_core_phys_list]
+                    # [MTP LOGITS SOCKET] socket config addr (only when socket is present)
+                    if has_mtp_logits_socket_output:
+                        ncrisc_bcast_common_args += [
+                            int(mtp_logits_socket_output.get_config_buffer_address()),
+                        ]
+                    # [TOKEN INPUT SOCKET] config addr for receiving T_base via D2D
+                    if has_token_input_socket:
+                        ncrisc_bcast_common_args += [
+                            int(token_input_socket.get_config_buffer_address()),
+                        ]
+                    # [MTP Verification] reference token addr, verification result addr, speculative token addr,
+                    # unverified spec addr, verified spec addr
                     if enable_mtp_verification:
                         ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
                         verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
@@ -1270,11 +1383,29 @@ class LMHeadSampling:
                             int(verify_result_dev.buffer_address()),
                             int(spec_tokens_dev.buffer_address()),
                         ]
-                    # [BYPASS RECV] bypass receiver socket config addr
-                    if bypass_socket_input is not None:
-                        ncrisc_bcast_common_args += [
-                            int(bypass_socket_input.get_config_buffer_address()),
-                        ]
+                        if unverified_spec_tensor is not None:
+                            unverified_dev = ttnn.get_device_tensors(unverified_spec_tensor)[device_idx]
+                            ncrisc_bcast_common_args.append(int(unverified_dev.buffer_address()))
+                        else:
+                            ncrisc_bcast_common_args.append(0)
+                        if verified_spec_tensor is not None:
+                            verified_dev = ttnn.get_device_tensors(verified_spec_tensor)[device_idx]
+                            ncrisc_bcast_common_args.append(int(verified_dev.buffer_address()))
+                        else:
+                            ncrisc_bcast_common_args.append(0)
+                        # Cross-core verification: staging buffer addr, argmax output addr,
+                        # argmax noc coords, input_core noc coords
+                        if verify_output_staging_tensor is not None:
+                            staging_dev = ttnn.get_device_tensors(verify_output_staging_tensor)[device_idx]
+                            ncrisc_bcast_common_args.append(int(staging_dev.buffer_address()))
+                        else:
+                            ncrisc_bcast_common_args.append(0)
+                        ncrisc_bcast_common_args.append(int(output_index_tensor_device.buffer_address()))
+                        ncrisc_bcast_common_args.append(int(final_core_phys.x))
+                        ncrisc_bcast_common_args.append(int(final_core_phys.y))
+                        input_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
+                        ncrisc_bcast_common_args.append(int(input_core_phys.x))
+                        ncrisc_bcast_common_args.append(int(input_core_phys.y))
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
@@ -1330,6 +1461,7 @@ class LMHeadSampling:
 
                 # CB 1: Mcast destination — tensor-backed on receiver cores (not the sender).
                 # Sender obtains the receiver data address via buffer_address() runtime arg.
+                # mcast_receiver_data_addr was pre-computed above for both runtime args and CB setup.
                 if mcast_dst_working_buf_tensor is not None:
                     mcast_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         mcast_dst_cb, ttnn.get_device_tensors(mcast_dst_working_buf_tensor)[device_idx]
@@ -1337,9 +1469,6 @@ class LMHeadSampling:
                     mcast_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
                     mcast_dst_cb_descriptor.format_descriptors[0].tile = mcast_dst_tile_descriptor
                     mcast_dst_cb_descriptor.format_descriptors[0].page_size = input_tile_size
-                    mcast_receiver_data_addr = int(
-                        ttnn.get_device_tensors(mcast_dst_working_buf_tensor)[device_idx].buffer_address()
-                    )
                 else:
                     mcast_dst_tile_descriptor = ttnn.TileDescriptor(in0_tile)
                     mcast_dst_cb_format = ttnn.CBFormatDescriptor(
@@ -1353,7 +1482,6 @@ class LMHeadSampling:
                         core_ranges=all_cores,
                         format_descriptors=[mcast_dst_cb_format],
                     )
-                    mcast_receiver_data_addr = 0
 
                 # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
                 matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor_device)
@@ -1676,18 +1804,6 @@ class LMHeadSampling:
                             value=1 if enable_mtp_verification else 0,
                             other_value=0,
                         ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="has_bypass_socket_output",
-                            core_range=all_cores,
-                            value=1 if bypass_socket_output is not None else 0,
-                            other_value=0,
-                        ),
-                        UnifiedCompileTimeCoreDescriptor(
-                            named_compile_time_arg="has_bypass_socket_input",
-                            core_range=all_cores,
-                            value=1 if bypass_socket_input is not None else 0,
-                            other_value=0,
-                        ),
                     ]
                     + (
                         [
@@ -1874,8 +1990,12 @@ class LMHeadSampling:
             io_tensors.append(mcast_dst_working_buf_tensor)
         if enable_mtp_verification:
             io_tensors.extend([reference_token_tensor, verification_result_tensor, speculative_tokens_tensor])
-        if bypass_staging_tensor is not None:
-            io_tensors.append(bypass_staging_tensor)
+            if unverified_spec_tensor is not None:
+                io_tensors.append(unverified_spec_tensor)
+            if verified_spec_tensor is not None:
+                io_tensors.append(verified_spec_tensor)
+            if verify_output_staging_tensor is not None:
+                io_tensors.append(verify_output_staging_tensor)
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
