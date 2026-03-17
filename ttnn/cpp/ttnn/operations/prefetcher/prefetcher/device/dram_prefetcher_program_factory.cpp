@@ -207,7 +207,7 @@ DramPrefetcherProgramFactory::cached_program_t DramPrefetcherProgramFactory::cre
     // Configs to enable for performance mode
     writer_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
 
-    // The sender barrier was introduced for Blackhole prefetcher integration, not used in TG/Wormhole.
+    // Issue:40112 The sender barrier was introduced for Blackhole prefetcher integration, not used in TG/Wormhole.
     const bool enable_sender_barrier = arch == tt::ARCH::BLACKHOLE;
     writer_ct_args.push_back((uint32_t)enable_sender_barrier);
 
