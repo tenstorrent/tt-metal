@@ -160,11 +160,11 @@ def moe_mlp_forward(
         sparse_multiple = _moe_sparse_tokens_multiple(device=device, moe_runtime=moe_runtime)
         pad_tokens = (-tokens) % sparse_multiple
         if pad_tokens:
-            if cfg.skip_defensive_clones:
-                x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-            else:
-                x_padded_view = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-                x = ttnn.clone(x_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x_padded_rm = ttnn.pad(x_rm, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+            ttnn.deallocate(x_rm, force=False)
+            x = ttnn.to_layout(x_padded_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(x_padded_rm, force=False)
 
     # --- Shared expert (dense SwiGLU) ---
     if use_signpost:
