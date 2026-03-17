@@ -86,10 +86,12 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     file.close();
     if (!file.fail()) {
         if (!tt::filesystem::safe_rename(tmp_path, marker_path, false)) {
-            log_warning(
-                tt::LogBuildKernels, "Failed to publish successful JIT marker from {} to {}", tmp_path, marker_path);
             tt::filesystem::safe_remove(tmp_path);
-            return;
+            TT_THROW(
+                "Failed to publish successful JIT marker from {} to {}. The build succeeded but the cache marker could "
+                "not be created.",
+                tmp_path,
+                marker_path);
         }
         if (tt::filesystem::nfs_safety_enabled()) {
             tt::filesystem::fsync_file(marker_path);
