@@ -60,20 +60,31 @@ static constexpr std::size_t num_sender_channels_z_router_vc1 = 4;
 static constexpr std::size_t num_sender_channels_vc2 = 1;
 static constexpr std::size_t num_receiver_channels_vc2 = 1;
 static constexpr std::size_t num_sender_channels_z_router_vc2 = 1;
+// Aggregate without VC2 — VC2 channels are added dynamically by channel mapping when requires_vc2 is true
 static constexpr std::size_t num_sender_channels_z_router =
-    num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1 + num_sender_channels_z_router_vc2;
+    num_sender_channels_z_router_vc0 + num_sender_channels_z_router_vc1;
+// Max including VC2 — used only for array sizing
+static constexpr std::size_t num_sender_channels_z_router_with_vc2 =
+    num_sender_channels_z_router + num_sender_channels_z_router_vc2;
 static constexpr std::size_t num_receiver_channels_z_router = 2;  // 1 for VC0, 1 for VC1
 
 static constexpr std::size_t num_sender_channels_1d = 2;
 // VC0: Worker + 3 of [N/E/S/W] = 4 channels
 // VC1: Up to 3 of [N/E/S/W] for inter-mesh = 3 channels, 1 for Z→mesh
-// VC2: 1 sender channel (neighbour exchange)
-// Total 2D: 4 + 3 + 1 + 1(VC2) = 9 channels
-static constexpr std::size_t num_sender_channels_2d = 9;
+// Total 2D without VC2: 4 + 3 + 1 = 8 channels (VC2 added dynamically)
+static constexpr std::size_t num_sender_channels_2d = 8;
+// Max including VC2 — used only for array sizing
+static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
+// Max without VC2 — feeds L1 layout, firmware CT args, and host-side array sizing
+// VC2 will increase these when actually wired through (Phase 4+)
 static constexpr std::size_t num_max_sender_channels =
     std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
 static constexpr std::size_t num_receiver_channels_1d = 1;
-static constexpr std::size_t num_receiver_channels_2d = 3;  // VC0(1) + VC1(1) + VC2(1)
+// Without VC2 — VC2 receiver added dynamically
+static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
+// Max including VC2 — used only for array sizing
+static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
+// Max without VC2 — feeds L1 layout, firmware CT args, and host-side array sizing
 static constexpr std::size_t num_max_receiver_channels = std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
