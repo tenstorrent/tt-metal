@@ -67,6 +67,7 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_memory_config=None,
     output_memory_config=None,
@@ -82,7 +83,6 @@ def run(
 
     if isinstance(input_a_shape, dict) and "self" in input_a_shape:
         shape = input_a_shape["self"] if isinstance(input_a_shape["self"], tuple) else tuple(input_a_shape["self"])
-        # "other" is the stats tensor shape (not weight), use it to determine n_devices
         stats_shape_from_trace = input_a_shape.get("other")
         if stats_shape_from_trace is not None:
             stats_shape_from_trace = (
@@ -94,6 +94,11 @@ def run(
     else:
         shape = (1, 1, 32, 32)
         stats_shape_from_trace = None
+
+    # MasterConfigLoader provides the stats tensor (arg1) shape as input_b_shape.
+    # Prefer it over the legacy "other" field from dict-based input_a_shape.
+    if input_b_shape is not None:
+        stats_shape_from_trace = tuple(input_b_shape) if isinstance(input_b_shape, list) else input_b_shape
 
     eps = kwargs.get("epsilon", 1e-5)
     op_kwargs = build_op_kwargs(kwargs, exclude={"epsilon"}, output_memory_config=output_memory_config)

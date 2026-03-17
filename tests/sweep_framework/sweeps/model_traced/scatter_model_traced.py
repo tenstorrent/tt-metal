@@ -182,7 +182,7 @@ def run(
         src_tensor = ttnn.from_torch(torch_src_tensor, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.scatter(input_tensor, dim, index_tensor, src_tensor, **op_kwargs)
+    output_tensor = ttnn.scatter(input=input_tensor, dim=dim, index=index_tensor, src=src_tensor, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

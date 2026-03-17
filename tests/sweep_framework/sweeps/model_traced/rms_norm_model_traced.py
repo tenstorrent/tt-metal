@@ -120,13 +120,15 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Use named memory_config for output if output_memory_config not set
-    if output_memory_config is None and "memory_config" in op_kwargs:
-        output_memory_config = op_kwargs.pop("memory_config")
-    # If output_memory_config is explicitly set, remove duplicate memory_config from op_kwargs
-    elif "memory_config" in op_kwargs:
-        op_kwargs.pop("memory_config")
-    if output_memory_config is not None:
+    # build_op_kwargs already filters memory_config. Only add it to op_kwargs
+    # if the model trace explicitly passed it as an op argument. The model trace
+    # for rms_norm does NOT include memory_config, so passing it creates a
+    # Category 6 (extra key) config_hash mismatch.
+    trace_had_memory_config = "memory_config" in kwargs and kwargs["memory_config"] is not None
+    if "memory_config" in op_kwargs:
+        if not trace_had_memory_config:
+            op_kwargs.pop("memory_config")
+    elif trace_had_memory_config and output_memory_config is not None:
         op_kwargs["memory_config"] = output_memory_config
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape

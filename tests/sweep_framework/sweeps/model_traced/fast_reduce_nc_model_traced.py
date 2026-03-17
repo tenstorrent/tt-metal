@@ -10,7 +10,7 @@ from models.common.utility_functions import torch_random
 from functools import partial
 
 # Import master config loader for traced model configurations
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader, dict_to_memory_config
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
@@ -86,6 +86,17 @@ def run(
     # Extract dims from kwargs (from traced config) or use default
     dims = kwargs.get("dims", [0, 1])
     op_kwargs = build_op_kwargs(kwargs, exclude={"dims"}, output_memory_config=output_memory_config)
+
+    # build_op_kwargs filters memory_config. Add it back if the model trace
+    # explicitly passed it as an op argument (e.g., config 2 has it).
+    trace_had_memory_config = "memory_config" in kwargs and kwargs["memory_config"] is not None
+    if trace_had_memory_config:
+        mem = output_memory_config
+        if mem is None:
+            raw = kwargs["memory_config"]
+            mem = dict_to_memory_config(raw) if isinstance(raw, dict) else raw
+        if mem is not None:
+            op_kwargs["memory_config"] = mem
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):

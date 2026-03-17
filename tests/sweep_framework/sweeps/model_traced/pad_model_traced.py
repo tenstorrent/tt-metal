@@ -110,6 +110,8 @@ def run(
 
     if value is None:
         value = 0.0
+    elif isinstance(value, str):
+        value = float(value)
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

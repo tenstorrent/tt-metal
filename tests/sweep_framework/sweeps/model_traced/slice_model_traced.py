@@ -91,9 +91,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Some configs use named params (starts/ends/steps), others use positional (arg1/arg2/arg3)
     slice_start = kwargs.get("starts", None) or kwargs.get("arg1", None) or [0] * len(shape)
     slice_end = kwargs.get("ends", None) or kwargs.get("arg2", None)
+    has_step = "steps" in kwargs or "arg3" in kwargs
     slice_step = kwargs.get("steps", None) or kwargs.get("arg3", None) or [1] * len(shape)
 
     if not slice_end:
@@ -132,7 +132,10 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    if has_step:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, slice_step, **op_kwargs)
+    else:
+        output_tensor = ttnn.slice(input_tensor_a, slice_start, slice_end, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

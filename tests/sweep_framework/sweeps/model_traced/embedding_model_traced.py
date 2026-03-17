@@ -127,21 +127,11 @@ def run(
     else:
         raise ValueError("Either input_b_shape or weight_shape must be provided")
 
-    # Squeeze leading dimensions of 1 from weight shape to make it 2D
-    # E.g., (1, 1, 128256, 2048) -> (128256, 2048)
+    # Extract num_embeddings from the weight shape (second-to-last dim for ND, first for 2D)
     if isinstance(weight_shape_actual, (list, tuple)) and len(weight_shape_actual) > 2:
-        # Remove leading 1s
-        squeezed_shape = weight_shape_actual
-        while len(squeezed_shape) > 2 and squeezed_shape[0] == 1:
-            squeezed_shape = squeezed_shape[1:]
-
-        # If still not 2D, there are non-1 leading dims - this is truly invalid
-        if len(squeezed_shape) != 2:
-            raise ValueError(f"Cannot convert weight shape {weight_shape_actual} to 2D - has non-1 leading dimensions")
-
-        weight_shape_actual = squeezed_shape
-
-    num_embeddings = weight_shape_actual[0]
+        num_embeddings = weight_shape_actual[-2]
+    else:
+        num_embeddings = weight_shape_actual[0]
 
     # Generate input indices tensor (random integers in range [0, num_embeddings))
     torch_input_tensor = torch_random(input_shape, 0, num_embeddings, torch.int64)
@@ -159,7 +149,9 @@ def run(
     )(weight_shape_actual)
 
     golden_function = ttnn.get_golden_function(ttnn.embedding)
-    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_tensor).squeeze()
+    # torch.nn.functional.embedding requires a 2-D weight; traced configs may have higher-rank shapes like (1,1,N,D)
+    torch_weight_2d = torch_weight_tensor.reshape(-1, torch_weight_tensor.shape[-1])
+    torch_output_tensor = golden_function(torch_input_tensor, torch_weight_2d).squeeze()
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -215,7 +207,15 @@ def run(
         weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=weight_dtype_actual, layout=weight_layout_actual)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.embedding(input_tensor, weight_tensor, dtype=dtype, memory_config=memory_config, **op_kwargs)
+    emb_kwargs = {}
+    if dtype is not None:
+        emb_kwargs["dtype"] = dtype
+    if memory_config is not None:
+        emb_kwargs["memory_config"] = memory_config
+    if layout is not None:
+        emb_kwargs["layout"] = layout
+    emb_kwargs.update(op_kwargs)
+    output_tensor = ttnn.embedding(input_tensor, weight_tensor, **emb_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None).squeeze()

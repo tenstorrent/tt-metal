@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import (
     MasterConfigLoader,
     dict_to_memory_config,
+    dict_to_program_config,
 )
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
@@ -136,10 +137,11 @@ def run(
             if isinstance(dtype, dict)
             else parse_dict_value("dtype", {"type": "DataType", "repr": dtype})
         )
-    # Skip traced program_config: block dimensions and grid sizes are computed for the
-    # original device/mesh and don't match the test device. Let ttnn auto-compute.
-    # The fallback below clears sharded configs when program_config is None.
-    program_config = None
+    if isinstance(program_config, dict):
+        try:
+            program_config = dict_to_program_config(program_config)
+        except (ValueError, TypeError, KeyError):
+            program_config = None
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -154,10 +156,8 @@ def run(
     # and output_tile (a Tile object that can't be auto-parsed from dict).
     parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation", "output_tile"})
 
-    # When program_config is None (grid-based configs dropped), the shard_spec in
-    # memory configs was computed for the original device and is invalid. Clear sharded
-    # configs so ttnn.linear auto-determines compatible settings.
-    # When program_config is BatchedDRAMSharded, keep DRAM-sharded input_b (required).
+    # When program_config is None and sharded configs were computed for a specific
+    # device, fall back to DRAM to avoid invalid shard specs on different hardware.
     if program_config is None:
         if memory_config is not None and "SHARDED" in str(memory_config):
             memory_config = None
@@ -167,7 +167,6 @@ def run(
             input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
         if input_a_memory_config is not None and "SHARDED" in str(input_a_memory_config):
             input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        # Also clear memory_config from parsed_op_kwargs (built before cleanup)
         if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
             del parsed_op_kwargs["memory_config"]
 

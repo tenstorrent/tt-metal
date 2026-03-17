@@ -99,18 +99,20 @@ def run(
 
     torch_expected_stats = torch_input.pow(2).sum(dim=-1, keepdim=True)
 
-    # Create tensor in DRAM first, then move to target memory config
+    layout = input_a_layout if input_a_layout is not None else ttnn.TILE_LAYOUT
+    mem_cfg = input_a_memory_config if input_a_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+
     if is_mesh_device:
         input_tensor = create_tensor_on_mesh(
-            torch_input, device, input_a_dtype, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, input_a_tensor_placement
+            torch_input, device, input_a_dtype, layout, mem_cfg, input_a_tensor_placement
         )
     else:
         input_tensor = ttnn.from_torch(
             torch_input,
             dtype=input_a_dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=layout,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem_cfg,
         )
 
     # If the traced config specifies a sharded memory config, move the tensor there

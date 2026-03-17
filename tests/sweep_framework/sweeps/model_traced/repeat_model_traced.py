@@ -93,8 +93,8 @@ def run(
         if m:
             repetition_vector = tuple(int(x) for x in m.group(1).split(","))
 
-    if isinstance(repetition_vector, list):
-        repetition_vector = tuple(repetition_vector)
+    if hasattr(repetition_vector, "__iter__") and not isinstance(repetition_vector, tuple):
+        repetition_vector = tuple(int(x) for x in repetition_vector)
 
     # Use named memory_config if output_memory_config not set
     if output_memory_config is None and memory_config is not None:

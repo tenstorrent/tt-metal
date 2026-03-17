@@ -131,8 +131,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # unsqueeze with dim as positional argument (no memory_config support)
-    output_tensor = ttnn.unsqueeze(input_tensor_a, dim, **op_kwargs)
+    output_tensor = ttnn.unsqueeze(input_tensor_a, dim=dim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
