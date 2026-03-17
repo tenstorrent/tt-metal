@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_slow_dispatch, skip_with_llk_assert
+from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
@@ -24,7 +24,6 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "tensor_size_bytes, fifo_size, num_iterations",
     [
@@ -91,7 +90,6 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
     host_io.terminate(True)
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "h2d_mode",
     [
@@ -197,7 +195,6 @@ def test_host_io_loopback_with_embedding(
     host_io.terminate(True)
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "tensor_size_bytes, fifo_size, num_iterations",
     [
@@ -401,7 +398,6 @@ def test_multi_stage_pipeline_loopback(mesh_device, tensor_size_bytes, fifo_size
     socket_interface_7.terminate(True)
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "h2d_mode",
     [

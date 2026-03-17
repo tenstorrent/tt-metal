@@ -15,7 +15,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
-@skip_with_llk_assert("Hits LLK assert check for are_unpacker_AB_configured_correctly.")
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39475")
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal

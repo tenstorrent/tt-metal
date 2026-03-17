@@ -5,14 +5,13 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
+from models.common.utility_functions import is_llk_assert_enabled
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
 USE_PERF_TEST_MODE = True
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_dram_group_norm_welford_reciprocal_vae(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
@@ -20,7 +19,6 @@ def test_dram_group_norm_welford_reciprocal_vae(device):
     test_group_norm_DRAM(device, 1, 256, 256, 256, 32, 4, 8, 8, "welford_reciprocal", perf_test_mode=USE_PERF_TEST_MODE)
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_block_sharded_group_norm_sdxl(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm
@@ -28,7 +26,6 @@ def test_block_sharded_group_norm_sdxl(device):
     test_sdxl_base_group_norm(device, (1, 1920, 32, 32), use_welford=False, perf_test_mode=USE_PERF_TEST_MODE)
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 def test_block_sharded_group_norm_negative_mask_sdxl(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm_negative_mask
@@ -36,7 +33,6 @@ def test_block_sharded_group_norm_negative_mask_sdxl(device):
     test_sdxl_base_group_norm_negative_mask(device, (1, 640, 128, 128), perf_test_mode=USE_PERF_TEST_MODE)
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_ff_matmul_with_gelu_sdxl(device):
     from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul import test_sdxl_matmul
@@ -58,7 +54,6 @@ def test_ff_matmul_with_gelu_sdxl(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_conv2d_block_sharded_sdxl(device):
     from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import test_conv2d_sdxl
 
@@ -91,7 +86,6 @@ def test_conv2d_block_sharded_sdxl(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_conv2d_auto_sliced_vae(device):
     from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import test_conv2d_vae_sdxl
 
@@ -122,7 +116,6 @@ def test_conv2d_auto_sliced_vae(device):
 
 
 @pytest.mark.models_device_performance_bare_metal
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Create a command that runs the specific test
     command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_dram_group_norm_welford_reciprocal_vae" -v'
@@ -141,7 +134,11 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
+    # Different expected values based on LLK assert configuration
+    if is_llk_assert_enabled():
+        expected_duration_ns = 2485890  # Measured: 2.49ms with LLK asserts enabled
+    else:
+        expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -159,7 +156,6 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
 
 
 @pytest.mark.models_device_performance_bare_metal
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_block_sharded_group_norm_sdxl_performance():
     # Create a command that runs the specific test
     command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl" -v'
@@ -178,7 +174,11 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
+    # Different expected values based on LLK assert configuration
+    if is_llk_assert_enabled():
+        expected_duration_ns = 132324  # Measured: ~132μs with LLK asserts enabled (64% overhead)
+    else:
+        expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -196,7 +196,6 @@ def test_block_sharded_group_norm_sdxl_performance():
 
 
 @pytest.mark.models_device_performance_bare_metal
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Create a command that runs the specific test
     command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_negative_mask_sdxl" -v'
@@ -215,7 +214,11 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 564334  # Measured: ~564μs for GroupNorm SDXL negative mask
+    # Different expected values based on LLK assert configuration
+    if is_llk_assert_enabled():
+        expected_duration_ns = 1158158  # Measured: ~1.16ms with LLK asserts enabled (64% overhead)
+    else:
+        expected_duration_ns = 564334  # Measured: ~564μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -233,7 +236,6 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
 
 
 @pytest.mark.models_device_performance_bare_metal
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_ff_matmul_with_gelu_sdxl_performance():
     # Create a command that runs the specific test
     command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_ff_matmul_with_gelu_sdxl" -v'
@@ -252,7 +254,11 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
+    # Different expected values based on LLK assert configuration
+    if is_llk_assert_enabled():
+        expected_duration_ns = 350126  # Measured: 350μs with LLK asserts enabled (64% overhead)
+    else:
+        expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
@@ -270,7 +276,6 @@ def test_ff_matmul_with_gelu_sdxl_performance():
 
 
 @pytest.mark.models_device_performance_bare_metal
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_conv2d_block_sharded_sdxl_performance():
     # Create a command that runs the specific test
     command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_conv2d_block_sharded_sdxl" -v'
@@ -289,7 +294,11 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
+    # Different expected values based on LLK assert configuration
+    if is_llk_assert_enabled():
+        expected_duration_ns = 1326109  # Measured: 1.33ms with LLK asserts enabled (64% overhead)
+    else:
+        expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(
@@ -307,7 +316,6 @@ def test_conv2d_block_sharded_sdxl_performance():
 
 
 @pytest.mark.models_device_performance_bare_metal
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 def test_conv2d_auto_sliced_vae_performance():
     # Create a command that runs the specific test
     command = f'pytest "models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_conv2d_auto_sliced_vae" -v'
@@ -326,7 +334,11 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
+    # Different expected values based on LLK assert configuration
+    if is_llk_assert_enabled():
+        expected_duration_ns = 4053958  # Measured: 4.05ms with LLK asserts enabled (64% overhead)
+    else:
+        expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(

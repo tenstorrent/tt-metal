@@ -47,9 +47,7 @@ def run_resnet_50(
     assert passed, message
 
 
-@skip_with_llk_assert(
-    "Hit LLK_ASSERT(l1_address_is_valid(hit_l1_address), L1 address must be in valid L1 memory region.)"
-)
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39469")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
