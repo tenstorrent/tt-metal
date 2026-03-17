@@ -15,7 +15,6 @@ from models.experimental.tt_symbiote.core.dispatchers.default_dispatcher import 
     handle_cat,
     handle_div,
     handle_expand,
-    handle_index_put_,
     handle_mul,
     handle_neg,
     handle_permute,
@@ -56,7 +55,6 @@ func_to_ttnn_compatible = {
     "aten::addmm": handle_addmm,
     "aten::permute": handle_permute,
     "aten::mm": handle_bmm,
-    "aten::index_put_": handle_index_put_,
 }
 
 
