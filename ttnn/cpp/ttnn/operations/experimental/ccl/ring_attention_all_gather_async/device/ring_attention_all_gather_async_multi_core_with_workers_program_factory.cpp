@@ -434,8 +434,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_size,                  // ring_size
             semaphore.at(1).address(),  // out_ready_semaphore_backward
         };
-        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
-            reader_forward_rt_args.push_back(tensor_descriptor_args[i]);
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            reader_forward_rt_args.push_back(tensor_descriptor_arg);
         }
         reader_sender_rt_offset = reader_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
@@ -458,8 +458,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_size,                  // ring_size
             semaphore.at(0).address(),  // out_ready_semaphore_backward
         };
-        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
-            reader_backward_rt_args.push_back(tensor_descriptor_args[i]);
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            reader_backward_rt_args.push_back(tensor_descriptor_arg);
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
@@ -486,8 +486,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_size,                     // ring_size
             semaphore.at(1).address()      // out_ready_semaphore_backward
         };
-        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
-            writer_forward_rt_args.push_back(tensor_descriptor_args[i]);
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            writer_forward_rt_args.push_back(tensor_descriptor_arg);
         }
         writer_sender_rt_offset = writer_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
@@ -523,8 +523,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             ring_size,                      // ring_size
             semaphore.at(0).address()       // out_ready_semaphore_backward
         };
-        for (uint32_t i = 0; i < tensor_descriptor_args.size(); i++) {
-            writer_backward_rt_args.push_back(tensor_descriptor_args[i]);
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            writer_backward_rt_args.push_back(tensor_descriptor_arg);
         }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());

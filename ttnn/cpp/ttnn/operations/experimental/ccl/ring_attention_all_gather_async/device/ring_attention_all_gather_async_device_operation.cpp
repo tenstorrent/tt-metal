@@ -105,8 +105,8 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     auto shape = input_tensor.logical_shape();
     std::vector<ttnn::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
-    for (uint32_t i = 0; i < input_tensors.size(); i++) {
-        auto shape = input_tensors[i].logical_shape();
+    for (const auto& input_item : input_tensors) {
+        auto shape = input_item.logical_shape();
         shape[operation_attributes.dim] *= operation_attributes.ring_size;
         output_specs.push_back(TensorSpec(
             shape,
