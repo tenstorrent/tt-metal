@@ -2,10 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+
+# Enable fused MM+RS for FF1/FF3 with env var
+USE_FUSED_MM_RS = os.environ.get("TT_LLAMA_USE_FUSED_MM_RS", "0") == "1"
 
 
 def pad_to_next_multiple(tensor):
@@ -226,6 +230,52 @@ class TtLlamaMLP(LightweightModule):
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=w1_out.memory_config(),
+                buffer_key="FF1",
+                dim=3,
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(w1_out)
+        elif USE_FUSED_MM_RS and seq_len >= 4096:
+            # Use fused MM+RS for FF1
+            # Testing N=34 (may fail if 3584 not divisible by 34)
+            fused_config = ttnn.MinimalMatmulConfig(
+                M_block_size=5,
+                K_block_size=8,
+                N_block_size=34,
+                subblock_h=1,
+                subblock_w=16,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 6),
+            )
+            rs_core_grid_offset = ttnn.CoreCoord(0, 6)
+            ccl_semaphore = self.tt_ccl.reduce_semaphore_handles[1][self.tt_ccl.gather_idx[1]]
+            barrier_semaphore = self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1)
+
+            fused_output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                x,
+                self.w1_interleaved if use_w1_w3_interleaved else self.w1,
+                3,  # dim
+                ccl_semaphore,
+                rs_core_grid_offset,
+                num_links=4,
+                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=1,
+                config=fused_config,
+                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                barrier_semaphore=barrier_semaphore,
+                num_workers_per_link=2,
+                chunk_width_in_mm_blocks=1,
+                num_buffers_per_channel=4,
+            )
+            # fused_output is a list [mm_output, rs_intermediate, rs_output]
+            w1_out_reduced = fused_output[2] if isinstance(fused_output, list) else fused_output
+            self.tt_ccl.gather_idx[1] = (self.tt_ccl.gather_idx[1] + 1) % self.tt_ccl.num_cbs
         else:
             w1_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
@@ -234,17 +284,16 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
-        w1_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w1_out,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=w1_out.memory_config(),
-            buffer_key="FF1",
-            dim=3,
-            batch_size=batch_size,
-        )
-        ttnn.deallocate(w1_out)
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=w1_out.memory_config(),
+                buffer_key="FF1",
+                dim=3,
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
@@ -260,6 +309,52 @@ class TtLlamaMLP(LightweightModule):
                 program_config=short_lens_pc_1_3,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=w3_out.memory_config(),
+                buffer_key="FF3",
+                dim=3,
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(w3_out)
+        elif USE_FUSED_MM_RS and seq_len >= 4096:
+            # Use fused MM+RS for FF3
+            # Testing N=34 (may fail if 3584 not divisible by 34)
+            fused_config = ttnn.MinimalMatmulConfig(
+                M_block_size=5,
+                K_block_size=8,
+                N_block_size=34,
+                subblock_h=1,
+                subblock_w=16,
+                compute_with_storage_grid_size=ttnn.CoreCoord(7, 6),
+            )
+            rs_core_grid_offset = ttnn.CoreCoord(0, 6)
+            ccl_semaphore = self.tt_ccl.reduce_semaphore_handles[1][self.tt_ccl.gather_idx[1]]
+            barrier_semaphore = self.tt_ccl.get_and_cycle_barrier_semaphore_handle(1)
+
+            fused_output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                x,
+                self.w3_interleaved if use_w1_w3_interleaved else self.w3,
+                3,  # dim
+                ccl_semaphore,
+                rs_core_grid_offset,
+                num_links=4,
+                memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+                rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=1,
+                config=fused_config,
+                compute_kernel_config=self.args.compute_kernel_config_lofi,
+                barrier_semaphore=barrier_semaphore,
+                num_workers_per_link=2,
+                chunk_width_in_mm_blocks=1,
+                num_buffers_per_channel=4,
+            )
+            # fused_output is a list [mm_output, rs_intermediate, rs_output]
+            w3_out_reduced = fused_output[2] if isinstance(fused_output, list) else fused_output
+            self.tt_ccl.gather_idx[1] = (self.tt_ccl.gather_idx[1] + 1) % self.tt_ccl.num_cbs
         else:
             w3_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
@@ -268,26 +363,26 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_out,
+                cluster_axis=1,
+                num_links=3,
+                memory_config=w3_out.memory_config(),
+                buffer_key="FF3",
+                dim=3,
+                batch_size=batch_size,
+            )
+            ttnn.deallocate(w3_out)
         ttnn.deallocate(x)
-        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w3_out,
-            cluster_axis=1,
-            num_links=3,
-            memory_config=w3_out.memory_config(),
-            buffer_key="FF3",
-            dim=3,
-            batch_size=batch_size,
-        )
-        ttnn.deallocate(w3_out)
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             dtype=ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            memory_config=w1_out_reduced.memory_config(),
         )
         w2_in_gathered = self.tt_ccl.line_all_gather(
-            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out_reduced.memory_config(), buffer_key="FF3", dim=3
         )
         ttnn.deallocate(w2_in)
 
