@@ -7,7 +7,6 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>

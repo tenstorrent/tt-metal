@@ -16,9 +16,12 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fcntl.h>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -30,12 +33,14 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <sys/file.h>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unistd.h>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
@@ -93,6 +98,64 @@ namespace {
 
 using namespace tt::tt_metal;
 
+class BuildPathLockGuard {
+public:
+    explicit BuildPathLockGuard(const std::string& build_path) : lock_file_path_(build_path + "/.build.lock") {
+        std::filesystem::create_directories(build_path);
+        fd_ = ::open(lock_file_path_.c_str(), O_CREAT | O_RDWR, 0666);
+        if (fd_ == -1) {
+            TT_THROW("Failed to create lock file {}: {}", lock_file_path_, std::strerror(errno));
+        }
+        if (!lock()) {
+            const int err = errno;
+            ::close(fd_);
+            fd_ = -1;
+            TT_THROW("Failed to lock file {}: {}", lock_file_path_, std::strerror(err));
+        }
+    }
+
+    ~BuildPathLockGuard() {
+        if (fd_ != -1) {
+            if (!unlock()) {
+                log_warning(
+                    tt::LogBuildKernels, "Failed to unlock lock file {}: {}", lock_file_path_, std::strerror(errno));
+            }
+            ::close(fd_);
+        }
+    }
+
+    BuildPathLockGuard(const BuildPathLockGuard&) = delete;
+    BuildPathLockGuard& operator=(const BuildPathLockGuard&) = delete;
+    BuildPathLockGuard(BuildPathLockGuard&&) = delete;
+    BuildPathLockGuard& operator=(BuildPathLockGuard&&) = delete;
+
+private:
+    bool lock() const {
+        while (true) {
+            if (::flock(fd_, LOCK_EX) == 0) {
+                return true;
+            }
+            if (errno != EINTR) {
+                return false;
+            }
+        }
+    }
+
+    bool unlock() const {
+        while (true) {
+            if (::flock(fd_, LOCK_UN) == 0) {
+                return true;
+            }
+            if (errno != EINTR) {
+                return false;
+            }
+        }
+    }
+
+    int fd_ = -1;
+    std::string lock_file_path_;
+};
+
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
         return device->allocator_impl()->get_config().l1_unreserved_base -
@@ -148,6 +211,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // const std::string tracyPrefix = "GenerateBinaries_";
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
+        BuildPathLockGuard build_lock(build_options.path);
         jit_build_genfiles_descriptors(
             BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
         kernel->generate_binaries(device, build_options);
