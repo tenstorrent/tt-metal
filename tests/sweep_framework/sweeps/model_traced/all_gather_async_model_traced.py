@@ -501,10 +501,9 @@ def run(
                 for _ in range(num_iters)
             ]
 
-            # Create barrier semaphore -- always for model_traced (model always
-            # passes it), conditionally for other suites.
+            # Create barrier semaphore if needed
             barrier_semaphore_handles = []
-            if is_model_traced or barrier_semaphore is not None:
+            if barrier_semaphore is not None:
                 barrier_semaphore_handles = [
                     ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
                 ]
