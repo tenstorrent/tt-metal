@@ -160,7 +160,7 @@ int get_retry_jitter_ms();
 //
 // Returns true if operation eventually succeeded, false if all retries failed.
 template <typename Operation>
-bool retry_on_estale(Operation&& operation) {
+bool retry_on_estale(Operation operation) {
     if (!nfs_safety_enabled()) {
         return operation();
     }
@@ -191,7 +191,7 @@ bool retry_on_estale(Operation&& operation) {
 // Returns true if operation eventually succeeded, false if all retries failed.
 // On failure, ec contains the error from the last attempt.
 template <typename Operation>
-bool retry_on_estale_ec(Operation&& operation, std::error_code& ec) {
+bool retry_on_estale_ec(Operation operation, std::error_code& ec) {
     ec.clear();
     if (!nfs_safety_enabled()) {
         return operation(ec);
