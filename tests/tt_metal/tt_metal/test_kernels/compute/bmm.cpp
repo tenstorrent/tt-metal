@@ -56,6 +56,7 @@ void kernel_main() {
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
 #ifdef ARCH_QUASAR
+                    MATH(DPRINT << "mt_C: " << mt_C << " nt_C: " << nt_C << " kt: " << kt << ENDL());
                     dfb0.wait_front(onetile);
                     dfb1.wait_front(onetile);
                     matmul_tiles(dfb0.get_id(), dfb1.get_id(), 0, 0, 0);
@@ -73,10 +74,9 @@ void kernel_main() {
                 }
 
 #ifdef ARCH_QUASAR
-                    DPRINT << "compute " << compute_id << " reserve_back: dfb_out" << ENDL();
+                    MATH(DPRINT << "mt_C: " << mt_C << " nt_C: " << nt_C << " reserve_back: dfb_out" << ENDL());
                     dfb_out.reserve_back(onetile);
                     pack_tile(0, dfb_out.get_id());
-                    DPRINT << "compute " << compute_id << " push_back: dfb_out" << ENDL();
                     dfb_out.push_back(onetile);
 #else
                     cb16.reserve_back(onetile);
