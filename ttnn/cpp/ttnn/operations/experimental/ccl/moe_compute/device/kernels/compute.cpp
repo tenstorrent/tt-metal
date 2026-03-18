@@ -10,10 +10,6 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack_untilize.h"
 
-// DEBUG
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/debug/dprint_pages.h"
-
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
@@ -28,35 +24,6 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
         invalidate_l1_cache();
     } while ((*sem_addr) < val);
     WAYPOINT("NSMD");
-}
-
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
 }
 
 void kernel_main() {
@@ -317,13 +284,6 @@ void kernel_main() {
                     }
                     cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
                 }
-
-                // fill_tile_init();
-                //                 fill_tile(0, 1.0);
-                //                 fill_tile(1, 1.0);
-                //                 fill_tile(2, 1.0);
-                //                 fill_tile(3, 1.0);
-
                 tile_regs_commit();
 
                 tile_regs_wait();
