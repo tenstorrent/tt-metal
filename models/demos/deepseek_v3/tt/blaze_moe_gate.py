@@ -32,7 +32,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-MAX_BATCH_SIZE_PER_CORE = 4
+MAX_BATCH_SIZE_PER_CORE = 1
 
 
 class BlazeMoeGate(AbstractModule):
@@ -444,6 +444,11 @@ class BlazeMoeGate(AbstractModule):
             topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
             topk_experts_scores_list.append(topk_experts_scores[:batch_size_per_device, :, :])
             topk_experts_indices_list.append(topk_experts_indices[:batch_size_per_device, :, :])
+            ttnn.deallocate(cur_logits)
+            ttnn.deallocate(scores_correction_bias)
+            ttnn.deallocate(ttnn_output_tensor)
+            ttnn.deallocate(ttnn_input_indices)
+            ttnn.deallocate(ttnn_output_indices)
 
             if end_index >= total_batch_size_per_device:
                 break
@@ -464,11 +469,14 @@ class BlazeMoeGate(AbstractModule):
         topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=cfg["output_memory_config"])
         topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=cfg["output_memory_config"])
         # if we do typecast on a row_major tensor, then we may see a hang
-        # topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
-        breakpoint()
+        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
-        # topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_indices = ttnn.slice(topk_experts_indices, [0, 0, 0, 0], [1, 1, topk_experts_indices.shape[2], 8])
+        for tensor in topk_experts_scores_list:
+            ttnn.deallocate(tensor)
+        for tensor in topk_experts_indices_list:
+            ttnn.deallocate(tensor)
 
         return topk_experts_weights, topk_experts_indices
 
