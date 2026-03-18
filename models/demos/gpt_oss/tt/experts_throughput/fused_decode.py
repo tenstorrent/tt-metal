@@ -207,6 +207,7 @@ def fused_decode_forward(
 
     tt_sum = ttnn.sum(tt_weighted, dim=0, keepdim=True)  # [1, 1, M, H]
     ttnn.deallocate(tt_weighted)
+    tt_sum = ttnn.typecast(tt_sum, ttnn.bfloat8_b)
 
     tt_output = ttnn.all_reduce(
         tt_sum,
