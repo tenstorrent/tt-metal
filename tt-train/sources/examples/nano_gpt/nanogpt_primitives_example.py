@@ -863,10 +863,10 @@ def main():
     print()
 
     if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_home = get_tt_metal_home()
-        if tt_metal_home and os.path.exists(tt_metal_home):
-            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_home
-            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_home} (from get_tt_metal_home)")
+        tt_metal_root = get_tt_metal_runtime_root()
+        if tt_metal_root and os.path.exists(tt_metal_root):
+            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_root
+            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_root} (from get_tt_metal_runtime_root)")
         else:
             current_dir = os.getcwd()
             if os.path.exists(os.path.join(current_dir, "tt_metal")):
@@ -885,7 +885,7 @@ def main():
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
     print()
 
-    tt_train_root = f"{get_tt_metal_home()}/tt-train"
+    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
     configs_root = f"{tt_train_root}/configs"
     try:
         print(f"Loading training config from: {args.config}")

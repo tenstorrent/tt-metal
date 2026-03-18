@@ -72,9 +72,7 @@ def validate_mesh_graph_descriptor(mesh_shape: list[int]) -> None:
     with open(mgd_path) as f:
         content = f.read()
 
-    dims_match = re.search(
-        r"device_topology\s*\{[^}]*dims\s*:\s*\[\s*([\d\s,]+)\]", content
-    )
+    dims_match = re.search(r"device_topology\s*\{[^}]*dims\s*:\s*\[\s*([\d\s,]+)\]", content)
     if not dims_match:
         print(f"WARNING: Could not parse dims from MGD file: {mgd_path}")
         return
@@ -88,9 +86,7 @@ def validate_mesh_graph_descriptor(mesh_shape: list[int]) -> None:
             f"Please ensure --ddp value matches the MGD file."
         )
 
-    types_match = re.search(
-        r"device_topology\s*\{[^}]*dim_types\s*:\s*\[\s*([A-Z_,\s]+)\]", content
-    )
+    types_match = re.search(r"device_topology\s*\{[^}]*dim_types\s*:\s*\[\s*([A-Z_,\s]+)\]", content)
     if types_match:
         dim_types = [t.strip() for t in types_match.group(1).split(",")]
         ddp_axis = 1
@@ -116,9 +112,7 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int) -> LlamaConfig:
             scaling_factor=rs.get("scaling_factor", rope_scaling.scaling_factor),
             high_freq_factor=rs.get("high_freq_factor", rope_scaling.high_freq_factor),
             low_freq_factor=rs.get("low_freq_factor", rope_scaling.low_freq_factor),
-            original_context_length=rs.get(
-                "original_context_length", rope_scaling.original_context_length
-            ),
+            original_context_length=rs.get("original_context_length", rope_scaling.original_context_length),
         )
 
     runner_type = RunnerType.Default
@@ -172,9 +166,7 @@ def load_lora_checkpoint(model: LoraModel, filepath: str) -> None:
         if name not in parameters:
             skipped.append(name)
             continue
-        restored = ttml.autograd.Tensor.from_numpy(
-            arr.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-        )
+        restored = ttml.autograd.Tensor.from_numpy(arr.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE)
         parameters[name].assign(restored)
         loaded += 1
 
@@ -186,9 +178,7 @@ def load_lora_checkpoint(model: LoraModel, filepath: str) -> None:
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Llama LoRA fine-tuning on Shakespeare"
-    )
+    parser = argparse.ArgumentParser(description="Llama LoRA fine-tuning on Shakespeare")
     parser.add_argument(
         "-m",
         "--model_config",
@@ -283,9 +273,7 @@ def main():
         hf_tokenizer = AutoTokenizer.from_pretrained(src)
         vocab_size = (hf_tokenizer.vocab_size + 31) // 32 * 32
         ids = np.array(hf_tokenizer.encode(text), dtype=np.uint32)
-        print(
-            f"Using HF BPE tokenizer, vocab_size={hf_tokenizer.vocab_size} (padded to {vocab_size})"
-        )
+        print(f"Using HF BPE tokenizer, vocab_size={hf_tokenizer.vocab_size} (padded to {vocab_size})")
     else:
         tokenizer = CharTokenizer(text)
         vocab_size = (tokenizer.vocab_size + 31) // 32 * 32
@@ -301,25 +289,21 @@ def main():
 
     if use_ddp:
         if batch_size % num_devices != 0:
-            raise ValueError(
-                f"--batch ({batch_size}) must be divisible by --ddp ({num_devices})"
-            )
+            raise ValueError(f"--batch ({batch_size}) must be divisible by --ddp ({num_devices})")
         ttml.core.distributed.enable_fabric(num_devices)
         validate_mesh_graph_descriptor(mesh_shape)
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     if use_ddp:
         autograd_ctx.open_device(mesh_shape)
-        autograd_ctx.initialize_parallelism_context(
-            ttml.autograd.DistributedConfig(enable_ddp=True)
-        )
+        autograd_ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=True))
         print(f"DDP enabled: {num_devices} devices, mesh_shape={mesh_shape}")
     else:
         autograd_ctx.open_device([1, 1], [0])
 
     # ── Model ─────────────────────────────────────────────────────────────────
     if args.model_config is not None:
-        tt_train_root = f"{get_tt_metal_home()}/tt-train"
+        tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
         print(f"Loading model config from: {args.model_config}")
         yaml_config = load_config(args.model_config, tt_train_root)
         llama_cfg = llama_config_from_yaml(yaml_config, vocab_size)
@@ -400,9 +384,7 @@ def main():
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
 
         optimizer.zero_grad()
         logits = model(tt_x, None)
@@ -430,9 +412,7 @@ def main():
         step_ms = (time.perf_counter() - t0) * 1000
 
         if step % PRINT_INTERVAL == 0 or step == 1:
-            print(
-                f"step {step:>4}/{steps}  loss={loss_val:.4f}  step_time={step_ms:.1f}ms"
-            )
+            print(f"step {step:>4}/{steps}  loss={loss_val:.4f}  step_time={step_ms:.1f}ms")
 
         if args.track_memory and is_first_step:
             is_first_step = False
