@@ -70,7 +70,7 @@ void bind_slice(nb::module_& mod) {
         doc,
         // Overload 1: Tensor args version (uint32_t template parameter)
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(
+            nb::overload_cast<
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
@@ -80,7 +80,7 @@ void bind_slice(nb::module_& mod) {
                 const std::optional<float>&,
                 const std::optional<uint32_t>&,
                 const std::optional<uint32_t>&,
-                const std::optional<CoreRangeSet>&)>(&ttnn::slice<uint32_t>),
+                const std::optional<CoreRangeSet>&>(&ttnn::slice<uint32_t>),
             nb::arg("input_tensor"),
             nb::arg("starts"),
             nb::arg("ends"),
@@ -94,7 +94,7 @@ void bind_slice(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()),
         // Overload 2: std::array version (uint32_t template parameter, size 4)
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(
+            nb::overload_cast<
                 const ttnn::Tensor&,
                 const std::array<uint32_t, 4>&,
                 const std::array<uint32_t, 4>&,
@@ -102,7 +102,7 @@ void bind_slice(nb::module_& mod) {
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
                 const std::optional<float>&,
-                const std::optional<CoreRangeSet>&)>(&ttnn::slice<uint32_t, 4>),
+                const std::optional<CoreRangeSet>&>(&ttnn::slice<uint32_t, 4>),
             nb::arg("input_tensor"),
             nb::arg("starts"),
             nb::arg("ends"),

@@ -322,7 +322,7 @@ static Tensor apply_halo_padding(
         .core_range_set = shard_spec.grid,
         .snap_to_tile = false};
 
-    ::ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    ttnn::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, 0, false, false, false);

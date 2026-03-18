@@ -34,9 +34,10 @@ void bind_repeat(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            static_cast<ttnn::Tensor (*)(
-                const ttnn::Tensor&, const ttnn::SmallVector<uint32_t>&, const std::optional<MemoryConfig>&)>(
-                &ttnn::repeat),
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::SmallVector<uint32_t>&,
+                const std::optional<MemoryConfig>&>(&ttnn::repeat),
             nb::arg("input_tensor"),
             nb::arg("repeat_dims"),
             nb::kw_only(),
