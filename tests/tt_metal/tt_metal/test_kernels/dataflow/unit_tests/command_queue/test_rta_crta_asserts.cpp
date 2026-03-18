@@ -8,9 +8,9 @@
 // Supports both DM and compute kernels
 
 #include "experimental/core_local_mem.h"
+#include "api/kernel_thread_globals.h"
 
 #ifndef COMPILE_FOR_TRISC
-#include "api/dataflow/dataflow_api.h"
 #include "internal/firmware_common.h"
 #else
 #include "api/compute/common.h"
@@ -64,7 +64,6 @@ static FORCE_INLINE void trigger_bounds_check_assert() {
 #endif
 }
 
-#ifndef COMPILE_FOR_TRISC
 // Helper: write RTA/CRTA metadata and values to L1 (DM only)
 static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
     experimental::CoreLocalMem<uint32_t> ptr(l1_write_addr);
@@ -82,7 +81,6 @@ static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(ptr.get_address()));
 #endif
 }
-#endif
 
 #ifndef COMPILE_FOR_TRISC
 
@@ -138,7 +136,9 @@ void core_agnostic_main() {
 
 void core_agnostic_main() {
     UNPACK({
-#if defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
+#if !defined(MAX_RTA_IDX) && !defined(MAX_CRTA_IDX)
+        write_args_to_l1(get_compile_time_arg_val(0));
+#else
         signal_completion_before_assert();
         trigger_bounds_check_assert();
 #endif
