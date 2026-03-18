@@ -146,11 +146,13 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
 D2HSocket::D2HSocket(
     const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
-    sender_core_(sender_core), fifo_size_(fifo_size), mesh_device_(mesh_device.get()), is_owner_(true) {
+    sender_core_(sender_core),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    mesh_device_(mesh_device.get()) {
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
-    pcie_alignment_ = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
@@ -307,7 +309,7 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
 
 std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
     auto desc = HDSocketDescriptor::wait_and_read(
-        fmt::format("/dev/shm/tt_d2h_{}.bin", socket_id), "d2h", timeout_ms.value_or(10000));
+        descriptor_path_for_socket("d2h", socket_id), "d2h", timeout_ms.value_or(10000));
 
     auto socket = std::unique_ptr<D2HSocket>(new D2HSocket());
     socket->is_owner_ = false;

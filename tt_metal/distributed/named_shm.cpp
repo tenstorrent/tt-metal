@@ -78,6 +78,15 @@ NamedShm NamedShm::open(const std::string& name, size_t size) {
     int fd = shm_open(name.c_str(), O_RDWR, 0600);
     TT_FATAL(fd != -1, "shm_open(open) failed for '{}': {}", name, std::strerror(errno));
 
+    struct stat st;
+    TT_FATAL(fstat(fd, &st) == 0, "fstat failed for '{}': {}", name, std::strerror(errno));
+    TT_FATAL(
+        static_cast<size_t>(st.st_size) >= size,
+        "Shared memory '{}' backing size ({}) is smaller than requested size ({})",
+        name,
+        st.st_size,
+        size);
+
     void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     int mmap_errno = errno;
     ::close(fd);
