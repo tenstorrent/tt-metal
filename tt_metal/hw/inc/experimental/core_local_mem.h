@@ -4,7 +4,9 @@
 
 #pragma once
 
+#if !defined(COMPILE_FOR_TRISC)
 #include "experimental/noc.h"
+#endif
 #include "experimental/lock.h"
 #include "tools/profiler/noc_debugging_metadata.hpp"
 #include "tools/profiler/noc_debugging_profiler.hpp"
@@ -166,6 +168,7 @@ private:
     AddressType address_;
 };
 
+#if !defined(COMPILE_FOR_TRISC)
 template <typename T, typename AddressType>
 struct noc_traits_t<CoreLocalMem<T, AddressType>> {
     struct src_args_type {
@@ -192,5 +195,6 @@ struct noc_traits_t<CoreLocalMem<T, AddressType>> {
         static_assert(false, "CoreLocalMem cannot be used as NoC mcast destination");
     }
 };
+#endif  // !defined(COMPILE_FOR_TRISC)
 
 }  // namespace experimental
