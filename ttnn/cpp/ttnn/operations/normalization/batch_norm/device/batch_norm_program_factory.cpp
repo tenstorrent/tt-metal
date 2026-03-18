@@ -172,10 +172,14 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
     uint32_t d_single_tile_size = tt::tile_size(d_data_format);
     uint32_t e_single_tile_size = tt::tile_size(e_data_format);
     uint32_t f_single_tile_size = tt::tile_size(f_data_format);
     uint32_t interm_single_tile_size = tt::tile_size(interm_data_format);
+
+    const bool needs_output_typecast =
+        (interm_data_format == DataFormat::Float32 && c_data_format != DataFormat::Float32);
 
     // we parallelize the computation across the output tiles
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -197,15 +201,25 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         b_single_tile_size,
         b_num_tiles_per_cb,
         b_data_format);  // batch_mean
-    // Output CB uses interm_data_format so the compute kernel can pack without packer format
-    // switching. The writer handles the final conversion to the tensor's native dtype.
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_2,
         program,
         all_device_cores,
-        interm_single_tile_size,
+        needs_output_typecast ? interm_single_tile_size : c_single_tile_size,
         num_tiles_per_cb,
-        interm_data_format);  // output
+        needs_output_typecast ? interm_data_format : c_data_format);  // compute output (staging when typecast)
+
+    uint32_t writer_output_cb = output_tensor_cb;
+    if (needs_output_typecast) {
+        auto [writer_cb, writer_cb_handle] = create_cb(
+            tt::CBIndex::c_9,
+            program,
+            all_device_cores,
+            c_single_tile_size,
+            num_tiles_per_cb,
+            c_data_format);  // writer-facing output (BF16)
+        writer_output_cb = writer_cb;
+    }
     auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_3,
         program,
@@ -246,7 +260,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         static_cast<uint32_t>(weight_has_value),
         static_cast<uint32_t>(bias_has_value),
         batch_mean_tensor_cb,
-        output_tensor_cb,
+        writer_output_cb,
         batch_var_tensor_cb,
         weight_tensor_cb,
         bias_tensor_cb,
@@ -284,9 +298,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     if (f_data_format == DataFormat::Float32) {
         writer_defines["BIAS_IS_FP32"] = "1";
     }
-    if (interm_data_format == DataFormat::Float32 && c_data_format != DataFormat::Float32) {
-        writer_defines["CONVERT_OUTPUT_TO_BF16"] = "1";
-    }
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -321,7 +332,17 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         den_cb,
         weight_tensor_cb,
         temp_1_cb,
-        bias_tensor_cb};
+        bias_tensor_cb,
+        writer_output_cb};
+
+    std::map<std::string, std::string> compute_defines;
+    if (needs_output_typecast) {
+        auto in_fmt = static_cast<uint32_t>(DataFormat::Float32);
+        auto out_fmt = static_cast<uint32_t>(c_data_format);
+        compute_defines["TYPECAST_OUTPUT_INIT"] = fmt::format("typecast_tile_init<{}u, {}u>", in_fmt, out_fmt);
+        compute_defines["TYPECAST_OUTPUT"] = fmt::format("typecast_tile<{}u, {}u>", in_fmt, out_fmt);
+    }
+
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         fmt::format(
@@ -334,7 +355,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             .dst_full_sync_en = dst_full_sync_en,
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .math_approx_mode = math_approx_mode,
-            .compile_args = compute_kernel_args});
+            .compile_args = compute_kernel_args,
+            .defines = std::move(compute_defines)});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

@@ -99,17 +99,6 @@ void kernel_main() {
 
                     // write data
                     cb_id_updated_running_mean_obj.wait_front(onetile);
-#ifdef CONVERT_UPDATED_MEAN_TO_BF16
-                    {
-                        auto* fp32_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id_updated_running_mean));
-                        auto* bf16_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_id_updated_running_mean));
-                        for (uint32_t i = 0; i < 1024; ++i) {
-                            bf16_ptr[i] = static_cast<uint16_t>(fp32_ptr[i] >> 16);
-                        }
-                    }
-#endif
                     noc.async_write(
                         cb_id_updated_running_mean_obj,
                         old_running_mean,
@@ -139,17 +128,6 @@ void kernel_main() {
 
                     // write data
                     cb_id_updated_running_var_obj.wait_front(onetile);
-#ifdef CONVERT_UPDATED_VAR_TO_BF16
-                    {
-                        auto* fp32_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id_updated_running_var));
-                        auto* bf16_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_id_updated_running_var));
-                        for (uint32_t i = 0; i < 1024; ++i) {
-                            bf16_ptr[i] = static_cast<uint16_t>(fp32_ptr[i] >> 16);
-                        }
-                    }
-#endif
                     noc.async_write(
                         cb_id_updated_running_var_obj,
                         old_running_var,
