@@ -372,7 +372,7 @@ class RowParallelLinear(Module):
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
             x = ttnn.unsqueeze(x, 0)
-        _, _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+        _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor=x,
             weight_tensor=weight,
             dim=3,

@@ -196,7 +196,6 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     def run_op(i):
         (
             tt_mm_out,
-            tt_rs_intermediate,
             tt_rs_out,
         ) = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
             input_tensor_mesh_list[i],

@@ -201,7 +201,6 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             # Fused path: matmul and strided reduce-scatter run concurrently
             (
                 tt_mm_out,
-                tt_rs_intermediate,
                 tt_rs_out,
             ) = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
                 input_tensor_mesh_list[i],
@@ -753,7 +752,7 @@ def _run_optional_feature_test(mesh_device, topology, cluster_axis, feature):
         torch_rs_scattered = [addcmul_a_slice + scalar * chunk * addcmul_b_slice for chunk in torch_rs_scattered]
 
     # Run the op
-    mm_out, _rs_inter, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+    mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
         input_mesh,
         weight_mesh,
         cfg.dim,

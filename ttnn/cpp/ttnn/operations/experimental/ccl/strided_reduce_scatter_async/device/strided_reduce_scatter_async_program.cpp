@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-///
+
 #include <algorithm>
 
 #include <tt-logger/tt-logger.hpp>

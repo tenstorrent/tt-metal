@@ -29,12 +29,11 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
-    const std::optional<Tensor>& optional_rs_intermediate_tensor,
     const std::optional<Tensor>& optional_rs_output_tensor,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2) {
-    return ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
+    auto all_outputs = ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
         input_tensor,
         weight_tensor,
         dim,
@@ -56,11 +55,13 @@ std::vector<ttnn::Tensor> ExecuteMinimalMatmulStridedReduceScatterAsync::invoke(
         num_workers_per_link.value_or(1),
         num_buffers_per_channel,
         chunk_width_in_mm_blocks,
-        optional_rs_intermediate_tensor,
+        std::nullopt,
         optional_rs_output_tensor,
         fused_ternary_scalar,
         addcmul_input_tensor1,
         addcmul_input_tensor2);
+
+    return {std::move(all_outputs[0]), std::move(all_outputs[2])};
 }
 
 }  // namespace ttnn::operations::experimental::ccl

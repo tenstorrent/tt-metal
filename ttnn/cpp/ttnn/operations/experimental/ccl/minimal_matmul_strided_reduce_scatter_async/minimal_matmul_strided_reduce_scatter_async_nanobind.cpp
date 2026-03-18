@@ -53,7 +53,6 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> chunk_width_in_mm_blocks,
-               const std::optional<Tensor>& optional_rs_intermediate_tensor,
                const std::optional<Tensor>& optional_rs_output_tensor,
                std::optional<float> fused_ternary_scalar,
                const std::optional<const Tensor>& addcmul_input_tensor1,
@@ -80,7 +79,6 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                     num_workers_per_link,
                     num_buffers_per_channel,
                     chunk_width_in_mm_blocks,
-                    optional_rs_intermediate_tensor,
                     optional_rs_output_tensor,
                     fused_ternary_scalar,
                     addcmul_input_tensor1,
@@ -108,7 +106,6 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("chunk_width_in_mm_blocks") = nb::none(),
-            nb::arg("optional_rs_intermediate_tensor") = nb::none(),
             nb::arg("optional_rs_output_tensor") = nb::none(),
             nb::arg("fused_ternary_scalar") = nb::none(),
             nb::arg("addcmul_input_tensor1") = nb::none(),
@@ -127,10 +124,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
         The matmul output is fed directly into the reduce-scatter, with the matmul
         signaling the reduce-scatter via semaphores as output blocks become ready.
 
-        Returns three tensors:
+        Returns two tensors:
             [0] matmul output (intermediate between MM and RS)
-            [1] reduce-scatter intermediate buffer
-            [2] reduce-scatter output (final result)
+            [1] reduce-scatter output (final result)
 
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): multi-device input activations tensor
@@ -156,7 +152,6 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`num_workers_per_link` (Optional[int]): Workers per link for RS.
             * :attr:`num_buffers_per_channel` (Optional[int]): Buffers per channel for RS.
             * :attr:`chunk_width_in_mm_blocks` (Optional[int]): MM output blocks per RS chunk.
-            * :attr:`optional_rs_intermediate_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS intermediate.
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
             * :attr:`fused_ternary_scalar` (Optional[float]): Scalar value for fused addcmul operation.
             * :attr:`addcmul_input_tensor1` (Optional[ttnn.Tensor]): First additional input tensor for fused addcmul (residual/base).
