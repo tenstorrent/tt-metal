@@ -3,13 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/socket_descriptor.hpp"
+#include "tt_metal/distributed/named_shm.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <nlohmann/json.hpp>
+#include "impl/context/metal_context.hpp"
 
+#include <chrono>
+#include <filesystem>
 #include <fstream>
+#include <thread>
 
 namespace tt::tt_metal::distributed {
+
+void SocketDescriptor::populate_from_owner(
+    const std::string& type,
+    const NamedShm& shm,
+    uint32_t fifo_size_arg,
+    uint32_t config_buffer_address_arg,
+    MeshDevice* mesh_device,
+    const MeshCoreCoord& core) {
+    socket_type = type;
+    shm_name = shm.name();
+    shm_size = shm.size();
+    data_offset = 0;
+    fifo_size = fifo_size_arg;
+    config_buffer_address = config_buffer_address_arg;
+    device_id = static_cast<uint32_t>(mesh_device->get_device(core.device_coord)->id());
+    core_x = core.core_coord.x;
+    core_y = core.core_coord.y;
+    auto vc = mesh_device->worker_core_from_logical_core(core.core_coord);
+    virtual_core_x = vc.x;
+    virtual_core_y = vc.y;
+    pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+}
 
 void SocketDescriptor::write_to_file(const std::string& path) const {
     nlohmann::json j;
@@ -65,6 +93,27 @@ SocketDescriptor SocketDescriptor::read_from_file(const std::string& path) {
     desc.pcie_alignment = j.value("pcie_alignment", uint32_t{0});
     desc.bytes_acked_device_offset = j.value("bytes_acked_device_offset", uint32_t{0});
 
+    return desc;
+}
+
+SocketDescriptor SocketDescriptor::wait_and_read(
+    const std::string& descriptor_path, const std::string& expected_type, uint32_t timeout_ms) {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (!std::filesystem::exists(descriptor_path)) {
+        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::high_resolution_clock::now() - start_time)
+                              .count();
+        if (elapsed_ms > timeout_ms) {
+            TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    auto desc = read_from_file(descriptor_path);
+    TT_FATAL(
+        desc.socket_type == expected_type,
+        "Descriptor type mismatch: expected '{}', got '{}'",
+        expected_type,
+        desc.socket_type);
     return desc;
 }
 

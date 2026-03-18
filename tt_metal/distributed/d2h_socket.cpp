@@ -289,27 +289,9 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
 
-    auto device_id = mesh_device_->get_device(sender_core_.device_coord)->id();
-
     SocketDescriptor desc;
-    desc.socket_type = "d2h";
-    desc.shm_name = shm_->name();
-    desc.shm_size = shm_->size();
-    desc.data_offset = 0;
+    desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
     desc.bytes_sent_offset = fifo_size_;
-    desc.bytes_acked_offset = 0;
-    desc.fifo_size = fifo_size_;
-    desc.h2d_mode = 0;
-    desc.config_buffer_address = config_buffer_address_;
-    desc.aligned_data_buf_start = 0;
-    desc.device_id = static_cast<uint32_t>(device_id);
-    desc.core_x = sender_core_.core_coord.x;
-    desc.core_y = sender_core_.core_coord.y;
-
-    auto virtual_core = mesh_device_->worker_core_from_logical_core(sender_core_.core_coord);
-    desc.virtual_core_x = virtual_core.x;
-    desc.virtual_core_y = virtual_core.y;
-    desc.pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     desc.bytes_acked_device_offset = bytes_acked_device_offset_;
 
     descriptor_path_ = fmt::format("/dev/shm/tt_d2h_{}.json", socket_id);
@@ -319,27 +301,15 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
 }
 
 std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
-    auto descriptor_path = fmt::format("/dev/shm/tt_d2h_{}.json", socket_id);
-    auto start_time = std::chrono::high_resolution_clock::now();
-    while (!std::filesystem::exists(descriptor_path)) {
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::high_resolution_clock::now() - start_time)
-                              .count();
-        if (elapsed_ms > timeout_ms.value_or(10000)) {
-            TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    auto desc = SocketDescriptor::read_from_file(descriptor_path);
-    TT_FATAL(desc.socket_type == "d2h", "Descriptor type mismatch: expected 'd2h', got '{}'", desc.socket_type);
+    auto desc = SocketDescriptor::wait_and_read(
+        fmt::format("/dev/shm/tt_d2h_{}.json", socket_id), "d2h", timeout_ms.value_or(10000));
 
     auto socket = std::unique_ptr<D2HSocket>(new D2HSocket());
     socket->is_owner_ = false;
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
-    socket->sender_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
     socket->pcie_alignment_ = desc.pcie_alignment;
+    socket->sender_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
     socket->bytes_acked_device_offset_ = desc.bytes_acked_device_offset;
 
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));

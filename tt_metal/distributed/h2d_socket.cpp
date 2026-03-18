@@ -354,27 +354,11 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
 
-    auto device_id = mesh_device_->get_device(recv_core_.device_coord)->id();
-
     SocketDescriptor desc;
-    desc.socket_type = "h2d";
-    desc.shm_name = shm_->name();
-    desc.shm_size = shm_->size();
-    desc.data_offset = 0;
+    desc.populate_from_owner("h2d", *shm_, fifo_size_, config_buffer_address_, mesh_device_, recv_core_);
     desc.bytes_acked_offset = (h2d_mode_ == H2DMode::DEVICE_PULL) ? fifo_size_ : 0;
-    desc.bytes_sent_offset = 0;
-    desc.fifo_size = fifo_size_;
     desc.h2d_mode = static_cast<uint32_t>(h2d_mode_);
-    desc.config_buffer_address = config_buffer_address_;
     desc.aligned_data_buf_start = aligned_data_buf_start_;
-    desc.device_id = static_cast<uint32_t>(device_id);
-    desc.core_x = recv_core_.core_coord.x;
-    desc.core_y = recv_core_.core_coord.y;
-
-    auto virtual_core = mesh_device_->worker_core_from_logical_core(recv_core_.core_coord);
-    desc.virtual_core_x = virtual_core.x;
-    desc.virtual_core_y = virtual_core.y;
-    desc.pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
 
     descriptor_path_ = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
     desc.write_to_file(descriptor_path_);
@@ -383,29 +367,17 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
 }
 
 std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
-    auto descriptor_path = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
-    auto start_time = std::chrono::high_resolution_clock::now();
-    while (!std::filesystem::exists(descriptor_path)) {
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::high_resolution_clock::now() - start_time)
-                              .count();
-        if (elapsed_ms > timeout_ms.value_or(10000)) {
-            TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    auto desc = SocketDescriptor::read_from_file(descriptor_path);
-    TT_FATAL(desc.socket_type == "h2d", "Descriptor type mismatch: expected 'h2d', got '{}'", desc.socket_type);
+    auto desc = SocketDescriptor::wait_and_read(
+        fmt::format("/dev/shm/tt_h2d_{}.json", socket_id), "h2d", timeout_ms.value_or(10000));
 
     auto socket = std::unique_ptr<H2DSocket>(new H2DSocket());
     socket->is_owner_ = false;
     socket->fifo_size_ = desc.fifo_size;
+    socket->config_buffer_address_ = desc.config_buffer_address;
+    socket->pcie_alignment_ = desc.pcie_alignment;
+    socket->recv_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
     socket->h2d_mode_ = static_cast<H2DMode>(desc.h2d_mode);
     socket->aligned_data_buf_start_ = desc.aligned_data_buf_start;
-    socket->config_buffer_address_ = desc.config_buffer_address;
-    socket->recv_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
-    socket->pcie_alignment_ = desc.pcie_alignment;
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
 
     if (socket->h2d_mode_ == H2DMode::DEVICE_PULL) {

@@ -6,8 +6,12 @@
 
 #include <cstdint>
 #include <string>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {
+
+class MeshDevice;
+class NamedShm;
 
 /**
  * @brief Serializable descriptor for cross-process H2D/D2H socket attachment.
@@ -52,6 +56,21 @@ struct SocketDescriptor {
     uint32_t bytes_acked_device_offset = 0;  // D2H: L1 offset of bytes_acked within config buffer
 
     /**
+     * @brief Populate common fields from the owner socket's state.
+     *
+     * Sets shm_name, shm_size, fifo_size, config_buffer_address, and resolves
+     * device_id, core coordinates (logical + virtual), and pcie_alignment from
+     * the mesh device. Called by the owner during export_descriptor().
+     */
+    void populate_from_owner(
+        const std::string& type,
+        const NamedShm& shm,
+        uint32_t fifo_size,
+        uint32_t config_buffer_address,
+        MeshDevice* mesh_device,
+        const MeshCoreCoord& core);
+
+    /**
      * @brief Serialize this descriptor to a JSON file.
      * @param path File path to write (e.g. "/dev/shm/tt_socket_<id>.json").
      */
@@ -63,6 +82,16 @@ struct SocketDescriptor {
      * @return Populated SocketDescriptor.
      */
     static SocketDescriptor read_from_file(const std::string& path);
+
+    /**
+     * @brief Wait for a descriptor file to appear and read it.
+     * @param descriptor_path Full path to the JSON descriptor file.
+     * @param expected_type Expected socket_type ("h2d" or "d2h").
+     * @param timeout_ms Max wait time in milliseconds (default 10000).
+     * @return Populated SocketDescriptor.
+     */
+    static SocketDescriptor wait_and_read(
+        const std::string& descriptor_path, const std::string& expected_type, uint32_t timeout_ms = 10000);
 };
 
 }  // namespace tt::tt_metal::distributed
