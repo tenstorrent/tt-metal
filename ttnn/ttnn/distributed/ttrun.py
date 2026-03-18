@@ -424,6 +424,10 @@ def build_generate_rank_bindings_mpi_cmd(
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
 
+    # Pass LD_LIBRARY_PATH so generate_rank_bindings can find libtt_metal.so when spawned by mpirun
+    ld_path = os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD)))
+    cmd.extend(["-x", f"LD_LIBRARY_PATH={ld_path}"])
+
     # Add user-provided MPI args (e.g., --allow-run-as-root for Docker containers)
     if mpi_args:
         cmd.extend(mpi_args)

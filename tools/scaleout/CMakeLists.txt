@@ -254,6 +254,10 @@ set_target_properties(
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${Metalium_BINARY_DIR}/tools/scaleout
+        BUILD_RPATH
+            "$ORIGIN/../../lib"
+        INSTALL_RPATH
+            "$ORIGIN/../lib"
 )
 
 add_dependencies(
