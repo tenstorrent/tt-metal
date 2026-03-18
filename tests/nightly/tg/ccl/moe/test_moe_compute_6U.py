@@ -694,7 +694,9 @@ def gen_sparse_buffer_and_indices(
     for src_device in range(num_dispatch_devices):
         for t in range(tokens_per_device):
             # Each token selects K unique experts
-            selected = torch.randperm(experts)[:selected_experts_k]
+            selected = torch.tensor([2 * src_device])
+            # selected = torch.tensor([t])
+            # selected = torch.randperm(experts)[:selected_experts_k]
             expert_indices[src_device, t, :] = selected.to(torch.uint16)
 
     # Generate expert scores

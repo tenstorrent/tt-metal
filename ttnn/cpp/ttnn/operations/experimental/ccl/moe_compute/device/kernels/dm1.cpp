@@ -7,42 +7,16 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "moe_ring_common.h"
 
-#include "api/debug/dprint_pages.h"
-
-void print_tile_rows(
-    uint32_t cb_idx,
-    uint32_t tile_idx,
-    bool untilize = false,
-    uint16_t start_row = 0,
-    uint16_t end_row = 32,
-    uint8_t start_col = 0,
-    uint8_t end_col = 32) {
-    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
-    DPRINT << "======" << ENDL();
-    for (uint16_t r = start_row; r < end_row; ++r) {
-        DPRINT << (uint)r << " : "
-               << TileSlice(
-                      cb_idx,
-                      tile_idx,
-                      SliceRange{
-                          .h0 = (uint8_t)r,
-                          .h1 = (uint8_t)(r + 1),
-                          .hs = (uint8_t)1,
-                          .w0 = (uint8_t)start_col,
-                          .w1 = (uint8_t)end_col,
-                          .ws = (uint8_t)1},
-                      true,
-                      untilize)
-               << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
+// PROFILING
+#include <tools/profiler/kernel_profiler.hpp>
 
 namespace detail {
 inline uint32_t div_up(const uint32_t a, const uint32_t b) { return (a + b - 1) / b; }
 }  // namespace detail
 
 void kernel_main() {
+    DeviceZoneScopedN("Compute-dm1");
+
     // Compile time arguments
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -212,7 +186,7 @@ void kernel_main() {
                 output_shard_core_map[2 * idx + 1],
                 combine_semaphore_addr,
                 /*noc_id=*/1);
-            noc_semaphore_inc(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
+            noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
         };
     };
 
@@ -345,10 +319,5 @@ void kernel_main() {
         }
         combine_semaphore_inc();
     }
-
-    // for (uint32_t expert_id = 0; expert_id< num_experts; ++expert_id){
-    //         combine_semaphore_inc(NUM_CHUNKS_PER_EXPERT[expert_id]);
-    //     }
-
-    noc_async_atomic_barrier(/*noc_idx=*/1);
+    noc_async_posted_writes_flushed(/*noc=*/1);
 }
