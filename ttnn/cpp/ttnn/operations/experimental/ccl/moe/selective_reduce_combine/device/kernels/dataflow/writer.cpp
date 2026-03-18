@@ -8,12 +8,26 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
+#include <tools/profiler/kernel_profiler.hpp>
+
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
 
 // packet size bytes 4352
+
+FORCE_INLINE void noc_semaphore_wait_min_waiting(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
+    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
+
+    DeviceZoneScopedN("Combine-writer-waiting");
+
+    WAYPOINT("NSMW");
+    do {
+        invalidate_l1_cache();
+    } while ((*sem_addr) < val);
+    WAYPOINT("NSMD");
+}
 
 namespace detail {
 
@@ -47,6 +61,8 @@ inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
 }  // namespace detail
 
 void kernel_main() {
+    DeviceZoneScopedN("Combine-writer");
+
     constexpr uint32_t dense_token_maps_cb_id = get_named_compile_time_arg_val("dense_token_maps_cb_id");
     constexpr uint32_t token_counts_cb_id = get_named_compile_time_arg_val("token_counts_cb_id");
     constexpr uint32_t data_cb_id = get_named_compile_time_arg_val("data_cb_id");
@@ -228,7 +244,7 @@ void kernel_main() {
                 mesh_cols,
                 replicate_axis>(st);
 
-            noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+            noc_semaphore_wait_min_waiting(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
 
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =
@@ -310,6 +326,4 @@ void kernel_main() {
         noc_async_write_barrier(/*noc=*/1);
         noc_async_atomic_barrier(/*noc=*/1);
     }
-
-    DPRINT << "COMBINE WRITER DONE \n";
 }
