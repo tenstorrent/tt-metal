@@ -62,7 +62,7 @@ def run_unet_model(batch, groups, device, iterations=1):
         ttnn.ReadDeviceProfiler(device)
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39469")
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39470")
 @pytest.mark.parametrize("batch", [1])
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)

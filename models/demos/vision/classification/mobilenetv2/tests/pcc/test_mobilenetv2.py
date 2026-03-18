@@ -21,7 +21,7 @@ from models.demos.vision.classification.mobilenetv2.tt.model_preprocessing impor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39469")
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39468")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "use_pretrained_weight",

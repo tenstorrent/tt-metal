@@ -16,7 +16,7 @@ from models.common.utility_functions import comp_pcc, is_blackhole, is_watcher_e
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39451")
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
     "decode_position",
