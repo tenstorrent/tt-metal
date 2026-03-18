@@ -167,7 +167,6 @@ class WhisperGenerator:
         # current_decode_pos_per_size stays int32 for the decoder's paged_update_cache
         # Both are incremented via plus_one inside the trace
         self.decode_pos_embed = defaultdict(lambda: None)
-        self.decode_pos_embed_host = defaultdict(lambda: None)
 
         # Value must exist on all devices
         pos_replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None
@@ -179,7 +178,6 @@ class WhisperGenerator:
                 mesh_mapper=pos_replicate_mapper,
             )
             self.decode_pos_embed[batch_size] = pos_host.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
-            self.decode_pos_embed_host[batch_size] = pos_host
 
         # Pre-allocated DRAM staging tensors for 2CQ token ID transfer (Q1 copy target)
         for batch_size in [1, WHISPER_BATCH_SIZE]:
@@ -270,7 +268,6 @@ class WhisperGenerator:
         self.token_id_host.clear()
         self.token_id_device.clear()
         self.decode_pos_embed.clear()
-        self.decode_pos_embed_host.clear()
 
     def _capture_prefill_trace(self, trace_key, decode_pos):
         """
@@ -1139,9 +1136,6 @@ class WhisperGenerator:
             # Track log probabilities (only available on un-traced path)
             if i >= transcription_start_pos:
                 if next_token_logits is not None:
-                    next_tokens_scores_for_log = (
-                        logits_processor(input_ids, next_token_logits) if next_token_logits is not None else None
-                    )
                     with torch.no_grad():
                         log_probs.append(
                             torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
