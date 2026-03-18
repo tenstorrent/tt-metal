@@ -51,31 +51,31 @@ struct bf16_t {
 };
 
 #ifdef UCK_CHLKC_UNPACK
-#define DEVICE_PRINT_UNPACK(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
+#define DEVICE_PRINT_UNPACK(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
 #else
 #define DEVICE_PRINT_UNPACK(format, ...)
 #endif
 
 #ifdef UCK_CHLKC_MATH
-#define DEVICE_PRINT_MATH(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
+#define DEVICE_PRINT_MATH(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
 #else
 #define DEVICE_PRINT_MATH(format, ...)
 #endif
 
 #ifdef UCK_CHLKC_PACK
-#define DEVICE_PRINT_PACK(format, ...) DEVICE_PRINT(format, __VA_ARGS__)
+#define DEVICE_PRINT_PACK(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
 #else
 #define DEVICE_PRINT_PACK(format, ...)
 #endif
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_DM)
-#define DEVICE_PRINT_DATA0(format, ...)    \
-    if (noc_index == 0) {                  \
-        DEVICE_PRINT(format, __VA_ARGS__); \
+#define DEVICE_PRINT_DATA0(format, ...)      \
+    if (noc_index == 0) {                    \
+        DEVICE_PRINT(format, ##__VA_ARGS__); \
     }
-#define DEVICE_PRINT_DATA1(format, ...)    \
-    if (noc_index == 1) {                  \
-        DEVICE_PRINT(format, __VA_ARGS__); \
+#define DEVICE_PRINT_DATA1(format, ...)      \
+    if (noc_index == 1) {                    \
+        DEVICE_PRINT(format, ##__VA_ARGS__); \
     }
 #else
 #define DEVICE_PRINT_DATA0(format, ...)
@@ -126,7 +126,7 @@ struct bf16_t {
         /* For indexed placeholders, validate all arguments are referenced */                                         \
         static_assert(                                                                                                \
             !device_print_detail::checks::has_indexed_placeholders(format) ||                                         \
-                device_print_detail::checks::all_arguments_referenced(format, __VA_ARGS__),                           \
+                device_print_detail::checks::all_arguments_referenced(format, ##__VA_ARGS__),                         \
             "All arguments must be referenced when using indexed placeholders");                                      \
         /* For non-indexed placeholders, count must match argument count */                                           \
         static_assert(                                                                                                \
@@ -136,7 +136,7 @@ struct bf16_t {
             "Number of {} placeholders must match number of arguments");                                              \
         /* Update format to include all necessary data */                                                             \
         constexpr auto updated_format =                                                                               \
-            device_print_detail::formatting::update_format_string_from_args(format, __VA_ARGS__);                     \
+            device_print_detail::formatting::update_format_string_from_args(format, ##__VA_ARGS__);                   \
         /* Store updated format string in a special section for device_print */                                       \
         DEVICE_PRINT_GET_STRING_INDEX(device_print_info_index, updated_format);                                       \
         /* Get buffer lock (once we change to be single buffer per L1 instead of per risc)*/                          \
@@ -161,7 +161,7 @@ struct bf16_t {
             auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;                          \
             device_print_detail::formatting::device_print_type<decltype(header_value)>::serialize(                    \
                 device_print_buffer_ptr, 0, header_value);                                                            \
-            device_print_detail::serialization::serialize_arguments(device_print_buffer_ptr, __VA_ARGS__);            \
+            device_print_detail::serialization::serialize_arguments(device_print_buffer_ptr, ##__VA_ARGS__);          \
             /* Move write pointer in device_print buffer */                                                           \
             asm volatile("" ::: "memory");                                                                            \
             device_print_buffer->aux.wpos = write_position + message_size;                                            \

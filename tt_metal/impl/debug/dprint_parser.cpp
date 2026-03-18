@@ -516,14 +516,16 @@ DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t
                 format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
             parsed_info.format_string = format_string;
             std::tie(parsed_info.plain_text_parts, parsed_info.placeholders) = parse_format_string(format_string);
-            uint32_t max_arg_id = 0;
-            for (const auto& placeholder : parsed_info.placeholders) {
-                max_arg_id = std::max(max_arg_id, placeholder.arg_id);
-            }
-            parsed_info.argument_types.resize(max_arg_id + 1);
-            for (const auto& placeholder : parsed_info.placeholders) {
-                parsed_info.argument_types[placeholder.arg_id] = placeholder.type_id;
-                parsed_info.arguments_size += get_argument_size_from_type_id(placeholder.type_id);
+            if (!parsed_info.placeholders.empty()) {
+                uint32_t max_arg_id = 0;
+                for (const auto& placeholder : parsed_info.placeholders) {
+                    max_arg_id = std::max(max_arg_id, placeholder.arg_id);
+                }
+                parsed_info.argument_types.resize(max_arg_id + 1);
+                for (const auto& placeholder : parsed_info.placeholders) {
+                    parsed_info.argument_types[placeholder.arg_id] = placeholder.type_id;
+                    parsed_info.arguments_size += get_argument_size_from_type_id(placeholder.type_id);
+                }
             }
         }
         if (info.file >= format_strings_address && info.file < format_strings_address + format_strings_bytes.size()) {
