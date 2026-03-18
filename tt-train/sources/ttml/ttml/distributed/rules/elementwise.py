@@ -61,7 +61,7 @@ def elementwise_unary_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=1)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,
@@ -77,7 +77,7 @@ def dropout_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=1)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,

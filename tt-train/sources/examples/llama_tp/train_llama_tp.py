@@ -42,10 +42,9 @@ from ttml.datasets import Batch, InMemoryDataloader
 # Layout-aware dispatch layer
 import ttml.distributed
 from ttml.distributed import (
-    Layout,
-    Shard,
-    Replicate,
-    distribute_module,
+    parallelize_module,
+    ColwiseParallel,
+    RowwiseParallel,
     sync_gradients,
     init_ops,
 )
@@ -167,7 +166,7 @@ class DistributedModelWrapper:
     Example::
 
         model = Llama(config)
-        model = distribute_module(model, mesh_device, tp_policy)  # TP sharding
+        model = parallelize_module(model, mesh_device, tp_plan)  # TP sharding
         model = DistributedModelWrapper(model, sync_axes=[0, 1])  # DP + CP sync
 
         # Use with SFTTrainer - no special hooks needed
@@ -434,42 +433,15 @@ class DispatchTraceCallback(TrainerCallback):
 
 
 # ---------------------------------------------------------------------------
-# TP policy for Llama
+# TP plan for Llama (PyTorch-style ParallelStyle)
 # ---------------------------------------------------------------------------
 
-
-def build_llama_tp_policy(mesh_device, tp_axis: int) -> dict:
-    """Build a TP sharding policy for the Python Llama model using regex patterns.
-
-    Convention (matches C++ DistributedGroupedQueryAttention / linear):
-      - q_linear, kv_linear: column-parallel  (weight sharded on out_features, dim -2)
-      - out_linear:          row-parallel      (weight sharded on in_features,  dim -1)
-      - MLP w1, w3:          column-parallel
-      - MLP w2:              row-parallel
-      - Everything else (embeddings, norms, fc head): replicated (no entry in policy)
-
-    Policy keys are regex patterns matched with ``re.fullmatch`` against
-    fully-qualified parameter names like ``layers.0.attention.q_linear.weight``.
-    """
-    mesh_shape = mesh_device.shape
-    # MeshShape doesn't support len(), use dims() method
-    ndim = mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
-
-    col_parallel = Layout(
-        placements=tuple(
-            Shard(-2) if i == tp_axis else Replicate() for i in range(ndim)
-        )
-    )
-    row_parallel = Layout(
-        placements=tuple(
-            Shard(-1) if i == tp_axis else Replicate() for i in range(ndim)
-        )
-    )
-
-    return {
-        r".*\.(q_linear|kv_linear|w1|w3)\.weight": col_parallel,
-        r".*\.(out_linear|w2)\.weight": row_parallel,
-    }
+# Module name patterns (regex or exact) -> ParallelStyle. No Layout in user code.
+LLAMA_TP_PLAN = {
+    r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
+    r".*\.(out_linear|w2)": RowwiseParallel(),
+    "fc": ColwiseParallel(output_gradient_replicated=True),  # LM head
+}
 
 
 # ---------------------------------------------------------------------------
@@ -739,17 +711,28 @@ def main():
         print("\n4. Distributing model...")
         if tp_axis is not None:
             print(f"   TP enabled on axis {tp_axis}")
-            policy = build_llama_tp_policy(mesh_device, tp_axis)
-            print(f"   Policy covers {len(policy)} parameter patterns")
-        else:
-            policy = {}
+            print(
+                f"   Plan: {len(LLAMA_TP_PLAN)} module patterns (ColwiseParallel / RowwiseParallel)"
+            )
         if cp_axis is not None:
             print(f"   CP enabled on axis {cp_axis}")
 
         if args.track_memory:
             dist_guard = MemoryUsageTracker.begin_capture()
 
-        model = distribute_module(model, mesh_device, policy, cp_axis=cp_axis)
+        if tp_axis is not None:
+            model = parallelize_module(
+                model,
+                mesh_device,
+                LLAMA_TP_PLAN,
+                tp_axis=tp_axis,
+                cp_axis=cp_axis,
+            )
+        else:
+            # CP only: parallelize_module with empty plan still runs GQA rule (cp_axis)
+            model = parallelize_module(
+                model, mesh_device, {}, tp_axis=0, cp_axis=cp_axis
+            )
 
         if args.track_memory:
             MemoryUsageTracker.end_capture("MODEL_DISTRIBUTION")

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Module-level transform rules for distribute_module().
+"""Module-level transform rules for parallelize_module().
 
 Each rule is registered with ``@register_module_rule(ModuleClass)`` and
 receives:
@@ -36,13 +36,13 @@ def _infer_bias_layout(weight_layout: Layout) -> Layout:
     Column-parallel (weight sharded on dim -2): bias sharded on dim -1
     Row-parallel (weight sharded on dim -1): bias replicated
     """
-    placements = []
-    for p in weight_layout.placements:
+    ndim = weight_layout.ndim
+    axis_placements = {}
+    for i in range(ndim):
+        p = weight_layout.placements[i]
         if isinstance(p, Shard) and p.dim in (-2, 2):
-            placements.append(Shard(-1))
-        else:
-            placements.append(Replicate())
-    return Layout(placements=tuple(placements))
+            axis_placements[i] = Shard(-1)
+    return Layout(ndim=ndim, axis_placements=axis_placements)
 
 
 @register_module_rule(LinearLayer)
@@ -96,21 +96,18 @@ def _distribute_gqa(
     prefix: str = "",
     cp_axis: Optional[int] = None,
 ):
-    """Distribute GQA: adjust local head/group counts, distribute sub-linears, and handle CP.
+    """Distribute GQA: adjust local head/group counts and handle CP.
 
-    The TP axis and size are inferred from the policy layouts. If no TP sharding
-    is found in the policy for this module's weights, the module is returned
-    unchanged (but CP handling still applies if cp_axis is provided).
-
-    When cp_axis is provided:
-    - Rebuilds rope_params with CP sharding
-    - Swaps sdpa to ring_attention_sdpa with cp_axis bound
+    Sub-linear weight sharding and forward collectives (broadcast, all_reduce) are
+    applied by parallelize_module when it recurses into q_linear, kv_linear, out_linear
+    and matches them to ColwiseParallel/RowwiseParallel. This rule only:
+    - Adjusts num_heads and num_groups for TP
+    - When cp_axis is provided: rebuilds rope_params and swaps to ring_attention_sdpa
 
     Reference: C++ DistributedGroupedQueryAttention in
     modules/distributed/grouped_query_attention.cpp
     """
-    from .training import distribute_tensor, _match_policy
-    from ttml.models.llama.gqattn import GroupedQueryAttention
+    from .training import _match_policy
 
     mesh_shape = mesh_device.shape
 
@@ -118,9 +115,8 @@ def _distribute_gqa(
     q_weight_key = f"{prefix}.q_linear.weight" if prefix else "q_linear.weight"
     q_layout = _match_policy(q_weight_key, policy)
 
-    # Handle TP if policy exists
+    # Handle TP: adjust local head/group counts only (child linears get styles on recursion)
     if q_layout is not None:
-        # Find which axis has Shard placement to determine TP axis
         tp_axis = None
         for i, p in enumerate(q_layout.placements):
             if isinstance(p, Shard):
@@ -145,15 +141,6 @@ def _distribute_gqa(
 
                 module.num_heads = num_heads // tp_size
                 module.num_groups = num_groups // tp_size
-
-                # Distribute sub-linear layers
-                q_prefix = f"{prefix}.q_linear" if prefix else "q_linear"
-                kv_prefix = f"{prefix}.kv_linear" if prefix else "kv_linear"
-                out_prefix = f"{prefix}.out_linear" if prefix else "out_linear"
-
-                distribute_linear(module.q_linear, mesh_device, policy, q_prefix)
-                distribute_linear(module.kv_linear, mesh_device, policy, kv_prefix)
-                distribute_linear(module.out_linear, mesh_device, policy, out_prefix)
 
     # Handle CP
     if cp_axis is not None:

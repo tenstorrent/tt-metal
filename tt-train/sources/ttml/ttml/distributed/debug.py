@@ -59,12 +59,15 @@ class TraceEntry:
     output_layout: Optional[Layout]
     depth: int = 0
     module_stack: List[str] = field(default_factory=list)
+    op_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:
         parts = [f"op={self.op_name}"]
         parts.append(f"inputs={self.input_layouts}")
         if self.rule_name:
             parts.append(f"rule={self.rule_name}")
+        if self.op_kwargs:
+            parts.append(f"kwargs={self.op_kwargs}")
         if self.pre_collectives:
             parts.append(f"pre_ccl={self.pre_collectives}")
         if self.redistributions:
@@ -99,6 +102,7 @@ class TraceEntry:
             "module_stack": list(self.module_stack),
             "input_layouts": [layout_repr(l) for l in self.input_layouts],
             "output_layout": layout_repr(self.output_layout),
+            "op_kwargs": json_safe(self.op_kwargs),
             "pre_collectives": json_safe(self.pre_collectives),
             "redistributions": json_safe(self.redistributions),
             "post_collectives": json_safe(self.post_collectives),
@@ -341,6 +345,8 @@ class DispatchTrace:
             parts = [f"op={entry.op_name}"]
             if entry.rule_name:
                 parts.append(f"rule={entry.rule_name}")
+            if entry.op_kwargs:
+                parts.append(f"kwargs={entry.op_kwargs}")
             if entry.pre_collectives:
                 parts.append("pre_ccl")
             if entry.redistributions:
@@ -443,6 +449,8 @@ class DispatchTrace:
             parts = [f"op={escape(ent.op_name)}"]
             if ent.rule_name:
                 parts.append(f"rule={escape(ent.rule_name)}")
+            if ent.op_kwargs:
+                parts.append(f"kwargs={escape(repr(ent.op_kwargs))}")
             if ent.pre_collectives:
                 parts.append("pre_ccl")
             if ent.redistributions:

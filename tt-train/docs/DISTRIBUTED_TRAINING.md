@@ -714,9 +714,163 @@ Check that your mesh graph descriptor specifies the correct topology
 
 - **Topology persistence**: The topology configuration should persist across reboots, but may need to be reconfigured if hardware changes or after system updates.
 
+## Python Distributed Infrastructure (Rules, Dispatch, ParallelStyle)
+
+This section describes the **rule-based layout and dispatch layer** used for Python distributed training (e.g. Llama TP). You use it to shard models by name pattern, and extend it with custom **op rules**, **module rules**, and **parallel styles**.
+
+### Overview
+
+1. **Layout**: Describes how a tensor is placed across the mesh (`Shard(dim)` or `Replicate()` per mesh axis). Built with `Layout(ndim=..., axis_placements={axis: Shard(dim), ...})`.
+2. **Dispatch**: When you call a patched op (e.g. `ttml.ops.linear.linear`), the call goes through `dispatch()`. Dispatch reads layouts from tensor metadata, looks up a **sharding rule** by op name, gets a `ShardingPlan`, redistributes inputs as needed, runs optional **pre-collectives** (e.g. broadcast), calls the raw op, runs optional **post-collectives** (e.g. all_reduce, all_gather), and stamps the output layout.
+3. **Parallelize**: `parallelize_module(model, mesh_device, parallelize_plan, tp_axis=..., cp_axis=...)` walks the module tree, matches module names to the plan (exact or regex), and applies a **ParallelStyle** (e.g. `ColwiseParallel`, `RowwiseParallel`) or a **module rule** for composite modules (e.g. GQA).
+4. **Op rules** and **module rules** are registered with decorators; the same op name used in the rule is used when patching `ttml.ops.*` so dispatch finds the rule.
+
+### How to Use the Infrastructure
+
+1. **Activate dispatch** (once, before creating the model):
+
+   ```python
+   import ttml.distributed
+   from ttml.distributed import init_ops, parallelize_module, ColwiseParallel, RowwiseParallel
+
+   init_ops()  # Patch ttml.ops.* so linear, matmul, etc. go through dispatch
+   ```
+
+2. **Define a parallelize plan**: map module name patterns to a style. Use exact names or regex; regex is matched with `re.fullmatch` against the module path (e.g. `"layers.0.attention.q_linear"`).
+
+   ```python
+   LLAMA_TP_PLAN = {
+       r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
+       r".*\.(out_linear|w2)": RowwiseParallel(),
+       "fc": ColwiseParallel(output_gradient_replicated=True),  # LM head
+   }
+   ```
+
+3. **Parallelize the model** after construction:
+
+   ```python
+   mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+   model = parallelize_module(model, mesh_device, LLAMA_TP_PLAN, tp_axis=1, cp_axis=0)
+   ```
+
+4. **Forward/backward**: Patched ops run through dispatch; rules decide input/output layouts and collectives. No layout code in the model itself.
+
+See `tt-train/sources/examples/llama_tp/train_llama_tp.py` for a full example.
+
+### Layout
+
+- **Construction**: `Layout(ndim=N)` (all Replicate) or `Layout(ndim=N, axis_placements={mesh_axis: Shard(dim), ...})`. Unspecified axes are Replicate.
+- **Placements**: `layout.placements` is a tuple of `Shard(dim)` or `Replicate()` per mesh dimension.
+- **Helpers**: `layout.with_placement(mesh_axis, placement)` returns a new Layout with that axis updated. `layout.ndim`, `layout.is_replicated()`, `layout.is_sharded_on(axis)`.
+
+### Op Rules (What They Are For)
+
+An **op rule** is a function that, given the **layouts of the tensor arguments** to an op, returns a **ShardingPlan**: required input layouts, output layout, and optional **pre-** and **post-collectives** per input/output. Dispatch uses this to:
+
+- Redistribute inputs to the required layouts (all_gather/scatter as needed),
+- Run pre-collectives (e.g. `Broadcast(mesh_axis)` on an input),
+- Call the raw C++ op,
+- Run post-collectives (e.g. `AllReduce(mesh_axis)`, `AllGather(dim, mesh_axis)`),
+- Attach the output layout to the result.
+
+Rules are **per op name** (e.g. `"linear"`, `"matmul"`). The op name in `@register_rule("op_name")` must match the name you use with `register_op("op_name", raw_callable)` when wrapping your op. You do **not** patch ttml.ops; built-in ops are patched by the lib, and your ops use your own names and the wrapper from `register_op`.
+
+### How to Create a Custom Op Rule (all in your code, no lib changes)
+
+1. **Implement the rule** (e.g. in your training script or a plugin module). The rule receives layouts as positional args (one per tensor input), then `runtime=None` and `**kwargs`. Return a `ShardingPlan`. Use the same op name as in step 3.
+
+   ```python
+   from ttml.distributed import register_rule, register_op
+   from ttml.distributed.rules.registry import ShardingPlan
+
+   @register_rule("my_custom_op")
+   def my_custom_op_rule(
+       input_layout,
+       *extra_layouts,
+       runtime=None,
+       **kwargs,
+   ):
+       return ShardingPlan(
+           input_layouts=[input_layout],
+           output_layout=input_layout,
+       )
+   ```
+
+2. **CCL types** (from `ttml.distributed.rules.registry`):
+   - **Pre-collectives**: `Broadcast(mesh_axis)` — broadcast tensor on that axis.
+   - **Post-collectives**: `AllReduce(mesh_axis, noop_backward=False)`, `AllGather(dim, mesh_axis, gather_grad_replicated=False)`.
+
+3. **Register your op under the same name**: Wrap your raw callable with `register_op(op_name, raw_callable)`. Use the returned wrapper as your op entry point (no patching of ttml.ops).
+
+   ```python
+   def my_raw_op(*args, **kwargs):
+       # Your implementation (e.g. ttnn call or Python logic).
+       return ...
+
+   my_custom_op = register_op("my_custom_op", my_raw_op)
+   # From here on, call my_custom_op(...) so it goes through dispatch.
+   ```
+
+### Module Rules (What They Are For)
+
+A **module rule** applies to a **composite module type** (e.g. `GroupedQueryAttention`). When `parallelize_module` walks the tree and finds a module whose type has a registered module rule, it:
+
+1. Builds a **policy** (dict `param_name -> Layout`) from the parallelize plan: for each submodule that matches the plan (e.g. `q_linear`, `kv_linear`, `out_linear`), it uses the style’s `get_layout(mesh_device, tp_axis)`.
+2. Calls the **module rule** with `(module, mesh_device, policy, prefix, cp_axis=None)` for composite-only concerns (e.g. head/group count adjustment, CP rope_params and ring_attention_sdpa).
+3. **Recurses into children** so that submodules (e.g. `q_linear`, `kv_linear`, `out_linear`) are visited with their full path and get the matching **ParallelStyle** from the plan. Those children then get weight sharding and forward collectives (broadcast, all_reduce) from `style._apply()`.
+
+So the rule should **not** call `distribute_linear` on sub-linears that are matched by the plan; recursion will apply the style to them (weight + collectives). The rule only handles composite-specific logic (e.g. GQA: `num_heads`/`num_groups` for TP, and when `cp_axis` is set: rope_params and ring_sdpa swap).
+
+### How to Create a Custom Module Rule
+
+1. **Register the rule** for your module type with `@register_module_rule(MyModuleClass)`.
+
+2. **Implement the rule** with signature `(module, mesh_device, policy, prefix, cp_axis=None)`. Use `_match_policy(prefix + ".q_linear.weight", policy)` (from `training`) etc. to infer TP axis/size from the policy. Do **composite-only** work: e.g. adjust `module.num_heads` / `module.num_groups` for TP; when `cp_axis` is set, rebuild `rope_params` and swap to `ring_attention_sdpa`. Do **not** call `distribute_linear` on sub-linears that are matched by the plan (e.g. `q_linear`, `out_linear`)—after the rule returns, `parallelize_module` recurses into children and applies the plan’s styles to them (weight sharding + broadcast/all_reduce).
+
+   ```python
+   from ttml.distributed.rules.registry import register_module_rule
+   from ttml.distributed.training import distribute_tensor, _match_policy
+
+   @register_module_rule(MyCompositeModule)
+   def distribute_my_composite(module, mesh_device, policy, prefix="", cp_axis=None):
+       # Composite-only: e.g. adjust head counts, or handle cp_axis (rope, ring_sdpa).
+       # Do NOT distribute sub-linear weights here; recursion will apply styles to children.
+       layout = _match_policy(f"{prefix}.weight" if prefix else "weight", policy)
+       if layout is not None:
+           # Only if this composite has its own weight (not sub-linears):
+           new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
+           module.weight.tensor = new_w
+           module.override_tensor(new_w, "weight")
+       # Optional: handle cp_axis (e.g. rope, ring attention)
+       return module
+   ```
+
+3. **Ensure the rule is loaded**: `ttml.distributed` imports `module_rules`, so any `@register_module_rule` in that package runs at import time. For a new rule in a new file, add an import in `ttml/distributed/__init__.py` or in `module_rules.py`.
+
+4. **Use the plan**: In the parallelize plan, use name patterns that match the **submodule** paths (e.g. `r".*\.q_linear"`, `r".*\.out_linear"`). `parallelize_module` will build the policy from those styles and pass it to your module rule.
+
+### Custom ParallelStyle
+
+To define a new style (e.g. a variant of column/row parallel):
+
+1. Subclass `ParallelStyle` and implement `_apply(module, mesh_device, tp_axis)` (mutate the module’s parameters with `distribute_tensor` and the layout you want).
+2. If the style is used inside a composite that has a **module rule**, also implement `get_layout(mesh_device, tp_axis) -> Layout` so the rule can build the policy from the plan.
+3. Add your style to the parallelize plan by name or regex, e.g. `{"my_layer": MyCustomStyle()}`.
+
+### Summary
+
+| Concept | Purpose |
+|--------|---------|
+| **Layout** | Describes sharding/replication per mesh axis; used for redistribution and plan output. |
+| **Op rule** | Maps op name + input layouts → ShardingPlan (layouts + optional pre/post collectives). |
+| **Module rule** | Distributes a composite module using a policy built from the parallelize plan; handles TP (and optionally CP) for that module type. |
+| **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer) or supplies `get_layout` for composite rules. |
+| **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; no layout code in user model. |
+
 ## Additional Resources
 
 - **MGD Format Documentation**: `$TT_METAL_HOME/tt_metal/fabric/MGD_README.md`
 - **Multihost Training Examples**: `$TT_METAL_HOME/tt-train/sources/examples/python/multihost/`
 - **Device Config Examples**: `$TT_METAL_HOME/tt-train/configs/training_configs/`
 - **TP+DP Example (Python)**: `$TT_METAL_HOME/tt-train/sources/examples/linear_regression_tp_dp/linear_regression_tp_dp.py` - Complete example demonstrating combined Tensor Parallelism and Data Parallelism with proper mesh configuration, parallelism context initialization, and distributed tensor mapping
+- **Llama TP (Python, rules/dispatch)**: `$TT_METAL_HOME/tt-train/sources/examples/llama_tp/train_llama_tp.py` - Full example using `parallelize_module`, `ColwiseParallel`/`RowwiseParallel`, and the rule-based dispatch layer

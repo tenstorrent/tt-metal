@@ -13,8 +13,11 @@ Usage:
 
     mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
     model = MyLlama(config)
-    policy = {"layer.weight": Layout(placements=(Replicate(), Shard(-2)))}
-    model = ttml.distributed.distribute_module(model, mesh_device, policy)
+    model = ttml.distributed.parallelize_module(
+        model, mesh_device,
+        {r".*\.w1": ColwiseParallel(), r".*\.w2": RowwiseParallel()},
+        tp_axis=0,
+    )
     # from here on, ttml.ops.linear.linear etc. go through dispatch
 """
 
@@ -25,13 +28,19 @@ from .redistribute import redistribute
 from .cache import PlanCache
 from .rules.registry import (
     ShardingPlan,
+    CCL,
+    Broadcast,
+    AllReduce,
+    AllGather,
+    OptionalCCL,
     register_rule,
     get_rule,
     register_module_rule,
     get_module_rule,
 )
 from .debug import DispatchTracer, dispatch_trace
-from .training import distribute_module, distribute_tensor, sync_gradients
+from .training import distribute_tensor, parallelize_module, sync_gradients
+from .style import ParallelStyle, ColwiseParallel, RowwiseParallel
 from ._register_ops import init_ops
 
 from . import module_rules as _module_rules  # register module rules  # noqa: F401
@@ -50,14 +59,22 @@ __all__ = [
     "redistribute",
     "PlanCache",
     "ShardingPlan",
+    "CCL",
+    "Broadcast",
+    "AllReduce",
+    "AllGather",
+    "OptionalCCL",
     "register_rule",
     "get_rule",
     "register_module_rule",
     "get_module_rule",
     "DispatchTracer",
     "dispatch_trace",
-    "distribute_module",
     "distribute_tensor",
+    "parallelize_module",
     "sync_gradients",
+    "ParallelStyle",
+    "ColwiseParallel",
+    "RowwiseParallel",
     "init_ops",
 ]

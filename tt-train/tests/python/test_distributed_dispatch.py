@@ -13,7 +13,7 @@ This file tests:
   - Policy construction patterns (exact and regex matching)
   - MeshRuntime properties and global singleton
   - Redistribute logic
-  - distribute_tensor and distribute_module
+  - distribute_tensor and parallelize_module (ParallelStyle API)
   - Full device-backed integration tests
 
 Device-backed tests are marked ``requires_device`` and skipped when
@@ -273,27 +273,31 @@ class TestShardingPlan:
             output_layout=Layout((Replicate(),)),
         )
         assert len(plan.input_layouts) == 1
-        assert plan.post_collective is None
-        assert plan.reduce_mesh_axis is None
-        assert plan.gather_grad_replicated is False
+        assert plan.post_collectives is None
 
     def test_plan_with_collective(self):
-        plan = ShardingPlan(
-            input_layouts=[Layout((Replicate(),))],
-            output_layout=Layout((Replicate(),)),
-            post_collective="all_reduce",
-            reduce_mesh_axis=1,
-        )
-        assert plan.post_collective == "all_reduce"
-        assert plan.reduce_mesh_axis == 1
+        from ttml.distributed.rules.registry import AllReduce
 
-    def test_plan_with_grad_replicated(self):
         plan = ShardingPlan(
             input_layouts=[Layout((Replicate(),))],
             output_layout=Layout((Replicate(),)),
-            gather_grad_replicated=True,
+            post_collectives=[AllReduce(mesh_axis=1)],
         )
-        assert plan.gather_grad_replicated is True
+        assert plan.post_collectives is not None
+        assert isinstance(plan.post_collectives[0], AllReduce)
+        assert plan.post_collectives[0].mesh_axis == 1
+
+    def test_plan_with_pre_collective(self):
+        from ttml.distributed.rules.registry import Broadcast
+
+        plan = ShardingPlan(
+            input_layouts=[Layout((Replicate(),))],
+            output_layout=Layout((Replicate(),)),
+            pre_collectives=[Broadcast(mesh_axis=1)],
+        )
+        assert plan.pre_collectives is not None
+        assert isinstance(plan.pre_collectives[0], Broadcast)
+        assert plan.pre_collectives[0].mesh_axis == 1
 
 
 class TestRuleRegistry:
@@ -375,18 +379,30 @@ class TestMatmulRules:
         inp = Layout((Replicate(), Replicate()))
         wt = Layout((Replicate(), Shard(-2)))
         plan = linear_rule(inp, wt, runtime=None)
-        assert plan.post_collective is None
+        from ttml.distributed.rules.registry import Broadcast, AllReduce
+
+        # Column-parallel has no AllReduce post-collective
+        assert not (
+            plan.post_collectives
+            and len(plan.post_collectives) > 0
+            and plan.post_collectives[0] is not None
+            and isinstance(plan.post_collectives[0], AllReduce)
+        )
         assert isinstance(plan.output_layout.placements[1], Shard)
         assert plan.output_layout.placements[1].dim == -1
+        assert plan.pre_collectives is not None and plan.pre_collectives[0] is not None
+        assert isinstance(plan.pre_collectives[0], Broadcast)
 
     def test_row_parallel(self):
         from ttml.distributed.rules.matmul import linear_rule
+        from ttml.distributed.rules.registry import AllReduce
 
         inp = Layout((Replicate(), Replicate()))
         wt = Layout((Replicate(), Shard(-1)))
         plan = linear_rule(inp, wt, runtime=None)
-        assert plan.post_collective == "all_reduce"
-        assert plan.reduce_mesh_axis == 1
+        assert plan.post_collectives is not None and len(plan.post_collectives) > 0
+        assert isinstance(plan.post_collectives[0], AllReduce)
+        assert plan.post_collectives[0].mesh_axis == 1
 
     def test_replicated_weights(self):
         from ttml.distributed.rules.matmul import linear_rule
@@ -394,7 +410,7 @@ class TestMatmulRules:
         inp = Layout((Replicate(), Replicate()))
         wt = Layout((Replicate(), Replicate()))
         plan = linear_rule(inp, wt, runtime=None)
-        assert plan.post_collective is None
+        assert plan.post_collectives is None
         assert plan.output_layout.is_replicated()
 
     def test_column_parallel_with_bias(self):
@@ -414,16 +430,20 @@ class TestMatmulRules:
         a = Layout((Replicate(), Replicate()))
         b = Layout((Replicate(), Shard(-1)))
         plan = matmul_rule(a, b, runtime=None)
-        assert plan.post_collective is None
+        assert plan.post_collectives is None
         assert isinstance(plan.output_layout.placements[1], Shard)
 
     def test_matmul_row_parallel(self):
         from ttml.distributed.rules.matmul import matmul_rule
+        from ttml.distributed.rules.registry import AllReduce
 
         a = Layout((Replicate(), Replicate()))
         b = Layout((Replicate(), Shard(-2)))
         plan = matmul_rule(a, b, runtime=None)
-        assert plan.post_collective == "all_reduce"
+        assert plan.post_collectives is not None and isinstance(
+            plan.post_collectives[0], AllReduce
+        )
+        assert plan.post_collectives[0].mesh_axis == 1
 
 
 class TestElementwiseRules:
@@ -591,7 +611,6 @@ class TestLossRule:
         target_layout = Layout((Replicate(), Replicate()))
         plan = cross_entropy_loss_rule(logit_layout, target_layout, runtime=None)
         assert plan.input_layouts[0].is_replicated()
-        assert plan.gather_grad_replicated is True
 
     def test_replicated_logits_stay(self):
         from ttml.distributed.rules.loss import cross_entropy_loss_rule
@@ -600,7 +619,6 @@ class TestLossRule:
         target_layout = Layout((Replicate(), Replicate()))
         plan = cross_entropy_loss_rule(logit_layout, target_layout, runtime=None)
         assert plan.input_layouts[0].is_replicated()
-        assert plan.gather_grad_replicated is True
 
     def test_no_layouts(self):
         from ttml.distributed.rules.loss import cross_entropy_loss_rule
@@ -634,6 +652,7 @@ class TestDebugTrace:
             input_layouts=[],
             rule_name=None,
             plan=None,
+            pre_collectives=[],
             redistributions=[],
             post_collectives=[],
             output_layout=None,
@@ -647,11 +666,11 @@ class TestDebugTrace:
     def test_context_manager_only_collects_new(self):
         dispatch_trace.clear()
         dispatch_trace.enable()
-        dispatch_trace.record(TraceEntry("old", [], None, None, [], [], None))
+        dispatch_trace.record(TraceEntry("old", [], None, None, [], [], [], None))
         dispatch_trace.disable()
 
         with DispatchTracer() as tracer:
-            dispatch_trace.record(TraceEntry("new", [], None, None, [], [], None))
+            dispatch_trace.record(TraceEntry("new", [], None, None, [], [], [], None))
 
         assert len(tracer.entries) == 1
         assert tracer.entries[0].op_name == "new"
@@ -659,7 +678,7 @@ class TestDebugTrace:
     def test_clear(self):
         dispatch_trace.clear()
         dispatch_trace.enable()
-        dispatch_trace.record(TraceEntry("x", [], None, None, [], [], None))
+        dispatch_trace.record(TraceEntry("x", [], None, None, [], [], [], None))
         dispatch_trace.disable()
         assert len(dispatch_trace.entries) == 1
         dispatch_trace.clear()
@@ -668,7 +687,7 @@ class TestDebugTrace:
     def test_record_when_disabled(self):
         dispatch_trace.clear()
         dispatch_trace.disable()
-        dispatch_trace.record(TraceEntry("ignored", [], None, None, [], [], None))
+        dispatch_trace.record(TraceEntry("ignored", [], None, None, [], [], [], None))
         assert len(dispatch_trace.entries) == 0
 
     def test_trace_entry_repr(self):
@@ -677,6 +696,7 @@ class TestDebugTrace:
             input_layouts=[Layout((Replicate(),))],
             rule_name="linear_rule",
             plan=None,
+            pre_collectives=[],
             redistributions=[{"from": "a", "to": "b"}],
             post_collectives=[{"type": "all_reduce"}],
             output_layout=Layout((Shard(-1),)),
@@ -686,6 +706,59 @@ class TestDebugTrace:
         assert "linear_rule" in repr_str
         assert "redist=" in repr_str
         assert "post_ccl=" in repr_str
+
+    def test_trace_entry_to_dict(self):
+        entry = TraceEntry(
+            op_name="linear",
+            input_layouts=[Layout((Replicate(),)), None],
+            rule_name="linear_rule",
+            plan=None,
+            pre_collectives=[],
+            redistributions=[{"from": "a", "to": "b"}],
+            post_collectives=[{"type": "all_reduce"}],
+            output_layout=Layout((Shard(-1),)),
+        )
+        d = entry.to_dict()
+        assert d["op_name"] == "linear"
+        assert d["rule_name"] == "linear_rule"
+        assert len(d["input_layouts"]) == 2
+        assert d["input_layouts"][1] is None
+        assert d["output_layout"] is not None
+        assert d["op_kwargs"] == {}
+        assert d["redistributions"] == [{"from": "a", "to": "b"}]
+        assert d["post_collectives"] == [{"type": "all_reduce"}]
+
+    def test_trace_entry_to_dict_includes_op_kwargs(self):
+        entry = TraceEntry(
+            op_name="all_gather",
+            input_layouts=[],
+            rule_name="all_gather_rule",
+            plan=None,
+            pre_collectives=[],
+            redistributions=[],
+            post_collectives=[],
+            output_layout=None,
+            op_kwargs={"dim": -1, "cluster_axis": 1},
+        )
+        d = entry.to_dict()
+        assert d["op_name"] == "all_gather"
+        assert d["op_kwargs"] == {"dim": -1, "cluster_axis": 1}
+
+    def test_trace_entry_repr_includes_op_kwargs_when_non_empty(self):
+        entry = TraceEntry(
+            op_name="broadcast",
+            input_layouts=[],
+            rule_name="broadcast_rule",
+            plan=None,
+            pre_collectives=[],
+            redistributions=[],
+            post_collectives=[],
+            output_layout=None,
+            op_kwargs={"cluster_axis": 1},
+        )
+        repr_str = repr(entry)
+        assert "kwargs=" in repr_str
+        assert "cluster_axis" in repr_str or "1" in repr_str
 
 
 # ---------------------------------------------------------------------------
@@ -1001,14 +1074,15 @@ class TestCustomOpRule:
         from ttml.distributed.rules.registry import register_rule, _OP_RULES
         from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
 
+        from ttml.distributed.rules.registry import AllReduce
+
         @register_rule("__test_custom_reduce_op__")
         def custom_reduce_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
             if input_layout.is_sharded_on(1):
                 return ShardingPlan(
                     input_layouts=[input_layout],
                     output_layout=replicated_layout(input_layout.ndim),
-                    post_collective="all_reduce",
-                    reduce_mesh_axis=1,
+                    post_collectives=[AllReduce(mesh_axis=1)],
                 )
             return ShardingPlan(
                 input_layouts=[input_layout],
@@ -1017,13 +1091,13 @@ class TestCustomOpRule:
 
         sharded = Layout((Replicate(), Shard(-1)))
         plan = custom_reduce_rule(sharded, runtime=None)
-        assert plan.post_collective == "all_reduce"
-        assert plan.reduce_mesh_axis == 1
+        assert isinstance(plan.post_collectives[0], AllReduce)
+        assert plan.post_collectives[0].mesh_axis == 1
         assert plan.output_layout.is_replicated()
 
         rep = Layout((Replicate(), Replicate()))
         plan2 = custom_reduce_rule(rep, runtime=None)
-        assert plan2.post_collective is None
+        assert plan2.post_collectives is None
 
         del _OP_RULES["__test_custom_reduce_op__"]
 
@@ -1055,6 +1129,8 @@ class TestCustomOpRule:
         from ttml.distributed.rules.registry import register_rule, _OP_RULES
         from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
 
+        from ttml.distributed.rules.registry import Broadcast
+
         @register_rule("__test_custom_broadcast_op__")
         def custom_broadcast_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
             ndim = input_layout.ndim
@@ -1062,14 +1138,15 @@ class TestCustomOpRule:
             return ShardingPlan(
                 input_layouts=[rep],
                 output_layout=rep.with_placement(1, Shard(-1)),
-                pre_collective="broadcast",
-                pre_collective_mesh_axis=1,
+                pre_collectives=[Broadcast(mesh_axis=1)],
             )
 
         inp = Layout((Replicate(), Replicate()))
         plan = custom_broadcast_rule(inp, runtime=None)
-        assert plan.pre_collective == "broadcast"
-        assert plan.pre_collective_mesh_axis == 1
+        assert plan.pre_collectives is not None and isinstance(
+            plan.pre_collectives[0], Broadcast
+        )
+        assert plan.pre_collectives[0].mesh_axis == 1
         assert plan.output_layout.is_sharded_on(1)
 
         del _OP_RULES["__test_custom_broadcast_op__"]
@@ -1079,28 +1156,30 @@ class TestCustomOpRule:
         from ttml.distributed.rules.registry import register_rule, _OP_RULES
         from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
 
+        from ttml.distributed.rules.registry import AllReduce
+
         @register_rule("__test_custom_noop_backward__")
         def custom_noop_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
             ndim = input_layout.ndim
             return ShardingPlan(
                 input_layouts=[input_layout],
                 output_layout=replicated_layout(ndim),
-                post_collective="all_reduce",
-                reduce_mesh_axis=1,
-                noop_backward=True,
+                post_collectives=[AllReduce(mesh_axis=1, noop_backward=True)],
             )
 
         inp = Layout((Replicate(), Shard(-1)))
         plan = custom_noop_rule(inp, runtime=None)
-        assert plan.noop_backward is True
-        assert plan.post_collective == "all_reduce"
+        assert plan.post_collectives[0].noop_backward is True
+        assert isinstance(plan.post_collectives[0], AllReduce)
 
         del _OP_RULES["__test_custom_noop_backward__"]
 
     def test_custom_op_rule_with_gather_grad_replicated(self):
-        """Test custom rule with gather_grad_replicated for loss-like ops."""
+        """Test custom rule with post all_gather and gather_grad_replicated."""
         from ttml.distributed.rules.registry import register_rule, _OP_RULES
         from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
+
+        from ttml.distributed.rules.registry import AllGather
 
         @register_rule("__test_custom_loss_op__")
         def custom_loss_rule(
@@ -1115,13 +1194,15 @@ class TestCustomOpRule:
             return ShardingPlan(
                 input_layouts=[rep, rep] if target_layout else [rep],
                 output_layout=rep,
-                gather_grad_replicated=True,
+                post_collectives=[
+                    AllGather(dim=-1, mesh_axis=1, gather_grad_replicated=True)
+                ],
             )
 
         logits = Layout((Replicate(), Shard(-1)))
         targets = Layout((Replicate(), Replicate()))
         plan = custom_loss_rule(logits, targets, runtime=None)
-        assert plan.gather_grad_replicated is True
+        assert plan.post_collectives[0].gather_grad_replicated is True
         assert plan.input_layouts[0].is_replicated()
 
         del _OP_RULES["__test_custom_loss_op__"]
@@ -1810,11 +1891,11 @@ class TestDistributedOnDevice:
         assert output_layout.is_replicated()
 
     def test_distribute_module_linear_layer(self):
-        """Test distribute_module with a LinearLayer."""
+        """Test parallelize_module with a LinearLayer (root module: use '' as pattern)."""
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed import init_ops, distribute_module
+        from ttml.distributed import init_ops, parallelize_module, ColwiseParallel
         from ttml.distributed.layout import Layout, Shard, Replicate
         from ttml.modules import LinearLayer
 
@@ -1825,24 +1906,19 @@ class TestDistributedOnDevice:
         # Create a LinearLayer (uses has_bias, not bias)
         linear = LinearLayer(64, 128, has_bias=False)
 
-        # Set up policy for column-parallel
-        policy = {
-            "weight": Layout(placements=(Replicate(), Shard(-2))),
-        }
-
-        # Distribute the module
-        distribute_module(linear, mesh_device, policy)
+        # Root module: match with empty string to apply ColwiseParallel
+        parallelize_module(linear, mesh_device, {"": ColwiseParallel()}, tp_axis=1)
 
         # Check that weight has correct layout
         weight_layout = get_layout(linear.weight.tensor)
         assert weight_layout == Layout(placements=(Replicate(), Shard(-2)))
 
     def test_distribute_module_with_bias(self):
-        """Test distribute_module with LinearLayer that has bias."""
+        """Test parallelize_module with LinearLayer that has bias."""
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed import init_ops, distribute_module
+        from ttml.distributed import init_ops, parallelize_module, ColwiseParallel
         from ttml.distributed.layout import Layout, Shard, Replicate
         from ttml.modules import LinearLayer
 
@@ -1853,13 +1929,8 @@ class TestDistributedOnDevice:
         # Create a LinearLayer with bias (uses has_bias, not bias)
         linear = LinearLayer(64, 128, has_bias=True)
 
-        # Set up policy for column-parallel (bias should be inferred)
-        policy = {
-            "weight": Layout(placements=(Replicate(), Shard(-2))),
-        }
-
-        # Distribute the module
-        distribute_module(linear, mesh_device, policy)
+        # Root module: apply ColwiseParallel (bias layout inferred)
+        parallelize_module(linear, mesh_device, {"": ColwiseParallel()}, tp_axis=1)
 
         # Check weight layout
         weight_layout = get_layout(linear.weight.tensor)
@@ -2081,7 +2152,12 @@ class TestDistributedOnDevice:
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed import init_ops, distribute_module, sync_gradients
+        from ttml.distributed import (
+            init_ops,
+            parallelize_module,
+            ColwiseParallel,
+            sync_gradients,
+        )
         from ttml.distributed.layout import Layout, Shard, Replicate
         from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
         from ttml.modules import LinearLayer
@@ -2095,10 +2171,7 @@ class TestDistributedOnDevice:
         # Create a simple model (uses has_bias, not bias)
         linear = LinearLayer(64, 128, has_bias=False)
 
-        policy = {
-            "weight": Layout(placements=(Replicate(), Shard(-2))),
-        }
-        distribute_module(linear, mesh_device, policy)
+        parallelize_module(linear, mesh_device, {"": ColwiseParallel()}, tp_axis=1)
 
         # Create input and run forward
         np_input = np.random.randn(1, 1, 8, 64).astype(np.float32)
@@ -2407,6 +2480,56 @@ class TestDistributedOnDevice:
 
         # Wrapper should have same name
         assert wrapped.__name__ == "dummy_op"
+
+    def test_user_op_register_rule_and_register_op_flow(self):
+        """Test that user can register a custom op with own name and call the wrapper (no lib patching).
+
+        Public API only: register_rule(op_name), register_op(op_name, raw_callable).
+        User calls the wrapper returned by register_op; dispatch runs and uses the rule.
+        """
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed import init_ops, register_rule, register_op
+        from ttml.distributed.training import distribute_tensor
+        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed.rules.registry import ShardingPlan
+        from ttml.distributed.dispatch import _get_raw
+
+        init_ops()
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+        rt = MeshRuntime(mesh_device=mesh_device, tp_axis=1, dp_axis=0)
+        set_runtime(rt)
+
+        op_name = "__test_user_op_flow__"
+
+        @register_rule(op_name)
+        def user_op_rule(input_layout, *extra, runtime=None, **kwargs):
+            return ShardingPlan(
+                input_layouts=[input_layout],
+                output_layout=input_layout,
+            )
+
+        def raw_user_op(x):
+            return _get_raw("silu")(x)
+
+        user_op = register_op(op_name, raw_user_op)
+
+        np_data = np.random.randn(1, 1, 32, 128).astype(np.float32)
+        tensor = ttml.autograd.Tensor.from_numpy(
+            np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+        )
+        layout = Layout(ndim=2, axis_placements={1: Shard(-1)})
+        x = distribute_tensor(tensor, mesh_device, layout)
+
+        result = user_op(x)
+
+        assert result is not None
+        assert hasattr(result, "get_value")
+        result_layout = get_layout(result)
+        assert result_layout is not None
+        assert result_layout == layout
 
     def test_dispatch_plan_cache_hit(self):
         """Test that plan cache is used on repeated calls."""
@@ -3407,11 +3530,11 @@ class TestDistributedVsSingleDevice:
         )
 
     def test_mlp_training_step_with_distribute_module(self):
-        """Test full MLP training step using distribute_module API.
+        """Test full MLP training step using parallelize_module API.
 
         This test simulates the actual training pipeline:
         1. Create an MLP model (LlamaMLP)
-        2. Use distribute_module() with a TP policy to shard weights
+        2. Use parallelize_module() with ColwiseParallel/RowwiseParallel to shard weights
         3. Run forward pass with dispatched ops
         4. Compute loss and run backward
         5. Verify gradients and compare with single-device reference
@@ -3421,8 +3544,13 @@ class TestDistributedVsSingleDevice:
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed import init_ops
-        from ttml.distributed.training import distribute_tensor, distribute_module
+        from ttml.distributed import (
+            init_ops,
+            parallelize_module,
+            ColwiseParallel,
+            RowwiseParallel,
+        )
+        from ttml.distributed.training import distribute_tensor
         from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
         from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime, get_runtime
         from ttml.models.llama.transformer import LlamaMLP
@@ -3504,7 +3632,7 @@ class TestDistributedVsSingleDevice:
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
         # =====================================================================
-        # DISTRIBUTED (TP sharded) - using distribute_module
+        # DISTRIBUTED (TP sharded) - using parallelize_module
         # =====================================================================
         rt = MeshRuntime(mesh_device=mesh_device, tp_axis=1, dp_axis=0)
         set_runtime(rt)
@@ -3523,22 +3651,13 @@ class TestDistributedVsSingleDevice:
             w3_np.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
         )
 
-        # Build TP policy using regex patterns (the recommended way)
-        # Note: When calling distribute_module directly on a module (not nested),
-        # the prefix for child LinearLayers is just the attribute name (e.g., "w1"),
-        # so the weight key is "w1.weight", not "mlp.w1.weight".
-        # Use regex that matches both cases: with or without parent prefix.
-        col_layout = Layout(placements=(Replicate(), Shard(-2)))  # column-parallel
-        row_layout = Layout(placements=(Replicate(), Shard(-1)))  # row-parallel
-
-        policy = {
-            r"(.*\.)?w1\.weight": col_layout,  # w1 is column-parallel
-            r"(.*\.)?w3\.weight": col_layout,  # w3 is column-parallel
-            r"(.*\.)?w2\.weight": row_layout,  # w2 is row-parallel
-        }
-
-        # Use distribute_module to apply the policy
-        distribute_module(mlp_dist, mesh_device, policy)
+        # Apply TP via ParallelStyle (module names w1, w2, w3)
+        parallelize_module(
+            mlp_dist,
+            mesh_device,
+            {"w1": ColwiseParallel(), "w3": ColwiseParallel(), "w2": RowwiseParallel()},
+            tp_axis=1,
+        )
 
         # Create input tensor (replicated, with requires_grad)
         x_dist = distribute_tensor(
@@ -3600,7 +3719,7 @@ class TestDistributedVsSingleDevice:
             x_grad_pcc > pcc_threshold
         ), f"Input gradient PCC {x_grad_pcc:.4f} < {pcc_threshold}"
 
-        print(f"MLP training step with distribute_module passed!")
+        print(f"MLP training step with parallelize_module passed!")
         print(f"  Output PCC: {out_pcc:.4f}")
         print(f"  Input gradient PCC: {x_grad_pcc:.4f}")
 
@@ -3743,6 +3862,8 @@ class TestDistributedVsSingleDevice:
         _RAW_OPS["__test_custom_partial_sum__"] = custom_partial_sum_op
 
         # Register rule that triggers all_reduce for sharded inputs
+        from ttml.distributed.rules.registry import AllReduce
+
         @register_rule("__test_custom_partial_sum__")
         def custom_partial_sum_rule(
             input_layout: Layout, *extra, runtime=None, **kwargs
@@ -3751,8 +3872,7 @@ class TestDistributedVsSingleDevice:
                 return ShardingPlan(
                     input_layouts=[input_layout],
                     output_layout=replicated_layout(input_layout.ndim),
-                    post_collective="all_reduce",
-                    reduce_mesh_axis=1,
+                    post_collectives=[AllReduce(mesh_axis=1)],
                 )
             return ShardingPlan(
                 input_layouts=[input_layout],
@@ -3784,23 +3904,22 @@ class TestDistributedVsSingleDevice:
         del _RAW_OPS["__test_custom_partial_sum__"]
 
     def test_custom_module_distribute_integration(self):
-        """Test that a custom module with custom rule works with distribute_module.
+        """Test that parallelize_module distributes a custom module's Linear children.
 
-        This test demonstrates the full workflow for adding a custom module:
-        1. Define a custom module class
-        2. Register a module rule
-        3. Use distribute_module to apply the policy
-        4. Verify weights are distributed correctly
+        parallelize_module applies ColwiseParallel/RowwiseParallel by module name pattern;
+        no custom rule needed for simple gate/up/down linears.
         """
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed import init_ops
-        from ttml.distributed.training import distribute_tensor, distribute_module
+        from ttml.distributed import (
+            init_ops,
+            parallelize_module,
+            ColwiseParallel,
+            RowwiseParallel,
+        )
         from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
         from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
-        from ttml.distributed.rules.registry import register_module_rule, _MODULE_RULES
-        from ttml.distributed.module_rules import distribute_linear
         from ttml.modules import AbstractModuleBase, LinearLayer
 
         init_ops()
@@ -3816,7 +3935,6 @@ class TestDistributedVsSingleDevice:
                 self.gate = LinearLayer(in_features, hidden_features, has_bias=False)
                 self.up = LinearLayer(in_features, hidden_features, has_bias=False)
                 self.down = LinearLayer(hidden_features, out_features, has_bias=False)
-                self._custom_distributed = False
 
             def forward(self, x):
                 gate_out = ttml.ops.unary.silu(
@@ -3826,38 +3944,23 @@ class TestDistributedVsSingleDevice:
                 gated = ttml.ops.binary.mul(gate_out, up_out)
                 return ttml.ops.linear.linear(gated, self.down.weight.tensor)
 
-        # Register a custom module rule
-        @register_module_rule(CustomGatedMLP)
-        def distribute_custom_gated_mlp(module, mesh_device, policy, prefix=""):
-            gate_prefix = f"{prefix}.gate" if prefix else "gate"
-            up_prefix = f"{prefix}.up" if prefix else "up"
-            down_prefix = f"{prefix}.down" if prefix else "down"
-
-            distribute_linear(module.gate, mesh_device, policy, gate_prefix)
-            distribute_linear(module.up, mesh_device, policy, up_prefix)
-            distribute_linear(module.down, mesh_device, policy, down_prefix)
-
-            module._custom_distributed = True
-            return module
-
         # Create model
         model = CustomGatedMLP(64, 64, 64)
 
-        # Build TP policy
+        # Distribute via ParallelStyle by module name
         col_layout = Layout(placements=(Replicate(), Shard(-2)))
         row_layout = Layout(placements=(Replicate(), Shard(-1)))
 
-        policy = {
-            r"(.*\.)?gate\.weight": col_layout,
-            r"(.*\.)?up\.weight": col_layout,
-            r"(.*\.)?down\.weight": row_layout,
-        }
-
-        # Distribute
-        distribute_module(model, mesh_device, policy)
-
-        # Verify custom rule was applied
-        assert model._custom_distributed, "Custom module rule was not applied"
+        parallelize_module(
+            model,
+            mesh_device,
+            {
+                "gate": ColwiseParallel(),
+                "up": ColwiseParallel(),
+                "down": RowwiseParallel(),
+            },
+            tp_axis=1,
+        )
 
         # Verify weights are distributed with correct layouts
         gate_layout = get_layout(model.gate.weight.tensor)
@@ -3867,9 +3970,6 @@ class TestDistributedVsSingleDevice:
         assert gate_layout == col_layout, f"Gate layout {gate_layout} != {col_layout}"
         assert up_layout == col_layout, f"Up layout {up_layout} != {col_layout}"
         assert down_layout == row_layout, f"Down layout {down_layout} != {row_layout}"
-
-        # Cleanup
-        del _MODULE_RULES[CustomGatedMLP]
 
     def test_custom_module_forward_correctness(self):
         """Test that custom distributed module produces correct forward pass results.
@@ -3882,11 +3982,14 @@ class TestDistributedVsSingleDevice:
         import ml_dtypes
         from ttml.distributed import init_ops
         from ttml.distributed.dispatch import _get_raw
-        from ttml.distributed.training import distribute_tensor, distribute_module
+        from ttml.distributed import (
+            parallelize_module,
+            ColwiseParallel,
+            RowwiseParallel,
+        )
+        from ttml.distributed.training import distribute_tensor
         from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
         from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
-        from ttml.distributed.rules.registry import register_module_rule, _MODULE_RULES
-        from ttml.distributed.module_rules import distribute_linear
         from ttml.modules import AbstractModuleBase, LinearLayer
 
         init_ops()
@@ -3909,15 +4012,6 @@ class TestDistributedVsSingleDevice:
                 )
                 return ttml.ops.linear.linear(h, self.fc2.weight.tensor)
 
-        # Register custom module rule
-        @register_module_rule(CustomTwoLayerNet)
-        def distribute_custom_two_layer(module, mesh_device, policy, prefix=""):
-            fc1_prefix = f"{prefix}.fc1" if prefix else "fc1"
-            fc2_prefix = f"{prefix}.fc2" if prefix else "fc2"
-            distribute_linear(module.fc1, mesh_device, policy, fc1_prefix)
-            distribute_linear(module.fc2, mesh_device, policy, fc2_prefix)
-            return module
-
         # Create model and get weights for reference
         model = CustomTwoLayerNet(64, 64, 64)
 
@@ -3934,19 +4028,16 @@ class TestDistributedVsSingleDevice:
         h_act_ref = h_ref * (1 / (1 + np.exp(-h_ref)))  # silu
         expected = h_act_ref @ fc2_weight_np[0, 0].T
 
-        # Distribute model
-        col_layout = Layout(placements=(Replicate(), Shard(-2)))
-        row_layout = Layout(placements=(Replicate(), Shard(-1)))
-
-        policy = {
-            r"(.*\.)?fc1\.weight": col_layout,
-            r"(.*\.)?fc2\.weight": row_layout,
-        }
-
+        # Distribute model via ParallelStyle
         rt = MeshRuntime(mesh_device=mesh_device, tp_axis=1, dp_axis=0)
         set_runtime(rt)
 
-        distribute_module(model, mesh_device, policy)
+        parallelize_module(
+            model,
+            mesh_device,
+            {"fc1": ColwiseParallel(), "fc2": RowwiseParallel()},
+            tp_axis=1,
+        )
 
         # Create input tensor
         rep_layout = Layout(placements=(Replicate(), Replicate()))

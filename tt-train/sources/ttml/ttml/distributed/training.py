@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training helpers: distribute_tensor, distribute_module, sync_gradients.
+"""Training helpers: distribute_tensor, parallelize_module, sync_gradients.
 
 These are the main user-facing entry points that wire the rule-based layout
 system into the model initialization and gradient synchronization steps.
@@ -23,6 +23,7 @@ from ttml.modules.module_base import ModuleList
 from .layout import Layout, Shard, Replicate, get_layout, set_layout, replicated_layout
 from .mesh_runtime import MeshRuntime, get_runtime, set_runtime
 from .rules.registry import get_module_rule
+from .style import ParallelStyle
 
 
 # ---------------------------------------------------------------------------
@@ -49,27 +50,21 @@ def distribute_tensor(
         requires_grad: If provided, override requires_grad on result.
                        If None, preserves original tensor's requires_grad status.
     """
-    # Preserve requires_grad from original tensor if not explicitly specified
-    orig_requires_grad = (
-        tensor.get_requires_grad() if hasattr(tensor, "get_requires_grad") else False
-    )
+    # Preserve requires_grad and dtype from original tensor (ttml.autograd.Tensor: get_requires_grad, dtype)
+    orig_requires_grad = tensor.get_requires_grad()
     final_requires_grad = (
         requires_grad if requires_grad is not None else orig_requires_grad
     )
+    orig_dtype = tensor.dtype()
 
     # Use composer to gather tensor from mesh (needed when mesh is open)
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
 
-    try:
-        np_data = tensor.to_numpy(ttnn.DataType.FLOAT32, composer)
-    except Exception:
-        np_data = tensor.to_numpy(None, composer)
+    np_data = tensor.to_numpy(orig_dtype, composer)
 
     # Composer concatenates all devices along dim 0, take first slice for replicated data
     if np_data.shape[0] > 1:
         np_data = np_data[:1]
-
-    np_bf16 = np_data.astype(ml_dtypes.bfloat16)
 
     shard_dim = None
     shard_axis = None
@@ -81,7 +76,7 @@ def distribute_tensor(
 
     mapper = None
     if shard_dim is not None:
-        rank = len(np_bf16.shape)
+        rank = len(np_data.shape)
         dim = shard_dim if shard_dim >= 0 else rank + shard_dim
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
             mesh_device, dim, shard_axis
@@ -91,9 +86,9 @@ def distribute_tensor(
         mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(mesh_device)
 
     result = ttml.autograd.Tensor.from_numpy(
-        np_bf16,
+        np_data,
         ttnn.Layout.TILE,
-        ttnn.DataType.BFLOAT16,
+        orig_dtype,
         mapper,
     )
     # Restore requires_grad status
@@ -103,100 +98,128 @@ def distribute_tensor(
 
 
 # ---------------------------------------------------------------------------
-# distribute_batch
+# parallelize_module (PyTorch-style ParallelStyle API)
 # ---------------------------------------------------------------------------
 
 
-def distribute_batch(
-    tensor,
+def _match_plan(name: str, plan: Dict[str, ParallelStyle]) -> Optional[ParallelStyle]:
+    """Match module name against plan patterns (exact first, then regex)."""
+    if name in plan:
+        return plan[name]
+    for pattern, style in plan.items():
+        try:
+            if re.fullmatch(pattern, name):
+                return style
+        except re.error:
+            continue
+    return None
+
+
+def _build_policy_for_composite(
+    module: AbstractModuleBase,
+    prefix: str,
+    plan: Dict[str, ParallelStyle],
     mesh_device,
-    dp_axis: int,
-) -> Any:
-    """Distribute a batch tensor across the DP axis.
-
-    Each DP rank gets a slice of the batch. The tensor is sharded
-    along dimension 0 (batch dimension) across the dp_axis of the mesh.
-
-    Args:
-        tensor: Input batch tensor (batch dimension is dim 0)
-        mesh_device: The mesh device
-        dp_axis: The data parallel mesh axis
-
-    Returns:
-        Distributed tensor with batch sharded across dp_axis
-    """
-    mesh_shape = mesh_device.shape
-    ndim = mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
-
-    # Build layout: Shard(0) on dp_axis, Replicate on others
-    placements = tuple(Shard(0) if i == dp_axis else Replicate() for i in range(ndim))
-    layout = Layout(placements=placements)
-
-    return distribute_tensor(tensor, mesh_device, layout)
+    tp_axis: int,
+) -> Optional[Dict[str, Layout]]:
+    """Build a Layout policy from parallelize_plan for a composite module (e.g. GQA)."""
+    try:
+        from ttml.models.llama.gqattn import GroupedQueryAttention
+    except ImportError:
+        return None
+    if not isinstance(module, GroupedQueryAttention):
+        return None
+    policy: Dict[str, Layout] = {}
+    for name in ("q_linear", "kv_linear", "out_linear"):
+        module_path = f"{prefix}.{name}" if prefix else name
+        style = _match_plan(module_path, plan)
+        if style is not None and hasattr(style, "get_layout"):
+            key = f"{prefix}.{name}.weight" if prefix else f"{name}.weight"
+            policy[key] = style.get_layout(mesh_device, tp_axis)
+    # Return policy (possibly empty) so rule is always invoked (e.g. for CP-only)
+    return policy
 
 
-# ---------------------------------------------------------------------------
-# distribute_module
-# ---------------------------------------------------------------------------
-
-
-def distribute_module(
-    model: AbstractModuleBase,
-    mesh_device,
-    policy: Dict[str, Layout],
-    cp_axis: Optional[int] = None,
-) -> AbstractModuleBase:
-    """Distribute a model for parallel training.
-
-    1. Walks the module tree.
-    2. For each module, checks if a module-level rule is registered.
-       If yes, applies the transform (the rule may distribute sub-parameters).
-    3. Otherwise, distributes individual parameters that appear in *policy*.
-
-    Args:
-        model: The model to distribute
-        mesh_device: The mesh device to distribute tensors to
-        policy: Dict mapping parameter names (or regex patterns) to Layouts
-        cp_axis: Optional context parallelism axis for sequence sharding
-    """
-    from . import module_rules as _  # ensure module rules are registered  # noqa: F401
-
-    # Set up a minimal runtime for dispatch to use
-    runtime = MeshRuntime(mesh_device=mesh_device)
-    set_runtime(runtime)
-
-    _apply_module_rules(model, mesh_device, policy, prefix="", cp_axis=cp_axis)
-
-    return model
-
-
-def _apply_module_rules(
+def _apply_parallelize_plan(
     module: AbstractModuleBase,
     mesh_device,
-    policy: Dict[str, Layout],
+    plan: Dict[str, ParallelStyle],
+    tp_axis: int,
+    cp_axis: Optional[int],
     prefix: str,
-    cp_axis: Optional[int] = None,
 ) -> None:
-    """Recursively apply module rules or direct parameter distribution."""
+    """Recursively apply parallelize_plan to module tree."""
+    # If this module has a registered module rule (e.g. GQA), run it then recurse into children.
+    # The rule handles composite-only concerns (e.g. head count, CP/rope, ring_sdpa); child linears
+    # get weight sharding + forward collectives from the plan when we recurse (Colwise/Rowwise).
     rule = get_module_rule(type(module))
-
     if rule is not None:
-        # Pass cp_axis to module rules that support it
-        try:
-            rule(module, mesh_device, policy, prefix, cp_axis=cp_axis)
-        except TypeError:
-            # Rule doesn't accept cp_axis, call without it
-            rule(module, mesh_device, policy, prefix)
+        composite_policy = _build_policy_for_composite(
+            module, prefix, plan, mesh_device, tp_axis
+        )
+        if composite_policy is not None:
+            from . import module_rules as _  # noqa: F401
+
+            try:
+                rule(module, mesh_device, composite_policy, prefix, cp_axis=cp_axis)
+            except TypeError:
+                rule(module, mesh_device, composite_policy, prefix)
+            # Recurse so q_linear, kv_linear, out_linear get ColwiseParallel/RowwiseParallel
+            for name, child in module.named_children():
+                if isinstance(child, AbstractModuleBase):
+                    child_prefix = f"{prefix}.{name}" if prefix else name
+                    _apply_parallelize_plan(
+                        child, mesh_device, plan, tp_axis, cp_axis, child_prefix
+                    )
+            return
+
+    # Check if this module matches a style
+    style = _match_plan(prefix, plan) if prefix else None
+    if style is not None:
+        style._apply(module, mesh_device, tp_axis)
         return
 
+    # Recurse into children
     for name, child in module.named_children():
-        child_prefix = f"{prefix}.{name}" if prefix else name
         if isinstance(child, AbstractModuleBase):
-            _apply_module_rules(
-                child, mesh_device, policy, child_prefix, cp_axis=cp_axis
+            child_prefix = f"{prefix}.{name}" if prefix else name
+            _apply_parallelize_plan(
+                child, mesh_device, plan, tp_axis, cp_axis, child_prefix
             )
 
-    _distribute_unhandled_params(module, mesh_device, policy, prefix)
+
+def parallelize_module(
+    module: AbstractModuleBase,
+    mesh_device,
+    parallelize_plan: Dict[str, ParallelStyle],
+    *,
+    tp_axis: int = 0,
+    cp_axis: Optional[int] = None,
+) -> AbstractModuleBase:
+    """Apply tensor parallelism by assigning ParallelStyle to modules by name pattern.
+
+    Args:
+        module: The model to parallelize.
+        mesh_device: The mesh device.
+        parallelize_plan: Dict mapping module name patterns (exact or regex) to ParallelStyle.
+        tp_axis: Mesh axis for tensor parallelism.
+        cp_axis: Optional mesh axis for context parallelism.
+
+    Example:
+        parallelize_module(model, mesh, {
+            r".*\\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
+            r".*\\.(out_linear|w2)": RowwiseParallel(),
+            "fc": ColwiseParallel(output_gradient_replicated=True),
+        })
+    """
+    runtime = MeshRuntime(mesh_device=mesh_device, tp_axis=tp_axis, cp_axis=cp_axis)
+    set_runtime(runtime)
+
+    _apply_parallelize_plan(
+        module, mesh_device, parallelize_plan, tp_axis, cp_axis, prefix=""
+    )
+
+    return module
 
 
 def _match_policy(param_key: str, policy: Dict[str, Layout]) -> Optional[Layout]:
@@ -214,41 +237,6 @@ def _match_policy(param_key: str, policy: Dict[str, Layout]) -> Optional[Layout]
         except re.error:
             continue
     return None
-
-
-def _distribute_unhandled_params(
-    module: AbstractModuleBase,
-    mesh_device,
-    policy: Dict[str, Layout],
-    prefix: str,
-) -> None:
-    """Distribute individual parameters that haven't been handled by a module rule.
-
-    IMPORTANT: We must call override_tensor() to update the C++ side's m_named_tensors
-    map. This ensures the old tensor can be deallocated and the optimizer (which calls
-    model.parameters()) will get the new distributed tensors.
-    """
-    for attr_name in list(vars(module).keys()):
-        attr = getattr(module, attr_name, None)
-        if attr is None:
-            continue
-        if not hasattr(attr, "tensor"):
-            continue
-        param_key = f"{prefix}.{attr_name}" if prefix else attr_name
-        param_key_with_tensor = f"{param_key}.weight"
-        matched = _match_policy(param_key, policy)
-        if matched is None:
-            matched = _match_policy(param_key_with_tensor, policy)
-        if matched is not None:
-            new_tensor = distribute_tensor(attr.tensor, mesh_device, matched)
-            # Update both Python side (Parameter.tensor) and C++ side (m_named_tensors)
-            attr.tensor = new_tensor
-            # Try to update C++ side - attr_name may be "weight" for Parameter wrappers
-            try:
-                module.override_tensor(new_tensor, attr_name)
-            except Exception:
-                # If attr_name doesn't match C++ registration name, try common names
-                pass
 
 
 # ---------------------------------------------------------------------------

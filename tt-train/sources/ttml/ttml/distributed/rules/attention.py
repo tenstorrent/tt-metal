@@ -31,7 +31,7 @@ def sdpa_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    q_layout = layouts[0] if layouts else Layout((Replicate(),))
+    q_layout = layouts[0] if layouts else Layout(ndim=2)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=q_layout,
@@ -51,7 +51,7 @@ def grouped_heads_creation_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    q_layout = layouts[0] if layouts else Layout((Replicate(),))
+    q_layout = layouts[0] if layouts else Layout(ndim=2)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=q_layout,
@@ -64,7 +64,7 @@ def heads_fusion_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=2)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,
@@ -77,7 +77,7 @@ def heads_creation_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=2)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,
@@ -93,7 +93,7 @@ def rope_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=2)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,
@@ -110,16 +110,13 @@ def _embedding_output_layout(input_layout: Layout) -> Layout:
     so sequence is dim 2. Preserve sequence sharding by remapping Shard(3) -> Shard(2).
     Shard(-1) on input (last dim = S) -> Shard(2) on output (seq dim).
     """
-    new_placements = []
-    for p in input_layout.placements:
+    ndim = input_layout.ndim
+    axis_placements = {}
+    for i in range(ndim):
+        p = input_layout.placements[i]
         if isinstance(p, Shard):
-            if p.dim in (3, -1):
-                new_placements.append(Shard(2))
-            else:
-                new_placements.append(p)
-        else:
-            new_placements.append(p)
-    return Layout(placements=tuple(new_placements))
+            axis_placements[i] = Shard(2) if p.dim in (3, -1) else p
+    return Layout(ndim=ndim, axis_placements=axis_placements)
 
 
 @register_rule("embedding")
@@ -128,7 +125,7 @@ def embedding_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=2)
     output_layout = _embedding_output_layout(input_layout)
     return ShardingPlan(
         input_layouts=list(layouts),
@@ -145,7 +142,7 @@ def reshape_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout((Replicate(),))
+    input_layout = layouts[0] if layouts else Layout(ndim=2)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,

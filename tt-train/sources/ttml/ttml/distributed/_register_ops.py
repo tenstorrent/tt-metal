@@ -9,13 +9,21 @@ set of ops with dispatch-wrapped versions. The raw callables are saved in
 after planning and redistribution.
 
 Only ops that participate in the TP / distributed path are patched.
-Unrelated ops (losses, sampling, etc.) are left untouched.
+User-defined ops are not patched: users register a rule and wrap their op
+with ``register_op(op_name, raw_callable)`` under their own names (see docs).
 """
 
 from __future__ import annotations
 
 # Import all rule modules so that @register_rule decorators fire
-from .rules import elementwise, matmul, normalization, attention, loss  # noqa: F401
+from .rules import (  # noqa: F401
+    elementwise,
+    matmul,
+    normalization,
+    attention,
+    loss,
+    collectives,
+)
 
 _initialized = False
 
@@ -101,3 +109,7 @@ def init_ops():
     # -- Loss --------------------------------------------------------------------
 
     _patch(ttml.ops.loss, "cross_entropy_loss", "cross_entropy_loss")
+
+    _patch(ttml.ops.distributed, "broadcast", "broadcast")
+    _patch(ttml.ops.distributed, "all_gather", "all_gather")
+    _patch(ttml.ops.distributed, "all_reduce", "all_reduce")

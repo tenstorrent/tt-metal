@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple, Union
 
+from .mesh_runtime import get_runtime
 import ttnn
 
 
@@ -54,7 +55,6 @@ class Layout:
     is either ``Shard(dim)`` or ``Replicate()``.
 
     Can be created in several ways:
-    - Layout(placements=(Shard(0), Replicate()))  # explicit tuple
     - Layout(ndim=2)  # all Replicate()
     - Layout(ndim=2, axis_placements={1: Shard(-1)})  # Replicate() on axis 0, Shard(-1) on axis 1
     """
@@ -63,33 +63,28 @@ class Layout:
 
     def __init__(
         self,
-        placements: Tuple[Placement, ...] = None,
-        *,
         ndim: int = None,
         axis_placements: dict = None,
     ):
         """Create a Layout.
 
         Args:
-            placements: Explicit tuple of placements (legacy API)
             ndim: Number of mesh dimensions (creates all Replicate() by default)
-            axis_placements: Dict mapping mesh_axis -> Placement for non-replicated axes
+            axis_placements: Dict mapping mesh_axis -> Placement for sharded axes
         """
-        if placements is not None:
-            # Legacy API: explicit placements tuple
-            if not isinstance(placements, tuple):
-                placements = tuple(placements)
-            object.__setattr__(self, "placements", placements)
-        elif ndim is not None:
-            # New API: ndim with optional axis_placements
-            p_list = [Replicate() for _ in range(ndim)]
-            if axis_placements:
-                for axis, placement in axis_placements.items():
-                    p_list[axis] = placement
-            object.__setattr__(self, "placements", tuple(p_list))
-        else:
-            # Empty layout
-            object.__setattr__(self, "placements", ())
+        # New API: ndim with optional axis_placements
+        if ndim is None:
+            runtime = get_runtime()
+            if runtime is not None:
+                ndim = len(runtime.mesh_shape)
+            else:
+                raise ValueError("ndim is required if no runtime is set")
+
+        p_list = [Replicate() for _ in range(ndim)]
+        if axis_placements:
+            for axis, placement in axis_placements.items():
+                p_list[axis] = placement
+        object.__setattr__(self, "placements", tuple(p_list))
 
     @property
     def ndim(self) -> int:
@@ -110,9 +105,13 @@ class Layout:
         return None
 
     def with_placement(self, mesh_axis: int, placement: Placement) -> "Layout":
-        lst = list(self.placements)
-        lst[mesh_axis] = placement
-        return Layout(placements=tuple(lst))
+        ndim = len(self.placements)
+        axis_placements = {}
+        for i in range(ndim):
+            p = placement if i == mesh_axis else self.placements[i]
+            if isinstance(p, Shard):
+                axis_placements[i] = p
+        return Layout(ndim=ndim, axis_placements=axis_placements)
 
     def __eq__(self, other):
         if not isinstance(other, Layout):
@@ -135,7 +134,7 @@ def replicated_layout(ndim: int = 2) -> Layout:
 # ---------------------------------------------------------------------------
 
 
-def layout_from_topology(topology) -> Layout:
+def layout_from_topology(topology, mesh_ndim: int) -> Layout:
     """Extract a Layout from a ttnn TensorTopology object."""
     placements: List[Placement] = []
     for p in topology.placements():
@@ -143,7 +142,12 @@ def layout_from_topology(topology) -> Layout:
             placements.append(Shard(dim=p.dim))
         else:
             placements.append(Replicate())
-    return Layout(placements=tuple(placements))
+    axis_placements = {
+        i: placements[i]
+        for i in range(len(placements))
+        if isinstance(placements[i], Shard)
+    }
+    return Layout(ndim=mesh_ndim, axis_placements=axis_placements)
 
 
 def layout_to_mapper_config(layout: Layout) -> ttnn.MeshMapperConfig:
@@ -161,8 +165,6 @@ def layout_to_mapper_config(layout: Layout) -> ttnn.MeshMapperConfig:
 # Attaching / reading layout metadata on ttml autograd tensors
 # ---------------------------------------------------------------------------
 
-_LAYOUT_ATTR = "_distributed_layout"
-
 
 def get_layout(tensor) -> Optional[Layout]:
     """Read the Layout attached to a ttml autograd tensor.
@@ -176,17 +178,12 @@ def get_layout(tensor) -> Optional[Layout]:
     # Get mesh dimensions from the tensor's device
     # device.shape is a property (MeshShape), not a method
     device = ttnn_tensor.device()
-    mesh_ndim = None
-    if hasattr(device, "shape"):
-        mesh_shape = device.shape  # property, not callable
-        mesh_ndim = (
-            mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
-        )
+    mesh_ndim = device.shape.dims()
 
-    layout = layout_from_topology(topology)
+    layout = layout_from_topology(topology, mesh_ndim)
 
     # Extend to mesh dimensions if needed
-    if mesh_ndim is not None and layout.ndim < mesh_ndim:
+    if layout.ndim < mesh_ndim:
         axis_placements = {i: p for i, p in enumerate(layout.placements)}
         layout = Layout(ndim=mesh_ndim, axis_placements=axis_placements)
 

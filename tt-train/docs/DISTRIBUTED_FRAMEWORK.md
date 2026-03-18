@@ -296,6 +296,8 @@ for entry in dispatch_trace.entries:
     print(f"Op: {entry.op_name}")
     print(f"  Input layouts: {entry.input_layouts}")
     print(f"  Output layout: {entry.output_layout}")
+    print(f"  Op kwargs: {entry.op_kwargs}")
+    print(f"  Pre-collectives: {entry.pre_collectives}")
     print(f"  Redistributions: {entry.redistributions}")
     print(f"  Post-collectives: {entry.post_collectives}")
 ```
@@ -306,11 +308,13 @@ Each `TraceEntry` contains:
 - `op_name`: The dispatched operation name
 - `input_layouts`: Layouts of input tensors before dispatch
 - `rule_name`: Name of the sharding rule applied (or `"fast_path"` if no distributed tensors)
+- `op_kwargs`: Keyword arguments passed to the op (e.g. for `all_gather`: `cluster_axis`, `dim`, `grad_output_type`)
+- `pre_collectives`: Collectives applied before the op (e.g., broadcast for column-parallel)
 - `redistributions`: Layout conversions applied to inputs
 - `post_collectives`: Collectives applied after the op (e.g., all_reduce for row-parallel)
 - `output_layout`: Layout of the output tensor
 
-Use `entry.to_dict()` to get a JSON-serializable representation.
+Use `entry.to_dict()` to get a JSON-serializable representation (includes `op_kwargs`).
 
 ### Trainer integration
 
