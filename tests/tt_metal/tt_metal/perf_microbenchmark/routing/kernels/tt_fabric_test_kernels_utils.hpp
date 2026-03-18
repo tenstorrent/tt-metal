@@ -746,8 +746,9 @@ struct LineSyncConfig {
     }
 
     void global_sync_start() {
-        connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
-        connection_manager_->send_header_non_blocking<false>(connection_ptr_, connection_idx_, (uint32_t)packet_header);
+        connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        connection_manager_->template send_header_non_blocking<false>(
+            connection_ptr_, connection_idx_, (uint32_t)packet_header);
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -1078,7 +1079,7 @@ struct SenderKernelTrafficConfig {
 
         // STEP 2: Wait for space
         if constexpr (BENCHMARK_MODE){
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
             auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
             if (num_packets_processed < conn->num_buffers_per_channel) {
@@ -1087,17 +1088,17 @@ struct SenderKernelTrafficConfig {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
 
                 // Send payload without header
-                connection_manager_->send_payload_without_header<BENCHMARK_MODE>(
+                connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
                     connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
             // Send header
-            connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
+            connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
                 connection_ptr_, connection_idx_, (uint32_t)packet_header);
         }
 
