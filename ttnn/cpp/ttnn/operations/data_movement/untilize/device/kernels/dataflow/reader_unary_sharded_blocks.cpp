@@ -13,7 +13,6 @@
 //
 // This kernel is used when use_block_reader=true in UntilizeMultiCoreProgramFactory:
 //   - Uneven sharding: tensor dims don't evenly divide shard dims
-//   - Slow untilize path (!use_pack_untilize): routed here from select_program_factory
 //
 // Data flow (block reader):
 //   L1 Shard Buffer          CB (double-buffered)          Compute
