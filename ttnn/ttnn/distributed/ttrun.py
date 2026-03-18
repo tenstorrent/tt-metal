@@ -515,7 +515,8 @@ def run_phase1_generate_rank_bindings(
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
 
-    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run)
+    # generate_rank_bindings writes to tt-run-generated/ relative to cwd
+    exit_code = run_generate_rank_bindings(cmd, cwd=output_dir.parent, subprocess_run=subprocess_run)
 
     if exit_code != 0:
         raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
@@ -1465,8 +1466,8 @@ def new_mode_flow(
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Mock cluster: {len(mock_rank_to_desc)} ranks")
 
-    # Output directory: tt-run-generated/ relative to ORIGINAL_CWD
-    output_dir = ORIGINAL_CWD / "tt-run-generated"
+    # Output directory: tt-run-generated/ in /tmp (generate_rank_bindings writes relative to cwd)
+    output_dir = Path("/tmp") / "tt-run-generated"
     output_dir.mkdir(exist_ok=True)
 
     if verbose:

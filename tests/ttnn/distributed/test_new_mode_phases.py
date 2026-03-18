@@ -217,10 +217,8 @@ class TestNewModePhase1Phase2:
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
-        # Use ORIGINAL_CWD/tt-run-generated for output (as new_mode_flow does)
-        from ttnn.distributed.ttrun import ORIGINAL_CWD
-
-        output_dir = ORIGINAL_CWD / "tt-run-generated"
+        # Use /tmp/tt-run-generated for output (as new_mode_flow does)
+        output_dir = Path("/tmp") / "tt-run-generated"
         output_dir.mkdir(exist_ok=True)
 
         # Create generated rank_bindings.yaml with 3 ranks (different from Phase 1)
@@ -404,13 +402,12 @@ class TestNewModePhase1Phase2:
             inject_rankfile_mpi_args,
             get_mpi_launcher,
         )
-        from ttnn.distributed.ttrun import ORIGINAL_CWD
 
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
-        # Use ORIGINAL_CWD/tt-run-generated for output
-        output_dir = ORIGINAL_CWD / "tt-run-generated"
+        # Use /tmp/tt-run-generated for output (as new_mode_flow does)
+        output_dir = Path("/tmp") / "tt-run-generated"
         output_dir.mkdir(exist_ok=True)
 
         # Create generated rank_bindings.yaml with asymmetrical distribution:
