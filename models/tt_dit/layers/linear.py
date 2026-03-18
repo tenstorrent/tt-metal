@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from ..utils.matmul import get_matmul_config
+from ..utils.matmul import get_fused_mmrs_config, get_matmul_config
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -338,6 +338,59 @@ class RowParallelLinear(Module):
             if needs_reshape:
                 output = ttnn.squeeze(output, 0)
 
+        return output
+
+    def forward_fused_addcmul(
+        self,
+        x: ttnn.Tensor,
+        addcmul_a: ttnn.Tensor,
+        addcmul_b: ttnn.Tensor,
+        scalar: float = 1.0,
+        *,
+        compute_kernel_config=None,
+    ) -> ttnn.Tensor:
+        """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
+
+        Computes: output = addcmul_a + scalar * rs_result * addcmul_b
+
+        Both addcmul_a and addcmul_b must already be at their per-TP-device slice size
+        [D/tp]. The RS kernel fuses the addcmul at the final ring write, eliminating
+        extra CCL ops entirely.
+        """
+        if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
+            unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
+            )
+            weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
+        else:
+            weight = self.weight.data
+
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+
+        needs_reshape = len(x.shape) <= 3
+        if needs_reshape:
+            x = ttnn.unsqueeze(x, 0)
+        _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+            input_tensor=x,
+            weight_tensor=weight,
+            dim=3,
+            multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
+            **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
+            bias=self.bias.data if self.bias is not None else None,
+            memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.mesh_axis,
+            compute_kernel_config=compute_kernel_config or self.compute_config,
+            barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+            fused_ternary_scalar=scalar,
+            addcmul_input_tensor1=addcmul_a,
+            addcmul_input_tensor2=addcmul_b,
+        )
+        if needs_reshape:
+            output = ttnn.squeeze(output, 0)
         return output
 
 
