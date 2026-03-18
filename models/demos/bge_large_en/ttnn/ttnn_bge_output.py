@@ -33,7 +33,9 @@ class TtnnBGEOutput:
 
         # Create dynamic program config
         dynamic_ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             in0_block_w=(dim_t__x * 4) // seqL_factor,  # 16 for seq_len <= 384, 8 for seq_len > 384
             out_subblock_h=1,  # Keep 1
             out_subblock_w=dim_t__x // seqL_factor,  # 4 for seq_len <= 384, 2 for seq_len > 384
@@ -71,7 +73,9 @@ class TtnnBGEOutput:
             block_h = 1
 
         dynamic_layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             subblock_w=dim_t__x,
             block_h=block_h,
             block_w=dim_t__x,

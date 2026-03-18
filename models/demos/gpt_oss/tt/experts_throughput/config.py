@@ -199,7 +199,9 @@ class ThroughputProgramConfig:
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,
@@ -239,7 +241,9 @@ class ThroughputProgramConfig:
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -268,7 +272,9 @@ class ThroughputProgramConfig:
         per_core_N = n_tiles // (core_x * core_y)
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=self.in0_block_w,
             out_subblock_h=self.out_subblock_h,
             out_subblock_w=self.out_subblock_w,

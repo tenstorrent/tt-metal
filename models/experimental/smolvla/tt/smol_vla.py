@@ -408,12 +408,7 @@ def smolvla_patch_embeddings_tt(
 
     # Linear projection
     patch_embedding_output = ttnn.linear(
-        pixel_values,
-        proj_weight,
-        bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        pixel_values, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(pixel_values)
 
@@ -443,12 +438,7 @@ def smolvla_attention_tt(
 
     # Combined QKV projection
     query_key_value = ttnn.linear(
-        hidden_states,
-        qkv_weight,
-        bias=qkv_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        hidden_states, qkv_weight, bias=qkv_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.reallocate(hidden_states)
 
@@ -462,13 +452,7 @@ def smolvla_attention_tt(
     value = ttnn.reallocate(value)
 
     # Attention scores: Q @ K^T
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
@@ -479,13 +463,7 @@ def smolvla_attention_tt(
     attention_probs = ttnn.softmax(attention_scores, dim=-1)
 
     # Attention output: softmax(Q @ K^T) @ V
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
@@ -497,12 +475,7 @@ def smolvla_attention_tt(
 
     # Output projection
     self_output = ttnn.linear(
-        context_layer,
-        proj_weight,
-        bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        context_layer, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(context_layer)
 
@@ -528,18 +501,12 @@ def smolvla_mlp_tt(
         bias=fc1_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
         activation="gelu",
     )
 
     # FC2
     output = ttnn.linear(
-        intermediate,
-        fc2_weight,
-        bias=fc2_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
+        intermediate, fc2_weight, bias=fc2_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(intermediate)
 
@@ -634,20 +601,8 @@ def smolvla_vlm_kv_projection_tt(
         k: [batch, seq_len, 320]
         v: [batch, seq_len, 320]
     """
-    k = ttnn.linear(
-        hidden_states,
-        k_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
-    v = ttnn.linear(
-        hidden_states,
-        v_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    k = ttnn.linear(hidden_states, k_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    v = ttnn.linear(hidden_states, v_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     return k, v
 
 
@@ -678,13 +633,7 @@ def smolvla_expert_attention_tt(
     head_dim = 80  # Fixed head dimension
 
     # Q projection: [batch, seq, 720] -> [batch, seq, 960]
-    query = ttnn.linear(
-        hidden_states,
-        q_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    query = ttnn.linear(hidden_states, q_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
     # K/V source depends on layer type
     if is_cross_attn and cross_attn_k is not None:
@@ -695,22 +644,10 @@ def smolvla_expert_attention_tt(
         v_input = hidden_states
 
     # K projection
-    key = ttnn.linear(
-        k_input,
-        k_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    key = ttnn.linear(k_input, k_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
     # V projection
-    value = ttnn.linear(
-        v_input,
-        v_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    value = ttnn.linear(v_input, v_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
     # Reshape for multi-head attention
     # Q: [batch, q_seq, 960] -> [batch, 12, q_seq, 80]
@@ -800,13 +737,7 @@ def smolvla_expert_attention_tt(
     context = ttnn.to_layout(context, layout=ttnn.TILE_LAYOUT)
 
     # Output projection: 960 -> 720
-    output = ttnn.linear(
-        context,
-        o_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    output = ttnn.linear(context, o_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(context)
 
     return output
@@ -830,18 +761,11 @@ def smolvla_expert_mlp_tt(
         gate_weight,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
         activation="silu",
     )
 
     # Up projection
-    up = ttnn.linear(
-        hidden_states,
-        up_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    up = ttnn.linear(hidden_states, up_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
     # SwiGLU: SiLU(gate) * up
     intermediate = ttnn.mul(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -849,13 +773,7 @@ def smolvla_expert_mlp_tt(
     ttnn.deallocate(up)
 
     # Down projection
-    output = ttnn.linear(
-        intermediate,
-        down_weight,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
-    )
+    output = ttnn.linear(intermediate, down_weight, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(intermediate)
 
     return output
@@ -1010,7 +928,6 @@ def smolvla_action_heads_tt(
         bias=action_out_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=8),
     )
 
     return actions
@@ -1350,7 +1267,6 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=self.tt_embed_params["proj_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(pixel_values)
 
@@ -1429,7 +1345,6 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["qkv_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
 
         # Split QKV and reshape for multi-head attention
@@ -1449,7 +1364,6 @@ class SmolVLAVisionEncoder(nn.Module):
             key,  # Key is already transposed by split_query_key_value_and_split_heads
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(query)
         ttnn.deallocate(key)
@@ -1458,13 +1372,7 @@ class SmolVLAVisionEncoder(nn.Module):
         attn_probs = ttnn.softmax(attn_weights, dim=-1)
         ttnn.deallocate(attn_weights)
 
-        attn_output = ttnn.matmul(
-            attn_probs,
-            value,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-        )
+        attn_output = ttnn.matmul(attn_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(attn_probs)
         ttnn.deallocate(value)
 
@@ -1481,7 +1389,6 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["proj_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(attn_output)
 
@@ -1496,7 +1403,6 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["fc1_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
             activation="gelu",  # SigLIP uses GELU
         )
 
@@ -1507,7 +1413,6 @@ class SmolVLAVisionEncoder(nn.Module):
             bias=layer_params["fc2_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(hidden)
 
@@ -2314,7 +2219,6 @@ class SmolVLAActionHeads(nn.Module):
             bias=self.tt_params["action_in_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
 
     def predict_velocity(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -2361,7 +2265,6 @@ class SmolVLAActionHeads(nn.Module):
             bias=self.tt_params["time_mlp_in_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(sinusoidal_emb)
 
@@ -2373,7 +2276,6 @@ class SmolVLAActionHeads(nn.Module):
             bias=self.tt_params["time_mlp_out_bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
         ttnn.deallocate(hidden)
 
@@ -2995,18 +2897,10 @@ class SmolVLAForActionPrediction(nn.Module):
         if isinstance(projected_features, ttnn.Tensor) and self.tt_vlm_k_proj is not None:
             # TT path
             k_context = ttnn.linear(
-                projected_features,
-                self.tt_vlm_k_proj,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
+                projected_features, self.tt_vlm_k_proj, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
             )
             v_context = ttnn.linear(
-                projected_features,
-                self.tt_vlm_v_proj,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
+                projected_features, self.tt_vlm_v_proj, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
             )
             return k_context, v_context
         elif self.vlm_k_proj is not None:

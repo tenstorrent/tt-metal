@@ -24,7 +24,6 @@ def bert_attention(
         bias=parameters.self.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
 
     (
@@ -38,13 +37,7 @@ def bert_attention(
     )
     ttnn.deallocate(query_key_value_output)
 
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
@@ -52,13 +45,7 @@ def bert_attention(
         attention_scores, attention_mask=attention_mask, head_size=head_size
     )
 
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-    )
+    context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
@@ -73,7 +60,6 @@ def bert_attention(
         bias=parameters.output.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(context_layer)
 
@@ -105,7 +91,6 @@ def bert_intermediate(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         activation="gelu_approx",
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -132,7 +117,6 @@ def bert_output(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
     )
     ttnn.deallocate(hidden_states)
 

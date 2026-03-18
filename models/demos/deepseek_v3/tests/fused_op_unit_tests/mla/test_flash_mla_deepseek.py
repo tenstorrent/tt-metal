@@ -247,7 +247,9 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
     k_chunk_size = 128
     padded_layer_len = nearest_y(max_seq_len // 2 + 1, k_chunk_size)
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
@@ -468,7 +470,9 @@ def test_paged_flash_mla_verify_aliasing_two_step_mesh_sharded_pos_idxs(mesh_dev
 
     scale = (192 + 64) ** -0.5
     sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         q_chunk_size=0,
         k_chunk_size=128,
         exp_approx_mode=False,

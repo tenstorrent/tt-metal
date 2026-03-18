@@ -878,7 +878,6 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     uint32_t /*grid_size_along_c*/) {
     if (height_sharded) {
         ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig matmul_config = {
-            .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
             .in0_block_w = conv_blocking_config.act_block_w_ntiles,
             .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
             .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,
@@ -894,7 +893,6 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
         return matmul_config;
     }
     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig matmul_config = {
-        .compute_with_storage_grid_size = conv_parallelization_config.grid_size,
         .in0_block_w = conv_blocking_config.act_block_w_ntiles,
         .out_subblock_h = conv_blocking_config.out_subblock_h_ntiles,
         .out_subblock_w = conv_blocking_config.out_subblock_w_ntiles,

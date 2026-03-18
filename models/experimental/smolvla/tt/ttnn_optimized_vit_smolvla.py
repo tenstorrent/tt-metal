@@ -93,12 +93,7 @@ def smolvla_patch_embeddings(
 
     # Linear projection: [B*num_patches, patch_size*patch_size*4] -> [B*num_patches, hidden_size]
     patch_embeddings = ttnn.linear(
-        pixel_values,
-        proj_weight,
-        bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
+        pixel_values, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(pixel_values)
 
@@ -146,12 +141,7 @@ def smolvla_attention(
 
     # Fused QKV projection
     query_key_value = ttnn.linear(
-        hidden_states,
-        qkv_weight,
-        bias=qkv_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
+        hidden_states, qkv_weight, bias=qkv_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.reallocate(hidden_states)
 
@@ -170,13 +160,7 @@ def smolvla_attention(
     query = ttnn.mul(query, scale)
 
     # Scaled dot-product attention: (Q / sqrt(d)) @ K^T
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
@@ -184,13 +168,7 @@ def smolvla_attention(
     attention_probs = ttnn.softmax_in_place(attention_scores, numeric_stable=True)
 
     # Attention output: softmax(Q @ K^T / sqrt(d)) @ V
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
-    )
+    context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
@@ -202,12 +180,7 @@ def smolvla_attention(
 
     # Output projection
     attention_output = ttnn.linear(
-        context_layer,
-        proj_weight,
-        bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
+        context_layer, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(context_layer)
 
@@ -249,18 +222,12 @@ def smolvla_mlp(
         bias=fc1_bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
         activation="gelu",
     )
 
     # Down projection
     output = ttnn.linear(
-        intermediate,
-        fc2_weight,
-        bias=fc2_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=CORE_GRID,
+        intermediate, fc2_weight, bias=fc2_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
     )
     ttnn.deallocate(intermediate)
 

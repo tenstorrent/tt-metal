@@ -264,7 +264,14 @@ class TTNNSelfAttention(TTNNModule):
         )
         new_self_attention.sdpa = TTNNSDPAAttention()
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(new_self_attention.core_grid.x, new_self_attention.core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(new_self_attention.core_grid.x - 1, new_self_attention.core_grid.y - 1),
+                    )
+                }
+            ),
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct
@@ -331,7 +338,14 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
         )
         new_self_attention.sdpa = TTNNSDPAAttention()
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(new_self_attention.core_grid.x, new_self_attention.core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(new_self_attention.core_grid.x - 1, new_self_attention.core_grid.y - 1),
+                    )
+                }
+            ),
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct
@@ -373,7 +387,9 @@ class TTNNWhisperAttention(TTNNModule):
         self.sdpa = TTNNSDPAAttention()
         self.core_grid = ttnn.CoreGrid(y=8, x=8)
         self.sdpa.program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1))}
+            ),
             q_chunk_size=256,
             k_chunk_size=256,
             exp_approx_mode=False,

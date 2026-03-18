@@ -83,7 +83,9 @@ class TtnnBGEEmbeddings:
             block_h = 1
         # Create dynamic program config matching the static one but with correct block_h
         dynamic_layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             subblock_w=dim_t__x,
             block_h=block_h,
             block_w=dim_t__x,

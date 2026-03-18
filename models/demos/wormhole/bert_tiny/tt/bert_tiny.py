@@ -24,7 +24,6 @@ def bert_attention(
         hidden_states,
         parameters.self.query.weight,
         bias=parameters.self.query.bias,
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -39,7 +38,6 @@ def bert_attention(
         hidden_states,
         parameters.self.key.weight,
         bias=parameters.self.key.bias,
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -54,7 +52,6 @@ def bert_attention(
         hidden_states,
         parameters.self.value.weight,
         bias=parameters.self.value.bias,
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -89,7 +86,6 @@ def bert_attention(
         self_output,
         parameters.output.dense.weight,
         bias=parameters.output.dense.bias,
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -117,7 +113,6 @@ def bert_intermediate(
         parameters.dense.weight,
         bias=parameters.dense.bias,
         activation="gelu",
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -136,7 +131,6 @@ def bert_output(
         hidden_states,
         parameters.dense.weight,
         bias=parameters.dense.bias,
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )
@@ -278,7 +272,6 @@ def bert_for_question_answering(
         qa_outputs,
         parameters.qa_outputs.weight,
         bias=parameters.qa_outputs.bias,
-        core_grid=device.core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
     )

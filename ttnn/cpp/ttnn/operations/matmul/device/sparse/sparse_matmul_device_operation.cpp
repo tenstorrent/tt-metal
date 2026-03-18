@@ -259,7 +259,6 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     std::optional<const DataType> dtype,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const CoreCoord>& user_core_coord,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
@@ -271,7 +270,6 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
         dtype,
         compute_kernel_config,
-        user_core_coord,
         output_tile,
         global_cb,
         sub_device_id};
@@ -330,7 +328,6 @@ SparseMatmulParams create_sparse_matmul_attributes(
         parameters.output_dtype,
         parameters.compute_kernel_config,
         /*untilize_out=*/false,
-        parameters.user_core_coord,
         /*user_fused_activation=*/std::nullopt,
         /*user_run_batched=*/false,
         /*transpose_a=*/false,
@@ -349,7 +346,6 @@ SparseMatmulParams create_sparse_matmul_attributes(
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
         matmul_struct.compute_kernel_config,
-        matmul_struct.user_core_coord,
         matmul_struct.output_tile,
         matmul_struct.global_cb,
         matmul_struct.sub_device_id};

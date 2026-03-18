@@ -174,7 +174,6 @@ def main():
             bias=fused_qkv_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
 
         (
@@ -193,7 +192,6 @@ def main():
             key,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
         ttnn.deallocate(query)
         ttnn.deallocate(key)
@@ -207,7 +205,6 @@ def main():
             value,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat8_b,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
         ttnn.deallocate(attention_probs)
 
@@ -223,7 +220,6 @@ def main():
             bias=self_output_bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
-            core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
         )
         ttnn.deallocate(context_layer_after_concatenate_heads)
 

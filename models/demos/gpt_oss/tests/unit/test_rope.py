@@ -1606,7 +1606,9 @@ def test_sdpa_with_large_q_values(mesh_device, device_params, reset_seeds):
     )
 
     sdpa_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+        ),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
         q_chunk_size=32,
         k_chunk_size=32,
     )
@@ -1948,8 +1950,8 @@ def test_attention_chain_with_yarn_scaling(mesh_device, device_params, reset_see
 
         # Step 3: Run SDPA
         sdpa_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(
-                8, 8
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
             ),  # Safe limit: max 8 per dimension to avoid Galaxy hangs
             q_chunk_size=32,
             k_chunk_size=32,

@@ -276,7 +276,9 @@ class ModelOptimisations:
             self.default_matmul_overrides.update(
                 {
                     "final_upsample_mm_config1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                        compute_with_storage_grid_size=(5, 4),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}
+                        ),
                         in0_block_w=2,
                         out_subblock_h=4,
                         out_subblock_w=2,
@@ -292,7 +294,9 @@ class ModelOptimisations:
                         untilize_out=False,
                     ),
                     "final_upsample_mm_config2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                        compute_with_storage_grid_size=(5, 4),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}
+                        ),
                         in0_block_w=2,
                         out_subblock_h=4,
                         out_subblock_w=2,
@@ -313,7 +317,9 @@ class ModelOptimisations:
             self.default_matmul_overrides.update(
                 {
                     "final_upsample_mm_config1": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(8, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                        ),
                         in0_block_w=8,
                         out_subblock_h=1,
                         out_subblock_w=4,
@@ -326,7 +332,9 @@ class ModelOptimisations:
                         transpose_mcast=False,
                     ),
                     "final_upsample_mm_config2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                        compute_with_storage_grid_size=(4, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}
+                        ),
                         in0_block_w=4,
                         out_subblock_h=4,
                         out_subblock_w=1,

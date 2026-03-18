@@ -97,7 +97,6 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             self.vision_projection_weight,
             bias=self.vision_projection_bias,
             compute_kernel_config=self.configuration.compute_kernel_config_hifi4,
-            core_grid=None,
             dtype=ttnn.bfloat16,
             program_config=pc,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

@@ -409,7 +409,9 @@ def _resolve_2d_config(config: RMSNorm2DConfig) -> RMSNorm2DConfig:
 
     if config.decode_progcfg is None:
         to_set["decode_progcfg"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_ln[1] - 1, core_grid_ln[0] - 1))}
+            ),
             subblock_w=(hidden_size_per_device // num_cores_ln) // TILE_SIZE,
             block_h=1,
             block_w=(hidden_size_per_device // num_cores_ln) // TILE_SIZE,

@@ -20,7 +20,9 @@ def update_model_config(config, batch_size):
 
     program_configs = {
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=6,
@@ -30,7 +32,9 @@ def update_model_config(config, batch_size):
             fused_activation=None,
         ),
         "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=6,
@@ -38,7 +42,9 @@ def update_model_config(config, batch_size):
             per_core_N=12,
         ),
         "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=12,
             out_subblock_h=4,
             out_subblock_w=2,
@@ -46,7 +52,9 @@ def update_model_config(config, batch_size):
             per_core_N=2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=4,
             out_subblock_h=2,
             out_subblock_w=4,
@@ -56,7 +64,9 @@ def update_model_config(config, batch_size):
             fused_activation=None,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=8,
@@ -66,7 +76,9 @@ def update_model_config(config, batch_size):
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=16,
             out_subblock_h=2,
             out_subblock_w=4,
@@ -76,14 +88,18 @@ def update_model_config(config, batch_size):
             fused_activation=None,
         ),
         "layernorm_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             subblock_w=4,
             block_h=12,
             block_w=4,
             inplace=True,
         ),
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             subblock_w=6,
             block_h=24,
             block_w=12,

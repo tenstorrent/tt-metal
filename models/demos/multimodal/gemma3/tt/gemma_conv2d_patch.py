@@ -115,7 +115,6 @@ class TtGemmaConv2dPatch(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
         )
 
         ttnn.deallocate(x)

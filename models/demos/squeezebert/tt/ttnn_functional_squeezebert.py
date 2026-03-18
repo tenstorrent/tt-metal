@@ -208,13 +208,7 @@ def squeezebert_attention(
     ttnn.deallocate(mixed_key_layer)
     ttnn.deallocate(mixed_value_layer)
 
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
@@ -222,13 +216,7 @@ def squeezebert_attention(
         attention_scores, attention_mask=attention_mask, head_size=head_size
     )
 
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-    )
+    context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     context_layer = transpose_output(config, context_layer, device)
 
     return context_layer

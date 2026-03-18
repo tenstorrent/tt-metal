@@ -267,7 +267,7 @@ def test_program_config_to_dict_with_to_json():
 def test_program_config_to_dict_without_to_json():
     """Test program_config_to_dict for a config that lacks to_json (SDPAProgramConfig)."""
     cfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         q_chunk_size=256,
         k_chunk_size=256,
     )

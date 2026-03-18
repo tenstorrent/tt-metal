@@ -52,7 +52,6 @@ class TtnnSentenceBertSelfAttention:
         ) = ttnn.experimental.split_query_key_value_and_split_heads(
             query_key_value_output,
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
             num_heads=num_heads,
         )
         ttnn.deallocate(query_key_value_output)

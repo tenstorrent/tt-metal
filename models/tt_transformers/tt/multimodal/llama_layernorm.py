@@ -74,7 +74,9 @@ class TtLayerNorm(LightweightModule):
                 use_height_and_width_as_shard_shape=True,
             )
             self.sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[core_grid.x, core_grid.y],
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+                ),
                 subblock_w=shard_width_hidden_dim_across_32_cores // TILE,
                 block_h=SHARD_HEIGHT // TILE,
                 block_w=shard_width_hidden_dim_across_32_cores // TILE,

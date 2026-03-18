@@ -46,7 +46,9 @@ class TtnnBGESelfAttention:
 
         # Create dynamic query_key_value program config
         dynamic_query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             in0_block_w=dim_t__x // seqL_factor,  # 4 for seq_len <= 384, 2 for seq_len > 384
             out_subblock_h=1,
             out_subblock_w=dim_t__x // seqL_factor,  # 4 for seq_len <= 384, 2 for seq_len > 384
@@ -77,7 +79,6 @@ class TtnnBGESelfAttention:
         ) = ttnn.experimental.split_query_key_value_and_split_heads(
             query_key_value_output,
             memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
             num_heads=num_heads,
         )
 
@@ -88,7 +89,9 @@ class TtnnBGESelfAttention:
 
         # Create dynamic pre_softmax config
         dynamic_pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             in0_block_w=head_size_t,  # head_size in tiles
             out_subblock_h=1,
             out_subblock_w=seqL_t // 2,  # Dynamic based on seq_len
@@ -109,7 +112,9 @@ class TtnnBGESelfAttention:
 
         # Create dynamic softmax config
         dynamic_softmax_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             subblock_w=seqL_t,  # Dynamic based on seq_len
             block_h=head_seqL_t__x,  # Calculate dynamically
             block_w=seqL_t,  # Calculate dynamically
