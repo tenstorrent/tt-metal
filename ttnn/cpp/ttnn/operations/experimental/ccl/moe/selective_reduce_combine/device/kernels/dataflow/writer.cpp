@@ -8,27 +8,12 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
-#include <tools/profiler/kernel_profiler.hpp>
-
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
 using namespace ttnn::operations::ccl::common;
 
 // packet size bytes 4352
-
-FORCE_INLINE void noc_semaphore_wait_min_waiting(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
-    RECORD_NOC_EVENT(NocEventType::SEMAPHORE_WAIT, false, -1);
-
-    DeviceZoneScopedN("Combine-writer-waiting");
-
-    WAYPOINT("NSMW");
-    do {
-        invalidate_l1_cache();
-    } while ((*sem_addr) < val);
-    WAYPOINT("NSMD");
-}
-
 namespace detail {
 
 template <
@@ -215,7 +200,6 @@ void kernel_main() {
 
     auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
-    bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
@@ -244,7 +228,7 @@ void kernel_main() {
                 mesh_cols,
                 replicate_axis>(st);
 
-            noc_semaphore_wait_min_waiting(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+            noc_semaphore_wait_min(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
 
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =

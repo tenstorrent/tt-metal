@@ -988,11 +988,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tile_height", tile_height},
         {"tile_width", tile_width},
         {"tile_width_size_bytes", tile_width * tt::datum_size(tilize_output_dataformat)},
-<<<<<<< HEAD
         {"buffer_size_total_tokens", buffer_size_total_tokens},  // Hardware buffer is always sized for 512 tokens
-=======
-        {"num_tokens_total", tokens},  // tokenizer input tensor shape
->>>>>>> 6ca7570c90 (  - Built helper functions for selective_combine encapsulation)
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", output_width_shard_dim},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
