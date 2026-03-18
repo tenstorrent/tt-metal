@@ -878,6 +878,16 @@ void TestDevice::create_sender_kernels() {
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
+        // Determine VC ID for this sender (all configs on a core use same vc_id)
+        // use_vc2=true on a sender config implies vc_id=2
+        uint8_t sender_vc_id = 0;
+        for (const auto& [config, _] : sender.configs_) {
+            if (config.use_vc2) {
+                sender_vc_id = 2;
+                break;
+            }
+        }
+
         // Compile-time args (FLOW_CONTROL_ENABLED removed - now handled per-traffic-config)
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled,
@@ -888,7 +898,8 @@ void TestDevice::create_sender_kernels() {
             num_local_sync_cores,                                /* num local sync cores */
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
-            num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
+            num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+            sender_vc_id                                         /* VC_ID */
         };
 
         // Runtime args with connection type information
