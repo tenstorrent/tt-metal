@@ -87,7 +87,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
-    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }} [bh-dram-init:sequence]
+    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }} [bh-dram-core:0-7]
     runs-on:
       - in-service
       - arch-blackhole
@@ -126,74 +126,48 @@ jobs:
         timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
-      - name: Summarize Blackhole DRAM init selector sequence
+      - name: Summarize Blackhole DRAM core iteration
         run: |
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          ## Blackhole DRAM init selector sequence
+          ## Blackhole DRAM core iteration
 
-          - `none`
-          - `dram_bank_to_noc_tables`
-          - `dram_bank_to_noc_tables,dram_core_info`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init`
-          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read`
+          - DRAM core index env: `TT_METAL_BH_DRAM_CORE_INDEX`
+          - Iteration order: `0 1 2 3 4 5 6 7`
+          - Full selector: `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read`
 
           EOF
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          selectors=(
-            "none"
-            "dram_bank_to_noc_tables"
-            "dram_bank_to_noc_tables,dram_core_info"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init"
-            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read"
-          )
+          dram_core_indices=(0 1 2 3 4 5 6 7)
+          full_selector="dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read"
 
           mapfile -t test_commands <<'COMMANDS_EOF'
           ${{ matrix.test-group.cmd }}
           COMMANDS_EOF
 
-          failed_selectors=()
+          failed_core_indices=()
           failed_commands=()
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "## Selector run results" >> "$GITHUB_STEP_SUMMARY"
+          echo "## DRAM core run results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          for selector in "${selectors[@]}"; do
-            echo "Running selector string: $selector"
+          for dram_core_index in "${dram_core_indices[@]}"; do
+            echo "Running DRAM core index: $dram_core_index"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "### \`$selector\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "### \`TT_METAL_BH_DRAM_CORE_INDEX=$dram_core_index\`" >> "$GITHUB_STEP_SUMMARY"
 
-            export TT_METAL_BH_DRAM_INIT_CASE="$selector"
-            selector_failed=0
+            export TT_METAL_BH_DRAM_CORE_INDEX="$dram_core_index"
+            export TT_METAL_BH_DRAM_INIT_CASE="$full_selector"
+            core_failed=0
 
             for command in "${test_commands[@]}"; do
               if [[ -z "$command" ]]; then
                 continue
               fi
 
-              echo "::group::[$selector] $command"
+              echo "::group::[dram_core_index=$dram_core_index] $command"
               set +e
               bash -lc "$command"
               status=$?
@@ -201,30 +175,30 @@ jobs:
               echo "::endgroup::"
 
               if [[ $status -ne 0 ]]; then
-                selector_failed=1
-                failed_commands+=("$selector :: exit $status :: $command")
-                echo "::error title=Blackhole selector command failed::selector=$selector exit_code=$status command=$command"
+                core_failed=1
+                failed_commands+=("dram_core_index=$dram_core_index :: exit $status :: $command")
+                echo "::error title=Blackhole DRAM core command failed::dram_core_index=$dram_core_index exit_code=$status command=$command"
               fi
             done
 
-            if [[ $selector_failed -eq 0 ]]; then
+            if [[ $core_failed -eq 0 ]]; then
               echo "- pass" >> "$GITHUB_STEP_SUMMARY"
             else
-              failed_selectors+=("$selector")
+              failed_core_indices+=("$dram_core_index")
               echo "- fail" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
 
-          if [[ ${#failed_selectors[@]} -ne 0 ]]; then
+          if [[ ${#failed_core_indices[@]} -ne 0 ]]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "## Failed selectors" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Failed DRAM core indices" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            for selector in "${failed_selectors[@]}"; do
-              echo "- \`$selector\`" >> "$GITHUB_STEP_SUMMARY"
+            for dram_core_index in "${failed_core_indices[@]}"; do
+              echo "- \`$dram_core_index\`" >> "$GITHUB_STEP_SUMMARY"
             done
 
-            printf 'Failed selectors:\n' >&2
-            printf '  %s\n' "${failed_selectors[@]}" >&2
+            printf 'Failed DRAM core indices:\n' >&2
+            printf '  %s\n' "${failed_core_indices[@]}" >&2
             printf 'Failed commands:\n' >&2
             printf '  %s\n' "${failed_commands[@]}" >&2
             exit 1

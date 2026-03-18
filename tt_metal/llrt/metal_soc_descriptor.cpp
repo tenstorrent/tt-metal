@@ -4,10 +4,46 @@
 
 #include "llrt/metal_soc_descriptor.hpp"
 
+#include <cstdlib>
+
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <umd/device/types/arch.hpp>
+
+namespace {
+
+constexpr const char* kBlackholeDramCoreIndexEnv = "TT_METAL_BH_DRAM_CORE_INDEX";
+
+size_t get_selected_blackhole_dram_core_index(size_t num_dram_views) {
+    const char* env_value = std::getenv(kBlackholeDramCoreIndexEnv);
+    if (env_value == nullptr || *env_value == '\0') {
+        return 0;
+    }
+
+    char* parse_end = nullptr;
+    const long parsed_value = std::strtol(env_value, &parse_end, 10);
+    TT_FATAL(
+        parse_end != env_value && *parse_end == '\0',
+        "{} must be an integer in range [0, 7], got '{}'",
+        kBlackholeDramCoreIndexEnv,
+        env_value);
+    TT_FATAL(
+        parsed_value >= 0 && parsed_value <= 7,
+        "{} must be in range [0, 7], got '{}'",
+        kBlackholeDramCoreIndexEnv,
+        env_value);
+    TT_FATAL(
+        static_cast<size_t>(parsed_value) < num_dram_views,
+        "{}={} exceeds available DRAM view count {}",
+        kBlackholeDramCoreIndexEnv,
+        parsed_value,
+        num_dram_views);
+
+    return static_cast<size_t>(parsed_value);
+}
+
+}  // namespace
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
@@ -22,8 +58,10 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_
 std::vector<CoreCoord> metal_SocDescriptor::get_preferred_worker_cores_for_dram_views(uint8_t noc) const {
     std::vector<CoreCoord> preferred_cores;
     preferred_cores.reserve(1);
-    if (this->get_num_dram_views() > 0) {
-        preferred_cores.push_back(this->get_preferred_worker_core_for_dram_view(0, noc));
+    const size_t num_dram_views = this->get_num_dram_views();
+    if (num_dram_views > 0) {
+        const size_t dram_view = get_selected_blackhole_dram_core_index(num_dram_views);
+        preferred_cores.push_back(this->get_preferred_worker_core_for_dram_view(dram_view, noc));
     }
     return preferred_cores;
 }
