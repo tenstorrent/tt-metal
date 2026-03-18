@@ -34,7 +34,7 @@ ORIGINAL_CWD = Path.cwd().resolve()
 class RankfileSyntax(Enum):
     """MPI rankfile syntax variants for different mpirun versions."""
 
-    MAP_BY_RANKFILE_FILE = "map_by_rankfile_file"  # --map-by rankfile:file=<path> (OpenMPI 5.x / PRRTE)
+    MAP_BY_RANKFILE_FILE = "map_by_rankfile_file"  # --map-by rankfile:FILE=<path> (OpenMPI 5.x / PRRTE)
     RANKFILE = "rankfile"  # --rankfile <path> (older OpenMPI)
     MCA_RMAPS_RANKFILE_PATH = "mca_rmaps_rankfile_path"  # -mca rmaps_rankfile_path <path> (fallback)
 
@@ -70,18 +70,18 @@ def build_rankfile_args(syntax: RankfileSyntax, rankfile: Path) -> List[str]:
         rankfile: Path to the rankfile
 
     Returns:
-        List of MPI command-line arguments (e.g., ["--map-by", "rankfile:file=/path/to/rankfile"])
+        List of MPI command-line arguments (e.g., ["--map-by", "rankfile:FILE=/path/to/rankfile"])
 
     Examples:
         >>> build_rankfile_args(RankfileSyntax.MAP_BY_RANKFILE_FILE, Path("/tmp/rankfile"))
-        ['--map-by', 'rankfile:file=/tmp/rankfile']
+        ['--map-by', 'rankfile:FILE=/tmp/rankfile']
         >>> build_rankfile_args(RankfileSyntax.RANKFILE, Path("/tmp/rankfile"))
         ['--rankfile', '/tmp/rankfile']
     """
     rankfile_str = str(rankfile.resolve())
 
     if syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
-        return ["--map-by", f"rankfile:file={rankfile_str}"]
+        return ["--map-by", f"rankfile:FILE={rankfile_str}"]
     elif syntax == RankfileSyntax.RANKFILE:
         return ["--rankfile", rankfile_str]
     elif syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH:
@@ -118,7 +118,7 @@ def get_mpi_version(mpi_launcher: str, subprocess_run=subprocess.run) -> Optiona
 def detect_rankfile_syntax(mpi_launcher: str, subprocess_run=subprocess.run) -> RankfileSyntax:
     """Detect which rankfile syntax variant the MPI launcher supports.
 
-    Uses MPI version when available: OpenMPI 5.x uses --map-by rankfile:file=,
+    Uses MPI version when available: OpenMPI 5.x uses --map-by rankfile:FILE=,
     older versions use --rankfile. Falls back to --help parsing if version
     cannot be determined.
 
@@ -1057,7 +1057,7 @@ def legacy_flow(
 
         For multi-host setups, you typically need BOTH:
             tt-run --rank-binding mesh_config.yaml \\
-                   --mpi-args "--host nodeA,nodeB --map-by rankfile:file=/etc/mpirun/rankfile" \\
+                   --mpi-args "--host nodeA,nodeB --map-by rankfile:FILE=/etc/mpirun/rankfile" \\
                    ./my_app
 
         The rank-binding configures what each MPI rank "sees" in terms of TT-Metal devices,
@@ -1306,7 +1306,7 @@ def legacy_flow(
     # Check if user already specified rankfile in mpi_args to avoid conflicts
     if rankfile:
         # Check for existing rankfile-related args in user's mpi_args
-        rankfile_keywords = ["--rankfile", "--map-by", "rankfile:file=", "rmaps_rankfile_path"]
+        rankfile_keywords = ["--rankfile", "--map-by", "rankfile:FILE=", "rmaps_rankfile_path"]
         has_existing_rankfile = False
         if mpi_args:
             mpi_args_str = " ".join(mpi_args)
@@ -1536,7 +1536,7 @@ def new_mode_flow(
     if phase2_mock_binding_path:
         phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
     mpi_launcher = get_mpi_launcher()
-    # Use version-based rankfile syntax (--map-by rankfile:file= for OpenMPI 5+, --rankfile for older)
+    # Use version-based rankfile syntax (--map-by rankfile:FILE= for OpenMPI 5+, --rankfile for older)
     rankfile_args = inject_rankfile_mpi_args(
         rankfile_path,
         mpi_args or [],

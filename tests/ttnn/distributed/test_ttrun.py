@@ -470,7 +470,7 @@ class TestRankfileInjection:
 
         assert len(args) == 2
         assert args[0] == "--map-by"
-        assert args[1] == f"rankfile:file={rankfile.resolve()}"
+        assert args[1] == f"rankfile:FILE={rankfile.resolve()}"
 
     def test_build_rankfile_args_rankfile(self, temp_dir):
         """Test build_rankfile_args with RANKFILE syntax."""
@@ -523,7 +523,7 @@ class TestRankfileInjection:
 
         # Should prepend rankfile args
         assert result[0] == "--map-by"
-        assert result[1] == f"rankfile:file={rankfile.resolve()}"
+        assert result[1] == f"rankfile:FILE={rankfile.resolve()}"
         assert result[2:] == base_args
 
     def test_legacy_flow_rankfile_conflict(self, runner, sample_rank_binding_yaml, temp_dir):
@@ -589,16 +589,16 @@ class TestDetectRankfileSyntax:
     """Test rankfile syntax detection."""
 
     def test_detect_rankfile_syntax_map_by(self, temp_dir):
-        """Test detection of --map-by rankfile:file= syntax."""
+        """Test detection of --map-by rankfile:FILE= syntax."""
         from unittest.mock import MagicMock
 
-        # Mock subprocess.run to return help text with --map-by rankfile:file=
+        # Mock subprocess.run to return help text with --map-by rankfile:FILE=
         mock_result = MagicMock()
         mock_result.stdout = """
 OpenMPI/PRRTE help text
 --map-by <policy>[:<options>]
   Map processes according to the specified policy.
-  rankfile:file=<path>  Use rankfile for mapping
+  rankfile:FILE=<path>  Use rankfile for mapping
 """
         mock_result.stderr = ""
 

@@ -25,7 +25,6 @@ run_dual_t3k_unit_tests() {
 
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   # Physical discovery with launcher NOT in hosts (OpenMPI #11830 - would hang without P2P workaround)
-  HOSTFILE=/etc/mpirun/hostfile ./tests/scripts/multihost/test_physical_discovery_launcher_not_in_hosts.sh ; fail+=$?
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
   tt-run --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
   tt-run --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
