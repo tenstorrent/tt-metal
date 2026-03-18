@@ -139,7 +139,7 @@ class DeepseekMinimalBroadcast:
                 ring_size = mesh_rows
                 ring_index = row
 
-                enable_torus = sender_row == 0 or sender_row == mesh_rows - 1 and is_torus
+                enable_torus = (sender_row == 0 or sender_row == mesh_rows - 1) and is_torus
 
                 if enable_torus:
                     num_targets_forward = (ring_size - 1) // 2
@@ -195,6 +195,7 @@ class DeepseekMinimalBroadcast:
                 # Determine fabric connections
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
                 dst_nodes = []
+                dst_coords = []  # For debugging
 
                 # Primary axis connections (forward and backward in column)
                 if num_targets_forward > 0:
@@ -204,6 +205,7 @@ class DeepseekMinimalBroadcast:
                     else:
                         forward_coord = ttnn.MeshCoordinate((row + 1) % mesh_rows, col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
+                    dst_coords.append(("forward", forward_coord))
 
                 if num_targets_backward > 0:
                     if enable_torus and sender_row == 0 and row == sender_row:
@@ -212,6 +214,7 @@ class DeepseekMinimalBroadcast:
                     else:
                         backward_coord = ttnn.MeshCoordinate((row - 1 + mesh_rows) % mesh_rows, col)
                     dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
+                    dst_coords.append(("backward", backward_coord))
 
                 # Secondary axis connection (for sender to secondary sender)
                 if has_secondary_target:
@@ -220,8 +223,18 @@ class DeepseekMinimalBroadcast:
                     )  # If sender is in col 0, secondary target is col 1, and vice versa
                     secondary_coord = ttnn.MeshCoordinate(row, secondary_col)  # Other column
                     dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
+                    dst_coords.append(("secondary", secondary_coord))
 
                 num_connections = len(dst_nodes)
+
+                # Debug: Print fabric connections for sender
+                if num_connections > 0 and is_sender:
+                    print(f"\n=== Fabric Connections for Sender at {coord} ===")
+                    print(f"Fabric Node ID: {fabric_node_id}")
+                    print(f"enable_torus: {enable_torus}, mesh: {mesh_rows}x{mesh_cols}")
+                    for i, (conn_type, dst_coord) in enumerate(dst_coords):
+                        print(f"  {conn_type}: {coord} -> {dst_coord}, fabric_node={dst_nodes[i]}")
+                    print("=" * 50)
 
                 # Writer runtime args - moved to common args since CCL only uses one core
                 wait_output_semaphore = is_secondary_sender or is_receiver
