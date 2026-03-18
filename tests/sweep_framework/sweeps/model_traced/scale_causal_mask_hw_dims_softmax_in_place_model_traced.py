@@ -18,6 +18,21 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 300
+
+# Load traced configurations from real model tests (V2 format)
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("scale_causal_mask_hw_dims_softmax_in_place")
+
+parameters = {}
+
+# This op requires HEIGHT_SHARDED input + SoftmaxShardedMultiCoreProgramConfig;
+# no simple sample suite is possible. Only traced configs are used.
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
+
+
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
     if mesh_shape:

@@ -20,6 +20,35 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 300
+
+# Load traced configurations from real model tests (V2 format)
+loader = MasterConfigLoader()
+# Default: Run exact traced configs from real models with all parameter values in vectors
+model_traced_params = loader.get_suite_parameters("matmul")
+
+# Parameters provided to the test vector generator are defined here.
+parameters = {
+    # Quick sample test with basic configurations for fast validation
+    "model_traced_sample": {
+        "input_a_shape": [(1, 1, 32, 32)],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_shape": [(1, 1, 32, 32)],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],
+    },
+}
+
+# Only add model_traced suite if it has valid configurations
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
+
 
 def mesh_device_fixture():
     """
@@ -75,7 +104,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     # Don't pass output_memory_config to build_op_kwargs — it would add memory_config
     # before we can clean up sharded configs below.
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation"})
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"})
 
     # Skip traced program_config: block dimensions (out_block_w, per_core_N, etc.) are computed
     # for the original device grid and don't match the local device. Let ttnn auto-compute.
@@ -107,10 +136,16 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
-    # Note: activation (e.g., gelu_approx) is fused via program_config in traced models.
-    # Since program_config is excluded (grid/block dims are device-specific), the TTNN matmul
-    # runs without fused activation. Skip applying activation to the golden reference too,
-    # so both sides compare plain matmul results.
+    # Apply activation to golden if specified (matches what ttnn.matmul does with activation kwarg)
+    activation = op_kwargs.get("activation")
+    if activation and activation != "__ABSENT__":
+        act_str = str(activation).lower()
+        if "gelu" in act_str:
+            torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate="tanh")
+        elif "relu" in act_str:
+            torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+        elif "silu" in act_str:
+            torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)

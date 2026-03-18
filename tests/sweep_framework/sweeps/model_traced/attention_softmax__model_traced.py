@@ -18,6 +18,29 @@ from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 300
+
+# Load traced configurations from real model tests (V2 format)
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("transformer::attention_softmax_")
+
+# Parameters provided to the test vector generator are defined here.
+parameters = {
+    "model_traced_sample": {
+        "input_a_shape": [(1, 1, 32, 32)],
+        "input_a_dtype": [ttnn.bfloat16],
+        "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "storage_type": ["StorageType::DEVICE"],
+    },
+}
+
+# Only add model_traced suite if it has valid configurations
+if model_traced_params:
+    parameters["model_traced"] = model_traced_params
+
+
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
     if mesh_shape:
