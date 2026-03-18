@@ -24,6 +24,8 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 MAX_NUM_LINKS = 2
+CCL_TILE_H = 32
+CCL_TILE_W = 32
 
 WRITER_COMMON_RT_KEYS = (
     "intermediate_buffer_address",
@@ -231,14 +233,12 @@ class AllReduceConfig:
             )
 
         self.total_num_tiles = input_num_pages // 32
-        inter_sample = self.intermediate_tensors_per_device[0]
-        inter_h, inter_w = inter_sample.tile.tile_shape
         self.element_size = 2
-        self.tile_size_bytes = inter_h * inter_w * self.element_size
+        self.tile_size_bytes = CCL_TILE_H * CCL_TILE_W * self.element_size
         self.chunk = resolve_chunk_config(self.total_num_tiles, self.tile_size_bytes, chunk_num_tiles)
 
         self.data_format = input_sample.dtype
-        self.standard_tile_descriptor = ttnn.TileDescriptor(inter_h, inter_w)
+        self.standard_tile_descriptor = ttnn.TileDescriptor(CCL_TILE_H, CCL_TILE_W)
 
         # Global semaphore addresses are identical across devices.
         sem_addrs = [ttnn.get_global_semaphore_address(semaphores[i]) for i in range(self.num_links)]
@@ -362,6 +362,15 @@ class AllReduceConfig:
             self.remote_data_cb_id, self.intermediate_tensors_per_device[idx]
         )
         remote_cb.core_ranges = core_set
+        remote_cb.total_size = self.total_num_tiles * self.tile_size_bytes
+        remote_cb.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=self.remote_data_cb_id,
+                data_format=self.data_format,
+                page_size=self.tile_size_bytes,
+                tile=self.standard_tile_descriptor,
+            )
+        ]
 
         output_cb = ttnn.cb_descriptor_from_sharded_tensor(self.output_cb_id, self.output_tensors_per_device[idx])
         output_cb.core_ranges = core_set
@@ -413,6 +422,81 @@ class AllReduceConfig:
         return self._per_device[coord]["worker_core_set"]
 
 
+class BypassAllReduceConfig:
+    """Skip-CCL shim that preserves the AllReduceConfig interface."""
+
+    def __init__(
+        self,
+        mesh_device,
+        input_tensor_mesh,
+        local_data_cb_id=0,
+        remote_data_cb_id=1,
+        output_cb_id=3,
+        sync_cb_id=4,
+        residual_cb_id=5,
+        temp_cb_id=6,
+        num_links=1,
+    ):
+        self.mesh_device = mesh_device
+        self.input_tensor_mesh = input_tensor_mesh
+        self.num_links = int(num_links)
+        self.local_data_cb_id = int(local_data_cb_id)
+        self.remote_data_cb_id = int(remote_data_cb_id)
+        self.output_cb_id = int(output_cb_id)
+        self.sync_cb_id = int(sync_cb_id)
+        self.residual_cb_id = int(residual_cb_id)
+        self.temp_cb_id = int(temp_cb_id)
+
+        if self.num_links < 1 or self.num_links > MAX_NUM_LINKS:
+            raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {self.num_links}")
+
+        self._per_device = {}
+        input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        mesh_rows, mesh_cols = mesh_device.shape
+        for row in range(mesh_rows):
+            for col in range(mesh_cols):
+                coord = ttnn.MeshCoordinate(row, col)
+                idx = row * mesh_cols + col
+                device = input_tensors_per_device[idx].device()
+                input_shard_grid = input_tensors_per_device[idx].memory_config().shard_spec.grid
+                shard_grid_start = input_shard_grid.bounding_box().start
+                worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
+                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
+                worker_core_physical = device.worker_core_from_logical_core(worker_core)
+                self._per_device[coord] = {
+                    "worker_core": worker_core,
+                    "worker_core_set": worker_core_set,
+                    "worker_core_physical": worker_core_physical,
+                }
+
+    def get_brisc_ct_args(self, coord):
+        return _reader_named_ct_schema(num_links=self.num_links)
+
+    def get_ncrisc_ct_args(self, coord):
+        return _writer_named_ct_schema(num_links=self.num_links)
+
+    def get_trisc_ct_args(self, coord):
+        return _compute_named_ct_schema()
+
+    def get_brisc_common_rt_args(self, coord):
+        return _schema_to_rt_list(_reader_common_rt_schema(), READER_COMMON_RT_KEYS)
+
+    def get_ncrisc_common_rt_args(self, coord):
+        return _schema_to_rt_list(_writer_common_rt_schema(), WRITER_COMMON_RT_KEYS)
+
+    def get_ncrisc_per_core_rt_args(self, coord, program, core):
+        return []
+
+    def get_cb_descriptors(self, coord):
+        return []
+
+    def get_worker_core(self, coord):
+        return self._per_device[coord]["worker_core"]
+
+    def get_worker_core_set(self, coord):
+        return self._per_device[coord]["worker_core_set"]
+
+
 class DeepseekMinimalAllReduce:
     @staticmethod
     def golden(input_tensors, residual_tensor=None):
@@ -420,6 +504,70 @@ class DeepseekMinimalAllReduce:
         if residual_tensor is not None:
             result += residual_tensor
         return result
+
+    @staticmethod
+    def get_num_semaphores(num_links=1):
+        num_links = int(num_links)
+        if num_links < 1 or num_links > MAX_NUM_LINKS:
+            raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {num_links}")
+        return num_links
+
+    @staticmethod
+    def configure(
+        mesh_device,
+        input_tensor_mesh,
+        intermediate_tensor=None,
+        output_tensor=None,
+        semaphores=None,
+        cluster_axis=0,
+        num_links=1,
+        chunk_num_tiles=None,
+        local_data_cb_id=0,
+        remote_data_cb_id=1,
+        output_cb_id=3,
+        sync_cb_id=4,
+        residual_tensor_mesh=None,
+        residual_cb_id=5,
+        temp_cb_id=6,
+        skip_local_push=False,
+        skip_ccl=False,
+    ):
+        if skip_ccl:
+            return BypassAllReduceConfig(
+                mesh_device=mesh_device,
+                input_tensor_mesh=input_tensor_mesh,
+                local_data_cb_id=local_data_cb_id,
+                remote_data_cb_id=remote_data_cb_id,
+                output_cb_id=output_cb_id,
+                sync_cb_id=sync_cb_id,
+                residual_cb_id=residual_cb_id,
+                temp_cb_id=temp_cb_id,
+                num_links=num_links,
+            )
+
+        if semaphores is None:
+            raise ValueError("Expected semaphore(s) via `semaphores` for non-skip all-reduce")
+        if intermediate_tensor is None or output_tensor is None:
+            raise ValueError("Expected `intermediate_tensor` and `output_tensor` for non-skip all-reduce")
+
+        return AllReduceConfig(
+            mesh_device=mesh_device,
+            input_tensor_mesh=input_tensor_mesh,
+            intermediate_tensor=intermediate_tensor,
+            output_tensor=output_tensor,
+            semaphores=semaphores,
+            cluster_axis=cluster_axis,
+            num_links=num_links,
+            chunk_num_tiles=chunk_num_tiles,
+            local_data_cb_id=local_data_cb_id,
+            remote_data_cb_id=remote_data_cb_id,
+            output_cb_id=output_cb_id,
+            sync_cb_id=sync_cb_id,
+            residual_tensor_mesh=residual_tensor_mesh,
+            residual_cb_id=residual_cb_id,
+            temp_cb_id=temp_cb_id,
+            skip_local_push=skip_local_push,
+        )
 
     @staticmethod
     def op(
@@ -461,7 +609,7 @@ class DeepseekMinimalAllReduce:
         residual_cb_id = 5
         temp_cb_id = 6
 
-        allreduce_config = AllReduceConfig(
+        allreduce_config = DeepseekMinimalAllReduce.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
             intermediate_tensor=intermediate_tensor,
@@ -478,6 +626,7 @@ class DeepseekMinimalAllReduce:
             residual_cb_id=residual_cb_id,
             temp_cb_id=temp_cb_id,
             skip_local_push=False,
+            skip_ccl=False,
         )
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
