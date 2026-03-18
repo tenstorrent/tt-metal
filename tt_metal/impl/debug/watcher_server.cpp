@@ -23,6 +23,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
+#include "context/metal_env_impl.hpp"
 #include "core_coord.hpp"
 #include "api/debug/ring_buffer.h"
 #include "debug_helpers.hpp"
@@ -31,6 +32,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt_stl/span.hpp>
+#include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -44,6 +46,8 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 class WatcherServer::Impl {
 public:
+    Impl(MetalEnv& env, WatcherServer& watcher_server);
+
     // Implementation of WatcherServer public functions
     void init_devices();
     void attach_devices();
@@ -94,21 +98,27 @@ private:
     std::string exception_message_;
     std::mutex exception_message_mutex_;
 
+    MetalEnvImpl& env_;
+    WatcherServer& watcher_server_;  // Reference back to the parent
+
     inline static const std::string LOG_FILE_PATH = "generated/watcher/";
     inline static const std::string LOG_FILE_NAME = "watcher.log";
     inline static const std::string KERNEL_FILE_NAME = "kernel_names.txt";
     inline static const std::string KERNEL_ELF_FILE_NAME = "kernel_elf_paths.txt";
 };
 
+WatcherServer::Impl::Impl(MetalEnv& env, WatcherServer& watcher_server) :
+    env_(MetalEnvAccessor(env).impl()), watcher_server_(watcher_server) {}
+
 void WatcherServer::Impl::init_devices() {
-    auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
+    auto all_devices = env_.get_cluster().all_chip_ids();
     for (ChipId device_id : all_devices) {
         init_device(device_id);
     }
 }
 
 void WatcherServer::Impl::attach_devices() {
-    auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    auto& rtoptions = env_.get_rtoptions();
     if (!rtoptions.get_watcher_enabled()) {
         return;
     }
@@ -117,9 +127,9 @@ void WatcherServer::Impl::attach_devices() {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
         create_kernel_file();
-        auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
+        auto all_devices = env_.get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
-            device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
+            device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
             log_info(LogLLRuntime, "Watcher attached device {}", device_id);
             fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
             fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
@@ -165,7 +175,7 @@ void WatcherServer::Impl::detach_devices() {
     // Detach all devices
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
-        auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
+        auto all_devices = env_.get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
             TT_ASSERT(device_id_to_reader_.contains(device_id));
             device_id_to_reader_.erase(device_id);
@@ -174,7 +184,7 @@ void WatcherServer::Impl::detach_devices() {
         }
 
         // Watcher server closed, can use dma library again.
-        MetalContext::instance().rtoptions().set_disable_dma_ops(false);
+        env_.get_rtoptions().set_disable_dma_ops(false);
         close_file(logfile_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
@@ -192,7 +202,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
     clear_log();
     read_kernel_ids_from_file();
     for (ChipId device_id : device_ids) {
-        device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_);
+        device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
         log_info(LogLLRuntime, "Watcher attached device {}", device_id);
         fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
     }
@@ -201,7 +211,7 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
 }
 
 std::string WatcherServer::Impl::log_file_name() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
+    return env_.get_rtoptions().get_logs_dir() + LOG_FILE_PATH + LOG_FILE_NAME;
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
@@ -232,7 +242,7 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 }
 
 void WatcherServer::Impl::read_kernel_ids_from_file() {
-    std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() + LOG_FILE_PATH);
+    std::filesystem::path output_dir(env_.get_rtoptions().get_logs_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
     std::ifstream f(fname);
     if (!f) {
@@ -262,7 +272,7 @@ double WatcherServer::Impl::get_elapsed_secs() {
 }
 
 void WatcherServer::Impl::create_log_file() {
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_.get_rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     if (!tt::filesystem::safe_create_directories(output_dir)) {
@@ -313,7 +323,7 @@ void WatcherServer::Impl::create_log_file() {
 }
 
 void WatcherServer::Impl::create_kernel_file() {
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_.get_rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     if (!tt::filesystem::safe_create_directories(output_dir)) {
@@ -333,7 +343,7 @@ void WatcherServer::Impl::create_kernel_file() {
 }
 
 void WatcherServer::Impl::create_kernel_elf_file() {
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_.get_rtoptions();
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + LOG_FILE_PATH);
     if (!tt::filesystem::safe_create_directories(output_dir)) {
         log_warning(tt::LogMetal, "Watcher: failed to create output directory {}", output_dir.string());
@@ -350,9 +360,9 @@ void WatcherServer::Impl::create_kernel_elf_file() {
 
 void WatcherServer::Impl::init_device(ChipId device_id) {
     const std::lock_guard<std::mutex> lock(watch_mutex_);
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = MetalContext::instance().hal();
+    const auto& rtoptions = env_.get_rtoptions();
+    const auto& cluster = env_.get_cluster();
+    const auto& hal = env_.get_hal();
     std::vector<dev_msgs::watcher_msg_t> watcher_init_val;
     watcher_init_val.reserve(NumHalProgrammableCoreTypes);
 
@@ -497,12 +507,10 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     }
 
     // Initialize ethernet cores debug values
-    for (const CoreCoord& active_eth_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
+    for (const CoreCoord& active_eth_core : env_.get_control_plane().get_active_ethernet_cores(device_id)) {
         write_watcher_init_val(active_eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
-    for (const CoreCoord& inactive_eth_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
+    for (const CoreCoord& inactive_eth_core : env_.get_control_plane().get_inactive_ethernet_cores(device_id)) {
         write_watcher_init_val(inactive_eth_core, HalProgrammableCoreType::IDLE_ETH);
     }
 
@@ -513,7 +521,7 @@ void WatcherServer::Impl::poll_watcher_data() {
     TT_ASSERT(server_running_ == false);
     server_running_ = true;
     dump_count_ = 1;
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_.get_rtoptions();
     auto sleep_duration = std::chrono::milliseconds(rtoptions.get_watcher_interval());
 
     // Print to the user which features are disabled via env vars.
@@ -576,7 +584,7 @@ void WatcherServer::Impl::poll_watcher_data() {
 }
 
 // Wrapper class functions
-WatcherServer::WatcherServer() : impl_(std::make_unique<Impl>()) {};
+WatcherServer::WatcherServer(MetalEnv& env) : impl_(std::make_unique<Impl>(env, *this)) {};
 WatcherServer::~WatcherServer() = default;
 void WatcherServer::init_devices() { impl_->init_devices(); }
 void WatcherServer::attach_devices() { impl_->attach_devices(); }
