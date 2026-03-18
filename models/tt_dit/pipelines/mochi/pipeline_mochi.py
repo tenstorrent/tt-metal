@@ -309,7 +309,7 @@ class MochiPipeline(DiffusionPipeline):
                     "sp_axis": 0,
                     "tp_axis": 1,
                     "num_links": 2,
-                    "vae_mesh_shape": (2, 2),
+                    "vae_mesh_shape": (1, 4),
                     "vae_sp_axis": 0,
                     "vae_tp_axis": 1,
                     "reload_dit_model": True,
