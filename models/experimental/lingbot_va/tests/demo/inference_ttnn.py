@@ -149,6 +149,16 @@ class _TTTransformerAdapter:
             timestep = timesteps.squeeze().clone().to(torch.float32)
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
+
+        # Use per-frame timesteps when frames have different timestep values
+        timestep_per_frame = None
+        if timesteps.dim() >= 1:
+            ts_1d = timesteps.flatten() if timesteps.dim() == 1 else timesteps[0]
+            if not torch.all(ts_1d == ts_1d[0]):
+                B = spatial.shape[0]
+                F_frames = ts_1d.shape[0]
+                timestep_per_frame = ts_1d.unsqueeze(0).expand(B, F_frames).to(torch.float32)
+
         return self._tt_model(
             spatial=spatial,
             prompt=prompt,
@@ -157,6 +167,7 @@ class _TTTransformerAdapter:
             action_mode=action_mode,
             update_cache=update_cache,
             cache_name=cache_name,
+            timestep_per_frame=timestep_per_frame,
         )
 
 
@@ -608,9 +619,7 @@ def _prepare_latent_input(
         }
         if latent_cond is not None:
             input_dict["latent_res_lst"]["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1]
-            # TT transformer uses timesteps[:, 0]; only zero when ref so ref matches TT (constant t).
-            if not models.get("transformer_is_tt", False):
-                input_dict["latent_res_lst"]["timesteps"][0:1] *= 0
+            input_dict["latent_res_lst"]["timesteps"][0:1] *= 0
 
     if action_model_input is not None:
         input_dict["action_res_lst"] = {
@@ -629,7 +638,7 @@ def _prepare_latent_input(
         }
         if action_cond is not None:
             input_dict["action_res_lst"]["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1]
-        # Use constant timestep for action path so ref and TT match (TT uses timesteps[:, 0]; do not zero).
+            input_dict["action_res_lst"]["timesteps"][0:1] *= 0
         input_dict["action_res_lst"]["noisy_latents"][:, ~action_mask] *= 0
     return input_dict
 
@@ -915,8 +924,6 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 else:
                     action_noise_pred = action_noise_pred[:1]
                 actions = action_scheduler.step(action_noise_pred, t, actions, return_dict=False)
-                if models.get("transformer_is_tt", False):
-                    actions = actions.to(dtype)
             actions[:, :, 0:1] = action_cond if frame_st_id == 0 else actions[:, :, 0:1]
 
     actions[:, ~action_mask] *= 0
@@ -1380,6 +1387,7 @@ def main() -> None:
     print("=" * 60)
     if "action" in result:
         action = result["action"]
+        torch.save(torch.tensor(action), _SCRIPT_DIR / "action_.pt")
         print("action shape:", action.shape, "dtype:", action.dtype)
         if args.output:
             np.save(args.output, action)
