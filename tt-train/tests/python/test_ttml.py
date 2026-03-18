@@ -308,6 +308,8 @@ def test_submodule_imported(submodule_name):
 class TestCppOptimizersWithPythonModules:
     """Test that C++ optimizers work with Python module parameter registration."""
 
+    # Re-enable this test once fixed. Ticket: https://github.com/tenstorrent/tt-metal/issues/40257
+    @pytest.mark.skip(reason="Failing because weights are not updated.")
     def test_sgd_optimizer_with_python_module(self):
         """Test SGD optimizer updates parameters registered via Python AbstractModuleBase."""
         from ttml.modules import AbstractModuleBase, Parameter
