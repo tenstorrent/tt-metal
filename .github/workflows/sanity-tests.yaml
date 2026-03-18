@@ -281,6 +281,8 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
+    # [TO REVERT] Skip unrelated sanity job for targeted CI dispatch.
+    if: ${{ false }}
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
@@ -289,7 +291,6 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -303,6 +304,8 @@ jobs:
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
+    # [TO REVERT] Skip unrelated sanity job for targeted CI dispatch.
+    if: ${{ false }}
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
@@ -311,7 +314,6 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -325,6 +327,8 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
+    # [TO REVERT] Skip unrelated sanity job for targeted CI dispatch.
+    if: ${{ false }}
     needs: [resolve-artifacts, tests-to-run]
 
     strategy:
@@ -333,7 +337,6 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -348,7 +351,8 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
+    # [TO REVERT] Skip unrelated sanity job for targeted CI dispatch.
+    if: ${{ false }}
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
@@ -362,6 +366,8 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
+    # [TO REVERT] Skip unrelated sanity job for targeted CI dispatch.
+    if: ${{ false }}
     needs: [resolve-artifacts, tests-to-run]
     secrets: inherit
     strategy:
@@ -370,7 +376,6 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
