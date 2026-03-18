@@ -550,6 +550,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_all_to_all_dispatch_output = ttnn.reshape(
                 all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
             )
+            post_all_to_all_dispatch_output = ttnn.repeat(post_all_to_all_dispatch_output, **cfg["activations_repeat"])
             post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
 
             experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, cfg["moe_experts"])
@@ -558,6 +559,11 @@ class MoE(SharedStateAddOn, AbstractModule):
             experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
             experts_output = ttnn.reshape(
                 experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
+            )
+
+            all_to_all_dispatch_metadata_tensors = ttnn.reshape(
+                all_to_all_dispatch_metadata_tensors,
+                shape=(1, batch_size, seq_len, cfg["num_experts_per_tok"]),
             )
 
             all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
