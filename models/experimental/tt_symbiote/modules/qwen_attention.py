@@ -331,16 +331,19 @@ class TTNNQwen3FullAttention(TTNNModule):
         if self.sdpa.program_config is None:
             self.sdpa.program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
-                q_chunk_size=256,
-                k_chunk_size=256,
+                q_chunk_size=128,  # Reduced for head_dim=256 (matches DeepSeek V3)
+                k_chunk_size=128,  # Reduced for head_dim=256 (matches DeepSeek V3)
                 exp_approx_mode=False,
             )
+            # Match DeepSeek V3 settings for head_dim=256 compatibility:
+            # fp32_dest_acc_en=False increases dst_size from 4 to 8
+            # packer_l1_acc=False reduces L1 pressure
             self.sdpa.compute_kernel_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
             )
 
     @property
@@ -451,13 +454,15 @@ class TTNNQwen3FullAttention(TTNNModule):
 
         For Qwen3.5: 2 KV heads -> 16 Q heads, so n_rep=8
         [batch, num_kv_heads, seq_len, head_dim] -> [batch, num_attention_heads, seq_len, head_dim]
+
+        Uses repeat_interleave for correct GQA head ordering:
+        - Correct: [K0,K0,...,K0, K1,K1,...,K1] - Q heads 0-7 attend to K0, Q heads 8-15 attend to K1
+        - Wrong (ttnn.repeat tiles): [K0,K1,K0,K1,...] - Q head 1 would wrongly attend to K1
         """
         if n_rep == 1:
             return hidden_states
-        batch, num_kv_heads, seq_len, head_dim = hidden_states.shape
-        # Repeat along the head dimension
-        hidden_states = ttnn.repeat(hidden_states, (1, n_rep, 1, 1))
-        return hidden_states
+        # Use repeat_interleave for correct GQA head ordering
+        return ttnn.repeat_interleave(hidden_states, n_rep, dim=1)
 
     def _to_replicated(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Convert a multi-device tensor to an explicitly replicated tensor.
