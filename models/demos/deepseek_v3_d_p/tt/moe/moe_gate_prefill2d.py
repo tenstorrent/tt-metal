@@ -2,11 +2,61 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
+
 import torch
 from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+
+@dataclass
+class MoEGateConfig:
+    # gate_params
+
+    ccl_config = {}
+    mm_configs = {}
+
+    dim: int = 7168
+    max_seq_len = 4096 * 32
+    sp_dim = 4096
+    n_routed_experts: int = 256
+    n_shared_experts: int = 2
+    n_activated_experts: int = 8
+    n_expert_groups: int = 8
+    n_limited_groups: int = 4
+    route_scale: float = 1.0
+    score_func: str = "sigmoid"
+    summed_experts_per_group: int = 2
+    topk_groups: int = 4
+
+    # grid_config
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 9))})
+    num_cores = 110
+
+    mm_configs["DEFAULT_PROGRAM_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+        in0_block_w=56,
+        out_subblock_h=2,
+        out_subblock_w=4,
+        out_block_h=2,
+        out_block_w=4,
+        per_core_M=2,
+        per_core_N=8,
+        fuse_batch=True,
+        mcast_in0=False,
+    )
+    mm_configs["DEFAULT_COMPUTE_CONFIG"] = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    ccl_config["DISPATCH_AXIS"] = 0
+    ccl_config["TP_AXIS"] = 1
+    ccl_config["NUM_LINKS"] = 2
 
 
 class MoEGatePrefill(LightweightModule):
