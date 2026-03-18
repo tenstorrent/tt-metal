@@ -8,11 +8,13 @@ on:
         type: string
         default: ""
         description: "Docker image to use for build and test"
+      build-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Build artifact name to use (skips build if provided)"
   workflow_dispatch:
   merge_group:
-
-permissions:
-  packages: write
 
 concurrency:
   group: >-
@@ -23,114 +25,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-docker-image:
-    if: ${{ !inputs.docker-image }}
-    uses: ./.github/workflows/build-docker-artifact.yaml
+  build-artifact:
+    if: ${{ !inputs.build-artifact-name }}
+    uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
-
-  build-tt-train:
-    needs: [build-docker-image]
-    if: ${{ always() && (needs.build-docker-image.result == 'success' || needs.build-docker-image.result == 'skipped') }}
-    runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 45
-    container:
-      image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'
-        }}
-      env:
-        TT_METAL_HOME: /work
-        ARCH_NAME: wormhole_b0
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    outputs:
-      build-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
-          path: docker-job
-
-      - name: Set artifact name
-        id: set-artifact-name
-        run: echo "name=tt-train-build-${{ github.run_id }}" >> $GITHUB_OUTPUT
-
-      - name: Build tt-metal with tt-train
-        run: |
-          ./build_metal.sh --build-tt-train --release --build-dir build
-
-      - name: Create build tarball
-        run: |
-          tar --zstd -cf tt-train-build.tar.zst -C /work build/lib build/tt-train runtime tt_metal/pre-compiled
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.set-artifact-name.outputs.name }}
-          path: /work/tt-train-build.tar.zst
-          retention-days: 1
+    with:
+      build-type: Release
+      skip-tt-train: false
+      platform: "Ubuntu 22.04"
 
   run-tt-train-tests:
-    needs: [build-docker-image, build-tt-train]
-    if: ${{ always() && needs.build-tt-train.result == 'success' }}
-    runs-on: tt-ubuntu-2204-N150-viommu-stable
-    timeout-minutes: 60
-    container:
-      image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'
-        }}
-      env:
-        TT_METAL_HOME: /work
-        TT_METAL_RUNTIME_ROOT: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: wormhole_b0
-        ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work
-    steps:
-      - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          lfs: false
-          path: docker-job
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-tt-train.outputs.build-artifact-name }}
-          path: /work
-
-      - name: Extract build tarball
-        run: |
-          tar --zstd -xf /work/tt-train-build.tar.zst -C /work
-
-      - name: tt-train tests
-        run: |
-          cd /work/build/tt-train
-          ctest -E NIGHTLY --no-tests=error --output-on-failure
-
-      - name: Cleanup workspace
-        if: always()
-        run: |
-          rm -rf /work/build /work/runtime /work/tt_metal /work/tt-train-build.tar.zst
+    needs: [build-artifact]
+    if: ${{ always() && (needs.build-artifact.result == 'success' || needs.build-artifact.result == 'skipped') }}
+    uses: ./.github/workflows/tt-train-post-commit.yaml
+    secrets: inherit
+    with:
+      arch: wormhole_b0
+      runner-label: N150
+      docker-image: >-
+        ${{ inputs.docker-image
+            || needs.build-artifact.outputs.dev-docker-image
+            || 'docker-image-unresolved!' }}
+      build-artifact-name: >-
+        ${{ inputs.build-artifact-name
+            || needs.build-artifact.outputs.build-artifact-name
+            || 'build-artifact-unresolved!' }}
 
   validate-pr:
     if: ${{ always() }}
