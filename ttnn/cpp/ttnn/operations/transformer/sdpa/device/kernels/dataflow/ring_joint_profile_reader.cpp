@@ -21,6 +21,9 @@
 #include "dataflow_common.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
+// Skip actual DRAM reads to isolate compute timing
+// #define SKIP_DRAM_ACCESS 1
+
 /**
  * Profile indexer for ring_joint_sdpa.
  * Computes ring_id arrival order without synchronization.
@@ -235,6 +238,13 @@ void kernel_main() {
             }
 
             // Read Q chunk
+#if SKIP_DRAM_ACCESS
+            {
+                constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
+                cb_reserve_back(cb_q_in, q_chunk_tiles);
+                cb_push_back(cb_q_in, q_chunk_tiles);
+            }
+#else
             if constexpr (use_joint_tensors) {
                 if (is_joint_q) {
                     read_block(joint_q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
@@ -244,6 +254,7 @@ void kernel_main() {
             } else {
                 read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
             }
+#endif
 
             for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
@@ -281,6 +292,10 @@ void kernel_main() {
                 }
 
                 // Read K (always from gathered buffer or joint buffer)
+#if SKIP_DRAM_ACCESS
+                cb_reserve_back(cb_k_in, k_chunk_tiles);
+                cb_push_back(cb_k_in, k_chunk_tiles);
+#else
                 {
                     DeviceZoneScopedN("K-RESERVE");
                     cb_reserve_back(cb_k_in, k_chunk_tiles);
@@ -305,8 +320,13 @@ void kernel_main() {
                             gathered_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
                     }
                 }
+#endif
 
                 // Read V (always from gathered buffer or joint buffer)
+#if SKIP_DRAM_ACCESS
+                cb_reserve_back(cb_v_in, v_chunk_tiles);
+                cb_push_back(cb_v_in, v_chunk_tiles);
+#else
                 {
                     DeviceZoneScopedN("V-RESERVE");
                     cb_reserve_back(cb_v_in, v_chunk_tiles);
@@ -336,6 +356,7 @@ void kernel_main() {
                             gathered_v_generator, v_slice, kv_end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
                     }
                 }
+#endif
             }
         }
         // Pad to ensure even number of chunks for double buffering

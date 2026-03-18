@@ -17,6 +17,9 @@
 #include "dataflow_common.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
+// Skip actual DRAM reads/writes to isolate compute timing
+// #define SKIP_DRAM_ACCESS 1
+
 template <typename ReaderType, typename TensorAccessorType>
 void read_prev_output_and_lse(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
@@ -32,8 +35,17 @@ void read_prev_output_and_lse(
     const uint32_t cb_prev_out,
     const uint32_t cb_lse_in,
     const uint32_t tile_bytes,
-    const uint32_t lse_tile_bytes) {
+    const uint32_t lse_tile_bytes,
+    const uint32_t vDHt) {
     DeviceZoneScopedN("WRITER-READ-PREV");
+#if SKIP_DRAM_ACCESS
+    // Skip actual DRAM reads, just do CB operations
+    const uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    cb_reserve_back(cb_prev_out, out_chunk_tiles);
+    cb_push_back(cb_prev_out, out_chunk_tiles);
+    cb_reserve_back(cb_lse_in, Sq_chunk_t);
+    cb_push_back(cb_lse_in, Sq_chunk_t);
+#else
     // Read previous output for this Q chunk
     read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
 
@@ -46,6 +58,7 @@ void read_prev_output_and_lse(
     }
     noc_async_read_barrier();
     cb_push_back(cb_lse_in, Sq_chunk_t);
+#endif
 }
 
 template <typename ReaderType, typename TensorAccessorType>
@@ -63,8 +76,17 @@ void write_output_and_lse(
     const uint32_t cb_out,
     const uint32_t cb_lse_out,
     const uint32_t tile_bytes,
-    const uint32_t lse_tile_bytes) {
+    const uint32_t lse_tile_bytes,
+    const uint32_t vDHt) {
     DeviceZoneScopedN("WRITER-OUT");
+#if SKIP_DRAM_ACCESS
+    // Skip actual DRAM writes, just do CB operations
+    const uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+    cb_wait_front(cb_out, out_chunk_tiles);
+    cb_pop_front(cb_out, out_chunk_tiles);
+    cb_wait_front(cb_lse_out, Sq_chunk_t);
+    cb_pop_front(cb_lse_out, Sq_chunk_t);
+#else
     write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
 
     cb_wait_front(cb_lse_out, Sq_chunk_t);
@@ -75,6 +97,7 @@ void write_output_and_lse(
     }
     noc_async_writes_flushed();
     cb_pop_front(cb_lse_out, Sq_chunk_t);
+#endif
 }
 
 /**
@@ -319,7 +342,8 @@ void kernel_main() {
                             cb_prev_out,
                             cb_lse_in,
                             tile_bytes,
-                            lse_tile_bytes);
+                            lse_tile_bytes,
+                            vDHt);
                     } else {
                         read_prev_output_and_lse(
                             out_generator,
@@ -335,7 +359,8 @@ void kernel_main() {
                             cb_prev_out,
                             cb_lse_in,
                             tile_bytes,
-                            lse_tile_bytes);
+                            lse_tile_bytes,
+                            vDHt);
                     }
                 } else {
                     read_prev_output_and_lse(
@@ -352,7 +377,8 @@ void kernel_main() {
                         cb_prev_out,
                         cb_lse_in,
                         tile_bytes,
-                        lse_tile_bytes);
+                        lse_tile_bytes,
+                        vDHt);
                 }
             }
 
@@ -372,7 +398,8 @@ void kernel_main() {
                         cb_out,
                         cb_lse_out,
                         tile_bytes,
-                        lse_tile_bytes);
+                        lse_tile_bytes,
+                        vDHt);
                 } else {
                     write_output_and_lse(
                         out_generator,
@@ -388,7 +415,8 @@ void kernel_main() {
                         cb_out,
                         cb_lse_out,
                         tile_bytes,
-                        lse_tile_bytes);
+                        lse_tile_bytes,
+                        vDHt);
                 }
             } else {
                 write_output_and_lse(
@@ -405,7 +433,8 @@ void kernel_main() {
                     cb_out,
                     cb_lse_out,
                     tile_bytes,
-                    lse_tile_bytes);
+                    lse_tile_bytes,
+                    vDHt);
             }
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
