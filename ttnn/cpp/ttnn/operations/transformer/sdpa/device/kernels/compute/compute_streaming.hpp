@@ -641,8 +641,9 @@ static void sdpa_inner_loop_step(
     const uint32_t lw_partial_tile_idx = 0,
     const uint32_t active_Sk = Sk_chunk_t,
     const bool reduce_trigger = false,
-    const SubblockDecomp kt_decomp = {
-        Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0}) {
+    const SubblockDecomp kt_decomp =
+        {Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0},
+    const bool pop_q = false) {
     const uint32_t kt_num_full_subblocks = kt_decomp.num_full;
     const uint32_t kt_remainder = kt_decomp.remainder;
     const bool has_partial_subblock = kt_decomp.has_partial;
@@ -855,11 +856,16 @@ static void sdpa_inner_loop_step(
 
     cb_pop_front(cb_kt_in, DHt * KT_stride);
 
-    // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
-    // reader can start fetching the next Q chunk during Phase 2.
-    // In ring_mode, is_last_iter is always false — skip entirely.
+    // Q is no longer needed after Phase 1. Pop early so the reader can start
+    // fetching the next Q chunk (or other data) during Phase 2.
+    // Non-ring: pop on last K chunk (is_last_iter).
+    // Ring: caller decides via pop_q (last K chunk of this q iteration).
     if constexpr (!ring_mode) {
         if (is_last_iter) {
+            cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+        }
+    } else {
+        if (pop_q) {
             cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
         }
     }
@@ -1420,9 +1426,10 @@ void sdpa_ring_v2(
             KV_chunks_processed_in_iter++;
 
             const bool is_first = is_first_kv_for_this_q && (KV_chunks_processed == 1);
+            const bool is_last_kv_chunk = (KV_chunks_processed == total_valid_kv);
 
             // Last K chunk of last ring_iter triggers per-row normalization
-            const bool is_last = is_last_ring_iter && (KV_chunks_processed == total_valid_kv);
+            const bool is_last = is_last_ring_iter && is_last_kv_chunk;
 
             // Determine if this K chunk needs masking (partial tile within a tile boundary)
             const bool is_global_n_mask_chunk = ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id;
@@ -1494,7 +1501,9 @@ void sdpa_ring_v2(
                 lw_partial_tile_idx,
                 active_Sk_param,
                 can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
-                chunk_decomp);
+                chunk_decomp,
+                // Pop Q after Phase 1 on the last K chunk — Q is not needed during Phase 2.
+                is_last_kv_chunk);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
@@ -1512,8 +1521,8 @@ void sdpa_ring_v2(
             }
         }
 
-        // Pop Q — not popped inside step since ring_mode gates the early Q pop
-        cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+        // Q is now popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk,
+        // freeing CB space during Phase 2.
 
         // Persist or save accumulators for next ring iteration
         if (q_per_core == 1) {
