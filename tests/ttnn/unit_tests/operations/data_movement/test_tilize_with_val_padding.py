@@ -688,7 +688,7 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum_input_interleaved_r
 
     # At this point, for the testcase with "(hw, kernel, stride, pad)" == "((64, 64), (2, 2), (2, 2), 0)", y is a row-major interleaved tensor with logical_shape [1, 1, 1024, 1] and padded_shape [1, 1, 1024, 16].
     # Make this precondition explicit to ensure the test remains valid if upstream behavior changes.
-    assert y.padded_shape()[-1] > y.logical_shape()[-1]
+    assert y.padded_shape[-1] > y.shape[-1]
 
     y_torch_before_tile = ttnn.to_torch(y)
 
