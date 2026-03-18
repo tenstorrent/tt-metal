@@ -362,48 +362,11 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def _forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        # Validate input dimensions
-        hidden_size = cfg["hidden_size"]
-        mesh_device = cfg.get("mesh_device")
-        tp_size = mesh_device.shape[1] if mesh_device else 1
-
-        x_dim = x.shape[-1]
-        expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
-
-        if x_dim not in expected_dims:
-            raise ValueError(
-                f"MoE: Unexpected input dimension {x_dim}. Expected one of {expected_dims}. "
-                f"(hidden_size={hidden_size}, tp_size={tp_size})"
-            )
-
-        seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
-        batch_size_per_device = x.shape[
-            -2
-        ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
-        batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
-
-        # Note: all_gather is handled by the caller (decoder block or test)
-
-        # MoE Gate
-        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
-
-        # MOE
-        post_combine_output_tensor = cls._fwd_decode_moe(
-            x,
-            topk_experts_indices,
-            topk_experts_weights,
-            cfg,
-            batch_size_per_device,
-            batch_size,
-            seq_len,
-        )
-
-        # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
-        return post_combine_output_tensor
+    def _forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        return cls._forward_impl(x, cfg, "decode")
 
     @classmethod
-    def _forward_prefill(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -412,7 +375,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
             return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_prefill_impl(x, cfg)
+        return cls._forward_impl(x, cfg, "prefill")
 
     @classmethod
     def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
@@ -422,7 +385,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         for start in range(0, seq_len, chunk_size):
             end = min(start + chunk_size, seq_len)
             x_chunk = ttnn.slice(x, [0, 0, start, 0], [x.shape[0], x.shape[1], end, x.shape[3]])
-            output_chunks.append(cls._forward_prefill_impl(x_chunk, cfg))
+            output_chunks.append(cls._forward_impl(x_chunk, cfg, "prefill"))
             ttnn.deallocate(x_chunk)
 
         if len(output_chunks) == 1:
@@ -433,7 +396,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def _forward_prefill_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig, mode: str) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
         mesh_device = cfg.get("mesh_device")
@@ -460,15 +423,26 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # MOE
-        post_combine_output_tensor = cls._fwd_prefill_moe(
-            x,
-            topk_experts_indices,
-            topk_experts_weights,
-            cfg,
-            batch_size_per_device,
-            batch_size,
-            seq_len,
-        )
+        if mode == "decode":
+            post_combine_output_tensor = cls._fwd_decode_moe(
+                x,
+                topk_experts_indices,
+                topk_experts_weights,
+                cfg,
+                batch_size_per_device,
+                batch_size,
+                seq_len,
+            )
+        else:
+            post_combine_output_tensor = cls._fwd_prefill_moe(
+                x,
+                topk_experts_indices,
+                topk_experts_weights,
+                cfg,
+                batch_size_per_device,
+                batch_size,
+                seq_len,
+            )
 
         # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
         return post_combine_output_tensor
@@ -494,7 +468,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
         topk_experts_weights: ttnn.Tensor,
-        cfg: RunDecodeConfig | RunPrefillConfig,
+        cfg: RunDecodeConfig,
         batch_size_per_device: int,
         batch_size: int,
         seq_len: int,
@@ -591,7 +565,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
         topk_experts_weights: ttnn.Tensor,
-        cfg: RunDecodeConfig | RunPrefillConfig,
+        cfg: RunPrefillConfig,
         batch_size_per_device: int,
         batch_size: int,
         seq_len: int,
