@@ -39,7 +39,7 @@ tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
 tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # Scaleout Tools
-tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tenstorrent/codeowner-bypass
+tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/codeowner-bypass
 
 # Scaleout
 tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-metal-distributed @tenstorrent/codeowner-bypass
@@ -194,6 +194,7 @@ ttnn/cpp/ttnn/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce 
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/kernel_lib/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass @jonathansuTT
