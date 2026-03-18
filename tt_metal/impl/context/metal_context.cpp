@@ -166,8 +166,19 @@ void MetalContext::initialize(
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
+
+    // Resolve the dispatch core axis eagerly so the comparison below uses the
+    // canonical form.  The default DispatchCoreConfig leaves axis_ unset
+    // (nullopt), but dispatch_core_config_ is stored with the resolved axis.
+    // so resolve it first to prevent unnecessary teardown+reinit
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    DispatchCoreConfig resolved_config = dispatch_core_config;
+    DispatchCoreAxis axis =
+        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config());
+    resolved_config.set_dispatch_core_axis(axis);
+
     if (initialized_) {
-        if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
+        if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
@@ -187,17 +198,7 @@ void MetalContext::initialize(
     }
 
     initialized_ = true;
-
-    // Resolve the dispatch core axis for this context's architecture.
-    // The default DispatchCoreConfig leaves axis_ unset, causing get_dispatch_core_axis()
-    // to call get_default_axis() which only checks the DEFAULT context. For non-default
-    // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here,
-    // but only when the caller hasn't explicitly set an axis.
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-    dispatch_core_config_ = dispatch_core_config;
-    DispatchCoreAxis axis =
-        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config());
-    dispatch_core_config_.set_dispatch_core_axis(axis);
+    dispatch_core_config_ = resolved_config;
 
     num_hw_cqs_ = num_hw_cqs;
     worker_l1_size_ = worker_l1_size;
