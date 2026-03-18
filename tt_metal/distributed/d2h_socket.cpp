@@ -175,13 +175,11 @@ D2HSocket::D2HSocket(
 }
 
 D2HSocket::~D2HSocket() noexcept {
-    if (!exported_) {
-        // Wait for 1000ms for the device to acknowledge all data over the socket.
-        // This may need to be tuned in future, depending on the application and
-        // the amount of data being sent.
-        // Realistically a hang should not be seen here since most user workloads
-        // synchronize with the device before the application exits and destructors are called.
-        barrier(1000);
+    try {
+        if (!exported_) {
+            barrier(1000);
+        }
+    } catch (...) {
     }
     if (is_owner_) {
         pinned_memory_.reset();
