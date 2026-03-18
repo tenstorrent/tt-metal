@@ -65,12 +65,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Validate all tensors have the same dtype
     const auto dtype = input_tensor_q.dtype();
-    for (const auto& tensor : sdpa_input_tensors) {
-        TT_FATAL(
-            tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
-            dtype,
-            tensor.dtype());
+    if (!args.is_causal) {
+        for (const auto& tensor : sdpa_input_tensors) {
+            TT_FATAL(
+                tensor.dtype() == dtype,
+                "All tensors must have the same dtype. Expected {}, got {}",
+                dtype,
+                tensor.dtype());
+        }
     }
 
     // Get shapes
@@ -99,10 +101,20 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto B = q_shape[0];
     const auto NQH = q_shape[1];
     const auto NKH = k_shape[1];
+    const auto NVH = v_shape[1];
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
     const auto L = joint_q_shape[2];
     const auto DH = q_shape[3];
+
+    auto q_chunk_size = args.get_q_chunk_size();
+    auto k_chunk_size = args.get_k_chunk_size();
+
+    TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
+
+    TT_FATAL(
+        !(args.is_balanced && (N_local / 2) % q_chunk_size != 0),
+        "q_chunk_size must divide half of local q seq_len in balanced case");
 
     TT_FATAL(
         k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
@@ -115,26 +127,24 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_v_shape[0]);
 
     // Validate head dimensions match
-    TT_FATAL(
-        k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-            joint_v_shape[3] == DH,
-        "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        DH,
-        k_shape[3],
-        v_shape[3],
-        joint_q_shape[3],
-        joint_k_shape[3],
-        joint_v_shape[3]);
-
-    TT_FATAL(
-        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
-        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        NQH,
-        NKH,
-        v_shape[1],
-        joint_q_shape[1],
-        joint_k_shape[1],
-        joint_v_shape[1]);
+    if (!args.is_causal) {
+        TT_FATAL(
+            k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
+                joint_v_shape[3] == DH,
+            "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            DH,
+            k_shape[3],
+            v_shape[3],
+            joint_q_shape[3],
+            joint_k_shape[3],
+            joint_v_shape[3]);
+    } else {
+        TT_FATAL(
+            k_shape[3] == DH && joint_k_shape[3] == DH,
+            "Q/K head dimensions must match. Got Q: {}, K: {}",
+            DH,
+            k_shape[3]);
+    }
 
     TT_FATAL(
         v_shape[2] == N_global,
@@ -185,11 +195,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
-    TT_FATAL(NQH == NKH, "Q num_heads must be equal to K num_heads. Got Q: {}, K: {}", NQH, NKH);
+    TT_FATAL(NQH == NVH, "Q num_heads must be equal to V num_heads. Got Q: {}, V: {}", NQH, NVH);
+    TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
 
     // Validate chunk sizes if program config is provided
-    auto q_chunk_size = args.get_q_chunk_size();
-    auto k_chunk_size = args.get_k_chunk_size();
 
     TT_FATAL(
         q_chunk_size % tt::constants::TILE_WIDTH == 0,
@@ -232,15 +241,16 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
     stats_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
 
+    auto out_shape = input.logical_shape();
+    // head dim as v head dim
+    out_shape[3] = tensor_args.input_v.logical_shape()[3];
+
     return {
-        TensorSpec(
-            input.logical_shape(),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+        TensorSpec(out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
-
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
@@ -253,7 +263,7 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
@@ -269,6 +279,8 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         input_tensors,
         args.joint_strategy,
         args.scale,
+        args.is_causal,
+        args.is_balanced,
         args.logical_n,
         args.ring_size,
         args.compute_kernel_config,
@@ -353,6 +365,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::Topology topology,
     const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const bool is_causal,
+    const bool is_balanced,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
@@ -397,6 +411,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     auto operation_attributes = OperationType::operation_attributes_t(
         joint_strategy,
         scale,
+        is_causal,
+        is_balanced,
         logical_n,
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,

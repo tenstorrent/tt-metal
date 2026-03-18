@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "api/debug/assert.h"
 #include "api/debug/dprint_tile.h"
 #include "api/debug/dprint.h"

@@ -236,6 +236,35 @@ class NanoExabox1x8FabricFixture : public Fixture {
     }
 };
 
+// BigMesh 1x16: a single mesh spanning two T3K hosts (no inter-mesh connections).
+class IntermeshBigMesh1x16FabricFixture : public BaseFabricFixture {
+public:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
+    void SetUp() override {
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported BigMesh system.";
+        }
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
+    }
+
+    void TearDown() override {
+        if (system_supported()) {
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            distributed_context.barrier();
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+
+private:
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) == 2 &&
+               cluster.user_exposed_chip_ids().size() == 8;
+    }
+};
+
 // Dedicated Fabric and Distributed Test Fixtures fir Multi-Host + Multi-Mesh Tests
 using IntermeshSplit2x2FabricFixture = Split2x2FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceSplit2x2Fixture = Split2x2FabricFixture<MultiMeshDeviceFabricFixture>;

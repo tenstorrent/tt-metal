@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -17,8 +17,8 @@ inline void calculate_elu(uint slope) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         v_if(v < 0.0f) {
             sfpi::vFloat v_exp =
-                _sfpu_exp_21f_<true>(v) - sfpi::vConst1;  // is_fp32_dest_acc_en set to true to avoid rounding as it has
-                                                          // to be done at the end of operation
+                _sfpu_exp_21f_bf16_<true>(v) - sfpi::vConst1;  // is_fp32_dest_acc_en set to true to avoid rounding as
+                                                               // it has to be done at the end of operation
             sfpi::vFloat result = s * v_exp;
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
