@@ -166,8 +166,17 @@ void MetalContext::initialize(
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
+
+    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with the default
+    // metal context ID which will cause implicit initialization of a MetalContext.
+    // Workaround that by setting the dispatch core axis here and storing a resolved config.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    DispatchCoreConfig resolved_config = dispatch_core_config;
+    resolved_config.set_dispatch_core_axis(
+        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
+
     if (initialized_) {
-        if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
+        if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
@@ -188,17 +197,8 @@ void MetalContext::initialize(
 
     initialized_ = true;
 
-    // Resolve the dispatch core axis for this context's architecture.
-    // The default DispatchCoreConfig leaves axis_ unset, causing get_dispatch_core_axis()
-    // to call get_default_axis() which only checks the DEFAULT context. For non-default
-    // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here,
-    // but only when the caller hasn't explicitly set an axis.
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
-    dispatch_core_config_ = dispatch_core_config;
-    DispatchCoreAxis axis =
-        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config());
-    dispatch_core_config_.set_dispatch_core_axis(axis);
-
+    // Store the resolved config
+    dispatch_core_config_ = resolved_config;
     num_hw_cqs_ = num_hw_cqs;
     worker_l1_size_ = worker_l1_size;
     l1_bank_remap_ = l1_bank_remap;
