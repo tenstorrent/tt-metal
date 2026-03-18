@@ -23,7 +23,7 @@ public:
         TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
         TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
         TT_FATAL(
-            mesh_buffer_->size() >= spec.compute_packed_buffer_size_bytes(),
+            mesh_buffer_->size() >= spec_.compute_packed_buffer_size_bytes(),
             "MeshBuffer must be large enough to hold the tensor.");
     }
 
