@@ -39,21 +39,20 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(12);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
 constexpr uint32_t dim = get_compile_time_arg_val(14);
 constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(15);
-constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(16);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(17);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(18);
-constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(19);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(20);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(21);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(27);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(28);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
+constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(18);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
+constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(26);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
 
-constexpr uint32_t num_ct_args = 29;
+constexpr uint32_t num_ct_args = 28;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -246,6 +245,8 @@ void kernel_main() {
 
                     for (uint32_t i = 0; i < ring_size; i++) {
                         const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
+                        const uint32_t mm_N_full_blocks_per_slice =
+                            get_slice_N_block_info(actual_slice_idx, slice_Wt, N_full_block_wt).first;
                         const uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
 
                         for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;

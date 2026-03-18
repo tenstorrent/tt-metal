@@ -271,7 +271,6 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     const uint32_t slice_Wt,
     const uint32_t normalized_dim,
     const uint32_t mm_M_unit_blocks_per_core,
-    const uint32_t mm_N_full_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
     const uint32_t N_full_block_wt,
@@ -282,6 +281,7 @@ std::vector<uint32_t> get_ring_writer_compile_args(
     // Strided writer compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_writer.cpp
     // NOTE: writer does not receive fuse_mm_op; only reader needs to wait on the MM semaphore.
+    // mm_N_full_blocks_per_slice removed; computed dynamically via get_slice_N_block_info.
     return {
         ring_index,                     // [0]  my_chip_id
         ring_size,                      // [1]  ring_size
@@ -299,15 +299,14 @@ std::vector<uint32_t> get_ring_writer_compile_args(
         slice_Wt,                       // [13] slice_Wt
         normalized_dim,                 // [14] dim normalized to 4D
         mm_M_unit_blocks_per_core,      // [15] mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,     // [16] mm_N_full_blocks_per_slice
-        mm_block_ht,                    // [17] mm_block_ht
-        mm_cores_y,                     // [18] mm_cores_y
-        N_full_block_wt,                // [19] N_full_block_wt
-        chunk_width_in_tiles,           // [20] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,     // [21] chunks_per_mm_N_full_block
-        slice_Ht_per_core,              // [22] slice_Ht_per_core
-        slice_Ht,                       // [23] slice_Ht (unpadded; used for ghost-tile bounds checks)
-        // [24+] fabric_mux CT args appended after (num_ct_args = 29 in writer kernel)
+        mm_block_ht,                    // [16] mm_block_ht
+        mm_cores_y,                     // [17] mm_cores_y
+        N_full_block_wt,                // [18] N_full_block_wt
+        chunk_width_in_tiles,           // [19] chunk_width_in_tiles
+        chunks_per_mm_N_full_block,     // [20] chunks_per_mm_N_full_block
+        slice_Ht_per_core,              // [21] slice_Ht_per_core
+        slice_Ht,                       // [22] slice_Ht (unpadded; used for ghost-tile bounds checks)
+        // [23+] fabric_mux CT args appended after (num_ct_args = 28 in writer kernel)
     };
 }
 
@@ -568,8 +567,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_Wt,
             requested_mm_N_full_block_wt_val);
     }
-    const uint32_t mm_N_full_blocks_per_slice = slice_Wt / mm_N_full_block_wt_val;
-
     // Pad slice_Ht to the next multiple of mm_cores_y_val so every core gets an equal number of
     // tile rows. The last core may receive ghost tiles (slice_row >= slice_Ht) which are skipped
     // by the reader/writer kernels via bounds checks.
@@ -741,7 +738,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_Wt,
             normalized_dim,
             mm_M_unit_blocks_per_core,
-            mm_N_full_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
             mm_N_full_block_wt_val,
