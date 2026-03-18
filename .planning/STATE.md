@@ -10,8 +10,8 @@ progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 10
-  completed_plans: 7
-  percent: 70
+  completed_plans: 8
+  percent: 80
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Third VC correctly wired into fabric infrastructure, invisible to existing VC0/VC1, only active under correct conditions
-**Current focus:** Phase 4 in progress. Plan 04-01 complete, ready for 04-02.
+**Current focus:** Phase 4 complete. Ready for Phase 5.
 
 ## Current Position
 
 Phase: 4 of 5 (Builder Wiring & Flow Control)
-Plan: 1 of 2 in current phase
-Status: Plan 04-01 complete, ready for 04-02
-Last activity: 2026-03-18 -- Plan 04-01 executed
+Plan: 2 of 2 in current phase
+Status: Phase 04 complete, ready for phase 05
+Last activity: 2026-03-18 -- Plan 04-02 executed
 
-Progress: [#######---] 70%
+Progress: [########--] 80%
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [#######---] 70%
 | Phase 03 P01 | 15min | 2 tasks | 3 files |
 | Phase 03 P02 | 19min | 2 tasks | 1 files |
 | Phase 04 P01 | 8min | 2 tasks | 4 files |
+| Phase 04 P02 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - [03-02] VC2 test configs use IntermeshVCConfig::full_mesh() + requires_vc2=true (factory does not set VC2)
 - [04-01] Host-side arrays always sized to absolute max (10/3) even before VC2 conditional emission
 - [04-01] VC2 stream IDs dual-use: ID 30 shared with tensix_relay (UDM exclusive), ID 31 shared with multi_risc_teardown scratch
+- [04-02] VC2 enablement derived from actual_sender_channels_vc2 > 0 (avoids FabricBuilderContext dependency in emit_ct_args)
+- [04-02] Firmware heuristic replaced with ACTUAL_VC*_SENDER_CHANNELS derivation -- no behavioral change for non-VC2 configs
 
 ### Pending Todos
 
@@ -89,6 +92,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-18T03:04:30Z
-Stopped at: Completed 04-01-PLAN.md
-Resume file: .planning/phases/04-builder-wiring-flow-control/04-02-PLAN.md
+Last session: 2026-03-18T03:13:13Z
+Stopped at: Completed 04-02-PLAN.md
+Resume file: .planning/phases/05-connection-api/ (next phase)

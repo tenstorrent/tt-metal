@@ -31,16 +31,16 @@
 ### Builder Integration
 
 - [x] **BLDR-01**: `FabricBuilderContext` computes VC2 channel counts and allocations
-- [ ] **BLDR-02**: `EriscDatamoverBuilder` wires VC2 sender→receiver connections on non-Z routers
-- [ ] **BLDR-03**: `EriscDatamoverBuilder` wires Z-router VC2 worker sender→VC0 receiver forwarding
+- [x] **BLDR-02**: `EriscDatamoverBuilder` wires VC2 sender→receiver connections on non-Z routers
+- [x] **BLDR-03**: `EriscDatamoverBuilder` wires Z-router VC2 worker sender→VC0 receiver forwarding
 - [x] **BLDR-04**: `StaticSizedChannelAllocator` allocates L1 buffer space for VC2 channels
-- [ ] **BLDR-05**: CT arg emission accounts for VC2 channels in index derivation formulas (`MAX_NUM_SENDER_CHANNELS_VC0`, `VC1_SENDER_CHANNEL_START`, etc.)
+- [x] **BLDR-05**: CT arg emission accounts for VC2 channels in index derivation formulas (`MAX_NUM_SENDER_CHANNELS_VC0`, `VC1_SENDER_CHANNEL_START`, etc.)
 
 ### Flow Control
 
 - [x] **FLOW-01**: Stream ID 30 increment-on-write register assigned to VC2 sender flow control (free-slots from worker)
 - [x] **FLOW-02**: Stream ID 31 increment-on-write register assigned to VC2 receiver flow control (free-slots from sender) -- non-Z routers only
-- [ ] **FLOW-03**: L1 credit counter arrays grow naturally via `NUM_SENDER_CHANNELS` -- `src_ch_id` is global flat index, no offset remapping needed
+- [x] **FLOW-03**: L1 credit counter arrays grow naturally via `NUM_SENDER_CHANNELS` -- `src_ch_id` is global flat index, no offset remapping needed
 
 ### Connection API
 
@@ -88,12 +88,12 @@
 | CMAP-03 | Phase 3 | Complete |
 | BLDR-04 | Phase 3 | Complete |
 | BLDR-01 | Phase 4 | Complete |
-| BLDR-02 | Phase 4 | Pending |
-| BLDR-03 | Phase 4 | Pending |
-| BLDR-05 | Phase 4 | Pending |
+| BLDR-02 | Phase 4 | Complete |
+| BLDR-03 | Phase 4 | Complete |
+| BLDR-05 | Phase 4 | Complete |
 | FLOW-01 | Phase 4 | Complete |
 | FLOW-02 | Phase 4 | Complete |
-| FLOW-03 | Phase 4 | Pending |
+| FLOW-03 | Phase 4 | Complete |
 | CONN-01 | Phase 5 | Pending |
 | CONN-02 | Phase 5 | Pending |
 | TEST-01 | Phase 5 | Pending |
