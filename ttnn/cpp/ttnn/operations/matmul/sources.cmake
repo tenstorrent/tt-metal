@@ -14,6 +14,8 @@ set(TTNN_OP_MATMUL_SRCS
     device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
     device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
     device/sparse/sparse_matmul_device_operation.cpp
+    device/tile_sparse/tile_sparse_matmul_device_operation.cpp
+    device/tile_sparse/factory/tile_sparse_matmul_program_factory.cpp
 )
 
 set(TTNN_OP_MATMUL_API_HEADERS

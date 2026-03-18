@@ -1324,6 +1324,102 @@ void py_module(nb::module_& mod) {
         nb::arg("input_tensor_b"),
         nb::arg("parameters"),
         nb::arg("optional_output_tensors"));
+
+    ttnn::bind_function<"tile_sparse_matmul">(
+        mod,
+        R"doc(
+        Tile-sparse matrix multiplication.
+
+        Performs matmul where one or both input matrices have tile-level sparsity.
+        Zero tiles (32x32 blocks of zeros) are skipped during computation,
+        providing speedup proportional to tile sparsity.
+
+        This operation is optimized for cases where entire 32x32 tiles of the input
+        matrices are zero (e.g., weight pruning, sparse attention patterns).
+
+        Args:
+            input_tensor_a (ttnn.Tensor): First input tensor (can have tile sparsity).
+            input_tensor_b (ttnn.Tensor): Second input tensor (can have tile sparsity).
+
+        Keyword Args:
+            sparsity_mask_a (ttnn.Tensor, optional): Tile sparsity mask for input_tensor_a.
+                Shape [tile_rows_a, tile_cols_a], dtype uint8. Value 1 indicates non-zero tile.
+            sparsity_mask_b (ttnn.Tensor, optional): Tile sparsity mask for input_tensor_b.
+                Shape [tile_rows_b, tile_cols_b], dtype uint8. Value 1 indicates non-zero tile.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            dtype (ttnn.DataType, optional): Output data type.
+            program_config (ttnn.MatmulProgramConfig, optional): Matmul program configuration.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration.
+            core_grid (ttnn.CoreGrid, optional): Core grid for computation.
+            output_tile (List of [int], optional): Output tile configuration.
+            optional_output_tensor (ttnn.Tensor, optional): Pre-allocated output tensor.
+
+        Returns:
+            ttnn.Tensor: Output tensor C = A @ B
+
+        Note:
+            - Tile size is fixed at 32x32 (Tensix native tile size)
+            - Sparsity masks are optional; if not provided, dense computation is performed
+            - Expected speedup is approximately (1 / (1 - tile_sparsity_ratio))
+
+        Example:
+            >>> # Create weight tensor with 50% tile sparsity
+            >>> weight = ttnn.from_torch(torch.randn(1024, 1024), device=device)
+            >>> # Create sparsity mask (32 x 32 tiles for 1024x1024 matrix)
+            >>> mask = ttnn.create_tile_sparsity_mask(weight)
+            >>> # Perform tile-sparse matmul
+            >>> output = ttnn.tile_sparse_matmul(input, weight, sparsity_mask_b=mask)
+        )doc",
+        ttnn::overload_t(
+            &tile_sparse_matmul,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("sparsity_mask_a") = nb::none(),
+            nb::arg("sparsity_mask_b") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("dtype") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("core_grid") = nb::none(),
+            nb::arg("output_tile") = nb::none(),
+            nb::arg("optional_output_tensor") = nb::none(),
+            nb::arg("global_cb") = nb::none(),
+            nb::arg("sub_device_id") = nb::none()));
+
+    ttnn::bind_function<"create_tile_sparsity_mask">(
+        mod,
+        R"doc(
+        Create a tile sparsity mask from a dense tensor.
+
+        Analyzes the input tensor and creates a boolean mask indicating which 32x32 tiles
+        contain non-zero elements (or elements above the threshold).
+
+        Args:
+            dense_tensor (ttnn.Tensor): Input dense tensor to analyze.
+
+        Keyword Args:
+            threshold (float, optional): Minimum absolute value to consider non-zero. Defaults to 0.0.
+
+        Returns:
+            ttnn.Tensor: Tensor of shape [tile_rows, tile_cols] with uint8 values (0 or 1).
+                tile_rows = tensor_height / 32
+                tile_cols = tensor_width / 32
+
+        Note:
+            - Input tensor dimensions must be divisible by 32
+            - Currently returns all-ones mask (dense); full implementation requires
+              analyzing tensor contents on device
+
+        Example:
+            >>> # Create a weight tensor with some zero tiles
+            >>> weight = ttnn.from_torch(torch.randn(1024, 1024), device=device)
+            >>> # Get the tile sparsity mask
+            >>> mask = ttnn.create_tile_sparsity_mask(weight)
+            >>> print(f"Mask shape: {mask.shape}")  # [32, 32] for 1024x1024 tensor
+        )doc",
+        ttnn::overload_t(
+            &create_tile_sparsity_mask, nb::arg("dense_tensor"), nb::kw_only(), nb::arg("threshold") = 0.0f));
 }
 
 }  // namespace ttnn::operations::matmul

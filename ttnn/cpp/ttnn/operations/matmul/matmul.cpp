@@ -18,6 +18,7 @@
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/operations/matmul/device/tile_sparse/tile_sparse_matmul_device_operation.hpp"
 
 namespace ttnn::operations::matmul {
 
@@ -558,6 +559,65 @@ Tensor sparse_matmul(
                global_cb,
                sub_device_id)
         .at(0);
+}
+
+Tensor tile_sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const Tensor>& sparsity_mask_a,
+    const std::optional<const Tensor>& sparsity_mask_b,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    std::optional<CoreCoord> user_core_coord =
+        core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
+
+    return ttnn::prim::tile_sparse_matmul(
+               input_tensor_a,
+               input_tensor_b,
+               sparsity_mask_a,
+               sparsity_mask_b,
+               optional_output_tensor,
+               memory_config,
+               dtype,
+               program_config,
+               compute_kernel_config,
+               user_core_coord,
+               output_tile,
+               global_cb,
+               sub_device_id)
+        .at(0);
+}
+
+Tensor create_tile_sparsity_mask(const Tensor& dense_tensor, [[maybe_unused]] float threshold) {
+    // Get tensor shape
+    const auto& shape = dense_tensor.padded_shape();
+    TT_FATAL(shape.rank() >= 2, "Tensor must have at least 2 dimensions");
+
+    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_width = 32;
+
+    uint32_t M = shape[-2];
+    uint32_t K = shape[-1];
+    uint32_t tile_rows = M / tile_height;
+    uint32_t tile_cols = K / tile_width;
+
+    TT_FATAL(M % tile_height == 0, "Tensor height {} must be divisible by tile height {}", M, tile_height);
+    TT_FATAL(K % tile_width == 0, "Tensor width {} must be divisible by tile width {}", K, tile_width);
+
+    // Create mask tensor on host (all ones for now - dense)
+    // Full implementation would analyze tensor contents on device
+    std::vector<uint8_t> mask_data(tile_rows * tile_cols, 1);
+    TensorSpec spec(
+        ttnn::Shape({tile_rows, tile_cols}),
+        TensorLayout(DataType::UINT8, PageConfig(ttnn::ROW_MAJOR_LAYOUT), MemoryConfig{}));
+    return Tensor::from_vector(mask_data, spec);
 }
 
 }  // namespace ttnn::operations::matmul
