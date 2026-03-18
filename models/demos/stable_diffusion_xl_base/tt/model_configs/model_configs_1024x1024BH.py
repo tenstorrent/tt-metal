@@ -132,7 +132,6 @@ class ModelOptimisations1024x1024BH:
             reallocate_halo_output=False,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
-            reshard_if_not_optimal=True,
             reshard_if_not_optimal=False,
             act_block_w_div=1,
             act_block_h_override=256,
