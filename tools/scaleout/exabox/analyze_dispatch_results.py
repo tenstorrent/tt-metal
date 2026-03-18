@@ -12,7 +12,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 
-from tools.scaleout.exabox.analysis_common import (
+from analysis_common import (
     DOMAIN_DISPATCH,
     Colors,
     analysis_timestamp,

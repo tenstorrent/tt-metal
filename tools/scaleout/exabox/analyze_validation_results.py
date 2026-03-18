@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from tools.scaleout.exabox.analysis_common import (
+from analysis_common import (
     DOMAIN_VALIDATION,
     Colors,
     analysis_timestamp,
