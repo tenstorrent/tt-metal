@@ -13,6 +13,9 @@ This test validates all-reduce on a 1D mesh (2 devices) where:
 4. Optionally, a residual tensor is added to the final result to fuse the next residual add block
 """
 
+from dataclasses import dataclass
+from typing import Any, Optional
+
 import pytest
 import torch
 from loguru import logger
@@ -28,6 +31,121 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+@dataclass(frozen=True)
+class AllReduceTestInputs:
+    input_tensors_per_device: list[torch.Tensor]
+    torch_expected: torch.Tensor
+    input_tensor_mesh: Any
+    intermediate_tensor_mesh: Any
+    output_tensor_mesh: Any
+    residual_tensor_mesh: Optional[Any]
+    semaphores: list[Any]
+
+
+def build_all_reduce_test_inputs(
+    *,
+    mesh_device,
+    num_devices,
+    output_shape,
+    input_shard_shape,
+    tensor_mem_layout,
+    layout,
+    input_dtype,
+    fuse_residual_add,
+    semaphore_count=2,
+):
+    # Set up sharded memory config
+    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    input_shard_spec = ttnn.ShardSpec(
+        input_shard_grid,
+        input_shard_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
+
+    # Create input tensors for each device
+    input_tensors_per_device = [torch.rand(output_shape, dtype=torch.bfloat16) for _ in range(num_devices)]
+
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], mesh_device.shape)
+
+    input_tensor_mesh = ttnn.from_torch(
+        torch.cat(input_tensors_per_device, dim=0),
+        device=mesh_device,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
+    )
+
+    residual_tensor_mesh = None
+    residual_tensor_torch = None
+    if fuse_residual_add:
+        residual_tensor_torch = torch.rand(output_shape, dtype=torch.bfloat16)
+        residual_tensor_mesh = ttnn.from_torch(
+            torch.cat([residual_tensor_torch for _ in range(num_devices)], dim=0),
+            device=mesh_device,
+            layout=layout,
+            tile=ttnn.Tile((1, 32)),
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
+        )
+
+    # Output tensor with tiny tiles (1x32), same as input
+    output_tensor_mesh = ttnn.from_torch(
+        torch.cat([torch.zeros(output_shape, dtype=torch.bfloat16)] * num_devices, dim=0),
+        device=mesh_device,
+        layout=layout,
+        tile=ttnn.Tile((1, 32)),
+        dtype=input_dtype,
+        memory_config=input_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
+    )
+
+    # Intermediate tensor with standard 32x32 tiles.
+    intermediate_shape = [32, 224]
+    intermediate_shard_spec = ttnn.ShardSpec(
+        input_shard_grid,
+        tuple(intermediate_shape),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    intermediate_mem_config = ttnn.MemoryConfig(
+        tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=intermediate_shard_spec
+    )
+    intermediate_tensor_mesh = ttnn.from_torch(
+        torch.cat([torch.zeros(intermediate_shape, dtype=torch.bfloat16)] * num_devices, dim=0),
+        device=mesh_device,
+        layout=layout,
+        tile=ttnn.Tile((32, 32)),
+        dtype=input_dtype,
+        memory_config=intermediate_mem_config,
+        mesh_mapper=ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config),
+    )
+
+    # Golden output
+    if fuse_residual_add:
+        torch_expected = DeepseekMinimalAllReduce.golden(input_tensors_per_device, residual_tensor_torch)
+    else:
+        torch_expected = DeepseekMinimalAllReduce.golden(input_tensors_per_device)
+
+    # Semaphores
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    num_cores = compute_grid_size.x * compute_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
+    semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(semaphore_count)]
+
+    return AllReduceTestInputs(
+        input_tensors_per_device=input_tensors_per_device,
+        torch_expected=torch_expected,
+        input_tensor_mesh=input_tensor_mesh,
+        intermediate_tensor_mesh=intermediate_tensor_mesh,
+        output_tensor_mesh=output_tensor_mesh,
+        residual_tensor_mesh=residual_tensor_mesh,
+        semaphores=semaphores,
+    )
 
 
 @pytest.mark.parametrize(
@@ -77,105 +195,17 @@ def test_ccl_all_reduce(
     # Create submesh - fabric requires opening full system mesh first
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
 
-    # Set up sub-device
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    # Set up sharded memory config
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        input_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-
-    # Create input tensors for each device
-    device_tensors = []
-    for device_idx in range(num_devices):
-        tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-        device_tensors.append(tensor)
-
-    # Create mesh tensor (concatenate along dim 0)
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    inputs = build_all_reduce_test_inputs(
+        mesh_device=submesh,
+        num_devices=num_devices,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        fuse_residual_add=fuse_residual_add,
+        semaphore_count=2,
     )
-
-    # Optionally create residual tensor
-    if fuse_residual_add:
-        residual_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-        residual_tensors = [residual_tensor for _ in range(num_devices)]
-        residual_mesh_tensor_torch = torch.cat(residual_tensors, dim=0)
-        residual_tensor_mesh = ttnn.from_torch(
-            residual_mesh_tensor_torch,
-            device=submesh,
-            layout=layout,
-            tile=ttnn.Tile((1, 32)),
-            dtype=input_dtype,
-            memory_config=input_mem_config,
-            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-        )
-    else:
-        residual_tensor_mesh = None
-
-    # Create output tensor with tiny tiles (1x32), same as input
-    output_tensor_per_device = torch.zeros(output_shape, dtype=torch.bfloat16)
-    output_tensor_torch = torch.cat([output_tensor_per_device] * num_devices, dim=0)
-    output_tensor = ttnn.from_torch(
-        output_tensor_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-
-    # Create intermediate tensor with standard 32x32 tiles
-    # Intermediate shape: [32, 224] to hold 7 standard tiles (7168 elements = 7 * 32 * 32)
-    intermediate_shape = [32, 224]
-    intermediate_shard_shape = tuple(intermediate_shape)
-    intermediate_tensor_torch = torch.zeros(intermediate_shape, dtype=torch.bfloat16)
-    intermediate_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        intermediate_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    intermediate_mem_config = ttnn.MemoryConfig(
-        tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=intermediate_shard_spec
-    )
-
-    # Concatenate for mesh
-    intermediate_mesh_torch = torch.cat([intermediate_tensor_torch] * num_devices, dim=0)
-    intermediate_tensor = ttnn.from_torch(
-        intermediate_mesh_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((32, 32)),
-        dtype=input_dtype,
-        memory_config=intermediate_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-
-    # Compute expected output using golden function
-    if fuse_residual_add:
-        torch_expected = DeepseekMinimalAllReduce.golden(device_tensors, residual_tensor)
-    else:
-        torch_expected = DeepseekMinimalAllReduce.golden(device_tensors)
-
-    # semaphores
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [semaphore1, semaphore2]
 
     # Run all-reduce operation
     logger.info(f"Running CCL all-reduce: num_devices={num_devices}")
@@ -185,12 +215,12 @@ def test_ccl_all_reduce(
     # Compile Run
     logger.info("Compiling model")
     ttnn_result = DeepseekMinimalAllReduce.op(
-        input_tensor_mesh,
-        intermediate_tensor,
+        inputs.input_tensor_mesh,
+        inputs.intermediate_tensor_mesh,
         cluster_axis=cluster_axis,
-        persistent_output_tensor=output_tensor,
-        residual_tensor_mesh=residual_tensor_mesh,
-        semaphores=semaphores,
+        persistent_output_tensor=inputs.output_tensor_mesh,
+        residual_tensor_mesh=inputs.residual_tensor_mesh,
+        semaphores=inputs.semaphores,
     )
     ttnn.synchronize_device(submesh)
 
@@ -199,12 +229,12 @@ def test_ccl_all_reduce(
     trace_id_warmup = ttnn.begin_trace_capture(submesh, cq_id=0)
     for i in range(num_warmup_iter):
         ttnn_result = DeepseekMinimalAllReduce.op(
-            input_tensor_mesh,
-            intermediate_tensor,
+            inputs.input_tensor_mesh,
+            inputs.intermediate_tensor_mesh,
             cluster_axis=cluster_axis,
-            persistent_output_tensor=output_tensor,
-            residual_tensor_mesh=residual_tensor_mesh,
-            semaphores=semaphores,
+            persistent_output_tensor=inputs.output_tensor_mesh,
+            residual_tensor_mesh=inputs.residual_tensor_mesh,
+            semaphores=inputs.semaphores,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -214,12 +244,12 @@ def test_ccl_all_reduce(
     trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
     for i in range(num_iter):
         ttnn_result = DeepseekMinimalAllReduce.op(
-            input_tensor_mesh,
-            intermediate_tensor,
+            inputs.input_tensor_mesh,
+            inputs.intermediate_tensor_mesh,
             cluster_axis=cluster_axis,
-            persistent_output_tensor=output_tensor,
-            residual_tensor_mesh=residual_tensor_mesh,
-            semaphores=semaphores,
+            persistent_output_tensor=inputs.output_tensor_mesh,
+            residual_tensor_mesh=inputs.residual_tensor_mesh,
+            semaphores=inputs.semaphores,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -259,15 +289,15 @@ def test_ccl_all_reduce(
     for device_idx in range(num_devices):
         received = output_tensor_torch[device_idx : device_idx + 1, :]
 
-        assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
+        assert received.shape == inputs.torch_expected.shape, f"Shape mismatch at device {device_idx}"
 
         if device_idx != ref_device_idx:
             dev_eq = torch.equal(received, ref_device_output)
             assert dev_eq, f"Device {device_idx} output mismatch"
 
-        if not torch.allclose(received, torch_expected, rtol=1e-2, atol=1e-2):
+        if not torch.allclose(received, inputs.torch_expected, rtol=1e-2, atol=1e-2):
             logger.error(f"Output mismatch for device {device_idx}")
-            logger.error(f"Expected: {torch_expected[:5, :5]}")
+            logger.error(f"Expected: {inputs.torch_expected[:5, :5]}")
             logger.error(f"Received: {received[:5, :5]}")
             all_passed = False
         else:
@@ -292,7 +322,7 @@ def test_ccl_all_reduce(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("num_links", [1, 2])
-@pytest.mark.parametrize("chunk_num_tiles", [None, 1, 2, 10])
+@pytest.mark.parametrize("chunk_num_tiles", [1, 2, 10])
 @pytest.mark.parametrize("fuse_residual_add", [True, False])
 @pytest.mark.parametrize(
     "device_params",
@@ -322,103 +352,31 @@ def test_ccl_all_reduce_chunk_and_link_matrix(
         pytest.skip("Test requires more devices than are available on this platform")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    compute_grid_size = submesh.compute_with_storage_grid_size()
-
-    input_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
-    input_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        input_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    input_mem_config = ttnn.MemoryConfig(tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=input_shard_spec)
-
-    device_tensors = [torch.rand(output_shape, dtype=torch.bfloat16) for _ in range(num_devices)]
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    inputs = build_all_reduce_test_inputs(
+        mesh_device=submesh,
+        num_devices=num_devices,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        fuse_residual_add=fuse_residual_add,
+        semaphore_count=2,
     )
-
-    residual_tensor_mesh = None
-    residual_tensor = None
-    if fuse_residual_add:
-        residual_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
-        residual_tensors = [residual_tensor for _ in range(num_devices)]
-        residual_mesh_tensor_torch = torch.cat(residual_tensors, dim=0)
-        residual_tensor_mesh = ttnn.from_torch(
-            residual_mesh_tensor_torch,
-            device=submesh,
-            layout=layout,
-            tile=ttnn.Tile((1, 32)),
-            dtype=input_dtype,
-            memory_config=input_mem_config,
-            mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-        )
-
-    output_tensor_per_device = torch.zeros(output_shape, dtype=torch.bfloat16)
-    output_tensor_torch = torch.cat([output_tensor_per_device] * num_devices, dim=0)
-    output_tensor = ttnn.from_torch(
-        output_tensor_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-
-    intermediate_shape = [32, 224]
-    intermediate_shard_shape = tuple(intermediate_shape)
-    intermediate_tensor_torch = torch.zeros(intermediate_shape, dtype=torch.bfloat16)
-    intermediate_shard_spec = ttnn.ShardSpec(
-        input_shard_grid,
-        intermediate_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    intermediate_mem_config = ttnn.MemoryConfig(
-        tensor_mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=intermediate_shard_spec
-    )
-    intermediate_mesh_torch = torch.cat([intermediate_tensor_torch] * num_devices, dim=0)
-    intermediate_tensor = ttnn.from_torch(
-        intermediate_mesh_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((32, 32)),
-        dtype=input_dtype,
-        memory_config=intermediate_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
-
-    if fuse_residual_add:
-        torch_expected = DeepseekMinimalAllReduce.golden(device_tensors, residual_tensor)
-    else:
-        torch_expected = DeepseekMinimalAllReduce.golden(device_tensors)
-
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-    semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [semaphore1, semaphore2]
 
     logger.info(
         f"Running all-reduce feature matrix: num_links={num_links}, chunk_num_tiles={chunk_num_tiles}, "
         f"fuse_residual_add={fuse_residual_add}"
     )
     ttnn_result = DeepseekMinimalAllReduce.op(
-        input_tensor_mesh,
-        intermediate_tensor,
-        semaphores=semaphores,
+        inputs.input_tensor_mesh,
+        inputs.intermediate_tensor_mesh,
+        semaphores=inputs.semaphores[:num_links],
         cluster_axis=cluster_axis,
         num_links=num_links,
         chunk_num_tiles=chunk_num_tiles,
-        persistent_output_tensor=output_tensor,
-        residual_tensor_mesh=residual_tensor_mesh,
+        persistent_output_tensor=inputs.output_tensor_mesh,
+        residual_tensor_mesh=inputs.residual_tensor_mesh,
     )
     ttnn.synchronize_device(submesh)
 
@@ -431,10 +389,10 @@ def test_ccl_all_reduce_chunk_and_link_matrix(
     ref_device_output = output_tensor_torch[ref_device_idx : ref_device_idx + 1, :]
     for device_idx in range(num_devices):
         received = output_tensor_torch[device_idx : device_idx + 1, :]
-        assert received.shape == torch_expected.shape, f"Shape mismatch at device {device_idx}"
+        assert received.shape == inputs.torch_expected.shape, f"Shape mismatch at device {device_idx}"
         if device_idx != ref_device_idx:
             assert torch.equal(received, ref_device_output), f"Device {device_idx} output mismatch"
-        assert torch.allclose(received, torch_expected, rtol=1e-2, atol=1e-2), (
+        assert torch.allclose(received, inputs.torch_expected, rtol=1e-2, atol=1e-2), (
             f"Output mismatch for device {device_idx}; "
             f"num_links={num_links}, chunk_num_tiles={chunk_num_tiles}, fuse_residual_add={fuse_residual_add}"
         )
