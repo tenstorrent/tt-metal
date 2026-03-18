@@ -138,7 +138,7 @@ class _TTTransformerAdapter:
     def clear_pred_cache(self, cache_name):
         self._tt_model.clear_pred_cache(cache_name)
 
-    def __call__(self, input_dict, update_cache=0, cache_name="pos", action_mode=False):
+    def __call__(self, input_dict, update_cache=0, cache_name="pos", action_mode=False, dump_iter=None):
         spatial = input_dict["noisy_latents"]
         prompt = input_dict["text_emb"]
         timesteps = input_dict["timesteps"]
@@ -168,6 +168,7 @@ class _TTTransformerAdapter:
             update_cache=update_cache,
             cache_name=cache_name,
             timestep_per_frame=timestep_per_frame,
+            dump_iter=dump_iter,
         )
 
 
@@ -860,6 +861,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=False,
+                dump_iter=i,
             )
             if models.get("transformer_is_tt", False) and video_noise_pred.dtype != torch.float32:
                 video_noise_pred = video_noise_pred.float()
@@ -910,6 +912,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=True,
+                dump_iter=i,
             )
             if models.get("transformer_is_tt", False):
                 if action_noise_pred.dtype != torch.float32:
