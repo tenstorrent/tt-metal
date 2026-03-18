@@ -840,6 +840,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
     const uint32_t bias_single_tile_size,
     const MemoryConfig& mem_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<unary::UnaryWithParam>& user_fused_activation,
     const bool user_run_batched,
     const tt::tt_metal::DataType output_dtype,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {
@@ -871,7 +872,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
         transpose_b,
         bias_single_tile_size,
         mem_config,
-        std::nullopt,
+        user_fused_activation,
         !bmm,
         compute_kernel_config,
         output_dtype);
@@ -939,6 +940,7 @@ MatmulProgramConfig get_program_config(
         bias_single_tile_size,
         attributes.output_mem_config,
         attributes.compute_kernel_config,
+        attributes.user_fused_activation,
         attributes.user_run_batched,
         attributes.output_dtype.value_or(input_tensor_a.dtype()),
         attributes.sub_device_id);

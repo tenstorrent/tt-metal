@@ -232,12 +232,21 @@ static ttnn::Tensor bound_matmul(
             optional_output_tensor);
     }
 
-    if (parameters.user_fused_activation.has_value() &&
-        !std::holds_alternative<MatmulMultiCoreProgramConfig>(chosen_program_config)) {
-        const UnaryWithParam& activation = parameters.user_fused_activation.value();
-
-        output_tensor =
-            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+    if (parameters.user_fused_activation.has_value()) {
+        // Check if activation was fused into the chosen program config
+        bool activation_fused = std::visit(
+            [](const auto& config) -> bool {
+                if constexpr (requires { config.fused_activation; }) {
+                    return config.fused_activation.has_value();
+                }
+                return false;
+            },
+            chosen_program_config);
+        if (!activation_fused) {
+            const UnaryWithParam& activation = parameters.user_fused_activation.value();
+            output_tensor =
+                ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+        }
     }
 
     return output_tensor;
