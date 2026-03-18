@@ -18,11 +18,12 @@ from loguru import logger
 
 import ttnn
 
+from diffusers.models.normalization import FP32LayerNorm as _FP32LayerNorm
+
 from models.tt_dit.layers.embeddings import WanPatchEmbed, WanTimeTextImageEmbedding
 from models.tt_dit.layers.feedforward import ParallelFeedForward
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
-from models.tt_dit.layers.normalization import DistributedLayerNorm
 from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
@@ -32,6 +33,68 @@ from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, 
 
 from .attention_wan import WanAttention
 from .wan_rotary_pos_embed import WanRotaryPosEmbed
+
+
+class _FP32LayerNormFallback(Module):
+    """PyTorch FP32LayerNorm fallback; same interface as DistributedLayerNorm for WanTransformerBlock."""
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        norm_eps: float = 1e-5,
+        norm_elementwise_affine: bool = True,
+        bias: bool = True,
+        mesh_axis: int = 0,
+        mesh_device: ttnn.MeshDevice | None = None,
+        ccl_manager: CCLManager | None = None,
+    ) -> None:
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.norm_eps = norm_eps
+        self.norm_elementwise_affine = norm_elementwise_affine
+        self.mesh_axis = mesh_axis
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+        self.mesh_width = int(mesh_device.shape[mesh_axis]) if mesh_device is not None else 1
+        self._norm = _FP32LayerNorm(embedding_dim, eps=norm_eps, elementwise_affine=False)
+        if norm_elementwise_affine and mesh_device is not None:
+            self.weight = Parameter(total_shape=(embedding_dim,), device=mesh_device)
+            self.bias = Parameter(total_shape=(embedding_dim,), device=mesh_device)
+        else:
+            self.weight = None
+            self.bias = None
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        dynamic_weight: ttnn.Tensor | None = None,
+        dynamic_bias: ttnn.Tensor | None = None,
+        compute_kernel_config=None,
+        dtype: ttnn.DataType | None = None,
+    ) -> ttnn.Tensor:
+        assert (dynamic_weight is None) == (dynamic_bias is None)
+        if self.mesh_width > 1 and self.ccl_manager is not None:
+            x = self.ccl_manager.all_gather_persistent_buffer(x, dim=len(x.shape) - 1, mesh_axis=self.mesh_axis)
+        t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+        out = self._norm(t)
+        if dynamic_weight is not None:
+            w = ttnn.to_torch(ttnn.get_device_tensors(dynamic_weight)[0]).float()
+            b = ttnn.to_torch(ttnn.get_device_tensors(dynamic_bias)[0]).float()
+            out = out * w + b
+        elif self.weight is not None:
+            w = ttnn.to_torch(ttnn.get_device_tensors(self.weight.data)[0]).float()
+            b = ttnn.to_torch(ttnn.get_device_tensors(self.bias.data)[0]).float()
+            out = out * w + b
+        out_dtype = dtype if dtype is not None else ttnn.bfloat16
+        mesh_axes = None
+        if self.mesh_width > 1:
+            mesh_axes = [None] * (len(x.shape) - 1) + [self.mesh_axis]
+        return from_torch(
+            out.to(torch.bfloat16 if out_dtype == ttnn.bfloat16 else torch.float32),
+            device=self.mesh_device,
+            dtype=out_dtype,
+            mesh_axes=tuple(mesh_axes) if mesh_axes is not None else None,
+        )
 
 
 # Lingbot-VA config (from reference model.py)
@@ -81,7 +144,7 @@ class WanTransformerBlock(Module):
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.norm1 = DistributedLayerNorm(
+        self.norm1 = _FP32LayerNormFallback(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
@@ -114,7 +177,7 @@ class WanTransformerBlock(Module):
         )
 
         self.norm2 = (
-            DistributedLayerNorm(
+            _FP32LayerNormFallback(
                 dim,
                 norm_eps=eps,
                 norm_elementwise_affine=True,
@@ -137,7 +200,7 @@ class WanTransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
-        self.norm3 = DistributedLayerNorm(
+        self.norm3 = _FP32LayerNormFallback(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
@@ -390,7 +453,7 @@ class WanTransformer3DModel(Module):
             for _ in range(num_layers)
         )
 
-        self.norm_out = DistributedLayerNorm(
+        self.norm_out = _FP32LayerNormFallback(
             dim,
             norm_eps=eps,
             norm_elementwise_affine=False,
@@ -744,6 +807,7 @@ class WanTransformer3DModel(Module):
         update_cache: int = 0,
         cache_name: str = "pos",
         timestep_per_frame: torch.Tensor | None = None,
+        dump_iter: int | None = None,
     ) -> torch.Tensor:
         """
         Forward pass.
@@ -805,15 +869,37 @@ class WanTransformer3DModel(Module):
 
         block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
         dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
+        dump_path = "action" if action_mode else "video"
+        suffix = f"_iter{dump_iter}_{dump_path}" if dump_iter is not None else ""
         os.makedirs(dump_dir, exist_ok=True)
 
         def _to_torch_cpu(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-            return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).detach().cpu()
+            return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).detach().cpu().float()
 
-        torch.save(
-            _to_torch_cpu(spatial_1BND),
-            os.path.join(dump_dir, "input_tt.pt"),
-        )
+        def _spatial_to_bnc(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+            t = _to_torch_cpu(tt_tensor)
+            return t[0, :, :N, :].contiguous()
+
+        if dump_iter is not None:
+            torch.save(_spatial_to_bnc(spatial_1BND), os.path.join(dump_dir, f"input_tt{suffix}.pt"))
+            torch.save(
+                _to_torch_cpu(prompt_1BLP)[0],
+                os.path.join(dump_dir, f"text_hidden_states_tt{suffix}.pt"),
+            )
+            if use_per_token:
+                torch.save(
+                    _to_torch_cpu(temb_1BND)[0, :, :N, :].contiguous(),
+                    os.path.join(dump_dir, f"temb_tt{suffix}.pt"),
+                )
+                tproj = _to_torch_cpu(block_temb)[0, :, :N, :]
+                tproj = tproj.reshape(B, N, 6, -1).contiguous()
+                torch.save(tproj, os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
+            else:
+                torch.save(
+                    _to_torch_cpu(temb_11BD).squeeze(0).squeeze(0),
+                    os.path.join(dump_dir, f"temb_tt{suffix}.pt"),
+                )
+                torch.save(_to_torch_cpu(block_temb)[0], os.path.join(dump_dir, f"timestep_proj_tt{suffix}.pt"))
 
         for block_idx, block in enumerate(self.blocks):
             cached_k_tt = None
@@ -864,14 +950,10 @@ class WanTransformer3DModel(Module):
                 slots = self._cache_update(cache, k_t, v_t, is_pred=(update_cache == 1))
                 if update_cache == 0:
                     self._cache_restore(cache, slots)
-                if block_idx < 5:
+                if dump_iter is not None:
                     torch.save(
-                        (
-                            _to_torch_cpu(attn1_out[0]),
-                            _to_torch_cpu(attn1_out[1]),
-                            _to_torch_cpu(attn1_out[2]),
-                        ),
-                        os.path.join(dump_dir, f"transformers_tt_{block_idx + 1}.pt"),
+                        _spatial_to_bnc(attn1_out[0]),
+                        os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
                     )
             else:
                 spatial_1BND = block(
@@ -883,10 +965,10 @@ class WanTransformer3DModel(Module):
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
                 )
-                if block_idx < 5:
+                if dump_iter is not None:
                     torch.save(
-                        _to_torch_cpu(spatial_1BND),
-                        os.path.join(dump_dir, f"transformers_tt_{block_idx + 1}.pt"),
+                        _spatial_to_bnc(spatial_1BND),
+                        os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
                     )
 
         if use_per_token:
@@ -910,6 +992,11 @@ class WanTransformer3DModel(Module):
                 dim=3,
                 mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
+        if dump_iter is not None:
+            torch.save(
+                _spatial_to_bnc(spatial_norm_1BND),
+                os.path.join(dump_dir, f"norm_out_tt{suffix}.pt"),
+            )
 
         if action_mode:
             proj_out_1BNA = self.action_proj_out(
@@ -917,11 +1004,22 @@ class WanTransformer3DModel(Module):
                 compute_kernel_config=self.hifi4_compute_kernel_config,
                 dtype=ttnn.float32,
             )
-            return self.postprocess_action_output(proj_out_1BNA, N)
+            out_action = self.postprocess_action_output(proj_out_1BNA, N)
+            if dump_iter is not None:
+                torch.save(out_action.detach().cpu(), os.path.join(dump_dir, f"final_out_action_tt{suffix}.pt"))
+            return out_action
         else:
             proj_out_1BNI = self.proj_out(
                 spatial_norm_1BND,
                 compute_kernel_config=self.hifi4_compute_kernel_config,
                 dtype=ttnn.float32,
             )
-            return self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
+            if dump_iter is not None:
+                torch.save(
+                    _spatial_to_bnc(proj_out_1BNI),
+                    os.path.join(dump_dir, f"final_pre_rearrange_tt{suffix}.pt"),
+                )
+            out_video = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
+            if dump_iter is not None:
+                torch.save(out_video.detach().cpu(), os.path.join(dump_dir, f"final_out_video_tt{suffix}.pt"))
+            return out_video
