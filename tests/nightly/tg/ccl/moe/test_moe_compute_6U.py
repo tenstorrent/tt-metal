@@ -295,6 +295,7 @@ def prepare_output_tensor_from_combine_writer(
 
 
 PCC_THRESHOLD = 0.988
+ATOL_THRESHOLD = 600
 
 
 def validate_matmul(
@@ -347,7 +348,7 @@ def validate_matmul(
             tt_layer_output = reshaped_device_outputs[d, expert_id, :active_tokens, :]
 
             _pcc_passed, pcc_val = comp_pcc(torch_layer_output, tt_layer_output)
-            allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=600)
+            allclose_passed = torch.allclose(torch_layer_output, tt_layer_output, atol=ATOL_THRESHOLD)
             std = torch_layer_output.std().item()
             relative_rmse_val = (
                 (torch.nn.functional.mse_loss(torch_layer_output, tt_layer_output).sqrt().item() / std)
@@ -398,7 +399,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
         vals = torch.stack(vals)
         refs = torch.stack(refs)
         _, pcc_val = comp_pcc(refs, vals)
-        allclose_passed = torch.allclose(refs, vals, atol=600)
+        allclose_passed = torch.allclose(refs, vals, atol=ATOL_THRESHOLD)
 
         if pcc_val < PCC_THRESHOLD or not allclose_passed:
             combine_all_passed = False
@@ -694,9 +695,7 @@ def gen_sparse_buffer_and_indices(
     for src_device in range(num_dispatch_devices):
         for t in range(tokens_per_device):
             # Each token selects K unique experts
-            selected = torch.tensor([2 * src_device])
-            # selected = torch.tensor([t])
-            # selected = torch.randperm(experts)[:selected_experts_k]
+            selected = torch.randperm(experts)[:selected_experts_k]
             expert_indices[src_device, t, :] = selected.to(torch.uint16)
 
     # Generate expert scores
