@@ -544,13 +544,13 @@ void WatcherServer::Impl::poll_watcher_data() {
 
             try {
                 dump();
-            } catch (std::runtime_error& e) {
+            } catch (const std::runtime_error& e) {
                 // Depending on whether test mode is enabled, catch and stop server, or re-throw.
                 if (rtoptions.get_test_mode_enabled()) {
                     server_killed_due_to_error_ = true;
                     break;
                 }
-                throw e;
+                throw;
             }
 
             fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
