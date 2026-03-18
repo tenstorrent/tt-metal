@@ -320,7 +320,6 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t ring_size,
     const uint32_t input_tensor_B,
     const uint32_t mm_M_unit_blocks_per_core,
-    const uint32_t mm_N_full_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
     const uint32_t chunk_width_in_tiles,
@@ -328,8 +327,11 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t slice_Wt,
     const uint32_t N_full_block_wt,
     const uint32_t slice_Ht_per_core,
-    const uint32_t slice_Ht) {
+    const uint32_t slice_Ht,
+    const uint32_t ring_index) {
     // Strided reduction compile args - include MM blocking parameters
+    // mm_N_full_blocks_per_slice is no longer a CT arg; computed dynamically per ring step
+    // via get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt).
     return {
         input_cb_index,              // [0]  input_cb_id
         intermediate_cb_index,       // [1]  intermediate_cb
@@ -338,15 +340,15 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
         ring_size,                   // [4]  ring_size
         input_tensor_B,              // [5]  input_tensor_B
         mm_M_unit_blocks_per_core,   // [6]  mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,  // [7]  mm_N_full_blocks_per_slice
-        mm_block_ht,                 // [8]  mm_block_ht
-        mm_cores_y,                  // [9]  mm_cores_y
-        chunk_width_in_tiles,        // [10] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,  // [11] chunks_per_mm_N_full_block
-        slice_Wt,                    // [12] slice_Wt
-        N_full_block_wt,             // [13] mm_N_full_block_wt
-        slice_Ht_per_core,           // [14] slice_Ht_per_core
-        slice_Ht,                    // [15] slice_Ht (unpadded; used for ghost-tile bounds checks)
+        mm_block_ht,                 // [7]  mm_block_ht
+        mm_cores_y,                  // [8]  mm_cores_y
+        chunk_width_in_tiles,        // [9]  chunk_width_in_tiles
+        chunks_per_mm_N_full_block,  // [10] chunks_per_mm_N_full_block
+        slice_Wt,                    // [11] slice_Wt (for get_slice_N_block_info)
+        N_full_block_wt,             // [12] mm_N_full_block_wt (for get_slice_N_block_info)
+        slice_Ht_per_core,           // [13] slice_Ht_per_core
+        slice_Ht,                    // [14] slice_Ht (unpadded; used for ghost-tile bounds checks)
+        ring_index,                  // [15] my_chip_id (for slice_idx initialization)
     };
 }
 
@@ -797,7 +799,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             ring_size,
             input_tensor_B,
             mm_M_unit_blocks_per_core,
-            mm_N_full_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
             chunk_width_in_tiles_val,
@@ -805,7 +806,8 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_Wt,
             mm_N_full_block_wt_val,
             slice_Ht_per_core,
-            slice_Ht);
+            slice_Ht,
+            ring_index);
 
     std::string sender_reduce_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/"
