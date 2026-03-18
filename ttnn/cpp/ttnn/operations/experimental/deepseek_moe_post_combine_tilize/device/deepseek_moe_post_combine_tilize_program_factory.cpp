@@ -185,8 +185,8 @@ void DeepseekMoEPostCombineTilizeProgramFactory::override_runtime_arguments(
     tt::tt_metal::UpdateDynamicCircularBufferAddress(
         program, cached_program.shared_variables.sharded_output_cb_handle, *output_tensor.buffer());
 
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        auto& reader_args = GetRuntimeArgs(program, reader_kernel_id, cores[i]);
+    for (auto core : cores) {
+        auto& reader_args = GetRuntimeArgs(program, reader_kernel_id, core);
         reader_args[2] = input_tensor.buffer()->address();
     }
 }

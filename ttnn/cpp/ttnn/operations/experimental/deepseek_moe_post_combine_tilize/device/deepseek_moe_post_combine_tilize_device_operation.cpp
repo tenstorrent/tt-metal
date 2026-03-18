@@ -26,44 +26,62 @@ void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t input_rank = input_shape.rank();
 
+    uint32_t upper_dims = 1;
+    for (uint32_t dim = 0; dim < input_rank - 1; ++dim) {
+        upper_dims *= input_shape[dim];
+    }
+
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     // rank 2+
     TT_FATAL(input_rank >= 2, "DeepseekMoEPostCombineTilize requires rank >= 2, but has {}", input_rank);
 
-    // input must be interleaved
+    // input must be bfloat16
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16,
         "DeepseekMoEPostCombineTilize requires dtype to be bfloat16, but has {}",
         input_tensor.dtype());
 
-    // input must be bfloat16
+    // input must be interleaved
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "DeepseekMoEPostCombineTilize requires input to be interleaved");
 
+    // input must be row-major layout (kernel reads rows as pages)
+    TT_FATAL(
+        input_tensor.layout() == ttnn::Layout::ROW_MAJOR,
+        "DeepseekMoEPostCombineTilize requires input layout to be ROW_MAJOR");
+
     // output must be L1 sharded
-    TT_FATAL(output_memory_config.is_sharded(), "DeepseekMoEPostCombineTilize requires sharded output");
+    TT_FATAL(
+        output_memory_config.is_sharded() && output_memory_config.nd_shard_spec().has_value(),
+        "DeepseekMoEPostCombineTilize requires sharded output");
     TT_FATAL(output_memory_config.buffer_type() == BufferType::L1, "DeepseekMoEPostCombineTilize requires L1 output");
 
     auto output_nd_shard_spec = output_memory_config.nd_shard_spec().value();
-    uint32_t output_shard_width = output_nd_shard_spec.shard_shape[-1];
-    uint32_t output_shard_height = output_nd_shard_spec.shard_shape[-2];
+    auto output_nd_shard_shape = output_nd_shard_spec.shard_shape;
+    uint32_t output_shard_width = output_nd_shard_shape[-1];
+    uint32_t output_shard_height = output_nd_shard_shape[-2];
 
     // must be a 2d shard shape
-    TT_FATAL(
-        output_nd_shard_spec.shard_shape.rank() == 2,
-        "DeepseekMoEPostCombineTilize requires dimension 2 output shard shape");
+    TT_FATAL(output_nd_shard_shape.rank() == 2, "DeepseekMoEPostCombineTilize requires dimension 2 output shard shape");
 
-    // output shard width must be even multiple of tiles
+    // output shard width must be even multiple of tiles and even split tensor width
     TT_FATAL(
-        output_shard_width % tt::constants::TILE_WIDTH == 0,
+        output_shard_width % tt::constants::TILE_WIDTH == 0 && input_shape[-1] % output_shard_width == 0,
         "DeepseekMoEPostCombineTilize requires output shard width to be even multiple of tiles");
 
-    // output shard height must be single tile high
+    // output shard height must be single tile high and even split physical tensor height
     TT_FATAL(
-        output_shard_height == tt::constants::TILE_HEIGHT,
+        output_shard_height == tt::constants::TILE_HEIGHT && upper_dims % output_shard_height == 0,
         "DeepseekMoEPostCombineTilize requires output shard height to be a single tile high");
+
+    // single shard per core
+    uint32_t num_shards_wide = input_shape[-1] / output_shard_width;
+    uint32_t num_shards_high = upper_dims / output_shard_height;
+    TT_FATAL(
+        num_shards_wide * num_shards_high == output_nd_shard_spec.grid.num_cores(),
+        "DeepseekMoEPostCombineTilize requires one output shard per core");
 }
 
 ttnn::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_output_specs(
