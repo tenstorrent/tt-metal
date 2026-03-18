@@ -1207,22 +1207,20 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         tt::tt_metal::CircularBufferConfig(8 * ag_pkt_hdr_size, {{ag_pkt_hdr_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(ag_pkt_hdr_cb_id, ag_pkt_hdr_size));
 
-    // cb_k_out (c_14) and cb_v_out (c_15): reader→writer pipe for CB-based K/V all-gather forwarding.
-    // Reader pushes each local K/V chunk here; writer pops and sends via fabric to next device.
-    // Sized for 1 KV chunk; allocated only on fabric writer cores (reader conditionally pushes).
+    // cb_k_out (c_14): reader→writer pipe for K all-gather forwarding (non-transposed K).
+    // cb_v_in (c_2) is shared directly for V forwarding via semaphore coordination (no separate cb_v_out).
     const uint32_t cb_k_out_id = tt::CBIndex::c_14;
-    const uint32_t cb_v_out_id = tt::CBIndex::c_15;
     const uint32_t kv_out_chunk_tiles = Sk_chunk_t * DHt;
     tt::tt_metal::CreateCircularBuffer(
         program,
         fabric_writer_range,
         tt::tt_metal::CircularBufferConfig(kv_out_chunk_tiles * k_tile_size, {{cb_k_out_id, k_df}})
             .set_page_size(cb_k_out_id, k_tile_size));
-    tt::tt_metal::CreateCircularBuffer(
-        program,
-        fabric_writer_range,
-        tt::tt_metal::CircularBufferConfig(kv_out_chunk_tiles * v_tile_size, {{cb_v_out_id, v_df}})
-            .set_page_size(cb_v_out_id, v_tile_size));
+
+    // v_fwd_done semaphore: writer (BRISC) increments once per forwarded V chunk (after per-chunk barrier).
+    // Reader (NCRISC) waits on it at the q_chunk=0→1 boundary to prevent overwriting cb_v_in slots
+    // that the writer's fabric DMA may still be reading.
+    const uint32_t v_fwd_done_sem_id = CreateSemaphore(program, fabric_writer_range, 0);
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -1373,16 +1371,17 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         const bool r_lnk_ok = r_is_mux_cl && (r_lnk < args.num_links) && (r_lnk < mux_backward_logical_cores.size()) &&
                               (r_lnk < mux_forward_logical_cores.size());
         const bool r_ag_valid = r_lnk_ok && (r_is_bwd ? backward_coord.has_value() : forward_coord.has_value());
-        // do_kv_out=1 for all valid MUX clients: each pushes K/V to cb_k_out/cb_v_out for AG forwarding.
+        // do_kv_out=1 for all valid MUX clients: each pushes K to cb_k_out and shares cb_v_in for V AG forwarding.
         const bool is_mux_cl_valid = r_is_mux_cl && r_ag_valid;
 
         // Push ring sequencer args. do_kv_out comes first.
-        // out_ready_sem_addr always pushed: kernel uses it only when is_injector is true.
+        // out_ready_sem_addr and v_fwd_done_sem_addr always pushed: kernels use them only when relevant.
         reader_args.push_back(static_cast<uint32_t>(is_mux_cl_valid));  // do_kv_out
         reader_args.push_back(sdpa_fused_op_signaler->ring_size);
         reader_args.push_back(sdpa_fused_op_signaler->ring_index);
         reader_args.push_back(direction);
         reader_args.push_back(out_ready_sem_addr);
+        reader_args.push_back(v_fwd_done_sem_id);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1484,6 +1483,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(v_addr);
                 writer_args.push_back(gathered_k_addr);
                 writer_args.push_back(gathered_v_addr);
+                // v_fwd_done semaphore: writer increments after each per-chunk V fabric barrier.
+                // Reader on same core waits on this before reusing cb_v_in slots.
+                writer_args.push_back(v_fwd_done_sem_id);
             }
             SetRuntimeArgs(program, writer_fabric_kernels_id, core, writer_args);
         } else {

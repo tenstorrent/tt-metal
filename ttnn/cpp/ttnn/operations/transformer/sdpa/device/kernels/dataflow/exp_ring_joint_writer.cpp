@@ -341,9 +341,10 @@ void kernel_main() {
     constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_input_v_args.next_compile_time_args_offset()>();
     constexpr auto ag_gathered_v_args = TensorAccessorArgs<ag_gathered_k_args.next_compile_time_args_offset()>();
 
-    // CB IDs for the reader→writer K/V pipe (populated by exp_ring_joint_reader.cpp)
+    // CB IDs for the reader→writer K pipe (populated by exp_ring_joint_reader.cpp).
+    // V forwarding reads directly from cb_v_in (c_2) using semaphore coordination.
     constexpr uint32_t cb_k_out = tt::CBIndex::c_14;
-    constexpr uint32_t cb_v_out = tt::CBIndex::c_15;
+    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
 #endif
@@ -421,6 +422,7 @@ void kernel_main() {
     uint32_t kv_scratch_addr = 0;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem = nullptr;
+    volatile tt_l1_ptr uint32_t* v_fwd_done_ptr = nullptr;
     uint32_t ag_local_gathered_tile_id_start = 0;
     // DRAM base addresses for K/V input and gathered output; updated inside the if-block.
     // TensorAccessors are constructed as temporaries at the call sites to avoid the
@@ -448,6 +450,8 @@ void kernel_main() {
         v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
+        const uint32_t v_fwd_done_sem_id_rt = get_arg_val<uint32_t>(argidx++);
+        v_fwd_done_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(v_fwd_done_sem_id_rt));
 
         // Allocate L1 scratch for one packet of K or V tiles
         cb_reserve_back(ag_kv_scratch_cb_id, ag_packet_size_in_pages);
@@ -560,6 +564,71 @@ void kernel_main() {
         }
 
         cb_pop_front(cb_id, k_chunk_tiles);
+    };
+
+    // Lambda: forward one V chunk to the next device by reading directly from cb_v_in's L1 address.
+    // Does NOT pop cb_v_in — only compute manages that CB. After the per-chunk barrier, increments
+    // v_fwd_done so the reader knows it can safely reuse this slot.
+    auto send_vin_chunk = [&](uint32_t gathered_bh_start, uint32_t k_chunk_idx, const auto& gathered_acc) {
+        cb_wait_front(cb_v_in, v_chunk_tiles);
+        const uint32_t v_l1_addr = get_read_ptr(cb_v_in);
+
+        const uint32_t chunk_start = k_chunk_idx * v_chunk_tiles;
+        const uint32_t chunk_end = chunk_start + v_chunk_tiles;
+
+        if (ag_tile_id_start < chunk_end && ag_tile_id_end > chunk_start) {
+            const uint32_t send_start = (ag_tile_id_start > chunk_start) ? ag_tile_id_start - chunk_start : 0;
+            const uint32_t send_end = (ag_tile_id_end < chunk_end) ? ag_tile_id_end - chunk_start : v_chunk_tiles;
+
+            const uint32_t bh_tile_start = chunk_start + send_start;
+            uint32_t pages_in_row = bh_tile_start % ag_input_Wt;
+            uint32_t output_row_off = (bh_tile_start / ag_input_Wt) * ag_output_Wt;
+            uint32_t cb_local_idx = send_start;
+            uint32_t tiles_sent = send_start;
+
+            while (tiles_sent < send_end) {
+                const uint32_t num_pages = std::min(send_end - tiles_sent, ag_packet_size_in_pages);
+                const uint32_t gathered_id0 = gathered_bh_start + output_row_off + pages_in_row;
+                const uint32_t src0 = v_l1_addr + cb_local_idx * ag_page_size;
+                pages_in_row++;
+                cb_local_idx++;
+                if (pages_in_row >= ag_input_Wt) {
+                    output_row_off += ag_output_Wt;
+                    pages_in_row = 0;
+                }
+
+                if constexpr (ag_packet_size_in_pages == 2) {
+                    if (num_pages == 2) {
+                        const uint32_t gathered_id1 = gathered_bh_start + output_row_off + pages_in_row;
+                        pages_in_row++;
+                        cb_local_idx++;
+                        if (pages_in_row >= ag_input_Wt) {
+                            output_row_off += ag_output_Wt;
+                            pages_in_row = 0;
+                        }
+                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+                            ag_page_size, pkt_hdr_write, gathered_id0, gathered_id1, gathered_acc);
+                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, src0, ag_page_size * 2);
+                    } else {
+                        tt::tt_fabric::linear::to_noc_unicast_write(
+                            ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
+                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, src0, ag_page_size);
+                    }
+                } else {
+                    tt::tt_fabric::linear::to_noc_unicast_write(
+                        ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
+                    tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, src0, ag_page_size);
+                }
+
+                tiles_sent += num_pages;
+            }
+        }
+
+        // Per-chunk barrier: ensures fabric DMA has read from v_l1_addr before reader can reuse slot.
+        noc_async_write_barrier();
+        // Signal reader that this V slot is safe to overwrite.
+        *v_fwd_done_ptr = *v_fwd_done_ptr + 1;
+        // Note: cb_v_in is NOT popped here — only compute calls cb_pop_front(cb_v_in).
     };
 
     // Lambda: store-and-forward one received slice from gathered DRAM to the next device.
@@ -796,7 +865,7 @@ void kernel_main() {
                             continue;
                         }
                         send_cb_chunk(cb_k_out, gathered_bh_start, k_chunk, gathered_k_acc);
-                        send_cb_chunk(cb_v_out, gathered_bh_start, k_chunk, gathered_v_acc);
+                        send_vin_chunk(gathered_bh_start, k_chunk, gathered_v_acc);
                         tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
                     }
                 }
@@ -870,7 +939,7 @@ void kernel_main() {
                             continue;
                         }
                         send_cb_chunk(cb_k_out, gathered_bh_start, k_chunk, gathered_k_acc);
-                        send_cb_chunk(cb_v_out, gathered_bh_start, k_chunk, gathered_v_acc);
+                        send_vin_chunk(gathered_bh_start, k_chunk, gathered_v_acc);
                         tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
                     }
                 }

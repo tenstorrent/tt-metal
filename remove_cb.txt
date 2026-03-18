@@ -1,0 +1,110 @@
+Notes on removing a circular buffer shared between two kernels (reader + writer)
+via direct L1 address access + semaphore coordination.
+
+Context: exp_ring_joint_sdpa, cb_v_out (c_15) removal.
+
+================================================================================
+WHEN THIS APPLIES
+================================================================================
+
+A CB can be eliminated this way when:
+1. Two CBs on the same logical core (reader NCRISC, writer BRISC) hold identical data.
+2. One CB is already managed by compute (cb_v_in, c_2): reader pushes, compute pops.
+3. The second CB (cb_v_out, c_15) is just a copy for a second consumer (writer).
+4. The second consumer only needs to read, not pop, the data.
+
+This does NOT apply when the two CBs hold different data (e.g. cb_k_in is transposed,
+cb_k_out is not — they cannot be shared this way).
+
+================================================================================
+KEY INSIGHT
+================================================================================
+
+cb_wait_front() is a pure occupancy check — multiple kernels on the same core can
+call it on the same CB without conflict. Only one caller should call cb_pop_front().
+
+get_read_ptr(cb_id) returns the L1 address of the current front without consuming it.
+The second consumer (writer) can read from this address directly.
+
+The risk: fabric_async_write() is asynchronous. The DMA reads from L1 after the call
+returns. If compute pops and reader refills the slot before the DMA completes,
+data corruption occurs.
+
+================================================================================
+SOLUTION: WRITER→READER SEMAPHORE (Option B)
+================================================================================
+
+1. Per-chunk barrier in writer: after each fabric_async_write(), call
+   noc_async_write_barrier() to ensure the DMA has consumed the L1 data.
+
+2. Writer signals reader: after the barrier, increment a shared L1 semaphore
+   (*v_fwd_done_ptr += 1) — direct write is safe for same-core BRISC/NCRISC.
+
+3. Reader waits at slot-reuse boundary: with double-buffering (depth=2), the first
+   possible slot overwrite is at push index 2 (start of q_chunk=1, k_chunk=0).
+   Reader waits noc_semaphore_wait_min(v_fwd_done_ptr, cumulative_expected) at
+   global_q_chunk == global_q_start + 1, once per ring_iter.
+
+   Why this boundary is sufficient: after q_chunk=0 is fully processed the writer
+   has forwarded all k_chunks for this ring_iter. Waiting once before q_chunk=1
+   ensures no slot used during q_chunk=0 forwarding is overwritten.
+
+================================================================================
+STEP-BY-STEP IMPLEMENTATION CHECKLIST
+================================================================================
+
+[ ] FACTORY (program_factory.cpp)
+    - Remove CreateCircularBuffer for the eliminated CB.
+    - Add: const uint32_t v_fwd_done_sem_id = CreateSemaphore(program, <range>, 0);
+           const uint32_t v_fwd_done_sem_addr = get_semaphore(v_fwd_done_sem_id);
+    - Pass v_fwd_done_sem_addr to both reader and writer RT args.
+      (Push unconditionally; kernels only use it when relevant flag is set.)
+
+[ ] WRITER KERNEL
+    - Declare: volatile tt_l1_ptr uint32_t* v_fwd_done_ptr = nullptr; (in outer scope)
+    - Parse v_fwd_done_sem_addr RT arg inside the mux_connection_valid block;
+      assign: v_fwd_done_ptr = reinterpret_cast<...>(v_fwd_done_sem_addr_rt);
+    - Add new lambda (e.g. send_vin_chunk) mirroring the existing send_cb_chunk but:
+        * cb_wait_front(shared_cb, chunk_tiles)   — wait for data
+        * get_read_ptr(shared_cb)                 — raw L1 address, no pop
+        * fabric_async_write(...)                 — send from L1
+        * noc_async_write_barrier()               — per-chunk barrier (CRITICAL)
+        * *v_fwd_done_ptr += 1                    — signal reader
+        * do NOT call cb_pop_front                — only compute manages this CB
+    - Replace old send_cb_chunk(eliminated_cb, ...) calls with new lambda.
+    - Remove the eliminated CB's compile-time constant (e.g. cb_v_out = c_15).
+    - Add compile-time constant for the shared CB if not already present.
+
+[ ] READER KERNEL
+    - Remove eliminated CB constant declaration.
+    - Remove the push code block (cb_reserve_back / noc_async_write / cb_push_back).
+    - Parse v_fwd_done_sem_addr RT arg (unconditionally or gated on do_kv_out).
+      Set: v_fwd_done_ptr = do_kv_out ? reinterpret_cast<...>(addr) : nullptr;
+    - Before ring loop: uint32_t cumulative_v_fwd_expected = 0;
+    - Before q_chunk loop each ring_iter (when do_kv_out && ring_iter_does_work):
+        count valid k_chunks (where kv_global_start < logical_nt) and accumulate
+        into cumulative_v_fwd_expected.
+    - Inside q_chunk loop, at global_q_chunk == global_q_start + 1:
+        noc_semaphore_wait_min(v_fwd_done_ptr, cumulative_v_fwd_expected);
+
+================================================================================
+WHY THE WAIT LOCATION IS CORRECT
+================================================================================
+
+With double-buffer depth=2, the CB has slots A and B.
+q_chunk=0: fills A (k=0), B (k=1), A (k=2), B (k=3), ...
+q_chunk=1: fills A (k=0) — first potential overwrite of a forwarding slot.
+
+The wait at global_q_chunk == global_q_start + 1 fires exactly once per ring_iter,
+before q_chunk=1's first push. All forwarding for q_chunk=0 is complete by then.
+For ring_iter with only 1 q_chunk total, the condition never triggers (no issue).
+
+================================================================================
+WHAT CANNOT USE THIS PATTERN
+================================================================================
+
+- CBs with different data (transposed vs non-transposed): cannot share.
+- If the second consumer needs to pop (to affect CB occupancy for flow control).
+- If fabric_async_write reads from L1 lazily past the next push window and the
+  CB depth is only 1 (no double-buffering to provide slack).
+- If writer and reader are on different physical cores (L1 not shared).

@@ -64,7 +64,7 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
-    // do_kv_out: 1 for all valid MUX client cores — they push K/V to cb_k_out/cb_v_out for AG forwarding.
+    // do_kv_out: 1 for all valid MUX client cores — they push K to cb_k_out and share cb_v_in for V AG forwarding.
     const uint32_t do_kv_out = get_arg_val<uint32_t>(argidx++);
 
     const uint32_t ring_size_rt = get_arg_val<uint32_t>(argidx++);
@@ -78,6 +78,13 @@ void kernel_main() {
     const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
     volatile tt_l1_ptr uint32_t* out_ready_sem_ptr =
         is_injector ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr) : nullptr;
+
+    // v_fwd_done semaphore: writer increments after each per-chunk V fabric barrier.
+    // Reader waits at the q_chunk=0→1 boundary so cb_v_in slots aren't overwritten before writer's DMA reads them.
+    // Always pushed; only used when do_kv_out is true.
+    const uint32_t v_fwd_done_sem_id = get_arg_val<uint32_t>(argidx++);
+    volatile tt_l1_ptr uint32_t* v_fwd_done_ptr =
+        do_kv_out ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(v_fwd_done_sem_id)) : nullptr;
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
@@ -128,7 +135,6 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_k_out = tt::CBIndex::c_14;
-    constexpr uint32_t cb_v_out = tt::CBIndex::c_15;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -168,6 +174,9 @@ void kernel_main() {
      */
     // Counts kv_chunks read from gathered DRAM (ring_iter > 0); used for per-chunk semaphore waits.
     uint32_t gathered_kv_chunks_received = 0;
+    // Cumulative count of V chunks the writer has been asked to forward across all ring_iters.
+    // Reader waits for v_fwd_done >= this value at the q_chunk=0→1 boundary each ring_iter.
+    uint32_t cumulative_v_fwd_expected = 0;
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
@@ -185,6 +194,16 @@ void kernel_main() {
         uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
             continue;
+        }
+
+        // Count how many V chunks the writer will forward this ring_iter (valid non-joint k_chunks).
+        // Used to compute the semaphore wait value at the q_chunk=0→1 boundary.
+        if (do_kv_out) {
+            for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
+                if (ring_id * local_padded_Nt + k * Sk_chunk_t < logical_nt) {
+                    cumulative_v_fwd_expected++;
+                }
+            }
         }
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
@@ -206,6 +225,12 @@ void kernel_main() {
                 // Index into the Q input tensor
                 q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
                 q_end_seq_tile = local_padded_Nt;
+            }
+
+            // At the q_chunk=0→1 boundary: wait for writer to finish all V forwarding for this ring_iter.
+            // This prevents cb_v_in double-buffer slots from being overwritten before writer's DMA reads them.
+            if (do_kv_out && global_q_chunk == global_q_start + 1) {
+                noc_semaphore_wait_min(v_fwd_done_ptr, cumulative_v_fwd_expected);
             }
 
             // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
@@ -384,17 +409,8 @@ void kernel_main() {
                     }
                 }
 
-                // Push V chunk to cb_v_out for the fabric writer to forward via MUX.
-                // Only on the first q_chunk: forwarding happens once per kv_chunk, not per q_chunk.
-                // Only for non-joint local V: joint V is device-local (not all-gathered).
-                if (do_kv_out && !kv_chunk_is_joint && global_q_chunk == global_q_start) {
-                    cb_reserve_back(cb_v_out, v_chunk_tiles);
-                    const uint32_t v_out_addr = get_write_ptr(cb_v_out);
-                    noc_async_write(
-                        cb_v_start_address, get_noc_addr(my_x[0], my_y[0], v_out_addr), v_chunk_tiles * v_tile_bytes);
-                    noc_async_write_barrier();
-                    cb_push_back(cb_v_out, v_chunk_tiles);
-                }
+                // V forwarding: writer reads directly from cb_v_in's L1 address via send_vin_chunk.
+                // No cb_v_out push needed — semaphore coordination prevents slot overwrite.
             }
         }
         if (KV_chunks_processed_in_iter % 2 == 0) {
