@@ -9,9 +9,8 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random, is_blackhole
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_downblock2d import TtDownBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -27,7 +26,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((512, 512), (1, 1536, 8, 8), (1, 1536), 3, 0.998),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_downblock2d(
     device,
     image_resolution,

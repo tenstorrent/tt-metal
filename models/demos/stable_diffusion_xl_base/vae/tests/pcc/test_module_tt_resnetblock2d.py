@@ -8,8 +8,7 @@ import torch
 from diffusers import AutoencoderKL
 
 import ttnn
-from models.common.utility_functions import torch_random, is_blackhole
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -48,7 +47,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((512, 512), (1, 512, 64, 64), 3, 0, False, "down_blocks", 0.999),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_resnetblock2d(
     device,
     image_resolution,

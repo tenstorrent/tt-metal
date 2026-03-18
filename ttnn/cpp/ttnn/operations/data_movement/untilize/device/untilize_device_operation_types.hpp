@@ -42,6 +42,7 @@ struct UntilizeSharedVariables {
     tt::tt_metal::CBHandle cb_src0{};
     tt::tt_metal::CBHandle cb_output{};
     std::vector<CoreCoord> cores_with_runtime_args;
+    bool has_uneven_sharding = false;
 };
 
 }  // namespace ttnn::prim

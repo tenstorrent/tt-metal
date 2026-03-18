@@ -11,7 +11,7 @@ from diffusers import DiffusionPipeline, StableDiffusionXLImg2ImgPipeline
 from loguru import logger
 
 from conftest import is_galaxy
-from models.common.utility_functions import profiler, is_blackhole
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,

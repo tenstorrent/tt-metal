@@ -8,7 +8,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -23,7 +22,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_euler_discrete_scheduler(
     device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location
 ):
@@ -122,7 +120,6 @@ def test_euler_discrete_scheduler(
         (1, 4, 64, 64),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("num_inference_steps", [20])
 def test_euler_discrete_scheduler_add_noise(
     device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location, reset_seeds

@@ -9,9 +9,8 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random, is_blackhole
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -25,7 +24,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ((512, 512), (1, 1536, 8, 8), (1, 1536), (1, 77, 1280), 1536, 24, 1536),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnmid(
     device,
     image_resolution,
