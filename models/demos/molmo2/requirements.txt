@@ -2,7 +2,7 @@
 # Note: tt-metal and ttnn are assumed to be installed from the main package
 
 # HuggingFace transformers for reference model
-transformers>=4.45.0
+transformers==4.57.1
 
 # Image processing
 Pillow>=10.0.0
