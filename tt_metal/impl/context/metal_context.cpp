@@ -167,8 +167,8 @@ void MetalContext::initialize(
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
 
-    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with the default
-    // metal context ID which will cause implicit initialization of a MetalContext.
+    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with DEFAULT_CONTEXT_ID
+    // which will cause implicit initialization of a MetalContext if one doesn't exist yet.
     // Workaround that by setting the dispatch core axis here and storing a resolved config.
     // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
     DispatchCoreConfig resolved_config = dispatch_core_config;
