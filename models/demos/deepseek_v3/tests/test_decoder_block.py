@@ -223,7 +223,6 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
-        # MoE (layer 3) variants last — ~200s each
         pytest.param(
             MoEDecoderBlock2D,
             None,
