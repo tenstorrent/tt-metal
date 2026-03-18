@@ -393,40 +393,20 @@ def test_ttnn_moe(
     all_passed = True
     validation_results = []
 
-    # Dense tensor checks with PCC (shared_output, final_output)
+    # Dense tensor checks with PCC
     # fmt: off
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.97),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.90),
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.95),
     ]
     # fmt: on
 
     for name, tt_tensor, torch_tensor, composer, threshold in dense_checks:
         if tt_tensor is None:
-            logger.warning(f"[{name}] SKIPPED - TTNN tensor is None (component not yet enabled)")
+            logger.warning(f"[{name}] validation SKIPPED")
             continue
-        # Convert TTNN to torch
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {torch_tensor.shape=}")
         tt_host = ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=torch.bfloat16)
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {tt_host.shape=} {torch_tensor.shape=}")
-
-        # Check shapes match
-        if tt_host.shape != torch_tensor.shape:
-            logger.error(f"[{name}] FAILED - Shape mismatch: TTNN {tt_host.shape} vs Torch {torch_tensor.shape}")
-            all_passed = False
-            continue
-
-        # Check for NaN/Inf
-        if torch.isnan(tt_host).any():
-            logger.error(f"[{name}] FAILED - TTNN tensor contains NaN")
-            all_passed = False
-            continue
-        if torch.isinf(tt_host).any():
-            logger.error(f"[{name}] FAILED - TTNN tensor contains Inf")
-            all_passed = False
-            continue
-
-        # Compute PCC
         _, pcc = comp_pcc(torch_tensor.float(), tt_host.float())
         if pcc >= threshold:
             logger.info(f"[{name}] PASSED - PCC: {pcc:.6f} (threshold: {threshold})")
@@ -434,22 +414,30 @@ def test_ttnn_moe(
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
 
-    # Sparse tensor validation for dispatched_buffer
-    # This is sparse: only valid data up to expert_token_counts per (dispatch_group, chip, expert)
-    # Using validate_dispatch_buffer for exact match validation (dispatch doesn't modify data)
-    if tt_intermediates.dispatched_buffer is not None:
-        name = "dispatched_buffer"
-        tt_tensor = tt_intermediates.dispatched_buffer
-        torch_tensor = torch_intermediates.dispatched_buffer
-        composer = get_dispatch_output_mesh_composer(mesh_device)
+    # Sparse tensor validation using slot-aware comparisons
+    # fmt: off
+    sparse_checks = [
+        ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
+         get_dispatch_output_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
+        ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
+         get_dispatch_output_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
+        ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
+         get_routed_expert_output_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.93}),
+    ]
+    # fmt: on
 
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {torch_tensor.shape=}")
-        tt_host = ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=torch.bfloat16)
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {tt_host.shape=} {torch_tensor.shape=}")
-
-        # Validate using sparse-aware comparison (only compares valid slots)
-        result = validate_dispatch_buffer(
-            torch_tensor.to(torch.bfloat16),
+    for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
+        if tt_tensor is None:
+            logger.warning(f"[{name}] validation SKIPPED")
+            continue
+        tt_host = (
+            ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=dtype)
+            if dtype
+            else ttnn.to_torch(tt_tensor, mesh_composer=composer)
+        )
+        torch_ref = torch_tensor.to(dtype) if dtype else torch_tensor
+        result = validate_fn(
+            torch_ref,
             tt_host,
             expert_token_counts,
             expert_dispatch_table,
@@ -457,87 +445,16 @@ def test_ttnn_moe(
             dispatch_group_size,
             experts_per_chip,
             verbose=True,
+            **extra_kwargs,
         )
         result.name = name
         validation_results.append(result)
-
         if result.passed:
             logger.info(f"[{name}] PASSED - {result.matches}/{result.total} slots matched")
         else:
             logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
             result.log_mismatches(limit=5)
             all_passed = False
-    else:
-        logger.warning("[dispatched_buffer] SKIPPED - TTNN tensor is None (component not yet enabled)")
-
-    if tt_intermediates.metadata is not None:
-        name = "dispatch_metadata"
-        tt_tensor = tt_intermediates.metadata
-        torch_tensor = torch_intermediates.metadata
-        composer = get_dispatch_output_mesh_composer(mesh_device)
-
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {torch_tensor.shape=}")
-        tt_host = ttnn.to_torch(tt_tensor, mesh_composer=composer)
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {tt_host.shape=} {torch_tensor.shape=}")
-
-        # Validate using sparse-aware comparison (only compares valid slots)
-        result = validate_dispatch_metadata(
-            torch_tensor,
-            tt_host,
-            expert_token_counts,
-            expert_dispatch_table,
-            num_dispatch_groups,
-            dispatch_group_size,
-            experts_per_chip,
-            verbose=True,
-        )
-        result.name = name
-        validation_results.append(result)
-
-        if result.passed:
-            logger.info(f"[{name}] PASSED - {result.matches}/{result.total} slots matched")
-        else:
-            logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
-            result.log_mismatches(limit=5)
-            all_passed = False
-    else:
-        logger.warning("[dispatched_buffer] SKIPPED - TTNN tensor is None (component not yet enabled)")
-
-    # Sparse PCC validation for expert_outputs
-    # This is sparse and has numerical differences from quantized matmul, so use PCC not allclose
-    if tt_intermediates.expert_outputs is not None:
-        name = "expert_outputs"
-        tt_tensor = tt_intermediates.expert_outputs
-        torch_tensor = torch_intermediates.expert_outputs
-        composer = get_routed_expert_output_mesh_composer(mesh_device)
-
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {torch_tensor.shape=}")
-        tt_host = ttnn.to_torch(tt_tensor, mesh_composer=composer, dtype=torch.bfloat16)
-        logger.debug(f"📊 {name} {tt_tensor.shape=} {tt_host.shape=} {torch_tensor.shape=}")
-
-        # Validate using sparse-aware PCC comparison (only compares valid slots)
-        result = validate_dispatch_buffer_pcc(
-            torch_tensor.to(torch.bfloat16),
-            tt_host,
-            expert_token_counts,
-            expert_dispatch_table,
-            num_dispatch_groups,
-            dispatch_group_size,
-            experts_per_chip,
-            pcc_threshold=0.93,
-            verbose=True,
-        )
-        result.name = name
-        validation_results.append(result)
-
-        if result.passed:
-            logger.info(f"[{name}] PASSED - {result.matches}/{result.total} slots matched (PCC >= 0.93)")
-        else:
-            logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
-            result.log_mismatches(limit=5)
-            all_passed = False
-    else:
-        logger.warning("[expert_outputs] SKIPPED - TTNN tensor is None (component not yet enabled)")
 
     # Validate combined_output (before reduce step)
     if tt_intermediates.combined_output is not None:
@@ -593,43 +510,6 @@ def test_ttnn_moe(
             all_passed = False
     else:
         logger.warning("[combined_output] SKIPPED - TTNN tensor is None")
-
-    # routed_output is a dense tensor (after reduce over topk), use standard PCC
-    if tt_intermediates.routed_output is not None:
-        name = "routed_output"
-        pcc_threshold = 0.90
-
-        logger.debug(f"📊 {name} {tt_intermediates.routed_output.shape=} {torch_intermediates.routed_output.shape=}")
-        tt_routed = ttnn.to_torch(
-            tt_intermediates.routed_output,
-            mesh_composer=get_tp_mesh_composer(mesh_device),
-            dtype=torch.bfloat16,
-        )
-        logger.debug(f"📊 {name} {tt_routed.shape=} {torch_intermediates.routed_output.shape=}")
-
-        # Check shapes match
-        if tt_routed.shape != torch_intermediates.routed_output.shape:
-            logger.error(
-                f"[{name}] FAILED - Shape mismatch: TTNN {tt_routed.shape} vs Torch {torch_intermediates.routed_output.shape}"
-            )
-            all_passed = False
-        else:
-            # Check for NaN/Inf
-            if torch.isnan(tt_routed).any():
-                logger.error(f"[{name}] FAILED - TTNN tensor contains NaN")
-                all_passed = False
-            elif torch.isinf(tt_routed).any():
-                logger.error(f"[{name}] FAILED - TTNN tensor contains Inf")
-                all_passed = False
-            else:
-                _, pcc = comp_pcc(torch_intermediates.routed_output.float(), tt_routed.float())
-                if pcc >= pcc_threshold:
-                    logger.info(f"[{name}] PASSED - PCC: {pcc:.6f} (threshold: {pcc_threshold})")
-                else:
-                    logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {pcc_threshold}")
-                    all_passed = False
-    else:
-        logger.warning("[routed_output] SKIPPED - TTNN tensor is None (component not yet enabled)")
 
     # Log validation summary
     if validation_results:
