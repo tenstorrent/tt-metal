@@ -158,6 +158,12 @@ class _TTTransformerAdapter:
                 B = spatial.shape[0]
                 F_frames = ts_1d.shape[0]
                 timestep_per_frame = ts_1d.unsqueeze(0).expand(B, F_frames).to(torch.float32)
+        # When dumping for transformer compare test, use per-token conditioning so TT norm_out
+        # matches reference (reference always has per-token scale/shift for final norm).
+        if dump_iter is not None and timestep_per_frame is None:
+            B = spatial.shape[0]
+            F = spatial.shape[2]
+            timestep_per_frame = timestep.unsqueeze(0).expand(B, F).to(torch.float32)
 
         return self._tt_model(
             spatial=spatial,
