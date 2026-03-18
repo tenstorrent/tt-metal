@@ -143,13 +143,15 @@ jobs:
 
       - name: Run Fabric Test
         run: |
-          tt-run --skip-executable-check --mesh-graph-descriptor /ci/ttrun/mgd.textproto --hosts $(paste -sd, /ci/ttrun/hostfile) --mpi-args "--tag-output" \
+          HOSTS=$(grep -v '^#' /ci/ttrun/hostfile 2>/dev/null | grep -v '^[[:space:]]*$' | awk '{print $1}' | paste -sd, 2>/dev/null || true)
+          tt-run --skip-executable-check --mesh-graph-descriptor /ci/ttrun/mgd.textproto --hosts "$HOSTS" --mpi-args "--tag-output" \
             /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
 
       - name: Run Pipeline Test
         timeout-minutes: 15
         run: |
-          PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+          HOSTS=$(grep -v '^#' /ci/ttrun/hostfile 2>/dev/null | grep -v '^[[:space:]]*$' | awk '{print $1}' | paste -sd, 2>/dev/null || true)
+          PIPELINE_HOSTS=$(grep -v '^#' /ci/ttrun/hostfile 2>/dev/null | grep -v '^[[:space:]]*$' | awk '{printf "%s:4,", $1}' | sed 's/,$//')
           PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
           mkdir -p $PIPELINE_DIR
           python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
@@ -160,7 +162,7 @@ jobs:
             models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
           tt-run --skip-executable-check \
             --mesh-graph-descriptor models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto \
-            --hosts $(paste -sd, /ci/ttrun/hostfile) \
+            --hosts "$HOSTS" \
             --mpi-args "--bind-to hwt:overload-allowed --tag-output" \
             /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
 
