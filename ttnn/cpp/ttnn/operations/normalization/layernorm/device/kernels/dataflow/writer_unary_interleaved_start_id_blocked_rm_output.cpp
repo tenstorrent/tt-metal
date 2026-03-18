@@ -48,7 +48,7 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
 
-    constexpr uint32_t cb_id_out_rm = tt::CBIndex::c_28;
+    constexpr uint32_t cb_id_out_rm = get_named_compile_time_arg_val("cb_out_rm");
 
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;

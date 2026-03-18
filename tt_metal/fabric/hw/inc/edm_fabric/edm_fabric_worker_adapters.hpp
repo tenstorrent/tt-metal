@@ -24,6 +24,24 @@
 
 namespace tt::tt_fabric {
 
+template <
+    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
+    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
+    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
+struct WorkerToFabricEdmSenderBase;
+
+// Type alias preserving the current name for all existing callers.
+// Stream ID 22 (sender_channel_0 free slots) is the default for VC0/VC1 worker connections.
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+using WorkerToFabricEdmSenderImpl =
+    WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>;
+
+using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
+
+namespace fabric_detail{
+    template <bool STATEFUL_NOC>
+    void update_credits_and_slots(WorkerToFabricEdmSender*);
+}
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -44,8 +62,8 @@ namespace tt::tt_fabric {
  */
 template <
     bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
-    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
+    uint8_t EDM_NUM_BUFFER_SLOTS,
+    uint32_t STREAM_ID>
 struct WorkerToFabricEdmSenderBase {
     static_assert(STREAM_ID <= 31, "Stream ID must be in range 0-31");
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
@@ -258,6 +276,11 @@ struct WorkerToFabricEdmSenderBase {
     // templatized num_slots to let callers implement bubble flow control without runtime overheads.
     template <size_t num_slots = 1>
     FORCE_INLINE bool edm_has_space_for_packet() const {
+        /*
+        Without this l1 invalidation `FlowControlAllToAllMeshLowLatency_size_1024_ntype_atomic_inc_ftype_mcast` fabric
+        test hangs, while sending packets, waiting for space in the EDM buffer. This is despite disabling the use of the
+        l1 data cache. More investigation is needed to discover the underlying issue.
+        */
         invalidate_l1_cache();
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             auto used_slots = this->buffer_slot_write_counter.counter - *this->edm_buffer_local_free_slots_read_ptr;
@@ -504,6 +527,9 @@ struct WorkerToFabricEdmSenderBase {
     uint8_t sync_noc_cmd_buf;
 
 private:
+    template <bool STATEFUL_NOC>
+    friend void fabric_detail::update_credits_and_slots(WorkerToFabricEdmSender*);
+
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (stateful_api) {
@@ -514,7 +540,7 @@ private:
                     this->sync_noc_cmd_buf,
                     noc);
             } else {
-                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
+                noc_inline_dw_write_with_state<false, true, false, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
                     this->sync_noc_cmd_buf,
@@ -602,13 +628,12 @@ private:
     }
 };
 
-// Type alias preserving the current name for all existing callers.
-// Stream ID 22 (sender_channel_0 free slots) is the default for VC0/VC1 worker connections.
-template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
-using WorkerToFabricEdmSenderImpl =
-    WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>;
-
-using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
-
+namespace fabric_detail{
+    template <bool STATEFUL_NOC>
+    void update_credits_and_slots(WorkerToFabricEdmSender* conn){
+        conn->advance_buffer_slot_write_index();
+        conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+    }
+} // namespace fabric_detail
 
 }  // namespace tt::tt_fabric

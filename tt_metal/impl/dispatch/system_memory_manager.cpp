@@ -41,11 +41,6 @@ void on_dispatch_timeout_detected();
 
 namespace {
 
-// Helper to check if running on mock device
-inline bool is_mock_device() {
-    return tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
-}
-
 bool wrap_ge(uint32_t a, uint32_t b) {
     // Signed Diff uses 2's Complement to handle wrap
     // Works as long as a and b are 2^31 apart
@@ -110,7 +105,8 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
+SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id, uint8_t num_hw_cqs) :
+    context_id(context_id),
     device_id(device_id),
     completion_byte_addrs(num_hw_cqs),
     cq_to_event_locks(num_hw_cqs),
@@ -120,6 +116,7 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
     this->prefetch_q_writers.reserve(num_hw_cqs);
     this->completion_q_writers.reserve(num_hw_cqs);
 
+    uint32_t alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
     if (is_mock_device()) {
         this->cq_size = 65536;
         this->cq_sysmem_start = nullptr;
@@ -127,17 +124,17 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
         this->cq_to_event.resize(num_hw_cqs, 0);
         this->cq_to_last_completed_event.resize(num_hw_cqs, 0);
         for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-            this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0);
+            this->cq_interfaces.emplace_back(0, cq_id, this->cq_size, 0, alignment);
         }
         log_debug(tt::LogMetal, "SystemMemoryManager: Initialized with stubs for mock device");
         return;
     }
 
     // Real hardware initialization below
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-    char* hugepage_start = static_cast<char*>(
-        tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel));
+    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
+    ChipId mmio_device_id = ctx.get_cluster().get_associated_mmio_device(device_id);
+    uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(device_id);
+    char* hugepage_start = static_cast<char*>(ctx.get_cluster().host_dma_address(0, mmio_device_id, channel));
     hugepage_start += (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     this->cq_sysmem_start = hugepage_start;
 
@@ -147,10 +144,8 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
         uint32_t cq_size_override = std::stoi(std::string(cq_size_override_env));
         this->cq_size = cq_size_override;
     } else {
-        this->cq_size =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(mmio_device_id, channel) /
-            num_hw_cqs;
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        this->cq_size = ctx.get_cluster().get_host_channel_size(mmio_device_id, channel) / num_hw_cqs;
+        if (ctx.get_cluster().is_galaxy_cluster()) {
             // We put 4 galaxy devices per huge page since number of hugepages available is less than number of
             // devices.
             this->cq_size = this->cq_size / DispatchSettings::DEVICES_PER_UMD_CHANNEL;
@@ -159,35 +154,27 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
     this->channel_offset = DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel) +
                            (channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE;
 
-    CoreType core_type = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
-    uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::COMPLETION_Q_RD);
-    uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t cq_start =
-        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
+    CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
+    uint32_t completion_q_rd_ptr =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
+    uint32_t prefetch_q_base =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    uint32_t cq_start = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
-        tt_cxy_pair prefetcher_core =
-            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().prefetcher_core(
-                device_id, channel, cq_id);
-        auto prefetcher_virtual =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
+        tt_cxy_pair prefetcher_core = ctx.get_dispatch_core_manager().prefetcher_core(device_id, channel, cq_id);
+        auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_writers.emplace_back(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
+        this->prefetch_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
 
         tt_cxy_pair completion_queue_writer_core =
-            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().completion_queue_writer_core(
-                device_id, channel, cq_id);
-        auto completion_queue_writer_virtual =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                completion_queue_writer_core.chip,
-                CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
-                core_type);
+            ctx.get_dispatch_core_manager().completion_queue_writer_core(device_id, channel, cq_id);
+        auto completion_queue_writer_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            completion_queue_writer_core.chip,
+            CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
+            core_type);
 
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = tt::tt_metal::MetalContext::instance()
-                                                                                 .get_cluster()
+        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = ctx.get_cluster()
                                                                                  .get_tlb_data(tt_cxy_pair(
                                                                                      completion_queue_writer_core.chip,
                                                                                      completion_queue_writer_virtual.x,
@@ -196,20 +183,17 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
         auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
 
         this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_writers.emplace_back(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(tt_cxy_pair(
-                completion_queue_writer_core.chip,
-                completion_queue_writer_virtual.x,
-                completion_queue_writer_virtual.y)));
+        this->completion_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(tt_cxy_pair(
+            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
 
-        this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start));
+        this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start, alignment));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
         // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping plus
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
         // before we reserve space in the prefetch queue
         TT_FATAL(
-            MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() *
-                    (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() + 1U +
+            ctx.dispatch_mem_map().max_prefetch_command_size() *
+                    (ctx.dispatch_mem_map().prefetch_q_entries() + 1U +
                      PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS) <=
                 this->get_issue_queue_size(cq_id),
             "Issue queue for cq_id {} has size of {} which is too small",
@@ -218,10 +202,14 @@ SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
         this->cq_to_event.push_back(0);
         this->cq_to_last_completed_event.push_back(0);
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-        this->prefetch_q_dev_fences[cq_id] =
-            prefetch_q_base + MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
-                                  sizeof(DispatchSettings::prefetch_q_entry_type);
+        this->prefetch_q_dev_fences[cq_id] = prefetch_q_base + ctx.dispatch_mem_map().prefetch_q_entries() *
+                                                                   sizeof(DispatchSettings::prefetch_q_entry_type);
     }
+}
+
+bool SystemMemoryManager::is_mock_device() const {
+    return tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().get_target_device_type() ==
+           tt::TargetDevice::Mock;
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
@@ -408,6 +396,8 @@ uint32_t SystemMemoryManager::get_cq_size() const {
 
 ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 
+ContextId SystemMemoryManager::get_context_id() const { return this->context_id; }
+
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
 void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
@@ -426,10 +416,11 @@ void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_
     uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
     const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
-    if (issue_q_write_ptr +
-            align(
-                cmd_size_B,
-                tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)) >
+    if (issue_q_write_ptr + align(
+                                cmd_size_B,
+                                tt::tt_metal::MetalContext::instance(this->context_id)
+                                    .hal()
+                                    .get_alignment(tt::tt_metal::HalMemType::HOST)) >
         command_issue_limit) {
         this->wrap_issue_queue_wr_ptr(cq_id);
         issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
@@ -483,15 +474,12 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         return;
     }
 
+    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     // All data needs to be PCIE_ALIGNMENT aligned
-    uint32_t push_size_16B =
-        align(
-            push_size_B, tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)) >>
-        4;
+    uint32_t push_size_16B = align(push_size_B, ctx.hal().get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
 
     SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-    uint32_t issue_q_wr_ptr =
-        MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
+    uint32_t issue_q_wr_ptr = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
 
     if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
         cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
@@ -501,11 +489,9 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+    ChipId mmio_device_id = ctx.get_cluster().get_associated_mmio_device(this->device_id);
+    uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(this->device_id);
+    ctx.get_cluster().write_sysmem(
         &cq_interface.issue_fifo_wr_ptr,
         sizeof(uint32_t),
         issue_q_wr_ptr + get_relative_cq_offset(cq_id, this->cq_size),
@@ -524,13 +510,12 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
-    ChipId mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
-    uint16_t channel =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
-    uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
-        CommandQueueHostAddrType::COMPLETION_Q_RD);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
+    ChipId mmio_device_id = ctx.get_cluster().get_associated_mmio_device(this->device_id);
+    uint16_t channel = ctx.get_cluster().get_assigned_channel_for_device(this->device_id);
+    uint32_t completion_q_rd_ptr =
+        ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
+    ctx.get_cluster().write_sysmem(
         &read_ptr_and_toggle,
         sizeof(uint32_t),
         completion_q_rd_ptr + get_relative_cq_offset(cq_id, this->cq_size),
@@ -547,8 +532,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         return;
     }
 
-    const uint32_t prefetch_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::PREFETCH_Q_RD);
+    auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
+    const uint32_t prefetch_q_rd_ptr =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -560,8 +546,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Body of the operation
         auto fetch_operation_body = [&]() {
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
+            ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
         };
 
@@ -571,16 +556,15 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         };
 
         // Handler for timeout
-        auto fetch_on_timeout = []() {
-            MetalContext::instance().on_dispatch_timeout_detected();
+        auto fetch_on_timeout = [this]() {
+            tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
         // Get dispatch progress for timeout detection
         auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
 
-        auto timeout_duration =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+        auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
 
         loop_and_wait_with_timeout(
             fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
@@ -588,9 +572,9 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
-        CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
+    uint32_t prefetch_q_base =
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+    uint32_t prefetch_q_limit = prefetch_q_base + (ctx.dispatch_mem_map().prefetch_q_entries() *
                                                    sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
@@ -623,10 +607,10 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     };
 
     // Handler for the timeout
-    auto on_timeout = [&exit_condition]() {
+    auto on_timeout = [this, &exit_condition]() {
         exit_condition.store(true);
 
-        MetalContext::instance().on_dispatch_timeout_detected();
+        tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
