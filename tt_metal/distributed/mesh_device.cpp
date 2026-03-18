@@ -630,7 +630,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
     submesh->pimpl_ = std::make_unique<MeshDeviceImpl>(
         scoped_devices_,
         std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
-        parent_mesh);
+        parent_mesh,
+        context_id_);
 
     const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh->initialize(
