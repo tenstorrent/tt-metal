@@ -313,23 +313,18 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
         output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout) {
         // Optimized special case: both input and output are sharded in L1 with identical specs.
-        // The identical factories use backed CBs (zero-copy) which work correctly on device.
-        // For the slow untilize path (!use_pack_untilize), the unpack can read past the backed CB
-        // boundary in tt-sim, so fall through to the multi-core/ND-shard factories instead.
-        if (operation_attributes.use_pack_untilize) {
-            bool identical_shard_specs = false;
-            identical_shard_specs |= input_tensor_a.shard_spec().has_value() &&
-                                     output_tensor.shard_spec().has_value() &&
-                                     input_tensor_a.shard_spec().value() == output_tensor.shard_spec().value();
-            if (identical_shard_specs) {
-                return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
-            }
-            identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
-                                     output_tensor.nd_shard_spec().has_value() &&
-                                     input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
-            if (identical_shard_specs) {
-                return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
-            }
+        // The identical factories use backed CBs (zero-copy) which work correctly with pack_untilize.
+        bool identical_shard_specs = false;
+        identical_shard_specs |= input_tensor_a.shard_spec().has_value() && output_tensor.shard_spec().has_value() &&
+                                 input_tensor_a.shard_spec().value() == output_tensor.shard_spec().value();
+        if (identical_shard_specs) {
+            return UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory{};
+        }
+        identical_shard_specs |= input_tensor_a.nd_shard_spec().has_value() &&
+                                 output_tensor.nd_shard_spec().has_value() &&
+                                 input_tensor_a.nd_shard_spec().value() == output_tensor.nd_shard_spec().value();
+        if (identical_shard_specs) {
+            return UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory{};
         }
     }
 
