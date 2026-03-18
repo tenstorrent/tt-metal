@@ -88,7 +88,7 @@ def test_stability(
         parallel_config=parallel_config,
         vae_parallel_config=vae_parallel_config,
         num_links=num_links,
-        use_cache=True,
+        vae_use_cache=True,
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
