@@ -68,7 +68,7 @@ shift
 # --- Acquire flock ---
 exec 9>"$LOCK_FILE"
 
-LOCK_TIMEOUT=300
+LOCK_TIMEOUT=600  # 10min: accounts for queued runs holding device during dual-mode testing
 echo "TT_TEST: Waiting for device lock..." >&2
 if ! flock -w "$LOCK_TIMEOUT" 9; then
     echo "TT_TEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
