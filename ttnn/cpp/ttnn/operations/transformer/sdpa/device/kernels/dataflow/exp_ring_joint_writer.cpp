@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "api/debug/dprint.h"
 #endif
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
@@ -421,11 +422,13 @@ void kernel_main() {
     uint32_t ag_local_gathered_tile_id_start = 0;
     uint32_t k_addr_ag_rt = 0, v_addr_ag_rt = 0;
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
+    
+    uint32_t injector_noc_x = 0, injector_noc_y = 0;
 
     if (mux_connection_valid) {
         const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
-        const uint32_t injector_noc_x = get_arg_val<uint32_t>(argidx++);
-        const uint32_t injector_noc_y = get_arg_val<uint32_t>(argidx++);
+        injector_noc_x = get_arg_val<uint32_t>(argidx++);
+        injector_noc_y = get_arg_val<uint32_t>(argidx++);
         ag_direction = get_arg_val<uint32_t>(argidx++);
         ag_input_Wt = get_arg_val<uint32_t>(argidx++);
         ag_input_Ht = get_arg_val<uint32_t>(argidx++);
@@ -481,6 +484,8 @@ void kernel_main() {
             safe_get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr, 0);
         pkt_hdr_injector_sem->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{injector_out_ready_sem_noc_addr, 1});
+
+        DPRINT << "injector sem x,y: " << injector_noc_x << "," << injector_noc_y << " addr: " << out_ready_sem_addr << ENDL();
 
         // Tile offset of our chip's local slice in the gathered output tensor
         ag_local_gathered_tile_id_start =
@@ -845,6 +850,7 @@ void kernel_main() {
                         // TODO: Read K chunk here
                         // TODO: Read V chunk here
                     }
+                    // DPRINT << "Sending injector semaphore increment packet to " << injector_noc_x << "," << injector_noc_y << ENDL();
                     tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
                 }
 #endif

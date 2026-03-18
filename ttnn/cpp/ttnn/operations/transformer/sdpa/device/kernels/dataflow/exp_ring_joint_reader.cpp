@@ -65,7 +65,8 @@ void kernel_main() {
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        true, /* wait_for_op_signal */
+        // true, /* wait_for_op_signal */
+        is_injector,
         argidx);
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
