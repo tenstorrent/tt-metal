@@ -1,0 +1,8 @@
+﻿ttnn.view
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.view:
+
+.. autooperation:: ttnn.view
