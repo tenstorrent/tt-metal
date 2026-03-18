@@ -264,14 +264,14 @@ class TtLlamaCrossAttention(LightweightModule):
                 program_config=program_config,
                 compute_kernel_config=self.compute_kernel_config_sdpa,
             )
-        if full_text_row_masked_out_mask_1NSH.dtype != output.dtype:
-            full_text_row_masked_out_mask_1NSH = ttnn.typecast(full_text_row_masked_out_mask_1NSH, output.dtype)
-        if full_text_row_masked_out_mask_1NSH.shape != output.shape:
-            full_text_row_masked_out_mask_1NSH = ttnn.reshape(
-                full_text_row_masked_out_mask_1NSH,
-                list(output.shape),
-                list(full_text_row_masked_out_mask_1NSH.padded_shape),
-            )
+        # if full_text_row_masked_out_mask_1NSH.dtype != output.dtype:
+        #     full_text_row_masked_out_mask_1NSH = ttnn.typecast(full_text_row_masked_out_mask_1NSH, output.dtype)
+        # if full_text_row_masked_out_mask_1NSH.shape != output.shape:
+        #     full_text_row_masked_out_mask_1NSH = ttnn.reshape(
+        #         full_text_row_masked_out_mask_1NSH,
+        #         list(output.shape),
+        #         list(full_text_row_masked_out_mask_1NSH.padded_shape),
+        #     )
         # WARNING: this broadcast is also broken, must broadcast on host
         output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
 
