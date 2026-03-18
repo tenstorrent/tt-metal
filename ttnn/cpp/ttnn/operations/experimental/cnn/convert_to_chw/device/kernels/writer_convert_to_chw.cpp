@@ -38,6 +38,7 @@ void kernel_main() {
             tile_index++;
             l1_read_addr_tile += in_transpose_tile_size;
         }
+        noc_async_read_barrier();
         cb_pop_front(cb_in_transpose, BATCH_SIZE);
     }
 
@@ -50,6 +51,7 @@ void kernel_main() {
             l1_read_addr += STICK_SIZE;
         }
         tile_index++;
+        noc_async_read_barrier();
         cb_pop_front(cb_in_transpose, 1);
     }
     noc_async_read_barrier();
