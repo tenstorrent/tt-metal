@@ -11,10 +11,11 @@ from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 
 TIMEOUT = 300
 
@@ -94,35 +95,71 @@ def mesh_device_fixture():
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
-    input_b_shape=None,
-    input_b_dtype=None,
-    input_b_layout=None,
-    input_b_memory_config=None,
-    input_c_shape=None,
-    input_c_dtype=None,
-    input_c_layout=None,
-    input_c_memory_config=None,
-    input_d_shape=None,
-    input_d_dtype=None,
-    input_d_layout=None,
-    input_d_memory_config=None,
-    output_memory_config=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
-    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
-    input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # --- Extract tensor parameters ---
+    # V2 model_traced suite provides named tensor kwargs:
+    #   input_tensor_q_*, input_tensor_k_*, input_tensor_v_*, page_table_tensor_*
+    # Sample suite provides positional tensor params:
+    #   input_a_*, input_b_*, input_c_*, input_d_*
+    q_kwargs = extract_named_tensor_kwargs(kwargs, "input_tensor_q")
+    k_kwargs = extract_named_tensor_kwargs(kwargs, "input_tensor_k")
+    v_kwargs = extract_named_tensor_kwargs(kwargs, "input_tensor_v")
+    pt_kwargs = extract_named_tensor_kwargs(kwargs, "page_table_tensor")
+
+    if q_kwargs and q_kwargs.get("shape") is not None:
+        # V2 path: named tensor kwargs from traced configurations
+        input_a_shape = q_kwargs["shape"]
+        input_a_dtype = q_kwargs.get("dtype", ttnn.bfloat16)
+        input_a_layout = q_kwargs.get("layout", ttnn.TILE_LAYOUT)
+        input_a_memory_config = q_kwargs.get("memory_config", ttnn.DRAM_MEMORY_CONFIG)
+        input_a_tensor_placement = q_kwargs.get("tensor_placement")
+
+        input_b_shape = k_kwargs["shape"] if k_kwargs else None
+        input_b_dtype = k_kwargs.get("dtype", ttnn.bfloat16) if k_kwargs else ttnn.bfloat16
+        input_b_layout = k_kwargs.get("layout", ttnn.TILE_LAYOUT) if k_kwargs else ttnn.TILE_LAYOUT
+        input_b_memory_config = (
+            k_kwargs.get("memory_config", ttnn.DRAM_MEMORY_CONFIG) if k_kwargs else ttnn.DRAM_MEMORY_CONFIG
+        )
+        input_b_tensor_placement = k_kwargs.get("tensor_placement") if k_kwargs else None
+
+        input_c_dtype = v_kwargs.get("dtype", ttnn.bfloat16) if v_kwargs else ttnn.bfloat16
+        input_c_layout = v_kwargs.get("layout", ttnn.TILE_LAYOUT) if v_kwargs else ttnn.TILE_LAYOUT
+        input_c_memory_config = (
+            v_kwargs.get("memory_config", ttnn.DRAM_MEMORY_CONFIG) if v_kwargs else ttnn.DRAM_MEMORY_CONFIG
+        )
+        input_c_tensor_placement = v_kwargs.get("tensor_placement") if v_kwargs else None
+
+        input_d_tensor_placement = pt_kwargs.get("tensor_placement") if pt_kwargs else None
+    else:
+        # Sample suite path: positional tensor params (input_a_*, input_b_*, etc.)
+        input_a_shape = kwargs.get("input_a_shape", (1, 8, 32, 64))
+        input_a_dtype = kwargs.get("input_a_dtype", ttnn.bfloat16)
+        input_a_layout = kwargs.get("input_a_layout", ttnn.TILE_LAYOUT)
+        input_a_memory_config = kwargs.get("input_a_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+        input_a_tensor_placement = kwargs.get("input_a_tensor_placement")
+
+        input_b_shape = kwargs.get("input_b_shape")
+        input_b_dtype = kwargs.get("input_b_dtype", ttnn.bfloat16)
+        input_b_layout = kwargs.get("input_b_layout", ttnn.TILE_LAYOUT)
+        input_b_memory_config = kwargs.get("input_b_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+        input_b_tensor_placement = kwargs.get("input_b_tensor_placement")
+
+        input_c_dtype = kwargs.get("input_c_dtype", ttnn.bfloat16)
+        input_c_layout = kwargs.get("input_c_layout", ttnn.TILE_LAYOUT)
+        input_c_memory_config = kwargs.get("input_c_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+        input_c_tensor_placement = kwargs.get("input_c_tensor_placement")
+
+        input_d_tensor_placement = kwargs.get("input_d_tensor_placement")
+
+    output_memory_config = kwargs.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
     chunk_start_idx = kwargs.get("chunk_start_idx", 0)
     if chunk_start_idx is None:
         chunk_start_idx = 0

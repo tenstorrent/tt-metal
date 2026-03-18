@@ -173,8 +173,9 @@ def compute_lead_models_matrix(modules, batch_size, dynamic_hw=False):
             runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
 
         # Route modules without a mesh suffix to the first (default) runner config.
+        # Only for lead models (static config); dynamic_hw skips legacy modules.
         is_default_runner = runner_config == config[0]
-        if is_default_runner:
+        if is_default_runner and not dynamic_hw:
             runner_modules.extend(unmatched_modules)
 
         if not runner_modules:
@@ -211,25 +212,16 @@ def compute_lead_models_matrix(modules, batch_size, dynamic_hw=False):
                             "mesh_shapes_filter": mesh_shape,
                         }
                     )
-            # Also handle unmatched modules on the default runner
+            # Log unmatched modules (no __mesh_/__hw_ suffix) — these are
+            # legacy vectors that cannot be routed to specific hardware.
+            # They are skipped in hardware-routed model_traced runs.
             if is_default_runner and unmatched_modules:
-                base_modules = sorted(set(strip_mesh_suffix(m) for m in unmatched_modules))
-                um_batches = chunk_modules(base_modules, batch_size)
-                batches.extend(um_batches)
-                for batch in um_batches:
-                    include_entries.append(
-                        {
-                            "test_group_name": runner_config["test_group_name"],
-                            "arch": runner_config["arch"],
-                            "runs_on": runner_config["runs_on"],
-                            "runner_label": runner_config["runner_label"],
-                            "tt_smi_cmd": runner_config["tt_smi_cmd"],
-                            "module_selector": batch,
-                            "batch_display": batch,
-                            "suite_name": runner_config["suite_name"],
-                            "mesh_shapes_filter": "",
-                        }
-                    )
+                base_unmatched = sorted(set(strip_mesh_suffix(m) for m in unmatched_modules))
+                print(
+                    f"Warning: {len(base_unmatched)} legacy modules without mesh/hw suffix "
+                    f"will be skipped (no hardware routing info): {', '.join(base_unmatched[:5])}{'...' if len(base_unmatched) > 5 else ''}",
+                    file=sys.stderr,
+                )
         else:
             # --- Lead models: original behavior (all mesh shapes grouped per runner) ---
             base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
