@@ -78,12 +78,10 @@ CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh
 
     auto* mesh_device = tensor_args.dispatched_buffer.device();
 
-    // Create global semaphore for cross-device synchronization (fabric init barrier)
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
 
-    // Create a program for each device in the mesh
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
             operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords, init_barrier_semaphore);
@@ -102,7 +100,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     const GlobalSemaphore& init_semaphore) {
     tt::tt_metal::Program program{};
 
-    // Extract input tensors
     const auto& dispatched_buffer = tensor_args.dispatched_buffer;
     const auto& dispatched_metadata = tensor_args.dispatched_metadata;
     const auto& expert_token_counts = tensor_args.expert_token_counts;
@@ -111,7 +108,6 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
     auto* mesh_device = dispatched_buffer.device();
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
-    // Extract mesh information for this specific device
     const auto& mesh_view = mesh_device->get_view();
     auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
@@ -137,104 +133,117 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         topology,
         num_links);
 
-    // Get fabric configuration and connection information
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
-    // Get neighbor connections for fabric
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
-    // Figure out tensor dimensions
     auto dispatched_shape = dispatched_buffer.logical_shape();
     auto hidden_size = dispatched_shape[-1];
     auto max_dispatched_tokens_per_expert = dispatched_shape[-2];
 
-    // Calculate work distribution
-    // For combine, we iterate over (chips, experts, tokens_per_expert)
-    // Start with single-core implementation, can parallelize later
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    TT_FATAL(!subdevice_cores.empty(), "Need at least one core for combine operation");
+    uint32_t effective_num_links = num_links >= 2 ? 2u : 1u;
+    TT_FATAL(
+        subdevice_cores.size() >= effective_num_links,
+        "Not enough cores {} for {} links",
+        subdevice_cores.size(),
+        effective_num_links);
 
-    // Use first available core for now (single-core implementation)
-    CoreCoord worker_core = subdevice_cores.at(0);
-    CoreRangeSet worker_core_grid = CoreRangeSet({CoreRange(worker_core, worker_core)});
+    uint32_t num_cores = effective_num_links;
+    uint32_t experts_per_core_range = tt::div_up(operation_attributes.experts_per_chip, num_cores);
 
-    // Create local semaphore for reader→writer zero-init synchronization (same core, no cross-device)
-    auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_grid, 0);
+    auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
+    std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
-    log_debug(tt::LogOp, "Creating prefill combine program with hidden_size: {} on core: {}", hidden_size, worker_core);
+    log_debug(
+        tt::LogOp,
+        "Combine program: hidden_size: {} num_cores: {} experts_per_core_range: {} cores: {}",
+        hidden_size,
+        num_cores,
+        experts_per_core_range,
+        sender_cores);
 
-    // Create input CBs (readers)
+    auto zero_init_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
+    auto zero_init_barrier_semaphore_id = tt::tt_metal::CreateSemaphore(program, sender_core_grid, 0);
+
+    constexpr uint32_t read_batch_size = 8;
+
+    // c_0: dispatched_buffer scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         dispatched_buffer,
-        /*buffering_factor=*/2,
+        /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_0,
-        "dispatched_buffer");
-
+        "dispatched_buffer_scratch");
+    // c_1: dispatched_metadata scratch (reader-only, batched DRAM reads)
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         dispatched_metadata,
-        /*buffering_factor=*/2,
+        /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_1,
-        "dispatched_metadata");
-
+        "dispatched_metadata_scratch");
+    // c_2: expert_token_counts (reader-only, full tensor)
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
+        sender_core_grid,
         expert_token_counts,
-        /*buffering_factor=*/detail::get_num_pages(expert_token_counts),  // Read entire counter
+        /*buffering_factor=*/detail::get_num_pages(expert_token_counts),
         /*cb_id=*/tt::CBIndex::c_2,
         "expert_token_counts");
 
-    // Create output CB (writer)
+    // c_3: route_info (reader->writer, 4 x uint32_t per entry)
+    {
+        uint32_t route_info_page_size = l1_alignment;
+        constexpr uint32_t route_info_buffering = 16;
+        tt::tt_metal::CircularBufferConfig route_info_cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                route_info_buffering * route_info_page_size, {{tt::CBIndex::c_3, tt::DataFormat::UInt8}})
+                .set_page_size(tt::CBIndex::c_3, route_info_page_size);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, route_info_cb_config);
+    }
+
+    // c_4: output_for_writer (reader->writer, output pages for fabric sends)
     detail::create_tensor_cb(
         program,
-        worker_core_grid,
-        output_tensor,
-        /*buffering_factor=*/2,
-        /*cb_id=*/tt::CBIndex::c_3,
-        "output_tensor");
+        sender_core_grid,
+        dispatched_buffer,
+        /*buffering_factor=*/16,
+        /*cb_id=*/tt::CBIndex::c_4,
+        "output_for_writer");
 
-    // Create packet header CB for fabric communication (if fabric is enabled)
+    // c_5: packet header CB for fabric sends (writer-only)
     if (num_links > 0) {
-        constexpr uint32_t num_packet_headers = 1;  // Only need unicast header for combine
+        constexpr uint32_t num_packet_headers = 2;
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
 
         tt::tt_metal::CircularBufferConfig packet_header_cb_config =
-            tt::tt_metal::CircularBufferConfig(packet_header_cb_size, {{tt::CBIndex::c_4, tt::DataFormat::UInt8}})
-                .set_page_size(tt::CBIndex::c_4, packet_header_size_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, worker_core_grid, packet_header_cb_config);
-
-        log_debug(
-            tt::LogOp,
-            "Created packet header CB with size {} bytes for {} headers",
-            packet_header_cb_size,
-            num_packet_headers);
+            tt::tt_metal::CircularBufferConfig(packet_header_cb_size, {{tt::CBIndex::c_5, tt::DataFormat::UInt8}})
+                .set_page_size(tt::CBIndex::c_5, packet_header_size_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
     }
 
-    // Generate destination chip and mesh IDs for fabric connections
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
         auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
-    log_debug(tt::LogOp, "dest_chip_id: {}", ccl::common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
-    log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
 
-    // Create reader kernel compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {
-        // CB IDs (4)
+    // Compile-time args shared by reader and writer
+    std::vector<uint32_t> compile_time_args = {
+        // CB IDs (6)
         static_cast<uint32_t>(tt::CBIndex::c_0),  // cb_dispatched_buffer_id
         static_cast<uint32_t>(tt::CBIndex::c_1),  // cb_dispatched_metadata_id
-        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_expert_token_counts_id
-        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_output_id
+        static_cast<uint32_t>(tt::CBIndex::c_2),  // cb_experts_tok_counter_id
+        static_cast<uint32_t>(tt::CBIndex::c_3),  // cb_route_info_id
+        static_cast<uint32_t>(tt::CBIndex::c_4),  // cb_output_for_writer_id
+        static_cast<uint32_t>(tt::CBIndex::c_5),  // cb_packet_header_id
 
         // Page counts (4)
         detail::get_num_pages(dispatched_buffer),
@@ -274,39 +283,42 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
         l1_alignment,
-        num_links,
+        (uint32_t)std::min(num_links, 1u),
         static_cast<uint32_t>(topology),
     };
 
-    // Append TensorAccessorArgs for all tensors
-    tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_time_args);
+    // Append TensorAccessorArgs for all 4 tensors
+    tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_token_counts.buffer()).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(compile_time_args);
 
-    // Generate defines for reader kernel
-    std::map<std::string, std::string> reader_defines;
+    // Both reader and writer get fabric defines so the reader can compute routes
+    std::map<std::string, std::string> fabric_defines;
+    if (num_links > 0) {
+        fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
+        fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
+        fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
+    }
+    if (operation_attributes.axis.has_value()) {
+        fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
+    }
+
+    std::map<std::string, std::string> reader_defines = fabric_defines;
     reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
 
-    // Check if output is L1 interleaved and add multicast defines
     bool is_l1_output = output_tensor.buffer()->buffer_type() == BufferType::L1;
     reader_defines["IS_L1_OUTPUT"] = is_l1_output ? "1" : "0";
 
     if (is_l1_output && operation_attributes.init_zeros) {
-        // Get compute_with_storage_grid for L1 bank cores
         auto compute_grid = mesh_device->compute_with_storage_grid_size();
         uint32_t num_l1_banks = compute_grid.x * compute_grid.y;
 
-        // Get NOC coordinates for the bank core grid
-        // Start is (0,0), end is (grid_x-1, grid_y-1) in logical coords
-        // Convert to virtual/NOC coords
         CoreCoord logical_start(0, 0);
         CoreCoord logical_end(compute_grid.x - 1, compute_grid.y - 1);
         CoreCoord noc_start = mesh_device->virtual_core_from_logical_core(logical_start, tt::CoreType::WORKER);
         CoreCoord noc_end = mesh_device->virtual_core_from_logical_core(logical_end, tt::CoreType::WORKER);
 
-        // Calculate bytes per bank based on lock-step allocator behavior:
-        // Each bank reserves space for ceil(num_pages / num_banks) pages
         uint32_t num_pages = detail::get_num_pages(output_tensor);
         uint32_t aligned_page_size = detail::get_aligned_page_size(output_tensor);
         uint32_t pages_per_bank = (num_pages + num_l1_banks - 1) / num_l1_banks;
@@ -318,115 +330,113 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         reader_defines["L1_BANK_NOC_Y_START"] = std::to_string(noc_start.y);
         reader_defines["L1_BANK_NOC_X_END"] = std::to_string(noc_end.x);
         reader_defines["L1_BANK_NOC_Y_END"] = std::to_string(noc_end.y);
-
-        log_debug(
-            tt::LogOp,
-            "L1 multicast zero-init: num_banks={} bytes_per_bank={} grid=({},{}) to ({},{})",
-            num_l1_banks,
-            bytes_per_bank,
-            noc_start.x,
-            noc_start.y,
-            noc_end.x,
-            noc_end.y);
     }
 
-    // Create reader kernel
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",
-        worker_core_grid,
+        sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch()),
-            .compile_args = reader_compile_time_args,
+            .compile_args = compile_time_args,
             .defines = reader_defines});
-
-    // Create writer kernel - shares same compile time args
-    const auto& writer_compile_time_args = reader_compile_time_args;
-
-    // Generate fabric defines for writer kernel
-    std::map<std::string, std::string> writer_defines;
-    if (num_links > 0) {
-        writer_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
-        writer_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
-        writer_defines["DIRECTIONS"] = ccl::common::stringify(directions);
-    }
-
-    if (operation_attributes.axis.has_value()) {
-        writer_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
-    }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/writer_combine.cpp",
-        worker_core_grid,
+        sender_core_grid,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
-            .compile_args = writer_compile_time_args,
-            .defines = writer_defines});
+            .compile_args = compile_time_args,
+            .defines = fabric_defines});
 
-    // Set runtime args
-    // Base tensor addresses (shared between reader and writer)
-    std::vector<uint32_t> base_runtime_args = {
-        dispatched_buffer.buffer()->address(),
-        dispatched_metadata.buffer()->address(),
-        expert_token_counts.buffer()->address(),
-        output_tensor.buffer()->address(),
-    };
-
-    // Reader needs: base + zero_init semaphore ID (kernel uses get_semaphore() to convert to address)
-    std::vector<uint32_t> reader_runtime_args = base_runtime_args;
-    reader_runtime_args.push_back(zero_init_semaphore_id);
-
-    // Writer needs: base + zero_init semaphore ID + init_semaphore address (global)
-    std::vector<uint32_t> writer_runtime_args = base_runtime_args;
-    writer_runtime_args.push_back(zero_init_semaphore_id);
-    writer_runtime_args.push_back((uint32_t)init_semaphore.address());
-
-    // Append fabric connection args (only if fabric is enabled)
-    if (num_links > 0) {
-        for (const auto& neighbor_coordinate : neighbors) {
-            // Skip self-connections
-            if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
-                log_debug(
-                    tt::LogOp,
-                    "Skipping self-connection for mesh coord ({}, {}) at core {}",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    worker_core);
-                continue;
-            }
-
-            log_debug(
-                tt::LogOp,
-                "Connection between mesh coord ({}, {}) and ({}, {}) at core {}",
-                mesh_coordinate[0],
-                mesh_coordinate[1],
-                neighbor_coordinate[0],
-                neighbor_coordinate[1],
-                worker_core);
-
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id,
-                mesh_device->get_fabric_node_id(neighbor_coordinate),
-                0,  // link_id - use 0 for single link
-                program,
-                worker_core,
-                writer_runtime_args);
-        }
+    // Pre-compute NOC coordinates for all sender cores (for inter-core barrier signaling)
+    std::vector<std::pair<uint32_t, uint32_t>> sender_noc_coords;
+    for (const auto& sc : sender_cores) {
+        auto noc_coord = mesh_device->virtual_core_from_logical_core(sc, tt::CoreType::WORKER);
+        sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
-    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, worker_core, reader_runtime_args);
-    tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, worker_core, writer_runtime_args);
+    uint32_t core_idx = 0;
+    for (const auto& sender_core : sender_cores) {
+        uint32_t expert_start = core_idx * experts_per_core_range;
+        uint32_t expert_end = std::min((core_idx + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+
+        std::vector<uint32_t> reader_runtime_args = {
+            dispatched_buffer.buffer()->address(),
+            dispatched_metadata.buffer()->address(),
+            expert_token_counts.buffer()->address(),
+            output_tensor.buffer()->address(),
+            zero_init_semaphore_id,
+            zero_init_barrier_semaphore_id,
+            num_cores,
+            expert_start,
+            expert_end,
+        };
+
+        std::vector<uint32_t> writer_runtime_args = {
+            dispatched_buffer.buffer()->address(),
+            dispatched_metadata.buffer()->address(),
+            expert_token_counts.buffer()->address(),
+            output_tensor.buffer()->address(),
+            zero_init_semaphore_id,
+            (uint32_t)init_semaphore.address(),
+            zero_init_barrier_semaphore_id,
+            num_cores,
+            expert_start,
+            expert_end,
+        };
+
+        // Append NOC coordinates of all cores for inter-core barrier signaling
+        for (const auto& [noc_x, noc_y] : sender_noc_coords) {
+            writer_runtime_args.push_back(noc_x);
+            writer_runtime_args.push_back(noc_y);
+        }
+
+        if (num_links > 0) {
+            uint32_t core_link = core_idx % num_links;
+            for (const auto& neighbor_coordinate : neighbors) {
+                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+                    continue;
+                }
+
+                log_debug(
+                    tt::LogOp,
+                    "Combine connection: ({}, {}) -> ({}, {}) core {} link {} experts [{}, {})",
+                    mesh_coordinate[0],
+                    mesh_coordinate[1],
+                    neighbor_coordinate[0],
+                    neighbor_coordinate[1],
+                    sender_core,
+                    core_link,
+                    expert_start,
+                    expert_end);
+
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    mesh_device->get_fabric_node_id(neighbor_coordinate),
+                    core_link,
+                    program,
+                    sender_core,
+                    writer_runtime_args);
+            }
+        }
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, sender_core, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, sender_core, writer_runtime_args);
+        core_idx++;
+    }
 
     return {
         std::move(program),
         {.reader_kernel_id = reader_kernel_id,
          .writer_kernel_id = writer_kernel_id,
-         .worker_core = worker_core,
+         .cores = sender_cores,
          .init_semaphore = init_semaphore,
-         .zero_init_semaphore_id = zero_init_semaphore_id}};
+         .zero_init_semaphore_id = zero_init_semaphore_id,
+         .zero_init_barrier_semaphore_id = zero_init_barrier_semaphore_id}};
 }
 
 void CombineProgramFactory::override_runtime_arguments(
@@ -434,32 +444,24 @@ void CombineProgramFactory::override_runtime_arguments(
     const CombineParams& /*operation_attributes*/,
     const CombineInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
-    // Update buffer addresses in runtime args when tensors are reallocated
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
 
-        std::vector<uint32_t> reader_runtime_args = {
-            tensor_args.dispatched_buffer.buffer()->address(),
-            tensor_args.dispatched_metadata.buffer()->address(),
-            tensor_args.expert_token_counts.buffer()->address(),
-            tensor_return_value.buffer()->address(),
-            shared_variables.zero_init_semaphore_id,
-        };
+        for (const auto& core : shared_variables.cores) {
+            auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.reader_kernel_id, core);
+            auto& writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, shared_variables.writer_kernel_id, core);
 
-        std::vector<uint32_t> writer_runtime_args = {
-            tensor_args.dispatched_buffer.buffer()->address(),
-            tensor_args.dispatched_metadata.buffer()->address(),
-            tensor_args.expert_token_counts.buffer()->address(),
-            tensor_return_value.buffer()->address(),
-        };
-        writer_runtime_args.push_back(shared_variables.zero_init_semaphore_id);
-        writer_runtime_args.push_back((uint32_t)shared_variables.init_semaphore.address());
-        // Note: Fabric connection args are not updated here as they don't change
+            reader_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.expert_token_counts.buffer()->address();
+            reader_runtime_args.at(3) = tensor_return_value.buffer()->address();
 
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared_variables.reader_kernel_id, shared_variables.worker_core, reader_runtime_args);
-        tt::tt_metal::SetRuntimeArgs(
-            program, shared_variables.writer_kernel_id, shared_variables.worker_core, writer_runtime_args);
+            writer_runtime_args.at(0) = tensor_args.dispatched_buffer.buffer()->address();
+            writer_runtime_args.at(1) = tensor_args.dispatched_metadata.buffer()->address();
+            writer_runtime_args.at(2) = tensor_args.expert_token_counts.buffer()->address();
+            writer_runtime_args.at(3) = tensor_return_value.buffer()->address();
+            writer_runtime_args.at(5) = (uint32_t)shared_variables.init_semaphore.address();
+        }
     }
 }
 
