@@ -119,6 +119,72 @@ using InplaceTensorFn = Tensor (*)(
     std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 
+using BitwiseScalarFn = Tensor (*)(
+    const Tensor&,
+    int32_t,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>);
+using BitwiseTensorFn = Tensor (*)(
+    const Tensor&,
+    const Tensor&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>);
+using BinaryUnaryScalarFn = Tensor (*)(
+    const Tensor&,
+    float,
+    const std::optional<const DataType>&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>);
+using BinaryUnaryTensorFn = Tensor (*)(
+    const Tensor&,
+    const Tensor&,
+    const std::optional<const DataType>&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>);
+using BinaryUnaryMaxScalarFn = Tensor (*)(
+    const Tensor&,
+    unary::ScalarVariant,
+    const std::optional<const DataType>&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>);
+using BinaryUnaryMaxTensorFn = Tensor (*)(
+    const Tensor&,
+    const Tensor&,
+    const std::optional<const DataType>&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>);
+using BinaryCompositeTensorTensorFn = Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+using BinaryCompositeTensorScalarFn = Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&);
+using BinaryOverloadScalarFn =
+    Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&);
+using BinaryOverloadTensorFn =
+    Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&);
+using PreluTensorArrayFn = Tensor (*)(const Tensor&, const std::array<float, 1>&, const std::optional<MemoryConfig>&);
+
 template <InplaceScalarFn Fn>
 Tensor inplace_binding_tensor_scalar(
     const Tensor& input_tensor_a,
@@ -1970,26 +2036,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Subtracts :attr:`input_tensor_a` from :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i - \mathrm{{input\_tensor\_a}}_i)doc",
-        nb::overload_cast<
-            const Tensor&,
-            float,
-            const std::optional<const DataType>&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::rsub),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<const DataType>&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::rsub),
+        static_cast<detail::BinaryUnaryScalarFn>(&ttnn::rsub),
+        static_cast<detail::BinaryUnaryTensorFn>(&ttnn::rsub),
         ". ",
         R"doc(FLOAT32,BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
@@ -1997,24 +2045,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        nb::overload_cast<
-            const Tensor&,
-            int32_t,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_and),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_and),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_and),
+        static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_and),
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
@@ -2022,24 +2054,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        nb::overload_cast<
-            const Tensor&,
-            int32_t,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_or),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_or),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_or),
+        static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_or),
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
@@ -2047,24 +2063,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        nb::overload_cast<
-            const Tensor&,
-            int32_t,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_xor),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_xor),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_xor),
+        static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_xor),
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
@@ -2072,24 +2072,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        nb::overload_cast<
-            const Tensor&,
-            int32_t,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_left_shift),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_left_shift),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_left_shift),
+        static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_left_shift),
         ". ",
         R"doc(INT32, UINT32, UINT16)doc");
 
@@ -2097,24 +2081,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        nb::overload_cast<
-            const Tensor&,
-            int32_t,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_right_shift),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::bitwise_right_shift),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_right_shift),
+        static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_right_shift),
         ". ",
         R"doc(INT32, UINT32, UINT16)doc");
 
@@ -2122,24 +2090,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform logical_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Equivalent to multiplying by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_left_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        nb::overload_cast<
-            const Tensor&,
-            int32_t,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::logical_left_shift),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::logical_left_shift),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::logical_left_shift),
+        static_cast<detail::BitwiseTensorFn>(&ttnn::logical_left_shift),
         ". ",
         R"doc(INT32, UINT32)doc");
 
@@ -2170,26 +2122,8 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,
         R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        nb::overload_cast<
-            const Tensor&,
-            unary::ScalarVariant,
-            const std::optional<const DataType>&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::minimum),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<const DataType>&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::minimum));
+        static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::minimum),
+        static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::minimum));
 
     detail::bind_binary_composite<"atan2">(
         mod,
@@ -2313,46 +2247,28 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_composite_overload<"div_no_nan">(
         mod,
         R"doc(Computes div_no_nan for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        nb::overload_cast<const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(&ttnn::div_no_nan),
-        nb::overload_cast<const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::div_no_nan));
+        static_cast<detail::BinaryCompositeTensorTensorFn>(&ttnn::div_no_nan),
+        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::div_no_nan));
 
     detail::bind_binary_composite_overload<"floor_div">(
         mod,
         R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        nb::overload_cast<const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(&ttnn::floor_div),
-        nb::overload_cast<const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::floor_div));
+        static_cast<detail::BinaryCompositeTensorTensorFn>(&ttnn::floor_div),
+        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::floor_div));
 
     detail::bind_binary_unary_max_operation<"maximum">(
         mod,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        nb::overload_cast<
-            const Tensor&,
-            unary::ScalarVariant,
-            const std::optional<const DataType>&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::maximum),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<const DataType>&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<Tensor>&,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            ttsl::Span<const unary::EltwiseUnaryWithParam>,
-            std::optional<bool>>(&ttnn::maximum),
+        static_cast<detail::BinaryUnaryMaxScalarFn>(&ttnn::maximum),
+        static_cast<detail::BinaryUnaryMaxTensorFn>(&ttnn::maximum),
         R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc");
 
     detail::bind_prelu<"prelu">(
         mod,
         R"doc(Perform an eltwise-prelu operation.)doc",
-        nb::overload_cast<const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(&ttnn::prelu),
-        nb::overload_cast<const Tensor&, float, const std::optional<MemoryConfig>&>(&ttnn::prelu),
-        nb::overload_cast<const Tensor&, const std::array<float, 1>&, const std::optional<MemoryConfig>&>(&ttnn::prelu),
+        static_cast<detail::BinaryCompositeTensorTensorFn>(&ttnn::prelu),
+        static_cast<detail::BinaryCompositeTensorScalarFn>(&ttnn::prelu),
+        static_cast<detail::PreluTensorArrayFn>(&ttnn::prelu),
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor :attr:`input_tensor_b` of size = the second dimension in :attr:`input_tensor_a`)doc");
 
@@ -2375,26 +2291,16 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        nb::overload_cast<const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&>(
-            &ttnn::fmod),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<CoreRangeSet>&>(&ttnn::fmod),
+        static_cast<detail::BinaryOverloadScalarFn>(&ttnn::fmod),
+        static_cast<detail::BinaryOverloadTensorFn>(&ttnn::fmod),
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_binary_overload_operation<"remainder">(
         mod,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        nb::overload_cast<const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&>(
-            &ttnn::remainder),
-        nb::overload_cast<
-            const Tensor&,
-            const Tensor&,
-            const std::optional<MemoryConfig>&,
-            const std::optional<CoreRangeSet>&>(&ttnn::remainder),
+        static_cast<detail::BinaryOverloadScalarFn>(&ttnn::remainder),
+        static_cast<detail::BinaryOverloadTensorFn>(&ttnn::remainder),
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation<"gt_">(
