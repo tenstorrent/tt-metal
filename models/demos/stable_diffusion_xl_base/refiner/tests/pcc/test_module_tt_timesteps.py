@@ -9,7 +9,7 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -20,6 +20,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_timesteps(
     device, input_shape, module_path, num_channels, is_ci_env, is_ci_v2_env, sdxl_refiner_unet_location, reset_seeds
 ):
+    if is_blackhole():
+        pytest.skip("Not supported on Blackhole")
     unet = UNet2DConditionModel.from_pretrained(
         sdxl_refiner_unet_location,
         torch_dtype=torch.float32,

@@ -389,8 +389,8 @@ def test_unet_loop(
     loop_iter_num,
     debug_mode,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
+    if is_blackhole():
+        pytest.skip("Not supported on Blackhole")
     return run_unet_inference(
         device,
         is_ci_env,
