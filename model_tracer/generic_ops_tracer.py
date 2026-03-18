@@ -262,6 +262,56 @@ def collect_operation_jsons(trace_dir):
     return json_files
 
 
+def _clean_tensor_dict(tensor_dict, mesh_device_info_ref):
+    """Clean a single tensor dict: extract mesh_device into tensor_placement, remove redundant fields.
+
+    Args:
+        tensor_dict: dict representing a traced tensor or other dict argument.
+        mesh_device_info_ref: single-element list ``[info | None]``; updated
+            in-place the first time a ``mesh_device`` block is encountered.
+
+    Returns:
+        A cleaned copy of *tensor_dict*.
+    """
+    if "mesh_device" in tensor_dict:
+        mesh_data = tensor_dict["mesh_device"]
+
+        if mesh_device_info_ref[0] is None:
+            mesh_device_info_ref[0] = {
+                "device_ids": mesh_data.get("device_ids", []),
+                "device_count": len(mesh_data.get("device_ids", [])),
+                "mesh_device_shape": mesh_data.get("shape", []),
+            }
+
+        placements = mesh_data.get("placements", [])
+        distribution_shape = mesh_data.get("distribution_shape", [])
+        mesh_shape = mesh_data.get("shape", [])
+
+        cleaned = {k: v for k, v in tensor_dict.items() if k != "mesh_device"}
+
+        if placements:
+            cleaned["tensor_placement"] = {
+                "placement": str(placements),
+                "distribution_shape": str(distribution_shape),
+                "mesh_device_shape": str(mesh_shape),
+            }
+    else:
+        cleaned = tensor_dict.copy()
+
+    if "shape" in cleaned and "original_shape" in cleaned:
+        if cleaned["shape"] == cleaned["original_shape"]:
+            del cleaned["shape"]
+
+    if "dtype" in cleaned and "original_dtype" in cleaned:
+        if cleaned["dtype"] == cleaned["original_dtype"]:
+            del cleaned["dtype"]
+
+    # Strip device_ids from device-like dicts (e.g. MeshDevice kwargs)
+    cleaned.pop("device_ids", None)
+
+    return cleaned
+
+
 def convert_json_to_master_format(json_file, test_source, machine_info):
     """Convert individual JSON file to master format"""
     try:
@@ -273,8 +323,9 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # Convert args format from new tracer to master format
         arguments = {}
 
-        # Track mesh_device info (extracted from args)
-        mesh_device_info = None
+        # Track mesh_device info (extracted from args).
+        # Wrapped in a list so _clean_tensor_dict can update it by reference.
+        mesh_device_info_ref = [None]
 
         # Add positional args with arg0, arg1, arg2, etc. labels
         for arg in data.get("args", []):
@@ -282,63 +333,15 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
             arg_key = f"arg{position}"
             arg_value = arg.get("value", {})
 
-            # Extract mesh_device info from tensor arguments
-            if isinstance(arg_value, dict) and "mesh_device" in arg_value:
-                mesh_data = arg_value["mesh_device"]
-
-                # Extract device info (only once, they should all be the same)
-                if mesh_device_info is None:
-                    mesh_device_info = {
-                        "device_ids": mesh_data.get("device_ids", []),
-                        "device_count": len(mesh_data.get("device_ids", [])),
-                        "mesh_device_shape": mesh_data.get("shape", []),
-                    }
-
-                # Extract tensor placement info and store it per-tensor
-                placements = mesh_data.get("placements", [])
-                distribution_shape = mesh_data.get("distribution_shape", [])
-                mesh_shape = mesh_data.get("shape", [])
-
-                # Remove mesh_device from the argument value
-                arg_value_clean = {k: v for k, v in arg_value.items() if k != "mesh_device"}
-
-                # Add per-tensor placement info if it exists
-                if placements:
-                    arg_value_clean["tensor_placement"] = {
-                        "placement": str(placements),
-                        "distribution_shape": str(distribution_shape),
-                        "mesh_device_shape": str(mesh_shape),
-                    }
-
-                # Remove redundant shape if it matches original_shape
-                if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
-                    if arg_value_clean["shape"] == arg_value_clean["original_shape"]:
-                        del arg_value_clean["shape"]
-
-                # Remove redundant dtype if it matches original_dtype
-                if "dtype" in arg_value_clean and "original_dtype" in arg_value_clean:
-                    if arg_value_clean["dtype"] == arg_value_clean["original_dtype"]:
-                        del arg_value_clean["dtype"]
-
-                arguments[arg_key] = arg_value_clean
+            if isinstance(arg_value, dict):
+                arguments[arg_key] = _clean_tensor_dict(arg_value, mesh_device_info_ref)
+            elif isinstance(arg_value, list):
+                arguments[arg_key] = [
+                    _clean_tensor_dict(item, mesh_device_info_ref) if isinstance(item, dict) else item
+                    for item in arg_value
+                ]
             else:
-                # Also clean up non-mesh tensors
-                if isinstance(arg_value, dict):
-                    arg_value_clean = arg_value.copy()
-
-                    # Remove redundant shape if it matches original_shape
-                    if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
-                        if arg_value_clean["shape"] == arg_value_clean["original_shape"]:
-                            del arg_value_clean["shape"]
-
-                    # Remove redundant dtype if it matches original_dtype
-                    if "dtype" in arg_value_clean and "original_dtype" in arg_value_clean:
-                        if arg_value_clean["dtype"] == arg_value_clean["original_dtype"]:
-                            del arg_value_clean["dtype"]
-
-                    arguments[arg_key] = arg_value_clean
-                else:
-                    arguments[arg_key] = arg_value
+                arguments[arg_key] = arg_value
 
         # Add kwargs as named arguments (they come after positional args)
         excluded_arg_keys = get_excluded_arg_keys()
@@ -346,66 +349,21 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         for key, value in kwargs.items():
             if key in excluded_arg_keys:
                 continue
-            # Also check kwargs for mesh_device info
-            if isinstance(value, dict) and "mesh_device" in value:
-                mesh_data = value["mesh_device"]
 
-                if mesh_device_info is None:
-                    mesh_device_info = {
-                        "device_ids": mesh_data.get("device_ids", []),
-                        "device_count": len(mesh_data.get("device_ids", [])),
-                        "mesh_device_shape": mesh_data.get("shape", []),
-                    }
-
-                placements = mesh_data.get("placements", [])
-                distribution_shape = mesh_data.get("distribution_shape", [])
-                mesh_shape = mesh_data.get("shape", [])
-
-                value_clean = {k: v for k, v in value.items() if k != "mesh_device"}
-
-                # Add per-tensor placement info if it exists
-                if placements:
-                    value_clean["tensor_placement"] = {
-                        "placement": str(placements),
-                        "distribution_shape": str(distribution_shape),
-                        "mesh_device_shape": str(mesh_shape),
-                    }
-
-                # Remove redundant shape if it matches original_shape
-                if "shape" in value_clean and "original_shape" in value_clean:
-                    if value_clean["shape"] == value_clean["original_shape"]:
-                        del value_clean["shape"]
-
-                # Remove redundant dtype if it matches original_dtype
-                if "dtype" in value_clean and "original_dtype" in value_clean:
-                    if value_clean["dtype"] == value_clean["original_dtype"]:
-                        del value_clean["dtype"]
-
-                arguments[key] = value_clean
+            if isinstance(value, dict):
+                arguments[key] = _clean_tensor_dict(value, mesh_device_info_ref)
+            elif isinstance(value, list):
+                arguments[key] = [
+                    _clean_tensor_dict(item, mesh_device_info_ref) if isinstance(item, dict) else item for item in value
+                ]
             else:
-                # Also clean up non-mesh tensors in kwargs
-                if isinstance(value, dict):
-                    value_clean = value.copy()
-
-                    # Remove redundant shape if it matches original_shape
-                    if "shape" in value_clean and "original_shape" in value_clean:
-                        if value_clean["shape"] == value_clean["original_shape"]:
-                            del value_clean["shape"]
-
-                    # Remove redundant dtype if it matches original_dtype
-                    if "dtype" in value_clean and "original_dtype" in value_clean:
-                        if value_clean["dtype"] == value_clean["original_dtype"]:
-                            del value_clean["dtype"]
-
-                    arguments[key] = value_clean
-                else:
-                    arguments[key] = value
+                arguments[key] = value
 
         # Merge mesh_device info into machine_info
         enhanced_machine_info = machine_info.copy() if machine_info else {}
 
-        if mesh_device_info:
-            enhanced_machine_info.update(mesh_device_info)
+        if mesh_device_info_ref[0]:
+            enhanced_machine_info.update(mesh_device_info_ref[0])
 
         # Note: tensor_placements are now stored per-tensor in the arguments
         # instead of globally in machine_info, to avoid ambiguity
@@ -476,6 +434,10 @@ def _normalize_for_hash(obj):
         # memory_config.hash is a device-specific pointer — remove it
         if "hash" in obj and isinstance(obj["hash"], int):
             del obj["hash"]
+
+        # device_ids is a PCI enumeration order specific to the physical
+        # machine topology; it must not affect configuration identity.
+        obj.pop("device_ids", None)
 
         # shard_spec: canonicalize None/null → string "None"
         if "shard_spec" in obj and obj["shard_spec"] is None:
