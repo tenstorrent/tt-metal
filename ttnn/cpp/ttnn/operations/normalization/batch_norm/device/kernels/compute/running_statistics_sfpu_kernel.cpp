@@ -9,6 +9,9 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#if defined(TYPECAST_MEAN) || defined(TYPECAST_VAR)
+#include "api/compute/eltwise_unary/typecast.h"
+#endif
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {
@@ -28,6 +31,8 @@ void kernel_main() {
     constexpr auto cb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
     constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
     constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
+    constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(14);  // writer-facing updated mean
+    [[maybe_unused]] constexpr auto cb_writer_updated_var = get_compile_time_arg_val(15);  // writer-facing updated var
 
     experimental::CircularBuffer cb_batch_mean_obj(cb_batch_mean);
     experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
@@ -130,6 +135,31 @@ void kernel_main() {
             tile_regs_release();
             cb_updated_running_mean_obj.push_back(onetile);
 
+#ifdef TYPECAST_MEAN
+            {
+                cb_updated_running_mean_obj.wait_front(onetile);
+                experimental::CircularBuffer cb_writer_mean_obj(cb_writer_updated_mean);
+                cb_writer_mean_obj.reserve_back(onetile);
+
+                tile_regs_acquire();
+                copy_tile_to_dst_init_short_with_dt(cb_tmp2, cb_updated_running_mean);
+                copy_tile(cb_updated_running_mean, tile_index, tile_index * 2);
+                TYPECAST_MEAN_INIT();
+                TYPECAST_MEAN(tile_index * 2);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_writer_updated_mean);
+                pack_tile(tile_index * 2, cb_writer_updated_mean);
+                tile_regs_release();
+
+                pack_reconfig_data_format(cb_writer_updated_mean, cb_updated_running_mean);
+
+                cb_updated_running_mean_obj.pop_front(onetile);
+                cb_writer_mean_obj.push_back(onetile);
+            }
+#endif
+
             cb_tmp3_obj.pop_front(onetile);
             cb_tmp2_obj.pop_front(onetile);
         }
@@ -210,6 +240,31 @@ void kernel_main() {
             pack_tile_with_dt(tile_index * 2, cb_out0);
             tile_regs_release();
             cb_updated_running_var_obj.push_back(onetile);
+
+#ifdef TYPECAST_VAR
+            {
+                cb_updated_running_var_obj.wait_front(onetile);
+                experimental::CircularBuffer cb_writer_var_obj(cb_writer_updated_var);
+                cb_writer_var_obj.reserve_back(onetile);
+
+                tile_regs_acquire();
+                copy_tile_to_dst_init_short_with_dt(cb_tmp2, cb_updated_running_var);
+                copy_tile(cb_updated_running_var, tile_index, tile_index * 2);
+                TYPECAST_VAR_INIT();
+                TYPECAST_VAR(tile_index * 2);
+                tile_regs_commit();
+
+                tile_regs_wait();
+                pack_reconfig_data_format(cb_writer_updated_var);
+                pack_tile(tile_index * 2, cb_writer_updated_var);
+                tile_regs_release();
+
+                pack_reconfig_data_format(cb_writer_updated_var, cb_updated_running_var);
+
+                cb_updated_running_var_obj.pop_front(onetile);
+                cb_writer_var_obj.push_back(onetile);
+            }
+#endif
 
             cb_tmp3_obj.pop_front(onetile);
             cb_tmp2_obj.pop_front(onetile);
