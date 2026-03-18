@@ -186,10 +186,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
-    tt::DataFormat scaler_cb_data_format =
-        (in_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE)
-            ? tt::DataFormat::Float32
-            : tt::DataFormat::Float16_b;
+    tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
     uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
     uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
     uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
@@ -387,8 +384,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
     if (input_is_row_major) {
-        // Merged readers need W (for page size) and element_size (for stride calculations).
-        reader_compile_time_args.push_back(W);
+        // For rm_input readers: element size of input tensor for address stride calculations
         reader_compile_time_args.push_back(static_cast<uint32_t>(a.element_size()));
     } else if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
@@ -397,7 +393,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
         reader_compile_time_args.push_back(beta_stick_size);
     } else {
-        reader_compile_time_args.push_back(W);
+        reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
 
     // Build compile time args for writer kernel
@@ -523,6 +519,8 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // Build per-core runtime args
     uint32_t curr_row = 0;
+    auto bfloat_one_value = bfloat16(1);
+    uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
     KernelDescriptor::RuntimeArgs reader_runtime_args;
     KernelDescriptor::RuntimeArgs writer_runtime_args;
@@ -559,12 +557,18 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             num_tile_rows_per_core,
             Wt,
             reader_start,
+            packed_one_value,
             std::bit_cast<uint32_t>(eps),
             gamma_dram_addr,
             beta_dram_addr,
             b_dram_addr};
+        if (!(use_welford && large_tensor_needed)) {
+            reader_args.push_back(W);
+            reader_args.push_back(tile_width);
+            reader_args.push_back(tile_height);
+        }
         if (input_is_row_major) {
-            reader_args.push_back(H_logical);  // arg[8]
+            reader_args.push_back(H_logical);
         }
 
         reader_runtime_args.emplace_back(core, std::move(reader_args));
@@ -785,13 +789,13 @@ void LayerNormMultiCoreProgramFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(program, shared_vars.reader_kernel_id, core);
             runtime_args[0] = src_a_dram_buffer->address();
             if (src_b_dram_buffer != nullptr) {
-                runtime_args[7] = src_b_dram_buffer->address();
+                runtime_args[8] = src_b_dram_buffer->address();
             }
             if (gamma_dram_buffer != nullptr) {
-                runtime_args[5] = gamma_dram_buffer->address();
+                runtime_args[6] = gamma_dram_buffer->address();
             }
             if (beta_dram_buffer != nullptr) {
-                runtime_args[6] = beta_dram_buffer->address();
+                runtime_args[7] = beta_dram_buffer->address();
             }
         }
 

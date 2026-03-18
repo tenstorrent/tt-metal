@@ -131,15 +131,31 @@ void kernel_main() {
     cb_push_back(cb_x2, num_tiles_per_block);
 
     // E(x^2)
-    cb_wait_front(cb_x2, num_tiles_per_block);
+    reconfig_data_format_srca(cb_in, cb_x2);
+    reconfig_data_format_srcb(cb_in, cb_scaler);
 
-    compute_kernel_lib::reduce<
-        PoolType::AVG,
-        ReduceDim::REDUCE_ROW,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        cb_x2, cb_scaler, cb_ex_partial2, compute_kernel_lib::ReduceInputBlockShape::row(num_reduce_tiles_per_block_h));
+    cb_wait_front(cb_x2, num_tiles_per_block);
+    cb_wait_front(cb_scaler, 1);
+
+    cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
+
+    reduce_init(cb_x2, cb_scaler, cb_ex_partial2);
+    index_h_offset = 0;
+    tile_regs_acquire();
+    for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+        // TODO(#38448): Temporary workaround pending further debug; do not copy this pattern elsewhere.
+        tensix_sync();
+        reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
+    }
+
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile(dst0, cb_ex_partial2);
+    tile_regs_release();
+    index_h_offset += block_w;
+    reduce_uninit();
     cb_pop_front(cb_x2, num_tiles_per_block);
+    cb_push_back(cb_ex_partial2, 1);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr (is_allgather_worker) {
