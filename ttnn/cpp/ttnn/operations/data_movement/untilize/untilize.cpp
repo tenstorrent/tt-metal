@@ -42,7 +42,6 @@ ttnn::Tensor untilize(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    bool use_pack_untilize,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
 
@@ -66,7 +65,6 @@ ttnn::Tensor untilize(
             input_tensor,
             memory_config.value_or(input_tensor.memory_config()),
             use_multicore,
-            use_pack_untilize,
             fp32_dest_acc_en,
             sub_core_grids,
             enough_space_width,

@@ -30,7 +30,6 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
-            use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
 
         Returns:
@@ -46,7 +45,6 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("use_pack_untilize") = true,
         nb::arg("sub_core_grids") = nb::none());
 }
 
