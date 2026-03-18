@@ -56,18 +56,27 @@ ALWI uint32_t batchnorm_bcast_tiles(
     tile_regs_acquire();
     copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_var);
     last_srca_cb = cb_batch_var;
-    copy_tile(cb_batch_var, 0, 0);
+    for (uint32_t i = 0; i < onetile; ++i) {
+        copy_tile(cb_batch_var, i, i * 2);
+    }
     add_binary_tile_init();
     copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_eps);
     last_srca_cb = cb_eps;
-    copy_tile(cb_eps, 0, 1);
-    add_binary_tile(0, 1, 0);
+    for (uint32_t i = 0; i < onetile; ++i) {
+        copy_tile(cb_eps, i, i * 2 + 1);
+
+        add_binary_tile(i * 2, i * 2 + 1, i * 2);
+    }
     rsqrt_tile_init();
-    rsqrt_tile(0);
+    for (uint32_t i = 0; i < onetile; ++i) {
+        rsqrt_tile(i * 2);
+    }
     tile_regs_commit();
 
     tile_regs_wait();
-    pack_tile(0, cb_den);
+    for (uint32_t i = 0; i < onetile; ++i) {
+        pack_tile(i * 2, cb_den);
+    }
     tile_regs_release();
 
     cb_den_obj.push_back(onetile);
@@ -89,22 +98,30 @@ ALWI uint32_t batchnorm_bcast_tiles(
         tile_regs_acquire();
         copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_other);
         last_srca_cb = cb_other;
-        copy_tile(cb_other, 0, 0);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            copy_tile(cb_other, i, i * 2);
+        }
         sub_binary_tile_init();
         copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_bcast);
         last_srca_cb = cb_bcast;
-        copy_tile(cb_bcast, 0, 1);
-        sub_binary_tile(0, 1, 0);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            copy_tile(cb_bcast, i, i * 2 + 1);
+            sub_binary_tile(i * 2, i * 2 + 1, i * 2);
+        }
 
         mul_binary_tile_init();
         copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_den);
         last_srca_cb = cb_den;
-        copy_tile(cb_den, 0, 1);
-        mul_binary_tile(0, 1, 0);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            copy_tile(cb_den, i, i * 2 + 1);
+            mul_binary_tile(i * 2, i * 2 + 1, i * 2);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_affine_or_out);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            pack_tile(i * 2, cb_affine_or_out);
+        }
         tile_regs_release();
 
         cb_other_obj.pop_front(onetile);
@@ -117,16 +134,22 @@ ALWI uint32_t batchnorm_bcast_tiles(
             tile_regs_acquire();
             copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_affine_or_out);
             last_srca_cb = cb_affine_or_out;
-            copy_tile(cb_affine_or_out, 0, 0);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                copy_tile(cb_affine_or_out, i, i * 2);
+            }
             mul_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_weight);
             last_srca_cb = cb_weight;
-            copy_tile(cb_weight, 0, 1);
-            mul_binary_tile(0, 1, 0);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                copy_tile(cb_weight, i, i * 2 + 1);
+                mul_binary_tile(i * 2, i * 2 + 1, i * 2);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(0, cb_scaled_output);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                pack_tile(i * 2, cb_scaled_output);
+            }
             tile_regs_release();
 
             cb_scaled_output_obj.push_back(onetile);
@@ -140,16 +163,22 @@ ALWI uint32_t batchnorm_bcast_tiles(
             tile_regs_acquire();
             copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp_1);
             last_srca_cb = cb_tmp_1;
-            copy_tile(cb_tmp_1, 0, 0);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                copy_tile(cb_tmp_1, i, i * 2);
+            }
             add_binary_tile_init();
             copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_bias);
             last_srca_cb = cb_bias;
-            copy_tile(cb_bias, 0, 1);
-            add_binary_tile(0, 1, 0);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                copy_tile(cb_bias, i, i * 2 + 1);
+                add_binary_tile(i * 2, i * 2 + 1, i * 2);
+            }
             tile_regs_commit();
 
             tile_regs_wait();
-            pack_tile(0, cb_output_0);
+            for (uint32_t i = 0; i < onetile; ++i) {
+                pack_tile(i * 2, cb_output_0);
+            }
             tile_regs_release();
 
             cb_output_0_obj.push_back(onetile);
@@ -164,14 +193,20 @@ ALWI uint32_t batchnorm_bcast_tiles(
         tile_regs_acquire();
         copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_output_0);
         last_srca_cb = cb_output_0;
-        copy_tile(cb_output_0, 0, 0);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            copy_tile(cb_output_0, i, i * 2);
+        }
         TYPECAST_OUTPUT_INIT();
-        TYPECAST_OUTPUT(0);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            TYPECAST_OUTPUT(i * 2);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
         pack_reconfig_data_format(cb_output_final);
-        pack_tile(0, cb_output_final);
+        for (uint32_t i = 0; i < onetile; ++i) {
+            pack_tile(i * 2, cb_output_final);
+        }
         tile_regs_release();
 
         pack_reconfig_data_format(cb_output_final, cb_output_0);
