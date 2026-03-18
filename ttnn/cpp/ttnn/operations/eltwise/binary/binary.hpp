@@ -21,40 +21,6 @@ bool is_legacy_only(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
 
 template <BinaryOpType binary_op_type>
-struct MulOperationWithFastApprox {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static Tensor invoke(
-        const ttnn::Tensor& lhs,
-        float rhs,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    // Simplified overloads for fast_and_approximate_mode
-    static Tensor invoke(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode);
-
-    static Tensor invoke(const Tensor& lhs, float rhs, bool fast_and_approximate_mode);
-};
-
-template <BinaryOpType binary_op_type>
 struct RelationalBinary {
     static Tensor invoke(
         const Tensor& lhs,

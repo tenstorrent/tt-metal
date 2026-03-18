@@ -493,100 +493,6 @@ Tensor invoke_binary_ng(
 }  // namespace detail
 
 template <BinaryOpType binary_op_type>
-Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
-    return detail::invoke_binary_ng(
-        lhs,
-        rhs,
-        binary_op_type,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        fast_and_approx,
-        sub_core_grids);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
-    const ttnn::Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
-    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
-    return detail::invoke_binary_ng(
-        lhs,
-        rhs,
-        binary_op_type,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        fast_and_approx,
-        sub_core_grids);
-}
-
-template <BinaryOpType binary_op_type>
-Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
-    const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode) {
-    return invoke(
-        lhs,
-        rhs,
-        std::nullopt,  // output_dtype
-        std::nullopt,  // memory_config
-        std::nullopt,  // output
-        {},            // post_activations
-        {},            // lhs_activations
-        {},            // rhs_activations
-        std::nullopt,  // use_legacy
-        fast_and_approximate_mode,
-        std::nullopt);  // sub_core_grids
-}
-
-template <BinaryOpType binary_op_type>
-Tensor MulOperationWithFastApprox<binary_op_type>::invoke(
-    const Tensor& lhs, float rhs, bool fast_and_approximate_mode) {
-    return invoke(
-        lhs,
-        rhs,
-        std::nullopt,  // output_dtype
-        std::nullopt,  // memory_config
-        std::nullopt,  // output
-        {},            // post_activations
-        {},            // lhs_activations
-        {},            // rhs_activations
-        std::nullopt,  // use_legacy
-        fast_and_approximate_mode,
-        std::nullopt);  // sub_core_grids
-}
-
-template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -956,7 +862,6 @@ template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
 template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 
-template struct MulOperationWithFastApprox<BinaryOpType::MUL>;
 template struct InplaceMulOperationWithFastApprox<BinaryOpType::MUL>;
 
 template struct WhereOperationWithScalar<BinaryOpType::WHERE_TST>;
@@ -2303,9 +2208,12 @@ Tensor multiply(
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::MulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>::invoke(
+    bool is_block_fmt_inp = (is_block_float(lhs.dtype()) || is_block_float(rhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    return operations::binary::detail::invoke_binary_ng(
         lhs,
         rhs,
+        operations::binary::BinaryOpType::MUL,
         output_dtype,
         memory_config,
         output,
@@ -2313,7 +2221,7 @@ Tensor multiply(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode,
+        fast_and_approx,
         sub_core_grids);
 }
 Tensor multiply(
@@ -2328,9 +2236,12 @@ Tensor multiply(
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::MulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>::invoke(
+    bool is_block_fmt_inp = (is_block_float(lhs.dtype()));
+    bool fast_and_approx = is_block_fmt_inp ? true : fast_and_approximate_mode.value_or(false);
+    return operations::binary::detail::invoke_binary_ng(
         lhs,
         rhs,
+        operations::binary::BinaryOpType::MUL,
         output_dtype,
         memory_config,
         output,
@@ -2338,16 +2249,38 @@ Tensor multiply(
         lhs_activations,
         rhs_activations,
         use_legacy,
-        fast_and_approximate_mode,
+        fast_and_approx,
         sub_core_grids);
 }
 Tensor multiply(const Tensor& lhs, const Tensor& rhs, bool fast_and_approximate_mode) {
-    return operations::binary::MulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>::invoke(
-        lhs, rhs, fast_and_approximate_mode);
+    return operations::binary::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        operations::binary::BinaryOpType::MUL,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt,
+        fast_and_approximate_mode,
+        std::nullopt);
 }
 Tensor multiply(const Tensor& lhs, float rhs, bool fast_and_approximate_mode) {
-    return operations::binary::MulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>::invoke(
-        lhs, rhs, fast_and_approximate_mode);
+    return operations::binary::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        operations::binary::BinaryOpType::MUL,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt,
+        fast_and_approximate_mode,
+        std::nullopt);
 }
 Tensor multiply_(
     const Tensor& lhs,
