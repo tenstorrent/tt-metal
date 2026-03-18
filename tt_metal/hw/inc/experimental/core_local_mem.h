@@ -168,6 +168,8 @@ private:
     AddressType address_;
 };
 
+// TRISC cores can use CoreLocalMem for L1 pointer access, but noc_traits_t is
+// intentionally omitted since only DM cores have NOC access
 #if !defined(COMPILE_FOR_TRISC)
 template <typename T, typename AddressType>
 struct noc_traits_t<CoreLocalMem<T, AddressType>> {
