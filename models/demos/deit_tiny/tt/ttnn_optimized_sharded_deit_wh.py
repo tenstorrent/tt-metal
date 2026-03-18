@@ -512,34 +512,6 @@ def deit(
     return classifier_output
 
 
-def preprocess_inputs(
-    input_ids,
-    token_type_ids,
-    attention_mask,
-    device,
-):
-    batch_size, _ = input_ids.shape
-
-    input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    token_type_ids = ttnn.from_torch(
-        token_type_ids, dtype=ttnn.uint32, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-
-    if attention_mask is not None:
-        attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
-        attention_mask = torch.nn.functional.pad(attention_mask, (0, 0, 0, 0, 0, 0, 0, batch_size - 1))
-        attention_mask = ttnn.from_torch(
-            attention_mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-    return input_ids, token_type_ids, attention_mask
-
-
 def custom_preprocessor(torch_model, name):
     parameters = {}
     if isinstance(torch_model, transformers.models.deit.modeling_deit.DeiTEmbeddings):
