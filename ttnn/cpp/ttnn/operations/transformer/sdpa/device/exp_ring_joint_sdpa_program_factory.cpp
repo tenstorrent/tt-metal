@@ -287,6 +287,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // Init fused op signaler
     sdpa_fused_op_signaler->init_fused_op(program, mesh_device, core_grid);
 
+    // Override the fused-op semaphore with the global out-ready semaphore so that
+    // the reader injector waits on the same semaphore that MUX writers increment.
+    const uint32_t out_ready_global_sem_addr = args.semaphore[0].address();
+    sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores[0] = out_ready_global_sem_addr;
+    sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores[1] = out_ready_global_sem_addr;
+
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
         tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
