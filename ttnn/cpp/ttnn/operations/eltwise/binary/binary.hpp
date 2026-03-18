@@ -121,20 +121,6 @@ struct InplaceMulOperationWithFastApprox {
 };
 
 template <BinaryOpType binary_op_type>
-struct BinaryOperationSfpu {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
 struct BinaryOperationAddalpha {
     static Tensor invoke(
         const Tensor& lhs,

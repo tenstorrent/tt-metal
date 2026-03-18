@@ -711,32 +711,6 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor BinaryOperationSfpu<binary_op_type>::invoke(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
-        lhs,
-        rhs,
-        binary_op_type,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
-}
-
-template <BinaryOpType binary_op_type>
 Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -844,19 +818,6 @@ template struct InplaceRelationalBinary<BinaryOpType::NE>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_XOR>;
-
-template struct BinaryOperationSfpu<BinaryOpType::POWER>;
-template struct BinaryOperationSfpu<BinaryOpType::BITWISE_AND>;
-template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
-template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
-template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
-template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
-template struct BinaryOperationSfpu<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
-template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
-template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
-template struct BinaryOperationSfpu<BinaryOpType::GCD>;
-template struct BinaryOperationSfpu<BinaryOpType::LCM>;
-template struct BinaryOperationSfpu<BinaryOpType::FMOD>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
