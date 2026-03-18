@@ -161,7 +161,12 @@ def run_conv2d_full_sweep(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    # Handle mesh device output - extract device 0 for distributed tensors
+    try:
+        _dev_tensors = ttnn.get_device_tensors(tt_output_tensor)
+        torch_output_tensor = ttnn.to_torch(_dev_tensors[0]) if _dev_tensors else ttnn.to_torch(tt_output_tensor)
+    except Exception:
+        torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     # torch_output_tensor is in row major layout and NHWC shape
@@ -313,7 +318,12 @@ def run_conv2d_short_sweep(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    # Handle mesh device output - extract device 0 for distributed tensors
+    try:
+        _dev_tensors = ttnn.get_device_tensors(tt_output_tensor)
+        torch_output_tensor = ttnn.to_torch(_dev_tensors[0]) if _dev_tensors else ttnn.to_torch(tt_output_tensor)
+    except Exception:
+        torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     # torch_output_tensor is in row major layout and NHWC shape
@@ -394,7 +404,12 @@ def run_conv1d_short_sweep(
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    # Handle mesh device output - extract device 0 for distributed tensors
+    try:
+        _dev_tensors = ttnn.get_device_tensors(tt_output_tensor)
+        torch_output_tensor = ttnn.to_torch(_dev_tensors[0]) if _dev_tensors else ttnn.to_torch(tt_output_tensor)
+    except Exception:
+        torch_output_tensor = ttnn.to_torch(tt_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     # torch_output_tensor is in row major layout and NLC shape

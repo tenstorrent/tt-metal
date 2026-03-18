@@ -125,6 +125,20 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Validate output memory_config shard spec against device grid
+    if "memory_config" in op_kwargs:
+        mc = op_kwargs["memory_config"]
+        if hasattr(mc, "is_sharded") and mc.is_sharded():
+            try:
+                grid = device.compute_with_storage_grid_size()
+                shard_grid = mc.shard_spec.grid
+                for cr in shard_grid:
+                    if cr.end.x >= grid.x or cr.end.y >= grid.y:
+                        del op_kwargs["memory_config"]
+                        break
+            except Exception:
+                del op_kwargs["memory_config"]
+
     start_time = start_measuring_time()
     output_tensor = ttnn.gelu(input_tensor_a, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)

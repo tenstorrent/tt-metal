@@ -284,10 +284,8 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Quantize PyTorch output to match TTNN output dtype for fair comparison
-    torch_output_tensor = _quantize_roundtrip(torch_output_golden, dtype_q, layout_q)
-
-    # Check with PCC (threshold 0.99 for low-precision dtypes)
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    # Compare raw golden (float32) against TTNN output.
+    # Do NOT requantize the golden — that introduces double-quantization error.
+    pcc = check_with_pcc(torch_output_golden, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

@@ -237,10 +237,10 @@ def run(
         # Check grid size before constructing program config
         cg = pc_dict.get("compute_with_storage_grid_size", {})
         if isinstance(cg, dict):
-            pc_cores = int(cg.get("x", 8)) * int(cg.get("y", 8))
+            pc_x, pc_y = int(cg.get("x", 8)), int(cg.get("y", 8))
         else:
-            pc_cores = 0
-        if pc_cores <= device_cores:
+            pc_x, pc_y = 0, 0
+        if pc_x <= device_grid.x and pc_y <= device_grid.y:
             from tests.sweep_framework.master_config_loader_v2 import dict_to_program_config
 
             program_config = dict_to_program_config(pc_dict)
