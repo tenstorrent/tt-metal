@@ -59,6 +59,7 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/polynorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
