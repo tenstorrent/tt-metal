@@ -125,6 +125,95 @@ bool RunBurstWritesThenSingleCrossCqEvent(
     FinishAllCqs(cqs);
     return pass;
 }
+
+bool RunDeviceOnlyEventChainWithPerIterationValidation(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshCoordinate& zero_coord,
+    TestBufferConfig config,
+    size_t num_iterations) {
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
+        mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
+    bool pass = true;
+    const size_t buf_size = config.num_pages * config.page_size;
+
+    distributed::ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+    distributed::DeviceLocalBufferConfig device_local_config{
+        .page_size = config.page_size, .buffer_type = config.buftype};
+    auto buffer = distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get());
+
+    for (size_t iter = 0; iter < num_iterations; iter++) {
+        auto& cq_write = cqs[iter % 2];
+        auto& cq_read = cqs[(iter + 1) % 2];
+
+        auto src = generate_arange_vector(buf_size, iter * 1000);
+        distributed::WriteShard(cq_write, buffer, src, zero_coord, false);
+        auto event = cq_write.get().enqueue_record_event();
+        cq_read.get().enqueue_wait_for_event(event);
+
+        vector<uint32_t> result;
+        distributed::ReadShard(cq_read, result, buffer, zero_coord, true);
+        bool iter_pass = (src == result);
+        if (!iter_pass) {
+            log_warning(
+                tt::LogTest,
+                "Device-only event chain iteration {} FAILED (write CQ={}, read CQ={})",
+                iter,
+                cq_write.get().id(),
+                cq_read.get().id());
+        }
+        pass &= iter_pass;
+    }
+
+    FinishAllCqs(cqs);
+    return pass;
+}
+
+bool RunHeavyBurstWritesThenDeviceOnlyEvent(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshCoordinate& zero_coord,
+    size_t num_buffers) {
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
+        mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
+    auto& cq_write = cqs[0];
+    auto& cq_read = cqs[1];
+    bool pass = true;
+
+    vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
+    vector<vector<uint32_t>> srcs;
+    buffers.reserve(num_buffers);
+    srcs.reserve(num_buffers);
+
+    constexpr uint32_t page_size = 2048;
+    constexpr uint32_t num_pages = 64;
+    const size_t buf_size = num_pages * page_size;
+
+    for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
+        distributed::ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+        distributed::DeviceLocalBufferConfig device_local_config{
+            .page_size = page_size, .buffer_type = BufferType::DRAM};
+        buffers.push_back(
+            distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
+        srcs.push_back(generate_arange_vector(buffers.back()->size(), buf_idx * 10000));
+        distributed::WriteShard(cq_write, buffers.back(), srcs.back(), zero_coord, false);
+    }
+
+    auto event = cq_write.get().enqueue_record_event();
+    cq_read.get().enqueue_wait_for_event(event);
+
+    for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
+        vector<uint32_t> result;
+        distributed::ReadShard(cq_read, result, buffers[buf_idx], zero_coord, true);
+        bool buf_pass = (srcs[buf_idx] == result);
+        if (!buf_pass) {
+            log_warning(tt::LogTest, "Heavy burst buffer {} mismatch after device-only event", buf_idx);
+        }
+        pass &= buf_pass;
+    }
+
+    FinishAllCqs(cqs);
+    return pass;
+}
+
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -352,6 +441,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 // Ensure read back data is correct, data is different for each write.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
     for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
         TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
         auto start = std::chrono::system_clock::now();
         bool pass = local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
@@ -364,42 +455,72 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
         auto end = std::chrono::system_clock::now();
         std::chrono::duration<double> elapsed_seconds = (end - start);
-        log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
-        EXPECT_TRUE(pass);
+        log_info(tt::LogTest, "Device {} finished in {}us", device->id(), elapsed_seconds.count() * 1000 * 1000);
+        EXPECT_TRUE(pass) << "Cross-CQ event read/write failed on device " << device->id();
     }
 }
 
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsDeterministic) {
     for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
         TestBufferConfig config = {.num_pages = 4, .page_size = 256, .buftype = BufferType::DRAM};
-        EXPECT_TRUE(local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
+        bool pass = local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
             mesh_device,
             zero_coord_,
             config,
             /*num_buffers_per_cq=*/8,
             /*vary_buffer_sizes=*/false,
-            /*notify_host=*/false));
+            /*notify_host=*/false);
+        EXPECT_TRUE(pass) << "Deterministic cross-CQ event failed on device " << device->id();
     }
 }
 
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsHostVisibleControl) {
     for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
         TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
-        EXPECT_TRUE(local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
+        bool pass = local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
             mesh_device,
             zero_coord_,
             config,
             /*num_buffers_per_cq=*/50,
             /*vary_buffer_sizes=*/true,
-            /*notify_host=*/true));
+            /*notify_host=*/true);
+        EXPECT_TRUE(pass) << "Host-visible cross-CQ event failed on device " << device->id();
     }
 }
 
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsBurstWritesThenSingleCrossCqEvent) {
     for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
         TestBufferConfig config = {.num_pages = 4, .page_size = 256, .buftype = BufferType::DRAM};
-        EXPECT_TRUE(local_test_functions::RunBurstWritesThenSingleCrossCqEvent(
-            mesh_device, zero_coord_, config, /*num_buffers=*/6));
+        bool pass = local_test_functions::RunBurstWritesThenSingleCrossCqEvent(
+            mesh_device, zero_coord_, config, /*num_buffers=*/6);
+        EXPECT_TRUE(pass) << "Burst writes + event ordering failed on device " << device->id();
+    }
+}
+
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsDeviceOnlyEventChainWithPerIterationValidation) {
+    for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
+        TestBufferConfig config = {.num_pages = 4, .page_size = 256, .buftype = BufferType::DRAM};
+        bool pass = local_test_functions::RunDeviceOnlyEventChainWithPerIterationValidation(
+            mesh_device, zero_coord_, config, /*num_iterations=*/16);
+        EXPECT_TRUE(pass) << "Device-only event chain failed on device " << device->id();
+    }
+}
+
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsHeavyBurstWritesThenDeviceOnlyEvent) {
+    for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
+        bool pass =
+            local_test_functions::RunHeavyBurstWritesThenDeviceOnlyEvent(mesh_device, zero_coord_, /*num_buffers=*/12);
+        EXPECT_TRUE(pass) << "Heavy burst event ordering failed on device " << device->id();
     }
 }
 
@@ -408,6 +529,8 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsBurstWritesThenSingleCr
 // write and write after read before checking correct data read at the end after all cmds finished on device.
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
     for (auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running on Device {}", device->id());
         TestBufferConfig config = {.num_pages = 1, .page_size = 16, .buftype = BufferType::DRAM};
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
             mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
@@ -522,9 +645,9 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
         auto end = std::chrono::system_clock::now();
         std::chrono::duration<double> elapsed_seconds = (end - start);
-        log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
+        log_info(tt::LogTest, "Device {} finished in {}us", device->id(), elapsed_seconds.count() * 1000 * 1000);
 
-        EXPECT_TRUE(pass);
+        EXPECT_TRUE(pass) << "PingPong event chain failed on device " << device->id();
     }
 }
 
