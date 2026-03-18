@@ -420,9 +420,8 @@ void WatcherDeviceReader::Dump(FILE* file) {
         if (has_dram_fw &&
             rtoptions.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramWatcherMailboxRead)) {
             const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
-                    .Dump();
+            for (const auto& dram_core : soc_d.get_preferred_worker_cores_for_dram_views(0)) {
+                Core::Create(dram_core, HalProgrammableCoreType::DRAM, *this, dump_data).Dump();
             }
         }
     }

@@ -237,8 +237,7 @@ void RiscFirmwareInitializer::clear_l1_state(tt::ChipId device_id) {
         uint32_t dram_l1_size = hal_.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE);
         std::vector<uint32_t> dram_zero_vec(dram_l1_size / sizeof(uint32_t), 0);
         const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : soc_d.get_preferred_worker_cores_for_dram_views(0)) {
             cluster_.write_core(
                 dram_zero_vec.data(),
                 dram_l1_size,
@@ -333,8 +332,7 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
     if (has_dram_fw &&
         rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramCoreResetAssert)) {
         const auto& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_core{dram_core.x, dram_core.y};
+        for (const auto& virtual_core : soc_d.get_preferred_worker_cores_for_dram_views(0)) {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
     }
@@ -1184,10 +1182,9 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
         const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
-        for (const auto& dram_noc : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
-            CoreCoord virtual_dram_core{dram_noc.x, dram_noc.y};
-            dram_core_info.view().absolute_logical_x() = dram_noc.x;
-            dram_core_info.view().absolute_logical_y() = dram_noc.y;
+        for (const auto& virtual_dram_core : soc_d.get_preferred_worker_cores_for_dram_views(0)) {
+            dram_core_info.view().absolute_logical_x() = virtual_dram_core.x;
+            dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
             uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramCoreInfo)) {
                 cluster_.write_core(

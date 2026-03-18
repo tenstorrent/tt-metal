@@ -6,7 +6,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
-#include <string>
 
 #include <umd/device/types/arch.hpp>
 
@@ -19,6 +18,15 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_
     TT_ASSERT(noc < 2, "Only 2 NOCs supported, noc={} is out of range", noc);
     return this->dram_view_worker_cores.at(dram_view).at(noc);
 };
+
+std::vector<CoreCoord> metal_SocDescriptor::get_preferred_worker_cores_for_dram_views(uint8_t noc) const {
+    std::vector<CoreCoord> preferred_cores;
+    preferred_cores.reserve(this->get_num_dram_views());
+    for (size_t dram_view = 0; dram_view < this->get_num_dram_views(); ++dram_view) {
+        preferred_cores.push_back(this->get_preferred_worker_core_for_dram_view(dram_view, noc));
+    }
+    return preferred_cores;
+}
 
 CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(

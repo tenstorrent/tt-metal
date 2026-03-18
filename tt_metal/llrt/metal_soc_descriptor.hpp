@@ -38,6 +38,7 @@ public:
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
+    std::vector<CoreCoord> get_preferred_worker_cores_for_dram_views(uint8_t noc) const;
     CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
     CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;

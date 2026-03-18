@@ -38,10 +38,10 @@
 #include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "llrt/metal_soc_descriptor.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
@@ -310,9 +310,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         if (MetalContext::instance().rtoptions().should_run_blackhole_dram_init_case(
                 tt::llrt::BlackholeDramInitCase::DramCqLaunchRdptr)) {
-            for (const auto& dram_core : MetalContext::instance().get_cluster().get_soc_desc(id_).get_cores(
-                     CoreType::DRAM, CoordSystem::TRANSLATED)) {
-                reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+            for (const auto& dram_core :
+                 MetalContext::instance().get_cluster().get_soc_desc(id_).get_preferred_worker_cores_for_dram_views(0)) {
+                reset_launch_message_rd_ptr_virtual(dram_core, HalProgrammableCoreType::DRAM);
             }
         }
     }
