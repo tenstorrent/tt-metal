@@ -68,7 +68,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
 
     const auto& first_input = input_tensors[0];
     const auto first_input_page_size = first_input.buffer()->page_size();
-    auto shape_first = first_input.padded_shape();
+    auto shape_first = first_input.logical_shape();
     TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
@@ -83,7 +83,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.layout() == first_input.layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.dtype() == first_input.dtype(), "All Tensors should have same dtypes.");
-        auto curr_shape = in_ref.padded_shape();
+        auto curr_shape = in_ref.logical_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[args.dim] = 0;
         // last tensor can support without any kernel changes
@@ -452,8 +452,8 @@ Tensor concat_impl(
         return concat_impl(intermediate_results, dim, groups, output_mem_config, sub_core_grids);
     }
 
-    uint32_t ref_rank = input_tensors[0].padded_shape().rank();
-    uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
+    uint32_t ref_rank = input_tensors[0].logical_shape().rank();
+    uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
         return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
@@ -509,7 +509,7 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::prim::ConcatDeviceOperation;
-    uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
+    uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = normalized_dim,

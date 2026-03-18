@@ -12,14 +12,14 @@
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
 
 template <typename OutputDataType, typename InputDataType>
-std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_convert) {
+std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {

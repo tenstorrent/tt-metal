@@ -538,16 +538,11 @@ class Generator(WarmupForwardMixin):
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
             )
 
-            # For batched prefill: pass full page_table (function handles slot placement)
-            # For non-batched prefill: pass sliced page_table for current user (like original code)
-            if use_batched_prefill:
-                page_table_for_user = page_table
-            elif page_table is not None:
-                page_table_for_user = page_table[idx : idx + 1]
-            else:
-                page_table_for_user = None
-            page_table_user = (
-                self._get_prefill_user_page_table(
+            if page_table is not None:
+                # For batched prefill: pass full page_table (function handles slot placement)
+                # For non-batched prefill: pass sliced page_table for current user (like original code)
+                page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
+                page_table_user = self._get_prefill_user_page_table(
                     page_table_for_user,
                     kv_cache[model_id],
                     seq_len,
@@ -556,9 +551,8 @@ class Generator(WarmupForwardMixin):
                     use_batched_prefill=use_batched_prefill,
                     user_id=batch_user_ids if use_batched_prefill else user_id,
                 )
-                if page_table is not None
-                else None
-            )
+            else:
+                page_table_user = None
             if page_table_user is not None and _deepseek_kvdbg_enabled():
                 sample = []
                 if page_table_user.numel():
