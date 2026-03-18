@@ -203,7 +203,9 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
             << "Sharded buffer data mismatch after FD->SD transition";
     }
 
-    // Write and verify interleaved L1 buffer in SD mode
+    // Write and verify interleaved L1 buffer in SD mode. This remains a replicated MeshBuffer across the mesh, so
+    // validate it shard-by-shard rather than through EnqueueReadMeshBuffer(), which is only defined for sharded global
+    // layouts on multi-device meshes.
     DeviceLocalBufferConfig sd_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig sd_global_config{.size = num_tiles * single_tile_size};
@@ -214,9 +216,11 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
-    std::vector<uint32_t> sd_dst_vec = {};
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, true);
-    EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> sd_dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
+        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed after FD->SD transition";
+    }
 }
 
 }  // namespace tt::tt_metal::distributed::test

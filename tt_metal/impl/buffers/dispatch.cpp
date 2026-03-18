@@ -1340,7 +1340,6 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
 
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = buffer.device();
-    dispatch_params.page_size = buffer.page_size();
     dispatch_params.padded_page_size = buffer.aligned_page_size();
     dispatch_params.src_page_index = 0;
     dispatch_params.unpadded_dst_offset = 0;
@@ -1364,7 +1363,6 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     dispatch_params.cq_id = cq_id;
     dispatch_params.device = device;
     dispatch_params.address = root_buffer->address();
-    dispatch_params.page_size = root_buffer->page_size();
     dispatch_params.unpadded_dst_offset = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     dispatch_params.num_banks = device->allocator()->get_num_banks(root_buffer->buffer_type());
@@ -1528,23 +1526,21 @@ void copy_interleaved_buffer_to_completion_queue(
     CoreType dispatch_core_type,
     void* dst,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
-    if (dispatch_params.total_pages_to_read == 0) {
-        return;
-    }
+    if (dispatch_params.total_pages_to_read > 0) {
+        // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
+        // To handle larger page offsets move bank base address up and update page offset to be relative to the new
+        // bank address
+        if (dispatch_params.src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
+            dispatch_params.update_params_to_be_within_bounds(buffer);
+        }
 
-    // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
-    // To handle larger page offsets move bank base address up and update page offset to be relative to the new
-    // bank address
-    if (dispatch_params.src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-        dispatch_params.update_params_to_be_within_bounds(buffer);
-    }
+        dispatch_params.dst = dst;
+        dispatch_params.pinned_memory = pinned_memory;
+        dispatch_params.calculate_num_pages_for_read_transaction();
+        issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
 
-    dispatch_params.dst = dst;
-    dispatch_params.pinned_memory = pinned_memory;
-    const uint32_t max_pages_before_page_offset_rebase =
-        CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK - dispatch_params.src_page_index + 1;
-    dispatch_params.pages_per_txn = std::min(dispatch_params.total_pages_to_read, max_pages_before_page_offset_rebase);
-    issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+        dispatch_params.update_params_after_read_transaction();
+    }
 }
 
 // Functions used to copy buffer data from completion queue into user space
@@ -1572,7 +1568,7 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
         dispatch_params.padded_page_size,
         dst,
         dispatch_params.unpadded_dst_offset,
-        dispatch_params.pages_per_txn);
+        dispatch_params.total_pages_read);
 }
 
 void copy_completion_queue_data_into_user_space(
