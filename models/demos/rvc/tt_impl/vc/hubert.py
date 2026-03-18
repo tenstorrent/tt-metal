@@ -38,10 +38,10 @@ class MultiheadSelfAttention:
             raise ValueError("embed_dim must be divisible by num_heads")
         self.self_attention = self_attention
 
-        self.k_proj = Linear(device=device, in_features=self.k_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.v_proj = Linear(device=device, in_features=self.v_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.q_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.out_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.k_proj = Linear(device=device, in_features=self.k_dim, out_features=embed_dim)
+        self.v_proj = Linear(device=device, in_features=self.v_dim, out_features=embed_dim)
+        self.q_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim)
+        self.out_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim)
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         self.k_proj.load_state_dict(state_dict=state_dict, key="k_proj", module_prefix=module_prefix)
@@ -112,12 +112,11 @@ class TransformerSentenceEncoderLayer:
             device=device,
             in_features=embed_dim,
             out_features=ffn_embed_dim,
-            dtype=ttnn.bfloat16,
             activation=activation_fn,
         )
-        self.fc2 = Linear(device=device, in_features=ffn_embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.self_attn_layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5, dtype=ttnn.bfloat16)
-        self.final_layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5, dtype=ttnn.bfloat16)
+        self.fc2 = Linear(device=device, in_features=ffn_embed_dim, out_features=embed_dim)
+        self.self_attn_layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5)
+        self.final_layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5)
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -206,7 +205,7 @@ class ConvFeatureExtractionModel:
         self.group_norms: list[GroupNorm1D] = []
         if self.mode == "layer_norm":
             for dim, _, _ in conv_layers:
-                self.layer_norms.append(LayerNorm(device=device, normalized_shape=dim, eps=1e-5, dtype=ttnn.bfloat16))
+                self.layer_norms.append(LayerNorm(device=device, normalized_shape=dim, eps=1e-5))
         if self.mode == "default" and conv_layers:
             self.group_norms.append(
                 GroupNorm1D(device=device, num_channels=conv_layers[0][0], num_groups=conv_layers[0][0])
@@ -292,7 +291,7 @@ class TransformerEncoder:
         )
         self.layers = [self.build_encoder_layer(args) for _ in range(args["encoder_layers"])]
         self.layer_norm_first = args["layer_norm_first"]
-        self.layer_norm = LayerNorm(device=device, normalized_shape=self.embedding_dim, eps=1e-5, dtype=ttnn.bfloat16)
+        self.layer_norm = LayerNorm(device=device, normalized_shape=self.embedding_dim, eps=1e-5)
 
     def build_encoder_layer(self, args: dict):
         return TransformerSentenceEncoderLayer(
@@ -360,7 +359,6 @@ class HubertModel:
                 device=device,
                 in_features=self.embed,
                 out_features=cfg["encoder_embed_dim"],
-                dtype=ttnn.bfloat16,
             )
 
         self.feature_grad_mult = cfg["feature_grad_mult"]
@@ -368,13 +366,12 @@ class HubertModel:
 
         final_dim = cfg["final_dim"] if cfg["final_dim"] > 0 else cfg["encoder_embed_dim"]
         self.encoder = TransformerEncoder(device=device, args=cfg)
-        self.layer_norm = LayerNorm(device=device, normalized_shape=self.embed, eps=1e-5, dtype=ttnn.bfloat16)
+        self.layer_norm = LayerNorm(device=device, normalized_shape=self.embed, eps=1e-5)
         self.untie_final_proj = cfg["untie_final_proj"]
         self.final_proj_linear = Linear(
             device=device,
             in_features=cfg["encoder_embed_dim"],
             out_features=final_dim,
-            dtype=ttnn.bfloat16,
         )
 
     @classmethod

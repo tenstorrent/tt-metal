@@ -16,19 +16,14 @@ class LayerNorm:
         self,
         device: ttnn.MeshDevice,
         normalized_shape: int,
-        eps: float = 1e-5,
-        weight: ttnn.Tensor | None = None,
-        bias: ttnn.Tensor | None = None,
         dtype: ttnn.DataType | None = None,
-        memory_config: ttnn.MemoryConfig | None = None,
+        eps: float = 1e-5,
     ) -> None:
         self.device = device
         self.normalized_shape = normalized_shape
         self.eps = eps
-        self.weight = weight
-        self.bias = bias
-        self.dtype = dtype
-        self.memory_config = memory_config
+        self.dtype = ttnn.bfloat16 if dtype is None else dtype
+        self.memory_config = None
 
     def load_state_dict(
         self, state_dict: dict[str, torch.Tensor], key: str | None = None, module_prefix: str | None = None
