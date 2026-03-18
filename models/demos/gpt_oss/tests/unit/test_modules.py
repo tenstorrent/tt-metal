@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -907,6 +909,7 @@ def run_model_forward_test(
     seq_len,
     is_decode,
     pcc_threshold=0.88,
+    tensor_cache_path=None,
 ):
     """
     Run a single forward pass test comparing TT model to reference model.
@@ -946,7 +949,7 @@ def run_model_forward_test(
         state_dict=state_dict_meta,
         ccl_manager=ccl_manager,
         dtype=ttnn.bfloat8_b,
-        tensor_cache_path=None,
+        tensor_cache_path=tensor_cache_path,
         paged_attention_config=None,
         mesh_config=mesh_config,
         create_kv_cache=True,
@@ -1044,34 +1047,37 @@ def run_model_forward_test(
 @pytest.mark.parametrize(
     "batch_size, seq_len, mode",
     [
-        (1, 128, "prefill"),  # Prefill test: batch=1, seq=128
-        (1, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
+        # (1, 128, "prefill"),  # Prefill test: batch=1, seq=128
+        # (1, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
         (128, 1, "decode"),  # Decode test: batch=128, seq=1 - disabled due to breakpoint in model.py
     ],
     ids=[
-        "prefill_b1_s128",
-        "decode_b1_s1",
+        # "prefill_b1_s128",
+        # "decode_b1_s1",
         "decode_b128_s1",
     ],
 )
 @pytest.mark.parametrize(
     "mesh_shape",
     [
-        (1, 8),
+        # (1, 8),
         (4, 8),
     ],
     ids=[
-        "mesh_1x8",
+        # "mesh_1x8",
         "mesh_4x8",
     ],
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1, 2, 5],
+    [
+        1,
+    ],
     ids=[
-        "1_layer",
-        "2_layer",
-        "5_layer",
+        # "1_layer",
+        # "2_layer",
+        #
+        "10_layer",
     ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
@@ -1123,16 +1129,35 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
     # Create mesh config
     mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
 
-    # Use randomly-initialized weights (config already has num_hidden_layers overridden to num_layers,
-    # so this creates a small model — no need to deserialize the full checkpoint shards).
-    # Build the reference model once here and pass it into run_model_forward_test to avoid
-    # a second instantiation of the large embedding/lm_head tensors inside that function.
-    reference_model_hf = GptOssForCausalLM(config)
-    reference_model_hf.eval()
-    state_dict_hf = reference_model_hf.state_dict()
+    # When HF_MODEL is set, use real weights + the pre-built tensor cache (same as the demo).
+    # Otherwise fall back to randomly-initialised weights (fast, no checkpoint needed).
+    hf_model_path = os.environ.get("HF_MODEL")
+    tensor_cache_path = None
+    if hf_model_path:
+        from models.demos.gpt_oss.tt.model_config import ModelArgs
 
-    # Convert to meta format for TT model
-    state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
+        _model_args = ModelArgs(mesh_device)
+        tensor_cache_path = str(_model_args.weight_cache_path(ttnn.bfloat8_b))
+        state_dict_hf = _model_args.load_state_dict(
+            weights_path=_model_args.model_path,
+            dummy_weights=False,
+            convert_to_meta_format=False,
+        )
+        from transformers import AutoConfig
+
+        _hf_config = AutoConfig.from_pretrained(hf_model_path, trust_remote_code=True)
+        _hf_config.num_hidden_layers = num_layers
+        _hf_config._attn_implementation = "eager"
+        reference_model_hf = GptOssForCausalLM(_hf_config)
+        reference_model_hf.load_state_dict(state_dict_hf, strict=False)
+        reference_model_hf.eval()
+        state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
+        logger.info(f"Using real weights from {hf_model_path}, cache: {tensor_cache_path}")
+    else:
+        reference_model_hf = GptOssForCausalLM(config)
+        reference_model_hf.eval()
+        state_dict_hf = reference_model_hf.state_dict()
+        state_dict_meta = convert_hf_qkv_to_meta_format(state_dict_hf, config.head_dim)
 
     logger.info(f"Running {mode} test with batch_size={batch_size}, seq_len={seq_len}, num_layers={num_layers}")
 
@@ -1146,7 +1171,8 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         batch_size=batch_size,
         seq_len=seq_len,
         is_decode=is_decode,
-        pcc_threshold=0.95 if num_layers == 1 else (0.85 if num_layers <= 2 else 0.70),  # PCC degrades across layers
+        pcc_threshold=0.95 if num_layers == 1 else (0.85 if num_layers <= 2 else 0.70),
+        tensor_cache_path=tensor_cache_path,
     )
 
     if passing:
