@@ -37,500 +37,6 @@ Tensor hypot_composite_wrapper(const Tensor& a, const Tensor& b, const std::opti
     return ttnn::hypot(a, b, m, std::nullopt);
 }
 
-Tensor minimum_tensor_scalar_binding(
-    const Tensor& input_tensor_a,
-    unary::ScalarVariant scalar,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::minimum(
-        input_tensor_a,
-        scalar,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor minimum_tensor_tensor_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::minimum(
-        input_tensor_a,
-        input_tensor_b,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor maximum_tensor_scalar_binding(
-    const Tensor& input_tensor_a,
-    unary::ScalarVariant scalar,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::maximum(
-        input_tensor_a,
-        scalar,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor maximum_tensor_tensor_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::maximum(
-        input_tensor_a,
-        input_tensor_b,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor gcd_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::gcd(
-        input_tensor_a,
-        input_tensor_b,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor lcm_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::lcm(
-        input_tensor_a,
-        input_tensor_b,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor div_no_nan_tensor_tensor_binding(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::div_no_nan(input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor div_no_nan_tensor_scalar_binding(
-    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::div_no_nan(input_tensor_a, value, memory_config);
-}
-
-Tensor floor_div_tensor_tensor_binding(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::floor_div(input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor floor_div_tensor_scalar_binding(
-    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::floor_div(input_tensor_a, value, memory_config);
-}
-
-Tensor div_tensor_tensor_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    bool fast_and_approximate_mode,
-    const std::optional<std::string>& rounding_mode,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::div(
-        input_tensor_a,
-        input_tensor_b,
-        fast_and_approximate_mode,
-        rounding_mode,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy,
-        sub_core_grids);
-}
-
-Tensor prelu_tensor_tensor_binding(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prelu(input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor prelu_tensor_scalar_binding(
-    const Tensor& input_tensor_a, float weight, const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prelu(input_tensor_a, weight, memory_config);
-}
-
-Tensor prelu_tensor_array_binding(
-    const Tensor& input_tensor_a,
-    const std::array<float, 1>& weight,
-    const std::optional<MemoryConfig>& memory_config) {
-    return ttnn::prelu(input_tensor_a, weight, memory_config);
-}
-
-Tensor fmod_tensor_scalar_binding(
-    const Tensor& input_tensor,
-    float scalar,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::fmod(input_tensor, scalar, memory_config, sub_core_grids);
-}
-
-Tensor fmod_tensor_tensor_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::fmod(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
-}
-
-Tensor remainder_tensor_scalar_binding(
-    const Tensor& input_tensor,
-    float scalar,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::remainder(input_tensor, scalar, memory_config, sub_core_grids);
-}
-
-Tensor remainder_tensor_tensor_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::remainder(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
-}
-
-Tensor pow_tensor_exponent_binding(
-    const Tensor& input_tensor,
-    const Tensor& exponent,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::pow(
-        input_tensor,
-        exponent,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor pow_tensor_int_exponent_binding(
-    const Tensor& input_tensor,
-    int32_t exponent,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor) {
-    return ttnn::pow(input_tensor, exponent, memory_config, output_tensor);
-}
-
-Tensor pow_tensor_float_exponent_binding(
-    const Tensor& input_tensor,
-    float exponent,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor) {
-    return ttnn::pow(input_tensor, exponent, memory_config, output_tensor);
-}
-
-Tensor pow_scalar_tensor_binding(
-    float input_a,
-    const Tensor& exponent,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::pow(
-        input_a,
-        exponent,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor rsub_tensor_scalar_binding(
-    const Tensor& input_tensor_a,
-    float input_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::rsub(
-        input_tensor_a,
-        input_b,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor rsub_tensor_tensor_binding(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy) {
-    return ttnn::rsub(
-        input_tensor_a,
-        input_tensor_b,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy);
-}
-
-Tensor bitwise_and_scalar_binding(
-    const Tensor& a,
-    int32_t b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_and(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_and_tensor_binding(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_and(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_or_scalar_binding(
-    const Tensor& a,
-    int32_t b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_or(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_or_tensor_binding(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_or(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_xor_scalar_binding(
-    const Tensor& a,
-    int32_t b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_xor(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_xor_tensor_binding(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_xor(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_left_shift_scalar_binding(
-    const Tensor& a,
-    int32_t b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_left_shift(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_left_shift_tensor_binding(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_left_shift(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_right_shift_scalar_binding(
-    const Tensor& a,
-    int32_t b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_right_shift(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor bitwise_right_shift_tensor_binding(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::bitwise_right_shift(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor logical_left_shift_scalar_binding(
-    const Tensor& a,
-    int32_t b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::logical_left_shift(a, b, m, o, act, a_act, b_act, leg);
-}
-Tensor logical_left_shift_tensor_binding(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& m,
-    const std::optional<Tensor>& o,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
-    const std::optional<bool>& leg) {
-    return ttnn::logical_left_shift(a, b, m, o, act, a_act, b_act, leg);
-}
-
-Tensor div_tensor_scalar_binding(
-    const Tensor& input_tensor_a,
-    float value,
-    bool fast_and_approximate_mode,
-    const std::optional<std::string>& rounding_mode,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::div(
-        input_tensor_a,
-        value,
-        fast_and_approximate_mode,
-        rounding_mode,
-        dtype,
-        memory_config,
-        output_tensor,
-        activations,
-        input_tensor_a_activations,
-        input_tensor_b_activations,
-        use_legacy,
-        sub_core_grids);
-}
-
 // Common broadcasting and performance documentation for binary operations
 constexpr auto BINARY_BROADCAST_DOC = R"doc(
         Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.
@@ -2209,21 +1715,32 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            &detail::pow_tensor_int_exponent_binding,
+            static_cast<Tensor (*)(
+                const Tensor&, int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&)>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            &detail::pow_tensor_float_exponent_binding,
+            static_cast<Tensor (*)(
+                const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&)>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            &detail::pow_tensor_exponent_binding,
+            static_cast<Tensor (*)(
+                const Tensor&,
+                const Tensor&,
+                const std::optional<const DataType>&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                ttsl::Span<const unary::EltwiseUnaryWithParam>,
+                ttsl::Span<const unary::EltwiseUnaryWithParam>,
+                ttsl::Span<const unary::EltwiseUnaryWithParam>,
+                std::optional<bool>)>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
@@ -2235,7 +1752,16 @@ void bind_power(nb::module_& mod, const std::string& note = "") {
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none()),
         ttnn::overload_t(
-            &detail::pow_scalar_tensor_binding,
+            static_cast<Tensor (*)(
+                float,
+                const Tensor&,
+                const std::optional<const DataType>&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                ttsl::Span<const unary::EltwiseUnaryWithParam>,
+                ttsl::Span<const unary::EltwiseUnaryWithParam>,
+                ttsl::Span<const unary::EltwiseUnaryWithParam>,
+                std::optional<bool>)>(&ttnn::pow),
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
@@ -2444,8 +1970,26 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Subtracts :attr:`input_tensor_a` from :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i - \mathrm{{input\_tensor\_a}}_i)doc",
-        &detail::rsub_tensor_scalar_binding,
-        &detail::rsub_tensor_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            float,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::rsub),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::rsub),
         ". ",
         R"doc(FLOAT32,BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
@@ -2453,8 +1997,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        &detail::bitwise_and_scalar_binding,
-        &detail::bitwise_and_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            int32_t,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_and),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_and),
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
@@ -2462,8 +2022,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        &detail::bitwise_or_scalar_binding,
-        &detail::bitwise_or_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            int32_t,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_or),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_or),
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
@@ -2471,8 +2047,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        &detail::bitwise_xor_scalar_binding,
-        &detail::bitwise_xor_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            int32_t,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_xor),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_xor),
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
@@ -2480,8 +2072,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        &detail::bitwise_left_shift_scalar_binding,
-        &detail::bitwise_left_shift_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            int32_t,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_left_shift),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_left_shift),
         ". ",
         R"doc(INT32, UINT32, UINT16)doc");
 
@@ -2489,8 +2097,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        &detail::bitwise_right_shift_scalar_binding,
-        &detail::bitwise_right_shift_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            int32_t,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_right_shift),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::bitwise_right_shift),
         ". ",
         R"doc(INT32, UINT32, UINT16)doc");
 
@@ -2498,8 +2122,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform logical_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Equivalent to multiplying by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_left_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        &detail::logical_left_shift_scalar_binding,
-        &detail::logical_left_shift_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            int32_t,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::logical_left_shift),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::logical_left_shift),
         ". ",
         R"doc(INT32, UINT32)doc");
 
@@ -2530,8 +2170,26 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,
         R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        &detail::minimum_tensor_scalar_binding,
-        &detail::minimum_tensor_tensor_binding);
+        static_cast<Tensor (*)(
+            const Tensor&,
+            unary::ScalarVariant,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::minimum),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::minimum));
 
     detail::bind_binary_composite<"atan2">(
         mod,
@@ -2581,7 +2239,7 @@ void py_module(nb::module_& mod) {
         [supported range [-2147483648, 2147483647]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
-        &detail::gcd_binding,
+        &ttnn::gcd,
         R"doc(INT32)doc");
 
     detail::bind_binary_gcd_lcm_operation<"lcm">(
@@ -2590,7 +2248,7 @@ void py_module(nb::module_& mod) {
         [supported range [-32768, 32767]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
-        &detail::lcm_binding,
+        &ttnn::lcm,
         R"doc(INT32)doc");
 
     detail::bind_binary_with_float_param<"addalpha">(
@@ -2619,8 +2277,32 @@ void py_module(nb::module_& mod) {
         R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
         )doc",
-        &detail::div_tensor_tensor_binding,
-        &detail::div_tensor_scalar_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            bool,
+            const std::optional<std::string>&,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            const std::optional<bool>&,
+            const std::optional<CoreRangeSet>&)>(&ttnn::div),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            float,
+            bool,
+            const std::optional<std::string>&,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            std::optional<Tensor>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            const std::optional<bool>&,
+            const std::optional<CoreRangeSet>&)>(&ttnn::div),
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
         With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
@@ -2631,28 +2313,47 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_composite_overload<"div_no_nan">(
         mod,
         R"doc(Computes div_no_nan for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        &detail::div_no_nan_tensor_tensor_binding,
-        &detail::div_no_nan_tensor_scalar_binding);
+        static_cast<Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&)>(&ttnn::div_no_nan),
+        static_cast<Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&)>(&ttnn::div_no_nan));
 
     detail::bind_binary_composite_overload<"floor_div">(
         mod,
         R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        &detail::floor_div_tensor_tensor_binding,
-        &detail::floor_div_tensor_scalar_binding);
+        static_cast<Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&)>(&ttnn::floor_div),
+        static_cast<Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&)>(&ttnn::floor_div));
 
     detail::bind_binary_unary_max_operation<"maximum">(
         mod,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        &detail::maximum_tensor_scalar_binding,
-        &detail::maximum_tensor_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&,
+            unary::ScalarVariant,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::maximum),
+        static_cast<Tensor (*)(
+            const Tensor&,
+            const Tensor&,
+            const std::optional<const DataType>&,
+            const std::optional<MemoryConfig>&,
+            const std::optional<Tensor>&,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            ttsl::Span<const unary::EltwiseUnaryWithParam>,
+            std::optional<bool>)>(&ttnn::maximum),
         R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc");
 
     detail::bind_prelu<"prelu">(
         mod,
         R"doc(Perform an eltwise-prelu operation.)doc",
-        &detail::prelu_tensor_tensor_binding,
-        &detail::prelu_tensor_scalar_binding,
-        &detail::prelu_tensor_array_binding,
+        static_cast<Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&)>(&ttnn::prelu),
+        static_cast<Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&)>(&ttnn::prelu),
+        static_cast<Tensor (*)(const Tensor&, const std::array<float, 1>&, const std::optional<MemoryConfig>&)>(
+            &ttnn::prelu),
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor :attr:`input_tensor_b` of size = the second dimension in :attr:`input_tensor_a`)doc");
 
@@ -2675,16 +2376,23 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::fmod_tensor_scalar_binding,
-        &detail::fmod_tensor_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&)>(&ttnn::fmod),
+        static_cast<Tensor (*)(
+            const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&)>(
+            &ttnn::fmod),
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_binary_overload_operation<"remainder">(
         mod,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::remainder_tensor_scalar_binding,
-        &detail::remainder_tensor_tensor_binding,
+        static_cast<Tensor (*)(
+            const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&)>(
+            &ttnn::remainder),
+        static_cast<Tensor (*)(
+            const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&)>(
+            &ttnn::remainder),
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
     detail::bind_inplace_operation<"gt_">(
