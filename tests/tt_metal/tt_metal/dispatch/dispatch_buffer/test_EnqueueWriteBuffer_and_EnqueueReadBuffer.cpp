@@ -634,6 +634,37 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
     return pass;
 }
 
+bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue_sub_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>>& cqs,
+    uint32_t page_size,
+    uint32_t buffer_num_pages,
+    const std::array<uint32_t, 3>& region_start_pages,
+    uint32_t region_num_pages,
+    BufferType buffer_type) {
+    bool pass = true;
+    const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_num_pages * page_size};
+
+    for (const uint32_t region_start_page : region_start_pages) {
+        const BufferRegion region(region_start_page * page_size, region_num_pages * page_size);
+        for (uint i = 0; i < cqs.size(); i++) {
+            distributed::DeviceLocalBufferConfig local_config{
+                .page_size = page_size, .buffer_type = buffer_type, .bottom_up = false};
+            auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+
+            clear_buffer(cqs[i], buffer);
+            auto src = generate_arange_vector(region.size);
+            EnqueueWriteMeshSubBuffer(cqs[i], buffer, src, region, false);
+
+            vector<uint32_t> result(region.size / sizeof(uint32_t));
+            EnqueueReadMeshSubBuffer(cqs[i], result, buffer, region, true);
+            pass &= (src == result);
+        }
+    }
+
+    return pass;
+}
+
 }  // end namespace local_test_functions
 
 namespace basic_tests {
@@ -1421,6 +1452,25 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDram
     }
 }
 
+TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestSubBufferReadCrossesRelayPageBoundary) {
+    constexpr uint32_t relay_page_boundary = 0xFF;
+    constexpr uint32_t page_size = 200;
+    constexpr uint32_t buffer_num_pages = relay_page_boundary + 8;
+    constexpr uint32_t region_num_pages = 4;
+    constexpr std::array<uint32_t, 3> region_start_pages = {
+        relay_page_boundary - 1, relay_page_boundary, relay_page_boundary + 1};
+
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running On Device {}", device->id());
+        distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
+        distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
+        vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue_sub_buffer(
+            mesh_device, cqs, page_size, buffer_num_pages, region_start_pages, region_num_pages, BufferType::DRAM));
+    }
+}
+
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
     auto mesh_device = this->device_;
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
@@ -1530,6 +1580,22 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
     vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {a, b};
     EXPECT_TRUE(
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(mesh_device, cqs, config));
+}
+
+TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestSubBufferReadCrossesRelayPageBoundary) {
+    auto mesh_device = this->device_;
+    constexpr uint32_t relay_page_boundary = 0xFF;
+    constexpr uint32_t page_size = 200;
+    constexpr uint32_t buffer_num_pages = relay_page_boundary + 8;
+    constexpr uint32_t region_num_pages = 4;
+    constexpr std::array<uint32_t, 3> region_start_pages = {
+        relay_page_boundary - 1, relay_page_boundary, relay_page_boundary + 1};
+
+    distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
+    distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue_sub_buffer(
+        mesh_device, cqs, page_size, buffer_num_pages, region_start_pages, region_num_pages, BufferType::DRAM));
 }
 
 TEST_F(UnitMeshCQMultiDeviceBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {

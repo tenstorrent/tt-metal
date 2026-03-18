@@ -85,6 +85,46 @@ bool RunCrossCqReadWriteWithWaitForEvent(
     FinishAllCqs(cqs);
     return pass;
 }
+
+bool RunBurstWritesThenSingleCrossCqEvent(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshCoordinate& zero_coord,
+    TestBufferConfig config,
+    size_t num_buffers) {
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
+        mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
+    auto& cq_write = cqs[0];
+    auto& cq_read = cqs[1];
+    bool pass = true;
+    const size_t buf_size = config.num_pages * config.page_size;
+
+    vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
+    vector<vector<uint32_t>> srcs;
+    buffers.reserve(num_buffers);
+    srcs.reserve(num_buffers);
+
+    for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
+        distributed::ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+        distributed::DeviceLocalBufferConfig device_local_config{
+            .page_size = config.page_size, .buffer_type = config.buftype};
+        buffers.push_back(
+            distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
+        srcs.push_back(generate_arange_vector(buffers.back()->size(), buf_idx * 100));
+        distributed::WriteShard(cq_write, buffers.back(), srcs.back(), zero_coord, false);
+    }
+
+    auto event = cq_write.get().enqueue_record_event();
+    cq_read.get().enqueue_wait_for_event(event);
+
+    for (size_t buf_idx = 0; buf_idx < num_buffers; buf_idx++) {
+        vector<uint32_t> result;
+        distributed::ReadShard(cq_read, result, buffers[buf_idx], zero_coord, true);
+        pass &= (srcs[buf_idx] == result);
+    }
+
+    FinishAllCqs(cqs);
+    return pass;
+}
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -352,6 +392,14 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
             /*num_buffers_per_cq=*/50,
             /*vary_buffer_sizes=*/true,
             /*notify_host=*/true));
+    }
+}
+
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsBurstWritesThenSingleCrossCqEvent) {
+    for (auto& mesh_device : devices_) {
+        TestBufferConfig config = {.num_pages = 4, .page_size = 256, .buftype = BufferType::DRAM};
+        EXPECT_TRUE(local_test_functions::RunBurstWritesThenSingleCrossCqEvent(
+            mesh_device, zero_coord_, config, /*num_buffers=*/6));
     }
 }
 
