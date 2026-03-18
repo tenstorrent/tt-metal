@@ -81,6 +81,10 @@ struct KernelSpec {
     using ThreadNodeMap = std::unordered_map<Nodes, uint8_t>;  // node -> number of kernel threads
     std::optional<ThreadNodeMap> thread_node_map = std::nullopt;
 
+    // Kernel type (methods)
+    bool is_dm_kernel() const { return std::holds_alternative<DataMovementConfiguration>(config_spec); }
+    bool is_compute_kernel() const { return std::holds_alternative<ComputeConfiguration>(config_spec); }
+
     ///////////////////////////////////////////////////////////////////
     // Kernel compiler options
     ///////////////////////////////////////////////////////////////////

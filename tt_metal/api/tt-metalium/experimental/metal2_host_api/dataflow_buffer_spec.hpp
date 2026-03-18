@@ -47,6 +47,16 @@ struct DataflowBufferSpec {
     using ProducerConsumerMap = std::vector<std::pair<NodeCoord, NodeCoord>>;
     std::optional<ProducerConsumerMap> producer_consumer_map = std::nullopt;
 
+    ////////////////////////////////////
+    // Entry format metadata
+    ////////////////////////////////////
+
+    // Required for DFBs bound to compute kernels; optional for DM-only DFBs
+    std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
+
+    // Optional; used to pass tile type info from host to kernel
+    std::optional<Tile> tile_format_metadata = std::nullopt;
+
     //////////////////////////////
     // Advanced options
     //////////////////////////////
@@ -69,31 +79,6 @@ struct DataflowBufferSpec {
     // Implicit sync is handled via ISR (available on Gen2 only)
     // Disabling may be useful in niche cases for fine tuning performance or performance debug.
     bool disable_implicit_sync = false;
-
-    ////////////////////////////////////
-    // Entry format metadata (optional)
-    ////////////////////////////////////
-
-    // Todo -- this is gross. Make it less so.
-    struct TileDescriptor {
-        static constexpr uint32_t DEFAULT_TILE_HEIGHT = 32;
-        static constexpr uint32_t DEFAULT_TILE_WIDTH = 32;
-
-        TileDescriptor() = default;
-        TileDescriptor(uint32_t height, uint32_t width, bool transpose = false) :
-            height(height), width(width), transpose(transpose) {}
-
-        uint32_t height = DEFAULT_TILE_HEIGHT;
-        uint32_t width = DEFAULT_TILE_WIDTH;
-        bool transpose = false;
-
-        bool operator==(const TileDescriptor& other) const {
-            return height == other.height && width == other.width && transpose == other.transpose;
-        }
-    };
-    // Optional metadata; used to pass entry type info from host to kernel
-    std::optional<TileDescriptor> tile_format_metadata = std::nullopt;
-    std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
