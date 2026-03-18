@@ -19,7 +19,7 @@ static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
 
 // TODO: See if these NodeRangeSet helpers are needed. They may already exist (for CoreRangeSet).
 
-// Helper to convert Nodes variant to NodeRangeSet
+// Helper: Convert Nodes variant to NodeRangeSet
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes) {
     return std::visit(
         [](const auto& n) -> NodeRangeSet {
@@ -36,7 +36,7 @@ NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRang
         nodes);
 }
 
-// Helper to check if two Nodes variants intersect
+// Helper: Check if two Nodes variants intersect
 bool nodes_intersect(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b) {
@@ -45,7 +45,7 @@ bool nodes_intersect(
     return a_set.intersects(b_set);
 }
 
-// Helper to check if one Nodes variant contains another
+// Helper: Check if one Nodes variant contains another
 bool nodes_contains(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset) {
@@ -54,6 +54,7 @@ bool nodes_contains(
     return superset_node_range_set.contains(subset_node_range_set);
 }
 
+// Handy struct used for solving kernel->core assignments
 template <uint8_t NUM_CORES>
 struct ProcessorMask {
     static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
@@ -109,7 +110,7 @@ struct ProcessorMask {
     }
 };
 
-// Type alias for DM processors on Quasar
+// Type aliases for DM and compute processors on Quasar
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
 using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
 
@@ -165,89 +166,7 @@ ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, cons
     return reserved.value();
 }
 
-// Forward declaration
-void ValidateProgramSpec(const ProgramSpec& spec);
-
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false) {
-    auto impl = std::make_shared<detail::ProgramImpl>();
-
-    //////////////////////////////
-    // Legality checks
-    //////////////////////////////
-
-    // May want to make an option to skip legality checks in production to reduce runtime overhead.
-    // If you skip legality checks, you will get undefined behavior if the ProgramSpec is invalid.
-    if (skip_validation) {
-        TT_FATAL(false, "For now, bypassing legality checks on Quasar isn't allowed.");
-    }
-    ValidateProgramSpec(spec);
-
-    //////////////////////////////////////
-    // Kernel->core assignments
-    /////////////////////////////////////
-
-    // Mapping from kernel names to KernelSpecs (inefficiency -- also created in legality checks)
-    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
-    for (const auto& kernel : spec.kernels) {
-        kernel_by_name[kernel.unique_id] = &kernel;
-    }
-
-    // Processor masks for each kernel in the ProgramSpec
-    std::unordered_map<const KernelSpec*, DMProcessorMask> kernel_dm_processor_mask;
-    std::unordered_map<const KernelSpec*, ComputeProcessorMask> kernel_compute_processor_mask;
-
-    // NOTE:
-    // The current implementation makes a simplifying assumption:
-    // A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
-    // This assumption is overly restrictive! it is easy to create a counterexample where it doesn't hold.
-    // If we encounter a case that violates the simplifying assumption, ValidateProgramSpec will succeed,
-    // but kernel->core assignment will fail. The error message will make it clear what happened.
-    //
-    // While the initial Quasar implementation uses this simplifying assumption, this is probably temporary.
-    // When the time comes to relax this assumption, several aspects of the implementation will need to change:
-    //   - The simple solver logic here will need to be re-written.
-    //   - DFBs will need to be created per-KernelGroup/WorkerSpec, not per-kernel.
-    //   - One DFBSpec may map to multiple DFBHandles.
-    //   - DFB bindings will no longer have the character of CTAs! They'll act like implicit RTAs.
-    //   - Possibly other knock-on effects, TBD.
-
-    for (const auto& worker : spec.workers.value()) {
-        // Cumulative DM processor mask for this WorkerSpec
-        // (If we decide to reserve DM cores for interal use, just update the initial mask.)
-        DMProcessorMask cumulative_dm_mask = DMProcessorMask::create(0x00);
-
-        for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = kernel_by_name.at(kernel_name);
-
-            if (std::holds_alternative<DataMovementConfiguration>(kernel_spec->config_spec)) {
-                AssignDMProcessors(
-                    kernel_spec, kernel_name, worker.unique_id, kernel_dm_processor_mask, cumulative_dm_mask);
-            } else {
-                kernel_compute_processor_mask[kernel_spec] = AssignComputeProcessors(kernel_spec, kernel_name);
-            }
-        }
-    }
-
-    //////////////////////////////
-    // DataflowBuffer creation
-    //////////////////////////////
-
-    // Mapping from DFB names to DataflowBufferSpecs (also created in legality checks)
-    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
-    for (const auto& dfb : spec.dataflow_buffers) {
-        dfb_by_name[dfb.unique_id] = &dfb;
-    }
-
-    // Add DFBs to the Program
-    //
-
-    // Generate DFBs
-
-    // Generate kernels
-
-    return Program(std::move(impl));
-}
-
+// Helper: All ProgramSpec validation checks
 void ValidateProgramSpec(const ProgramSpec& spec) {
     // Check target architecture
     TT_FATAL(
@@ -451,6 +370,86 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
     }
 
     return;
+}
+
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false) {
+    auto impl = std::make_shared<detail::ProgramImpl>();
+
+    //////////////////////////////
+    // Legality checks
+    //////////////////////////////
+
+    // May want to make an option to skip legality checks in production to reduce runtime overhead.
+    // If you skip legality checks, you will get undefined behavior if the ProgramSpec is invalid.
+    if (skip_validation) {
+        TT_FATAL(false, "For now, bypassing legality checks on Quasar isn't allowed.");
+    }
+    ValidateProgramSpec(spec);
+
+    //////////////////////////////////////
+    // Kernel->core assignments
+    /////////////////////////////////////
+
+    // Mapping from kernel names to KernelSpecs (inefficiency -- also created in legality checks)
+    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
+    for (const auto& kernel : spec.kernels) {
+        kernel_by_name[kernel.unique_id] = &kernel;
+    }
+
+    // Processor masks for each kernel in the ProgramSpec
+    std::unordered_map<const KernelSpec*, DMProcessorMask> kernel_dm_processor_mask;
+    std::unordered_map<const KernelSpec*, ComputeProcessorMask> kernel_compute_processor_mask;
+
+    // NOTE:
+    // The current implementation makes a simplifying assumption:
+    // A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
+    // This assumption is overly restrictive! it is easy to create a counterexample where it doesn't hold.
+    // If we encounter a case that violates the simplifying assumption, ValidateProgramSpec will succeed,
+    // but kernel->core assignment will fail. The error message will make it clear what happened.
+    //
+    // While the initial Quasar implementation uses this simplifying assumption, this is probably temporary.
+    // When the time comes to relax this assumption, several aspects of the implementation will need to change:
+    //   - The simple solver logic here will need to be re-written.
+    //   - DFBs will need to be created per-KernelGroup/WorkerSpec, not per-kernel.
+    //   - One DFBSpec may map to multiple DFBHandles.
+    //   - DFB bindings will no longer have the character of CTAs! They'll act like implicit RTAs.
+    //   - Possibly other knock-on effects, TBD.
+
+    for (const auto& worker : spec.workers.value()) {
+        // Cumulative DM processor mask for this WorkerSpec
+        // (If we decide to reserve DM cores for interal use, just update the initial mask.)
+        DMProcessorMask cumulative_dm_mask = DMProcessorMask::create(0x00);
+
+        for (const auto& kernel_name : worker.kernels) {
+            const auto& kernel_spec = kernel_by_name.at(kernel_name);
+
+            if (std::holds_alternative<DataMovementConfiguration>(kernel_spec->config_spec)) {
+                AssignDMProcessors(
+                    kernel_spec, kernel_name, worker.unique_id, kernel_dm_processor_mask, cumulative_dm_mask);
+            } else {
+                kernel_compute_processor_mask[kernel_spec] = AssignComputeProcessors(kernel_spec, kernel_name);
+            }
+        }
+    }
+
+    //////////////////////////////
+    // DataflowBuffer creation
+    //////////////////////////////
+
+    // Mapping from DFB names to DataflowBufferSpecs (also created in legality checks)
+    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
+    for (const auto& dfb : spec.dataflow_buffers) {
+        dfb_by_name[dfb.unique_id] = &dfb;
+    }
+
+    // Add DFBs to the Program
+    //
+
+    // Generate DFBs
+
+    // Generate kernels
+
+    return Program(std::move(impl));
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
