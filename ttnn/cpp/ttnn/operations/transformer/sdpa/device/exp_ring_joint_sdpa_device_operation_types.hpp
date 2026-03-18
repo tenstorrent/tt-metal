@@ -32,10 +32,8 @@ struct ExpRingJointSDPAParams {
     ttnn::ccl::Topology topology;
     std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy;
     uint32_t cluster_axis;
     CoreCoord ccl_core_grid_offset;
-    std::optional<std::vector<CoreCoord>> ccl_worker_cores;
     uint32_t num_workers_per_link = 1;
     uint32_t num_buffers_per_channel = 8;
 
@@ -52,10 +50,8 @@ struct ExpRingJointSDPAParams {
         ttnn::ccl::Topology topology,
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
         uint32_t cluster_axis,
         CoreCoord ccl_core_grid_offset,
-        std::optional<std::vector<CoreCoord>> ccl_worker_cores = std::nullopt,
         uint32_t num_workers_per_link = 1,
         uint32_t num_buffers_per_channel = 8) :
         joint_strategy(std::move(joint_strategy)),
@@ -70,10 +66,8 @@ struct ExpRingJointSDPAParams {
         topology(topology),
         semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
-        core_allocation_strategy(core_allocation_strategy),
         cluster_axis(cluster_axis),
         ccl_core_grid_offset(ccl_core_grid_offset),
-        ccl_worker_cores(std::move(ccl_worker_cores)),
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
 
