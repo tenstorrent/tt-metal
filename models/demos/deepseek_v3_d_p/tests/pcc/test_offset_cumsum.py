@@ -144,7 +144,7 @@ def test_offset_cumsum(
     )
 
     # Run ttnn op — now returns (dispatch_offsets, total_counts_per_expert)
-    tt_offsets, tt_totals = ttnn.offset_cumsum(
+    tt_offsets, tt_totals = ttnn.experimental.deepseek_prefill.offset_cumsum(
         tt_histograms,
         cluster_axis=sp_axis,
         num_links=num_links,
