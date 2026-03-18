@@ -918,7 +918,6 @@ by running the following from the ``tt-metal`` directory:
 
    ./create_venv.sh
    source python_env/bin/activate
-   scripts/install_debugger.sh
    uv pip install -r tools/triage/requirements.txt
 
 Note that you may need to reenter the virtual environment by re-running ``source python_env/bin/activate``

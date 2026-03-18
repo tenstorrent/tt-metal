@@ -33,8 +33,11 @@ void kernel_main() {
     uint32_t next_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     bool end_of_hop = (bool)get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
-    rt_args_idx += ring_size;
+    const uint32_t* unpadded_in0_shard_widths_in_tiles = nullptr;
+    if (!is_hop_core) {
+        unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
+        rt_args_idx += ring_size;
+    }
 
     volatile tt_l1_ptr uint32_t* l1_signal_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
@@ -57,7 +60,7 @@ void kernel_main() {
 
     for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
         uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
-        bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0 && !is_hop_core;
+        bool skip_send = !is_hop_core && unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0;
 
         uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
         uint64_t remote_curr_shard_write_addr =
