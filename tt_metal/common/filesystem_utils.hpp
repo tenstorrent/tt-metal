@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -280,14 +279,13 @@ std::optional<std::uintmax_t> safe_file_size(const std::filesystem::path& path);
 std::optional<std::filesystem::file_time_type> safe_last_write_time(const std::filesystem::path& path);
 
 // Safe directory iteration with ESTALE retry (no sync, no jitter).
-// Returns vector of directory entries, skipping entries that disappear during iteration.
-// Returns empty vector on error or if directory doesn't exist.
+// Returns vector of directory entries. On iteration errors, returns entries
+// collected up to the point of failure (may be partial). Returns empty vector
+// if directory doesn't exist or cannot be opened.
 //
-// Consistency guarantee: If ESTALE occurs mid-iteration, the entire operation is
-// retried (up to kMaxFsRetries times) with the entries vector cleared before each
-// retry. This ensures callers always receive a consistent snapshot of the directory
-// at a single point in time, at the cost of potentially higher latency when
-// ESTALE errors occur frequently.
+// Consistency guarantee: If ESTALE occurs mid-iteration (NFS safety mode only),
+// the entire operation is retried (up to kMaxFsRetries times) with the entries
+// vector cleared before each retry.
 std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::filesystem::path& path);
 
 // Targeted fsync of a single file and its parent directory entry.

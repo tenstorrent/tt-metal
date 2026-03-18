@@ -57,8 +57,18 @@ void sync_filesystem(const std::filesystem::path& path) {
     }
 
     if (fd == -1) {
-        log_debug(tt::LogMetal, "Failed to open path for syncfs: {}: {}", path_str, ::strerror(errno));
-        return;
+        // Try opening parent directory as fallback
+        std::filesystem::path parent = path.parent_path();
+        if (!parent.empty() && parent != path) {
+            fd = ::open(parent.string().c_str(), O_RDONLY | O_DIRECTORY);
+        }
+
+        if (fd == -1) {
+            // Last resort: process-wide sync
+            log_debug(tt::LogMetal, "Cannot open {} or parent for syncfs, falling back to sync()", path_str);
+            ::sync();
+            return;
+        }
     }
     if (::syncfs(fd) != 0) {
         log_debug(tt::LogMetal, "syncfs failed for {}: {}", path_str, ::strerror(errno));
@@ -254,8 +264,18 @@ bool safe_create_directories(const std::filesystem::path& path) {
         if (!ec) {
             return true;
         }
-        if (ec == std::errc::file_exists && std::filesystem::is_directory(path)) {
-            return true;
+        if (ec == std::errc::file_exists) {
+            std::error_code type_ec;
+            bool is_dir = std::filesystem::is_directory(path, type_ec);
+            if (!type_ec && is_dir) {
+                return true;
+            }
+            if (type_ec) {
+                log_warning(tt::LogMetal, "Failed to verify directory {}: {}", path.string(), type_ec.message());
+            } else {
+                log_warning(tt::LogMetal, "Path {} already exists but is not a directory", path.string());
+            }
+            return false;
         }
         log_warning(tt::LogMetal, "Failed to create directories {}: {}", path.string(), ec.message());
         return false;

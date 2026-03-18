@@ -655,7 +655,8 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesEmptyParentPath) {
 }
 
 TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesNonExistentPath) {
-    // Test with a non-existent path - should fall back to sync() without crashing
+    // Test with a non-existent path - on Linux, tries to open parent directory
+    // and falls back to sync() if that also fails. This is best-effort sync.
     std::filesystem::path non_existent = temp_dir_ / "definitely_does_not_exist" / "subdir";
 
     // Should not throw even though path doesn't exist
