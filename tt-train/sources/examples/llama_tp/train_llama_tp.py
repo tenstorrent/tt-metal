@@ -440,7 +440,7 @@ class DispatchTraceCallback(TrainerCallback):
 LLAMA_TP_PLAN = {
     r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
     r".*\.(out_linear|w2)": RowwiseParallel(),
-    "fc": ColwiseParallel(output_gradient_replicated=True),  # LM head
+    "fc": ColwiseParallel(gather_output=True),  # LM head
 }
 
 

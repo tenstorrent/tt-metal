@@ -742,7 +742,7 @@ This section describes the **rule-based layout and dispatch layer** used for Pyt
    LLAMA_TP_PLAN = {
        r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
        r".*\.(out_linear|w2)": RowwiseParallel(),
-       "fc": ColwiseParallel(output_gradient_replicated=True),  # LM head
+       "fc": ColwiseParallel(gather_output=True),  # LM head
    }
    ```
 
@@ -815,46 +815,45 @@ Rules are **per op name** (e.g. `"linear"`, `"matmul"`). The op name in `@regist
 
 A **module rule** applies to a **composite module type** (e.g. `GroupedQueryAttention`). When `parallelize_module` walks the tree and finds a module whose type has a registered module rule, it:
 
-1. Builds a **policy** (dict `param_name -> Layout`) from the parallelize plan: for each submodule that matches the plan (e.g. `q_linear`, `kv_linear`, `out_linear`), it uses the style’s `get_layout(mesh_device, tp_axis)`.
-2. Calls the **module rule** with `(module, mesh_device, policy, prefix, cp_axis=None)` for composite-only concerns (e.g. head/group count adjustment, CP rope_params and ring_attention_sdpa).
+1. Builds a **policy** (dict `param_name -> Layout`) from the parallelize plan only to detect that this is a composite to handle (e.g. GQA); the policy is **not** passed to the rule.
+2. Calls the **module rule** with `(module, mesh_device, tp_axis, cp_axis)` — axes are passed through from `parallelize_module`, no policy or prefix.
 3. **Recurses into children** so that submodules (e.g. `q_linear`, `kv_linear`, `out_linear`) are visited with their full path and get the matching **ParallelStyle** from the plan. Those children then get weight sharding and forward collectives (broadcast, all_reduce) from `style._apply()`.
 
-So the rule should **not** call `distribute_linear` on sub-linears that are matched by the plan; recursion will apply the style to them (weight + collectives). The rule only handles composite-specific logic (e.g. GQA: `num_heads`/`num_groups` for TP, and when `cp_axis` is set: rope_params and ring_sdpa swap).
+So the rule should **not** call `distribute_linear` on sub-linears that are matched by the plan; recursion will apply the style to them (weight + collectives). The rule only handles composite-specific logic (e.g. GQA: `num_heads`/`num_groups` for TP using `tp_axis`, and when `cp_axis` is set: rope_params and ring_sdpa swap).
 
 ### How to Create a Custom Module Rule
 
 1. **Register the rule** for your module type with `@register_module_rule(MyModuleClass)`.
 
-2. **Implement the rule** with signature `(module, mesh_device, policy, prefix, cp_axis=None)`. Use `_match_policy(prefix + ".q_linear.weight", policy)` (from `training`) etc. to infer TP axis/size from the policy. Do **composite-only** work: e.g. adjust `module.num_heads` / `module.num_groups` for TP; when `cp_axis` is set, rebuild `rope_params` and swap to `ring_attention_sdpa`. Do **not** call `distribute_linear` on sub-linears that are matched by the plan (e.g. `q_linear`, `out_linear`)—after the rule returns, `parallelize_module` recurses into children and applies the plan’s styles to them (weight sharding + broadcast/all_reduce).
+2. **Implement the rule** with signature `(module, mesh_device, tp_axis, cp_axis=None)`. You receive `tp_axis` and `cp_axis` from `parallelize_module`; no policy or prefix. Do **composite-only** work: e.g. get `tp_size = mesh_device.shape[tp_axis]` and adjust `module.num_heads` / `module.num_groups` for TP; when `cp_axis` is set, rebuild `rope_params` and swap to `ring_attention_sdpa`. Do **not** call `distribute_linear` on sub-linears—after the rule returns, `parallelize_module` recurses into children and applies the plan’s styles to them (weight sharding + broadcast/all_reduce).
 
    ```python
    from ttml.distributed.rules.registry import register_module_rule
-   from ttml.distributed.training import distribute_tensor, _match_policy
 
    @register_module_rule(MyCompositeModule)
-   def distribute_my_composite(module, mesh_device, policy, prefix="", cp_axis=None):
-       # Composite-only: e.g. adjust head counts, or handle cp_axis (rope, ring_sdpa).
-       # Do NOT distribute sub-linear weights here; recursion will apply styles to children.
-       layout = _match_policy(f"{prefix}.weight" if prefix else "weight", policy)
-       if layout is not None:
-           # Only if this composite has its own weight (not sub-linears):
-           new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
-           module.weight.tensor = new_w
-           module.override_tensor(new_w, "weight")
-       # Optional: handle cp_axis (e.g. rope, ring attention)
+   def distribute_my_composite(module, mesh_device, tp_axis, cp_axis=None):
+       # Composite-only: adjust head/group counts for TP; optional CP (rope, ring_sdpa).
+       mesh_shape = mesh_device.shape
+       tp_size = mesh_shape[tp_axis]
+       if tp_size > 1:
+           module.num_heads = module.num_heads // tp_size
+           module.num_groups = module.num_groups // tp_size
+       if cp_axis is not None:
+           # Rebuild rope_params, swap to ring_attention_sdpa, etc.
+           ...
        return module
    ```
 
 3. **Ensure the rule is loaded**: `ttml.distributed` imports `module_rules`, so any `@register_module_rule` in that package runs at import time. For a new rule in a new file, add an import in `ttml/distributed/__init__.py` or in `module_rules.py`.
 
-4. **Use the plan**: In the parallelize plan, use name patterns that match the **submodule** paths (e.g. `r".*\.q_linear"`, `r".*\.out_linear"`). `parallelize_module` will build the policy from those styles and pass it to your module rule.
+4. **Use the plan**: In the parallelize plan, use name patterns that match the **submodule** paths (e.g. `r".*\.q_linear"`, `r".*\.out_linear"`). `parallelize_module` builds a policy from those styles to detect the composite, then calls your rule with `tp_axis` and `cp_axis` and recurses into children.
 
 ### Custom ParallelStyle
 
 To define a new style (e.g. a variant of column/row parallel):
 
 1. Subclass `ParallelStyle` and implement `_apply(module, mesh_device, tp_axis)` (mutate the module’s parameters with `distribute_tensor` and the layout you want).
-2. If the style is used inside a composite that has a **module rule**, also implement `get_layout(mesh_device, tp_axis) -> Layout` so the rule can build the policy from the plan.
+2. If the style is used inside a composite that has a **module rule**, also implement `get_layout(mesh_device, tp_axis) -> Layout` so the composite can be detected (policy is built from the plan for that purpose; the rule itself receives only `tp_axis` and `cp_axis`).
 3. Add your style to the parallelize plan by name or regex, e.g. `{"my_layer": MyCustomStyle()}`.
 
 ### Summary
@@ -863,7 +862,7 @@ To define a new style (e.g. a variant of column/row parallel):
 |--------|---------|
 | **Layout** | Describes sharding/replication per mesh axis; used for redistribution and plan output. |
 | **Op rule** | Maps op name + input layouts → ShardingPlan (layouts + optional pre/post collectives). |
-| **Module rule** | Distributes a composite module using a policy built from the parallelize plan; handles TP (and optionally CP) for that module type. |
+| **Module rule** | For composite modules: called with `(module, mesh_device, tp_axis, cp_axis)`; handles TP/CP logic (e.g. head counts, rope, ring_sdpa); children get styles on recursion. |
 | **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer) or supplies `get_layout` for composite rules. |
 | **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; no layout code in user model. |
 

@@ -225,10 +225,8 @@ def dispatch(op_name: str, *args, **kwargs):
             redistributed.append(a)
 
     raw = _get_raw(op_name)
-    # Strip rule-only kwargs (e.g. output_gradient_replicated) so raw C++ op is not passed them
-    kwargs_for_raw = {
-        k: v for k, v in kwargs.items() if k not in ("output_gradient_replicated",)
-    }
+    # Strip rule-only kwargs (e.g. gather_output) so raw C++ op is not passed them
+    kwargs_for_raw = {k: v for k, v in kwargs.items() if k not in ("gather_output",)}
     result = raw(*redistributed, **kwargs_for_raw)
 
     # Apply optional post-collective per output. Rule sets post_collectives[j] for each output.

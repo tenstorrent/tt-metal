@@ -160,10 +160,7 @@ def _apply_parallelize_plan(
         if composite_policy is not None:
             from . import module_rules as _  # noqa: F401
 
-            try:
-                rule(module, mesh_device, composite_policy, prefix, cp_axis=cp_axis)
-            except TypeError:
-                rule(module, mesh_device, composite_policy, prefix)
+            rule(module, mesh_device, tp_axis, cp_axis)
             # Recurse so q_linear, kv_linear, out_linear get ColwiseParallel/RowwiseParallel
             for name, child in module.named_children():
                 if isinstance(child, AbstractModuleBase):
@@ -209,7 +206,7 @@ def parallelize_module(
         parallelize_module(model, mesh, {
             r".*\\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
             r".*\\.(out_linear|w2)": RowwiseParallel(),
-            "fc": ColwiseParallel(output_gradient_replicated=True),
+            "fc": ColwiseParallel(gather_output=True),
         })
     """
     runtime = MeshRuntime(mesh_device=mesh_device, tp_axis=tp_axis, cp_axis=cp_axis)

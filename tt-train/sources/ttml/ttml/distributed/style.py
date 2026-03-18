@@ -50,12 +50,12 @@ class ColwiseParallel(ParallelStyle):
         parallelize_module(model, mesh, {"w1": ColwiseParallel()})
     """
 
-    def __init__(self, *, output_gradient_replicated: bool = False):
+    def __init__(self, *, gather_output: bool = False):
         """Args:
-        output_gradient_replicated: If True, backward all_gather uses REPLICATED
-            grad type (for LM head where output grads are replicated across TP).
+        gather_output: If True, all_gather the output (e.g. LM head) and use REPLICATED
+            grad type in backward (output grads replicated across TP).
         """
-        self.output_gradient_replicated = output_gradient_replicated
+        self.gather_output = gather_output
 
     def get_layout(self, mesh_device, tp_axis: int) -> Layout:
         """Return the weight layout for this style (for composite module rules)."""
@@ -102,7 +102,7 @@ class ColwiseParallel(ParallelStyle):
             x_bc = ttml.ops.distributed.broadcast(x, cluster_axis=tp_axis)
             out = _original_forward(x_bc)
             # Post: all_gather with replicated grad for LM head
-            if self.output_gradient_replicated:
+            if self.gather_output:
                 out = ttml.ops.distributed.all_gather(
                     out,
                     dim=-1,
