@@ -419,10 +419,9 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 use_multicore=True,
             )
-            # Argmax path: no top-k selection, so return the raw sampled-token
-            # logprob tensor directly (not wrapped in LogProbsResult).
-            # The vllm host side handles both raw tensors and LogProbsResult.
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            # Argmax path: logprobs are not supported (force-argmax is disabled
+            # when logprobs are enabled via format_sampling_params guard).
+            self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
@@ -547,7 +546,6 @@ class TTSampling(LightweightModule):
         topk_global_indices_interleaved_untilised = ttnn.untilize(
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.sub_core_grids
         )
-        ttnn.deallocate(topk_global_indices_interleaved)
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
@@ -568,21 +566,19 @@ class TTSampling(LightweightModule):
             output_tensor=tt_out_tok,
         )
 
-        # Calculate logprobs before deallocating gathered topk tensors.
-        # Logprobs are computed once for all gathered top-k tokens. The sampled
-        # token is always part of the gathered top-k, so its logprob can be
-        # looked up by the caller using its index in top_k_indices.
+        # if self.sampling_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+        #     ttnn.deallocate(topk_global_indices)
         if self.log_probs_calculator.enable_log_probs:
             self.tt_log_probs = self.log_probs_calculator.calculate_topk_log_probs(
                 logits_tensor=x,
                 topk_values=topk_values_gathered_bf16_interleaved,
-                topk_global_indices=topk_global_indices_interleaved_untilised,
+                topk_global_indices=topk_global_indices_interleaved,
                 sub_core_grid_topk=self.sub_core_grid_topk,
             )
         else:
             self.tt_log_probs = None
-
-        ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
+        ttnn.deallocate(topk_values_gathered_bf16_interleaved)
+        ttnn.deallocate(topk_global_indices_interleaved)
 
         return tt_out_tok, self.tt_log_probs

@@ -795,10 +795,8 @@ class Generator(WarmupForwardMixin):
                 tt_out = tt_out[0]
                 if tt_log_probs is not None:
                     if isinstance(tt_log_probs, LogProbsResult):
-                        # Transfer top-k logprobs from device to host here
-                        sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
                         lp_calculator = self.model.sampling.tt_sampling.log_probs_calculator
-                        tt_log_probs_cpu = lp_calculator.transfer_logprobs_to_host(tt_log_probs, sampled_tokens)
+                        tt_log_probs_cpu = lp_calculator.to_cpu(tt_log_probs)
                     else:
                         tt_log_probs_cpu = tt_log_probs.cpu()
 

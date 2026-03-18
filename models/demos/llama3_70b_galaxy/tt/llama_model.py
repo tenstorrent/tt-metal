@@ -536,9 +536,9 @@ class TtTransformer(LightweightModule):
                 from models.common.sampling.tt_log_probs import LogProbsResult
 
                 if isinstance(tt_log_probs, LogProbsResult):
-                    # LogProbsResult is a dataclass, not a tensor — pass through.
-                    # transfer_logprobs_to_host will be called by the generator.
-                    tt_log_probs_cpu = tt_log_probs
+                    tt_log_probs_cpu = self.sampling.tt_sampling.log_probs_calculator.to_cpu(
+                        tt_log_probs, blocking=False
+                    )
                 else:
                     tt_log_probs_cpu = tt_log_probs.cpu(blocking=False, cq_id=0)
             else:

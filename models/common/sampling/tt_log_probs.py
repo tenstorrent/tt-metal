@@ -35,6 +35,8 @@ class LogProbsResult:
 
     topk_logprobs: ttnn.Tensor
     topk_indices: ttnn.Tensor
+    topk_logprobs_host: torch.Tensor
+    topk_indices_host: torch.Tensor
 
 
 class LogProbsCalculator:
@@ -108,33 +110,18 @@ class LogProbsCalculator:
 
         self.num_devices_for_sharding = num_devices_for_sharding
 
-        # Create mask tensor with shape (num_devices_for_sharding, batch_size)
-        # Each row will have device_id starting from 0 to num_devices_for_sharding - 1
-        mask_tensor = torch.arange(num_devices_for_sharding).unsqueeze(1).expand(num_devices_for_sharding, batch_size)
-
-        # Choose mesh mapper based on mesh topology
-        if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
-            # 2D mesh: shard along the TP axis
-            dims = (0, None) if self._all_gather_cluster_axis == 0 else (None, 0)
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-        elif num_devices > 1:
-            # 1D mesh
-            mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
-        else:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-
-        self.mask = ttnn.as_tensor(
-            mask_tensor,
+        # Pre-allocate output tensors for top-k logprobs computation
+        self.topk_logprobs_output = ttnn.as_tensor(
+            torch.zeros(1, 1, batch_size, DEVICE_TOP_K),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=self.mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            preprocess=lambda x: x.to(torch.bfloat16),
-            mesh_mapper=mesh_mapper,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        self.output_tensor = ttnn.as_tensor(
-            torch.ones(1, 1, 1, batch_size),
-            dtype=ttnn.bfloat16,
+        self.topk_indices_output = ttnn.as_tensor(
+            torch.zeros(1, 1, batch_size, DEVICE_TOP_K, dtype=torch.int32),
+            dtype=ttnn.uint32,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
@@ -239,6 +226,7 @@ class LogProbsCalculator:
             num_links=1,
             buffer_key="LOGPROBS_MAX_REDUCTION",
         )
+        ttnn.deallocate(local_max_tensor)
         # Convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
         gathered_max_tensors = ttnn.to_layout(gathered_max_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
         D = self.num_devices_for_sharding
@@ -254,8 +242,11 @@ class LogProbsCalculator:
 
         # Calculate stable local sum-exp using subtract of global-max from each local logit
         subtracted_tensor = ttnn.subtract(logits_tensor, global_max_to_subtract, **self.common_args)
+        ttnn.deallocate(global_max_to_subtract)
         exp_tensor = ttnn.exp(subtracted_tensor, **self.common_args)
+        ttnn.deallocate(subtracted_tensor)
         sum_exp_tensor = ttnn.sum(exp_tensor, dim=-1, keepdim=True, **self.common_args)
+        ttnn.deallocate(exp_tensor)
 
         gathered_sum_exp_tensors = self._perform_all_gather(
             sum_exp_tensor,
@@ -263,92 +254,14 @@ class LogProbsCalculator:
             num_links=1,
             buffer_key="LOGPROBS_SUM_EXP_REDUCTION",
         )
+        ttnn.deallocate(sum_exp_tensor)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
         B_sum = gathered_sum_exp_tensors.shape[2]
         gathered_sum_exp_tensors = ttnn.reshape(gathered_sum_exp_tensors, (1, 1, D, B_sum), **self.common_args)
         gathered_sum_exp_tensors = ttnn.to_layout(gathered_sum_exp_tensors, ttnn.TILE_LAYOUT, **self.common_args)
 
         self.global_exp_sum = ttnn.sum(gathered_sum_exp_tensors, dim=2, keepdim=True, **self.common_args)
-
-    def _prepare_relevant_logits(self, logits_tensor: ttnn.Tensor, global_idx_tensor: ttnn.Tensor):
-        """
-        Prepare global idx tensor with correct values on all devices.
-        """
-        size_per_device = logits_tensor.shape[-1]
-
-        # convert global_idx_tensor to ttnn.TILE_LAYOUT
-        global_idx_tilized_tensor = ttnn.to_layout(global_idx_tensor, ttnn.TILE_LAYOUT, **self.common_args)
-
-        # TODO: Raise an issue on this since for UINT_32 ttnn.div produces incorrect output (all zeros)
-        global_idx_tilized_tensor = ttnn.typecast(global_idx_tilized_tensor, ttnn.float32, **self.common_args)
-
-        # Get chip_id for each user based on global_idx values in global_idx_tensor
-        chip_ids_tensor = ttnn.div(
-            global_idx_tilized_tensor,
-            size_per_device,
-            rounding_mode="floor",
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self.common_args,
-        )
-
-        # Get local index for each user based on global_idx values in global_idx_tensor
-        remainder_tensor = ttnn.remainder(
-            global_idx_tilized_tensor,
-            size_per_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            **self.common_args,
-        )
-
-        # Convert remainder_tensor to int32
-        remainder_tensor = ttnn.typecast(remainder_tensor, ttnn.uint32, **self.common_args)
-        # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
-        remainder_tensor = ttnn.to_layout(remainder_tensor, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        batch_vol = remainder_tensor.shape[2] * remainder_tensor.shape[3]
-        remainder_tensor = ttnn.reshape(remainder_tensor, (1, 1, batch_vol, 1), **self.common_args)
-        remainder_tensor = ttnn.to_layout(remainder_tensor, ttnn.TILE_LAYOUT, **self.common_args)
-
-        # Get logits for each user on each chip based on local index
-        selected_logits_tensor = ttnn.gather(logits_tensor, dim=3, index=remainder_tensor, **self.common_args)
-
-        # convert to ROW_MAJOR_LAYOUT due to memory clobbering which affects all ttnn.reshape ops with TILE_LAYOUT
-        selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        batch_vol_s = selected_logits_tensor.shape[2] * selected_logits_tensor.shape[3]
-        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, 1, batch_vol_s), **self.common_args)
-        selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT, **self.common_args)
-        # Compare mask to chip_ids tensor and select correct positions for each user on all chips inplace
-        ttnn.eq_(chip_ids_tensor, self.mask, **self.common_args)
-
-        # Multiply selected_logits_tensor with chip_ids_tensor to get expected logits for each user
-        selected_logits_tensor = ttnn.multiply(selected_logits_tensor, chip_ids_tensor, **self.common_args)
-
-        # All gather logits across all devices
-        selected_logits_tensor = self._perform_all_gather(
-            selected_logits_tensor,
-            dim=1,
-            num_links=1,
-            buffer_key="LOGPROBS_LOGITS",
-        )
-
-        selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
-        D_s = self.num_devices_for_sharding
-        B_g = selected_logits_tensor.shape[3]
-        selected_logits_tensor = ttnn.reshape(selected_logits_tensor, (1, 1, D_s, B_g), **self.common_args)
-        selected_logits_tensor = ttnn.to_layout(selected_logits_tensor, ttnn.TILE_LAYOUT, **self.common_args)
-
-        # Apply sum over device dimension to get logits for each user on all chips
-        selected_logits_tensor = ttnn.sum(selected_logits_tensor, dim=2, keepdim=True, **self.common_args)
-
-        return selected_logits_tensor
-
-    def _calculate_log_probs(self, sampled_logits_tensor: ttnn.Tensor):
-        """
-        Calculate log-probs for a given logits tensor with formula:
-        log-prob(x) = logits(x) - global_max - log(global_exp_sum)
-        """
-        out = ttnn.subtract(sampled_logits_tensor, self.global_max, **self.common_args)
-        log_global_exp_sum = ttnn.log(self.global_exp_sum, **self.common_args)
-        # Subtract and put result to self.output_tensor
-        ttnn.subtract(out, log_global_exp_sum, output_tensor=self.output_tensor, **self.common_args)
+        ttnn.deallocate(gathered_sum_exp_tensors)
 
     def _is_supported(self):
         """Check if logprobs computation is supported on this device configuration."""
@@ -358,38 +271,6 @@ class LogProbsCalculator:
         if self.num_devices_for_sharding < 2:
             return False
         return True
-
-    def calculate_log_probs(
-        self,
-        logits_tensor: ttnn.Tensor,
-        indices_tensor: ttnn.Tensor,
-    ):
-        """
-        Calculate log-probs for the sampled token only.
-
-        Returns None if log-probs are not requested, not supported, or the device count is not 8 or 32.
-        This is the original method that computes only the sampled token's logprob.
-        """
-        if not self.enable_log_probs:
-            return None
-
-        if not self._is_supported():
-            return None
-
-        # Calculating log-probs requires bfloat16 precision for near-stable sum-exp calculation
-        if logits_tensor.dtype == ttnn.bfloat8_b:
-            logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16, **self.common_args)
-
-        # Compute global max and global sum(exp(logits - global_max)) for each chip
-        self._compute_global_stats(logits_tensor)
-
-        # Prepare relevant logits for each user on each chip
-        relevant_logits = self._prepare_relevant_logits(logits_tensor, indices_tensor)
-
-        # Calculate log-probs for each user on each chip and stores in self.output_tensor
-        self._calculate_log_probs(relevant_logits)
-
-        return self.output_tensor
 
     def _calculate_topk_log_probs_from_values(
         self,
@@ -420,12 +301,20 @@ class LogProbsCalculator:
         log_global_exp_sum_bcast = ttnn.to_layout(log_global_exp_sum, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
         log_global_exp_sum_bcast = ttnn.reshape(log_global_exp_sum_bcast, (1, 1, B, 1), **self.common_args)
         log_global_exp_sum_bcast = ttnn.to_layout(log_global_exp_sum_bcast, ttnn.TILE_LAYOUT, **self.common_args)
-
+        ttnn.deallocate(log_global_exp_sum)
         # Apply log-softmax formula: logprob = logit - global_max - log(global_exp_sum)
-        topk_logprobs = ttnn.subtract(topk_values, global_max_bcast, **self.common_args)
-        topk_logprobs = ttnn.subtract(topk_logprobs, log_global_exp_sum_bcast, **self.common_args)
+        # Write into pre-allocated output tensor to avoid per-call allocations
+        ttnn.subtract(topk_values, global_max_bcast, output_tensor=self.topk_logprobs_output, **self.common_args)
+        ttnn.subtract(
+            self.topk_logprobs_output,
+            log_global_exp_sum_bcast,
+            output_tensor=self.topk_logprobs_output,
+            **self.common_args,
+        )
+        ttnn.deallocate(global_max_bcast)
+        ttnn.deallocate(log_global_exp_sum_bcast)
 
-        return topk_logprobs
+        return self.topk_logprobs_output
 
     def calculate_topk_log_probs(
         self,
@@ -468,11 +357,16 @@ class LogProbsCalculator:
         if logits_tensor.dtype == ttnn.bfloat8_b:
             logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16, **self.common_args)
 
+        # Compute global stats first — the large intermediates (subtracted_tensor,
+        # exp_tensor, each ~B*V/D) are allocated and freed here before topk
+        # allocates its output tensors, reducing peak device memory.
+        self._compute_global_stats(logits_tensor)
+
         # Narrow down 256 -> 32 topk values and indices.
         # Cannot pass topk_global_indices as indices_tensor because global
         # vocab indices exceed uint16 range (>65K). Instead, get positional
         # indices and use gather to map back to global indices.
-        topk_values, topk_local_indices = ttnn.topk(
+        topk_local_values, topk_local_indices = ttnn.topk(
             topk_values,
             k=32,
             dim=-1,
@@ -483,21 +377,23 @@ class LogProbsCalculator:
         topk_local_indices = ttnn.typecast(topk_local_indices, ttnn.uint32, **self.common_args)
         topk_local_indices = ttnn.to_layout(topk_local_indices, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
         topk_local_indices = ttnn.to_layout(topk_local_indices, ttnn.TILE_LAYOUT, **self.common_args)
-        topk_indices = ttnn.gather(topk_global_indices, dim=-1, index=topk_local_indices, **self.common_args)
-
-        # Compute global max and global sum-exp from full logits
-        self._compute_global_stats(logits_tensor)
+        ttnn.gather(
+            topk_global_indices, dim=-1, index=topk_local_indices, out=self.topk_indices_output, **self.common_args
+        )
+        ttnn.deallocate(topk_local_indices)
 
         # Ensure topk_values is bfloat16 for consistent computation
-        if topk_values.dtype != ttnn.bfloat16:
-            topk_values = ttnn.typecast(topk_values, ttnn.bfloat16, **self.common_args)
+        if topk_local_values.dtype != ttnn.bfloat16:
+            topk_local_values = ttnn.typecast(topk_local_values, ttnn.bfloat16, **self.common_args)
 
-        # Single-pass logprob computation for all gathered top-k tokens
-        topk_logprobs = self._calculate_topk_log_probs_from_values(topk_values)
-
+        # Single-pass logprob computation for all gathered top-k tokens (writes to self.topk_logprobs_output)
+        self._calculate_topk_log_probs_from_values(topk_local_values)
+        ttnn.deallocate(topk_local_values)
         return LogProbsResult(
-            topk_logprobs=topk_logprobs,
-            topk_indices=topk_indices,
+            topk_logprobs=self.topk_logprobs_output,
+            topk_indices=self.topk_indices_output,
+            topk_logprobs_host=None,
+            topk_indices_host=None,
         )
 
     def _build_mesh_composer(self):
@@ -516,6 +412,19 @@ class LogProbsCalculator:
         else:
             # 1D mesh (T3K): concat along last dim
             return ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+
+    def to_cpu(self, log_probs_result: LogProbsResult, blocking: bool = False):
+        # Return a NEW LogProbsResult so that each iteration gets its own host
+        # tensor references.  The original log_probs_result may be a trace-captured
+        # singleton that is reused across iterations; mutating it in-place causes a
+        # race when the async-read pipeline processes iteration N-1 after iteration N
+        # has already overwritten the host fields.
+        return LogProbsResult(
+            topk_logprobs_host=log_probs_result.topk_logprobs.cpu(blocking=blocking, cq_id=0),
+            topk_indices_host=log_probs_result.topk_indices.cpu(blocking=blocking, cq_id=0),
+            topk_logprobs=None,
+            topk_indices=None,
+        )
 
     def transfer_logprobs_to_host(
         self,
@@ -558,11 +467,15 @@ class LogProbsCalculator:
 
         # Transfer top-k logprobs and indices from device to host
         topk_logprobs_host = ttnn.to_torch(
-            log_probs_result.topk_logprobs,
+            log_probs_result.topk_logprobs_host
+            if log_probs_result.topk_logprobs_host is not None
+            else log_probs_result.topk_logprobs,
             mesh_composer=mesh_composer,
         )
         topk_indices_host = ttnn.to_torch(
-            log_probs_result.topk_indices,
+            log_probs_result.topk_indices_host
+            if log_probs_result.topk_indices_host is not None
+            else log_probs_result.topk_indices,
             mesh_composer=mesh_composer,
         )
         # Remove replicas from top-k logprobs and indices
@@ -600,6 +513,8 @@ class LogProbsCalculator:
                     "top_logprobs": {
                         "token_indices": user_indices[:n].tolist(),
                         "logprobs": user_logprobs[:n].tolist(),
+                        "num_logprobs": n,
+                        "logprobs_formatted": False,
                     },
                 }
             )

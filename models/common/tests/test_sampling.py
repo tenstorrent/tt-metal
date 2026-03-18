@@ -42,222 +42,9 @@ def _simulate_gathered_topk(torch_logits, num_devices, top_k=32):
 
 
 # ===========================================================================
-# Existing tests (sampled-token-only logprobs)
+# Top-K logprobs tests (TG Galaxy only)
 # ===========================================================================
 
-
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [1, 1, 32, 8 * 18992],  # Qwen3 on T3K
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
-    ],
-    indirect=["device_params"],
-    ids=["fabric_linear"],
-)
-def test_log_probs_calculation(shape, mesh_device):
-    seed = 1234
-    torch.manual_seed(seed)
-
-    log_probs_calculator = LogProbsCalculator(mesh_device)
-
-    torch_tensor = torch.randn(shape)
-    # shuffle the tensor in last 2 dimensions
-    for i in range(shape[-2]):
-        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
-
-    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    indices_tensor = argmax_tensor.reshape(
-        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
-    )
-    # Push inputs to device
-    logits_tensor = ttnn.from_torch(
-        torch_tensor,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    ttnn_indices_tensor = ttnn.from_torch(
-        indices_tensor,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    log_probs_calculator.set_log_probs_mode(True)
-    tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
-    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
-    log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]
-
-    # Calculate log-probs for each user on each chip using torch
-    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
-    log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
-    log_probs_torch_argmax = torch.reshape(log_probs_torch_argmax, (1, 1, 1, 32))
-
-    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
-    print(f"pcc={pcc}")
-
-    assert passing, f"Assertion failed, PCC={pcc}"
-
-
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [1, 1, 32, 8 * 18992],  # Qwen3 on T3K
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
-    ],
-    indirect=["device_params"],
-    ids=["fabric_linear"],
-)
-def test_log_probs_returns_none_when_disabled(shape, mesh_device):
-    """Test that calculate_log_probs returns None when enable_log_probs is False."""
-    log_probs_calculator = LogProbsCalculator(mesh_device)
-
-    torch_tensor = torch.randn(shape)
-    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    indices_tensor = argmax_tensor.reshape(
-        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
-    )
-
-    logits_tensor = ttnn.from_torch(
-        torch_tensor,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    ttnn_indices_tensor = ttnn.from_torch(
-        indices_tensor,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    # Log probs disabled (default) - should return None
-    log_probs_calculator.set_log_probs_mode(False)
-    result = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
-    assert result is None, f"Expected None when log_probs disabled, got {type(result)}"
-
-    # Log probs enabled - should return a tensor (not None)
-    log_probs_calculator.set_log_probs_mode(True)
-    num_devices = mesh_device.get_num_devices()
-    result = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
-    if num_devices in (8, 32) and log_probs_calculator.num_devices_for_sharding >= 2:
-        assert result is not None, "Expected tensor when log_probs enabled on supported device"
-    else:
-        assert result is None, "Expected None on unsupported device count"
-
-
-@pytest.mark.parametrize(
-    "shape",
-    [
-        [1, 1, 32, 8 * 16032],  # llama on TG with 8 chips sharded vocab
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            }
-        ),
-    ],
-    indirect=True,
-    ids=["fabric_linear"],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),
-    ],
-    indirect=True,
-)
-def test_log_probs_with_sub_core_grids_on_galaxy(shape, mesh_device):
-    seed = 1234
-    torch.manual_seed(seed)
-
-    sub_core_grids = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        ]
-    )
-    log_probs_calculator = LogProbsCalculator(mesh_device, sub_core_grids)
-
-    torch_tensor = torch.randn(shape)
-    # shuffle the tensor in last 2 dimensions
-    for i in range(shape[-2]):
-        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
-
-    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    indices_tensor = argmax_tensor.reshape(
-        argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
-    )
-
-    if mesh_device.get_num_devices() == 8:
-        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-    elif mesh_device.get_num_devices() == 32:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=list(mesh_device.shape))
-    else:
-        raise ValueError(f"Unsupported number of devices: {mesh_device.get_num_devices()}")
-
-    logits_tensor = ttnn.from_torch(
-        torch_tensor,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=mesh_mapper,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    ttnn_indices_tensor = ttnn.from_torch(
-        indices_tensor,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    log_probs_calculator.set_log_probs_mode(True)
-    tt_log_probs = log_probs_calculator.calculate_log_probs(logits_tensor, ttnn_indices_tensor)
-    log_probs_tt_host = ttnn.to_torch(tt_log_probs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
-    # slice from (1,1,32,256) -> (1,1,1,32)
-    log_probs_tt_host = log_probs_tt_host[:, :, :1, :32]
-
-    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
-    log_probs_torch_argmax = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
-    log_probs_torch_argmax = torch.reshape(log_probs_torch_argmax, (1, 1, 1, 32))
-
-    passing, pcc = comp_pcc(log_probs_torch_argmax, log_probs_tt_host, pcc=0.99)
-    print(f"pcc={pcc}")
-
-    assert passing, f"Assertion failed, PCC={pcc}"
-
-
-# ===========================================================================
-# New tests: top-K logprobs (TG Galaxy only)
-# ===========================================================================
 
 # Common TG Galaxy device parametrization for all new tests
 TG_SHAPE = [1, 1, 32, 8 * 16032]  # Llama on TG with 8-chip TP sharded vocab
@@ -351,15 +138,20 @@ def test_top_k_log_probs_on_galaxy(shape, mesh_device):
     # Transfer to host and verify
     host_results = calc.transfer_logprobs_to_host(result, argmax_tensor.squeeze())
 
-    # PCC check: compare all gathered top-k logprobs against PyTorch reference
-    expected_logprobs = torch.gather(
-        log_probs_torch.squeeze(0).squeeze(0),
-        dim=-1,
-        index=gathered_indices.squeeze(0).squeeze(0).long(),
-    )
+    # PCC check: compare device top-32 logprobs against PyTorch reference
+    # Device narrows 256 gathered values → top-32 via ttnn.topk, so compare
+    # at the device's actual 32 indices (not the full 256 gathered indices).
     composer = calc._build_mesh_composer()
     topk_logprobs_host = ttnn.to_torch(result.topk_logprobs, mesh_composer=composer)
     topk_logprobs_host = topk_logprobs_host[0, 0, ...]
+    topk_indices_host = ttnn.to_torch(result.topk_indices, mesh_composer=composer)
+    topk_indices_host = topk_indices_host[0, 0, ...].long()
+
+    expected_logprobs = torch.gather(
+        log_probs_torch.squeeze(0).squeeze(0),
+        dim=-1,
+        index=topk_indices_host,
+    )
 
     passing, pcc = comp_pcc(expected_logprobs, topk_logprobs_host, pcc=0.99)
     print(f"Galaxy top-K logprobs PCC={pcc}")
@@ -414,7 +206,7 @@ def test_top_k_log_probs_returns_none_when_not_needed(shape, mesh_device):
         r = host_results[i]
         assert r is not None, f"User {i} should have result (logprobs enabled)"
         assert r["returned_token"]["token_idx"] == int(sampled_ids[i].item())
-        # num_logprobs=0 → top_logprobs arrays are empty
+        # num_logprobs=0 → top_logprobs arrays are empty (truncated to 0)
         assert len(r["top_logprobs"]["token_indices"]) == 0, "token_indices should be empty"
         assert len(r["top_logprobs"]["logprobs"]) == 0, "logprobs should be empty"
 
@@ -668,7 +460,7 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
             f"User {user} sampled logprob mismatch: " f"device={device_sampled_lp:.4f}, torch={torch_sampled_lp:.4f}"
         )
 
-        # Top logprobs PCC
+        # Top logprobs PCC — truncated to requested_logprobs
         top_indices = r["top_logprobs"]["token_indices"]
         top_lps_device = torch.tensor(r["top_logprobs"]["logprobs"], dtype=torch.float32)
         assert (
