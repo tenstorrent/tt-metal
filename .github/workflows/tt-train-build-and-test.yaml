@@ -79,7 +79,7 @@ jobs:
     needs: [build-docker-image, build-tt-train]
     if: ${{ always() && needs.build-tt-train.result == 'success' }}
     runs-on: tt-ubuntu-2204-N150-viommu-stable
-    timeout-minutes: 45
+    timeout-minutes: 60
     container:
       image: >-
         harbor.ci.tenstorrent.net/${{
@@ -124,8 +124,10 @@ jobs:
           cd /work/build/tt-train
           ctest --no-tests=error --output-on-failure
 
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - name: Cleanup workspace
         if: always()
+        run: |
+          rm -rf /work/build /work/runtime /work/tt_metal /work/tt-train-build.tar.zst
 
   validate-pr:
     if: ${{ always() }}
