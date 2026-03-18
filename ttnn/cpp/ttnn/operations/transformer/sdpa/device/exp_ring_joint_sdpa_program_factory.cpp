@@ -1123,6 +1123,15 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
+    // Map (batch * NH + head) -> injector physical coordinates for MUX writer signaling
+    std::unordered_map<uint32_t, CoreCoord> injector_physical_by_head;
+    for (uint32_t ci = 0; ci < num_cores; ++ci) {
+        if (core_chain_info[ci].is_injector) {
+            uint32_t head_key = core_chain_info[ci].batch * NH + core_chain_info[ci].head;
+            injector_physical_by_head[head_key] = core_work[ci].physical_core;
+        }
+    }
+
     // ---- Fabric MUX config (needed for writer kernel CT args below) ----
     // Hardcoded positions: backward-direction MUX at (11,0), (11,5); forward-direction MUX at (11,4), (11,9).
     const std::vector<CoreCoord> mux_backward_logical_cores = {{11, 0}, {11, 5}};
@@ -1400,12 +1409,43 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(0);                                    // termination_master_noc_x
                 writer_args.push_back(0);                                    // termination_master_noc_y
             }
-            // All-gather RT args: only for termination master cores
-            if (is_term_master && link_in_range) {
+
+            // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler
+            if (link_in_range) {
                 if (!ag_rt_offset_set) {
                     writer_fabric_ag_rt_offset = writer_args.size();
                     ag_rt_offset_set = true;
                 }
+
+                const uint32_t out_ready_sem_addr = args.semaphore[0].address();
+                writer_args.push_back(out_ready_sem_addr);
+
+                // Find the injector core for this MUX writer's (batch, head)
+                const auto& mux_head_work = core_work.at(i).head_work;
+                CoreCoord injector_physical = {0, 0};
+                if (mux_head_work.empty()) {
+                    log_warning(
+                        tt::LogOp,
+                        "MUX writer core ({},{}) has no head_work; cannot determine injector",
+                        core.x,
+                        core.y);
+                } else {
+                    uint32_t head_key = mux_head_work[0].batch * NH + mux_head_work[0].head;
+                    auto it = injector_physical_by_head.find(head_key);
+                    if (it != injector_physical_by_head.end()) {
+                        injector_physical = it->second;
+                    } else {
+                        log_warning(
+                            tt::LogOp,
+                            "MUX writer core ({},{}) batch={} head={}: no injector found in chain info",
+                            core.x,
+                            core.y,
+                            mux_head_work[0].batch,
+                            mux_head_work[0].head);
+                    }
+                }
+                writer_args.push_back(static_cast<uint32_t>(injector_physical.x));
+                writer_args.push_back(static_cast<uint32_t>(injector_physical.y));
 
                 // Direction: top half of rows = backward (0), bottom half = forward (1).
                 const uint32_t ag_direction = is_backward ? 0 : 1;
@@ -1415,9 +1455,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 const uint32_t remainder = ag_single_bh_num_tiles % args.num_links;
                 const uint32_t ag_tile_id_start = link * base_tiles + std::min(link, remainder);
                 const uint32_t ag_tile_id_end = (link + 1) * base_tiles + std::min(link + 1, remainder);
-
-                // Use a global semaphore so the address is stable across program invocations
-                const uint32_t out_ready_sem_addr = args.semaphore[0].address();
 
                 writer_args.push_back(ag_direction);
                 writer_args.push_back(ag_input_Wt);
@@ -1429,7 +1466,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(ag_tile_id_start);
                 writer_args.push_back(ag_tile_id_end);
                 writer_args.push_back(static_cast<uint32_t>(args.ring_size));
-                writer_args.push_back(out_ready_sem_addr);
                 writer_args.push_back(k_addr);
                 writer_args.push_back(v_addr);
                 writer_args.push_back(gathered_k_addr);
