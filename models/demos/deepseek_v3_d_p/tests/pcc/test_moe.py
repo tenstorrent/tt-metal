@@ -27,6 +27,7 @@ from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
+from models.demos.deepseek_v3_d_p.reference.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -167,40 +168,6 @@ class TorchSharedExpertModule(nn.Module):
         return self.expert(x)
 
 
-class TorchSplitConnectionModule(nn.Module):
-    """
-    Split connection module: applies gate weights and reduces expert outputs.
-
-    This is the "weighted sum" operation that combines routed expert contributions:
-        output = sum(weight[i] * expert_output[i] for i in topk_experts)
-    """
-
-    def __init__(self):
-        """Initialize split connection module."""
-        super().__init__()
-
-    def forward(
-        self,
-        combined_output: torch.Tensor,
-        weights: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Apply gate weights and sum expert contributions.
-
-        Args:
-            combined_output: Combined expert outputs
-                shape: (dispatch_group_size, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-            weights: Gate weights
-                shape: (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
-
-        Returns:
-            Weighted sum of expert outputs
-                shape: (dispatch_group_size, seq_len_per_chip, hidden_dim)
-        """
-        weighted = combined_output * weights.unsqueeze(-1)  # Apply weights
-        return weighted.sum(dim=2)  # Sum expert contributions
-
-
 @dataclass
 class MoEIntermediates:
     """Data structure holding intermediate values from MoE forward pass for debugging."""
@@ -304,8 +271,9 @@ class TorchMinimalMoE(nn.Module):
         # Create shared expert module
         self.shared_expert_module = TorchSharedExpertModule(shared_expert)
 
-        # Create split connection module
-        self.split_connection_module = TorchSplitConnectionModule()
+        # Create reduce module (sums over topk dimension)
+        # topk_dim=1 because combined_output shape is (dispatch_group_size, seq_len, topk, hidden)
+        self.reduce_module = TorchReduceModule(topk_dim=1)
 
     def forward(
         self,
@@ -366,8 +334,10 @@ class TorchMinimalMoE(nn.Module):
         # so no transformation is needed before calling combine.
         combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts)
 
-        # Step 5: Apply gate weights (split connection)
-        routed_output = self.split_connection_module(combined_output, weights)
+        # Step 5: Apply gate weights and sum over topk
+        # combined_output: (dispatch_group_size, seq_len, topk, hidden_dim)
+        # routed_output: (dispatch_group_size, seq_len, hidden_dim)
+        routed_output = self.reduce_module(combined_output, weights=weights)
 
         # Step 6: Final output = routed + shared
         final_output = routed_output + shared_output
