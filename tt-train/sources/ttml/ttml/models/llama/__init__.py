@@ -102,16 +102,11 @@ class Llama(AbstractModuleBase):
         head_dim = config.hidden_size // config.num_attention_heads
 
         rope_scaling_params = ttml.ops.rope.RopeScalingParams()
-        if (
-            config.rope_scaling.scaling_factor != 0.0
-            and config.rope_scaling.original_context_length != 0
-        ):
+        if config.rope_scaling.scaling_factor != 0.0 and config.rope_scaling.original_context_length != 0:
             rope_scaling_params.scaling_factor = config.rope_scaling.scaling_factor
             rope_scaling_params.high_freq_factor = config.rope_scaling.high_freq_factor
             rope_scaling_params.low_freq_factor = config.rope_scaling.low_freq_factor
-            rope_scaling_params.original_context_length = (
-                config.rope_scaling.original_context_length
-            )
+            rope_scaling_params.original_context_length = config.rope_scaling.original_context_length
 
         rope_params = ttml.ops.rope.build_rope_params(
             config.max_position_embeddings,
@@ -181,9 +176,7 @@ class Llama(AbstractModuleBase):
             elif self.config.runner_type == ttml.models.RunnerType.Default:
                 out = block(out, mask, *extra_args)
             else:
-                raise ValueError(
-                    "Unknown runner type. Supported runner types ['default', 'memory_efficient']"
-                )
+                raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 
         out = self.ln_fc(out)
         logits = self.fc(out)
@@ -191,11 +184,13 @@ class Llama(AbstractModuleBase):
 
 
 # C++ Llama bindings from _ttml.models.llama
-from ..._ttml.models.llama import (
+from _ttml.models.llama import (
     CppLlama,
     CppLlamaConfig,
     create_cpp_llama_model,
 )
+
+from .safetensors_loader import load_from_safetensors
 
 __all__ = [
     # C++ bindings
@@ -206,4 +201,5 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "load_from_safetensors",
 ]

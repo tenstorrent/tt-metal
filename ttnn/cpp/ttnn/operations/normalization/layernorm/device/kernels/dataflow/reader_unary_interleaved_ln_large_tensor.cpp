@@ -56,14 +56,28 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W_logical = get_arg_val<uint32_t>(9);
+    const uint32_t tile_width = get_arg_val<uint32_t>(10);
+    const uint32_t tile_height = get_arg_val<uint32_t>(11);
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(10);
+    const uint32_t H_logical = get_arg_val<uint32_t>(12);
 #endif
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
+    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+#ifdef FUSE_PRE_ADD
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+#endif
+#ifdef FUSE_GAMMA
+    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+#endif
+#ifdef FUSE_BETA
+    experimental::CircularBuffer cb_beta(cb_id_beta);
+#endif
 
     // No use_welford slot (large-tensor + Welford uses a separate kernel).
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
@@ -81,7 +95,7 @@ void kernel_main() {
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t cb_id_in_rm = tt::CBIndex::c_27;
+    constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
 
     const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
 #else
@@ -106,15 +120,16 @@ void kernel_main() {
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
     {
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         const uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
+        const auto partial_last_tile_cols = W_logical % tile_width;
         if (partial_last_tile_cols > 0) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
+                cb_in_2, scaler, partial_last_tile_cols, tile_height, tile_width);
         }
     }
-    constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
@@ -129,13 +144,13 @@ void kernel_main() {
 #else
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #endif
@@ -152,16 +167,16 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #else  // TILE path: interleaved per block
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
 #endif
         }
 #endif
@@ -197,20 +212,20 @@ void kernel_main() {
                 block);
 #else
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
 #endif
 
             // Gamma/beta and b-tensor for this block — pushed immediately after input so
             // compute finds them in the CB when it reaches the per-block multiply step.
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
 #endif
 #ifdef FUSE_GAMMA
-            layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, cb_gamma, addrg, gamma_tile_bytes, block.start(), block);
 #endif
 #ifdef FUSE_BETA
-            layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, cb_beta, addrb, beta_tile_bytes, block.start(), block);
 #endif
         }  // wt loop
     }  // ncht loop

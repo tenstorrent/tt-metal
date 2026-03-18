@@ -284,7 +284,7 @@ void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
 
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
         const uint32_t output_tensor_start_idx = 4;
-        for (unsigned j = 0; j < output_tensors.size() - 1; ++j) {
+        for (unsigned j = 0; j < output_tensors.size(); ++j) {
             writer_kernel_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
         }
     }
