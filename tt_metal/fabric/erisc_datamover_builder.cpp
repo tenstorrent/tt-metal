@@ -890,7 +890,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // TODO: promote to user-configurable parameter (user could be just control plane based on arch in this case)
     // specifies if we do spin waits on eth_txq_busy in send_next_data
-    const bool eth_txq_spin_wait_send_next_data = true;
+    const bool eth_txq_spin_wait_send_next_data = false;
     const bool eth_txq_spin_wait_receiver_send_completion_ack = false;
 
     // TODO: allow specification per eth txq

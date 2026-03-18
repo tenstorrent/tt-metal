@@ -308,6 +308,11 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock &&
+        get_cluster().get_target_device_type() != tt::TargetDevice::Simulator) {
+        get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), false);
+    }
+
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
