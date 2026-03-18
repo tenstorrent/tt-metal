@@ -491,6 +491,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         cache_name="pos",
         action_mode=False,
         train_mode=False,
+        dump_iter=None,
     ):
         r"""
         Forward pass through the diffusion model
@@ -511,6 +512,8 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
             List[Tensor]:
                 List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
         """
+        for key, val in input_dict.items():
+            print(f"{key}: {val.shape}")
         if train_mode:
             return self.forward_train(input_dict)
         if action_mode:  # action input emb
@@ -542,13 +545,23 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         timestep_proj = timestep_proj.unflatten(2, (6, -1))  # B L 6 C
 
         dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
-        os.makedirs(dump_dir, exist_ok=True)
-        torch.save(
-            latent_hidden_states.detach().cpu(),
-            os.path.join(dump_dir, "input_torch.pt"),
-        )
+        dump_path = "action" if action_mode else "video"
+        suffix = f"_iter{dump_iter}_{dump_path}" if dump_iter is not None else ""
 
-        for block_idx, block in enumerate(self.blocks, start=1):
+        os.makedirs(dump_dir, exist_ok=True)
+        if dump_iter is not None:
+            torch.save(
+                latent_hidden_states.detach().cpu(),
+                os.path.join(dump_dir, f"input_torch{suffix}.pt"),
+            )
+            torch.save(
+                text_hidden_states.detach().cpu(),
+                os.path.join(dump_dir, f"text_hidden_states_torch{suffix}.pt"),
+            )
+            torch.save(temb.detach().cpu(), os.path.join(dump_dir, f"temb_torch{suffix}.pt"))
+            torch.save(timestep_proj.detach().cpu(), os.path.join(dump_dir, f"timestep_proj_torch{suffix}.pt"))
+
+        for block_idx, block in enumerate(self.blocks):
             latent_hidden_states = block(
                 latent_hidden_states,
                 text_hidden_states,
@@ -557,10 +570,10 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
                 update_cache=update_cache,
                 cache_name=cache_name,
             )
-            if block_idx <= 5:
+            if dump_iter is not None:
                 torch.save(
                     latent_hidden_states.detach().cpu(),
-                    os.path.join(dump_dir, f"transformer_torch_{block_idx}.pt"),
+                    os.path.join(dump_dir, f"transformer_torch_{block_idx}{suffix}.pt"),
                 )
         temb_scale_shift_table = self.scale_shift_table[None] + temb[:, :, None, ...]
         shift, scale = rearrange(temb_scale_shift_table, "b l n c -> b n l c").chunk(2, dim=1)
@@ -569,16 +582,36 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         latent_hidden_states = (self.norm_out(latent_hidden_states.float()) * (1.0 + scale) + shift).type_as(
             latent_hidden_states
         )
+        if dump_iter is not None:
+            torch.save(
+                latent_hidden_states.detach().cpu(),
+                os.path.join(dump_dir, f"norm_out_torch{suffix}.pt"),
+            )
 
         if action_mode:
             latent_hidden_states = self.action_proj_out(latent_hidden_states)
+            if dump_iter is not None:
+                torch.save(
+                    latent_hidden_states.detach().cpu(),
+                    os.path.join(dump_dir, f"final_out_action_torch{suffix}.pt"),
+                )
+            return latent_hidden_states
         else:
             latent_hidden_states = self.proj_out(latent_hidden_states)
+            if dump_iter is not None:
+                torch.save(
+                    latent_hidden_states.detach().cpu(),
+                    os.path.join(dump_dir, f"final_pre_rearrange_torch{suffix}.pt"),
+                )
             latent_hidden_states = rearrange(
                 latent_hidden_states, "b l (n c) -> b (l n) c", n=math.prod(self.patch_size)
-            )  #
-
-        return latent_hidden_states
+            )
+            if dump_iter is not None:
+                torch.save(
+                    latent_hidden_states.detach().cpu(),
+                    os.path.join(dump_dir, f"final_out_video_torch{suffix}.pt"),
+                )
+            return latent_hidden_states
 
 
 if __name__ == "__main__":

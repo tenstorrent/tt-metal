@@ -640,6 +640,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=False,
+                dump_iter=i,
             )
             if not last_step or video_step != -1:
                 video_noise_pred = data_seq_to_patch(
@@ -687,6 +688,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=True,
+                dump_iter=i,
             )
             if not last_step:
                 action_noise_pred = rearrange(action_noise_pred, "b (f n) c -> b c f n 1", f=frame_chunk_size)
