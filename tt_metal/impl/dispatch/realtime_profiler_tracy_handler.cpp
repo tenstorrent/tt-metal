@@ -8,7 +8,6 @@
 #include <tt-logger/tt-logger.hpp>
 
 #if defined(TRACY_ENABLE)
-#include <common/TracyColor.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #endif
 
@@ -29,7 +28,7 @@ tracy::TTDeviceMarker make_marker(
     marker.chip_id = record.chip_id;
     marker.core_x = kRealtimeProfilerCore_X;
     marker.core_y = kRealtimeProfilerCore_Y;
-    marker.risc = tracy::RiscType::NONE;
+    marker.risc = tracy::RiscType::BRISC;
     marker.timestamp = timestamp;
     marker.runtime_host_id = record.program_id;
     marker.marker_name = fmt::format("Program_{}", record.program_id);
@@ -138,14 +137,13 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(uint32_t chip_id, uint64_
     start_marker.chip_id = chip_id;
     start_marker.core_x = kRealtimeProfilerCore_X;
     start_marker.core_y = kRealtimeProfilerCore_Y;
-    start_marker.risc = tracy::RiscType::NONE;
+    start_marker.risc = tracy::RiscType::BRISC;
     start_marker.timestamp = device_timestamp;
     start_marker.runtime_host_id = 0;
     start_marker.marker_name = "SYNC_CHECK";
     start_marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
     start_marker.file = "sync_check";
     start_marker.line = 0;
-    start_marker.color = tracy::Color::Orange;
 
     // End marker: 1µs after start (just enough to be visible in Tracy)
     uint64_t end_timestamp = device_timestamp + static_cast<uint64_t>(frequency * 1000.0);

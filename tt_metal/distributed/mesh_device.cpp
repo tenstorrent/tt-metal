@@ -374,13 +374,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     // Initialize D2H socket for real-time profiler streaming
     // This uses the dispatch core which runs dispatch_subordinate kernel
-    if (std::getenv("TT_METAL_DISABLE_REALTIME_PROFILER") == nullptr) {
-        mesh_device->init_realtime_profiler_socket();
-    } else {
-        log_info(tt::LogMetal, "Real-time profiler disabled via TT_METAL_DISABLE_REALTIME_PROFILER");
-    }
+    mesh_device->init_realtime_profiler_socket();
 
-    log_info(tt::LogMetal, "MeshDevice::create: returning mesh device");
     return mesh_device;
 }
 
@@ -475,15 +470,10 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     // Initialize D2H socket for real-time profiler streaming on each submesh
     // (parent mesh_device is not fully initialized, but each submesh is)
-    if (std::getenv("TT_METAL_DISABLE_REALTIME_PROFILER") == nullptr) {
-        for (auto& [device_id, submesh] : result) {
-            submesh->init_realtime_profiler_socket();
-        }
-    } else {
-        log_info(tt::LogMetal, "Real-time profiler disabled via TT_METAL_DISABLE_REALTIME_PROFILER");
+    for (auto& [device_id, submesh] : result) {
+        submesh->init_realtime_profiler_socket();
     }
 
-    log_info(tt::LogMetal, "create_unit_meshes: returning {} submeshes", result.size());
     return result;
 }
 
