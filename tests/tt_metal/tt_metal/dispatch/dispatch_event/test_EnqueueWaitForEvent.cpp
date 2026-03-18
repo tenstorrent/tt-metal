@@ -38,6 +38,53 @@ void FinishAllCqs(vector<std::reference_wrapper<distributed::MeshCommandQueue>>&
         distributed::Finish(cq);
     }
 }
+
+bool RunCrossCqReadWriteWithWaitForEvent(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const distributed::MeshCoordinate& zero_coord,
+    TestBufferConfig config,
+    size_t num_buffers_per_cq,
+    bool vary_buffer_sizes,
+    bool notify_host) {
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
+        mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
+    bool pass = true;
+
+    for (uint buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
+        if (vary_buffer_sizes && buf_idx > 0 && ((buf_idx % 10) == 0)) {
+            config.page_size *= 2;
+            config.num_pages *= 2;
+        }
+
+        vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
+        vector<vector<uint32_t>> srcs;
+        const size_t buf_size = config.num_pages * config.page_size;
+
+        for (uint i = 0; i < cqs.size(); i++) {
+            const uint32_t wr_data_base = (buf_idx * 1000) + (i * 100);
+            auto& cq_write = cqs[i];
+            auto& cq_read = cqs[(i + 1) % cqs.size()];
+            vector<uint32_t> result;
+
+            distributed::ReplicatedBufferConfig global_buffer_config{.size = buf_size};
+            distributed::DeviceLocalBufferConfig device_local_config{
+                .page_size = config.page_size, .buffer_type = config.buftype};
+            buffers.push_back(
+                distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
+            srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
+
+            distributed::WriteShard(cq_write, buffers[i], srcs[i], zero_coord, false);
+            auto event =
+                notify_host ? cq_write.get().enqueue_record_event_to_host() : cq_write.get().enqueue_record_event();
+            cq_read.get().enqueue_wait_for_event(event);
+            distributed::ReadShard(cq_read, result, buffers[i], zero_coord, true);
+            pass &= (srcs[i] == result);
+        }
+    }
+
+    FinishAllCqs(cqs);
+    return pass;
+}
 }  // namespace local_test_functions
 
 namespace basic_tests {
@@ -266,72 +313,45 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
     for (auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
-        vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
-            mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
-        vector<uint32_t> cmds_issued_per_cq = {0, 0};
-
-        size_t num_buffers_per_cq = 50;
-        bool pass = true;
-
         auto start = std::chrono::system_clock::now();
-
-        for (uint buf_idx = 0; buf_idx < num_buffers_per_cq; buf_idx++) {
-            // Increase number of pages and page size every 10 buffers, to change async timing betwen CQs.
-            if (buf_idx > 0 && ((buf_idx % 10) == 0)) {
-                config.page_size *= 2;
-                config.num_pages *= 2;
-            }
-
-            vector<std::shared_ptr<distributed::MeshBuffer>> buffers;
-            vector<vector<uint32_t>> srcs;
-            size_t buf_size = config.num_pages * config.page_size;
-
-            for (uint i = 0; i < cqs.size(); i++) {
-                uint32_t wr_data_base = (buf_idx * 1000) + (i * 100);
-                auto& cq_write = cqs[i];
-                auto& cq_read = cqs[(i + 1) % cqs.size()];
-                vector<uint32_t> result;
-
-                // Create MeshBuffer with proper config
-                distributed::ReplicatedBufferConfig global_buffer_config{.size = buf_size};
-                distributed::DeviceLocalBufferConfig device_local_config{
-                    .page_size = config.page_size, .buffer_type = config.buftype};
-                buffers.push_back(
-                    distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
-                srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
-
-                // Blocking Read after Non-Blocking Write on alternate CQs, events ensure ordering.
-                log_debug(
-                    tt::LogTest,
-                    "buf_idx: {} Doing Write (page_size: {} num_pages: {}) to cq_id: {}",
-                    buf_idx,
-                    config.page_size,
-                    config.num_pages,
-                    cq_write.get().id());
-
-                distributed::WriteShard(cq_write, buffers[i], srcs[i], zero_coord_, false);
-                auto event = cq_write.get().enqueue_record_event();
-                cq_read.get().enqueue_wait_for_event(event);
-                distributed::ReadShard(cq_read, result, buffers[i], zero_coord_, true);
-                bool local_pass = (srcs[i] == result);
-                log_debug(
-                    tt::LogTest,
-                    "Checking buf_idx: {} cq_idx: {} local_pass: {} write_data: {} read_results: {}",
-                    buf_idx,
-                    i,
-                    local_pass,
-                    srcs[i],
-                    result);
-                pass &= local_pass;
-            }
-        }
-
-        local_test_functions::FinishAllCqs(cqs);
+        bool pass = local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
+            mesh_device,
+            zero_coord_,
+            config,
+            /*num_buffers_per_cq=*/50,
+            /*vary_buffer_sizes=*/true,
+            /*notify_host=*/false);
 
         auto end = std::chrono::system_clock::now();
         std::chrono::duration<double> elapsed_seconds = (end - start);
         log_info(tt::LogTest, "Test Finished in {}us", elapsed_seconds.count() * 1000 * 1000);
         EXPECT_TRUE(pass);
+    }
+}
+
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsDeterministic) {
+    for (auto& mesh_device : devices_) {
+        TestBufferConfig config = {.num_pages = 4, .page_size = 256, .buftype = BufferType::DRAM};
+        EXPECT_TRUE(local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
+            mesh_device,
+            zero_coord_,
+            config,
+            /*num_buffers_per_cq=*/8,
+            /*vary_buffer_sizes=*/false,
+            /*notify_host=*/false));
+    }
+}
+
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsHostVisibleControl) {
+    for (auto& mesh_device : devices_) {
+        TestBufferConfig config = {.num_pages = 1, .page_size = 32, .buftype = BufferType::DRAM};
+        EXPECT_TRUE(local_test_functions::RunCrossCqReadWriteWithWaitForEvent(
+            mesh_device,
+            zero_coord_,
+            config,
+            /*num_buffers_per_cq=*/50,
+            /*vary_buffer_sizes=*/true,
+            /*notify_host=*/true));
     }
 }
 

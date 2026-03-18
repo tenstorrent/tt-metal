@@ -1403,6 +1403,24 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestIssueMultipleReadWriteComman
     }
 }
 
+TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestNon32BAlignedPageSizeForDramWrapsAcrossBanksAndTransactions) {
+    constexpr uint32_t page_size = 200;
+    const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        log_info(tt::LogTest, "Running On Device {}", device->id());
+        const uint32_t num_banks = mesh_device->allocator()->get_num_banks(BufferType::DRAM);
+        const uint32_t num_pages = std::max(4 * num_banks, (max_prefetch_command_size / page_size) + num_banks);
+        TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+
+        distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
+        distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
+        vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {a, b};
+        EXPECT_TRUE(
+            local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(mesh_device, cqs, config));
+    }
+}
+
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
     auto mesh_device = this->device_;
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
@@ -1489,6 +1507,22 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteComma
         tt::tt_metal::MetalContext::instance().get_cluster().get_host_channel_size(device->id(), channel);
     uint32_t num_pages = command_queue_size / page_size;
 
+    TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
+
+    distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
+    distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {a, b};
+    EXPECT_TRUE(
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(mesh_device, cqs, config));
+}
+
+TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDramWrapsAcrossBanksAndTransactions) {
+    auto mesh_device = this->device_;
+    auto* device = mesh_device->get_devices()[0];
+    constexpr uint32_t page_size = 200;
+    const uint32_t max_prefetch_command_size = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
+    const uint32_t num_pages = std::max(4 * num_banks, (max_prefetch_command_size / page_size) + num_banks);
     TestBufferConfig config = {.num_pages = num_pages, .page_size = page_size, .buftype = BufferType::DRAM};
 
     distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
