@@ -40,45 +40,44 @@ static uint32_t realtime_profiler_host_fifo_start = 0;
 static uint32_t realtime_profiler_fifo_page_aligned_size = 0;
 static uint32_t realtime_profiler_l1_data_addr = 0;
 
-// Initialize the real-time profiler socket interface
-// Returns: true if initialized successfully, false if config not available
+// Fallback staging buffer when no L1 data buffer is provided via the socket config
+static uint32_t realtime_profiler_l1_staging[realtime_profiler_page_size / sizeof(uint32_t)]
+    __attribute__((aligned(64)));
+
 FORCE_INLINE
 bool realtime_profiler_init() {
     if (realtime_profiler_initialized) {
         return true;
     }
 
-    // Invalidate L1 cache to see host writes
     invalidate_l1_cache();
 
-    // Read config buffer address from mailbox
     uint32_t socket_config_addr = realtime_profiler_mailbox->config_buffer_addr;
     if (socket_config_addr == 0) {
-        // Config not set by host yet
         return false;
     }
 
-    // Create socket interface from config buffer
     realtime_profiler_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(realtime_profiler_socket, realtime_profiler_page_size);
 
-    // Read PCIe-specific config from the config buffer
-    // Layout: 8 words MD + 4 words ack + downstream encoding area
-    // [12] = pcie_xy_enc, [13] = data_addr_hi, [14] = bytes_sent_addr_hi
-    // [15] = l1_data_buffer_address, [16] = l1_data_buffer_size
-    // [4] = data_addr_lo (downstream_fifo_addr)
-    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket_config_addr);
-    realtime_profiler_pcie_xy_enc = socket_config_words[12];
-    realtime_profiler_data_addr_hi = socket_config_words[13];
-    realtime_profiler_l1_data_addr = socket_config_words[15];
-    uint32_t data_addr_lo = socket_config_words[4];  // downstream_fifo_addr = data buffer start
+    realtime_profiler_pcie_xy_enc = realtime_profiler_socket.d2h.pcie_xy_enc;
+    realtime_profiler_data_addr_hi = realtime_profiler_socket.d2h.data_addr_hi;
+    uint32_t data_addr_lo = realtime_profiler_socket.downstream_fifo_addr;
 
-    // Calculate page-aligned FIFO size
+    // L1 data buffer info is stored after the downstream encoding in the config buffer.
+    // Offset: md + ack + enc (all L1-aligned). If the address is non-zero, the host
+    // allocated a dedicated L1 buffer; otherwise fall back to the static staging array.
+    constexpr uint32_t l1_info_offset =
+        sender_socket_md_size_bytes + bytes_acked_size_bytes + downstream_encoding_size_bytes;
+    tt_l1_ptr uint32_t* l1_info = reinterpret_cast<tt_l1_ptr uint32_t*>(socket_config_addr + l1_info_offset);
+    uint32_t l1_buf_addr = l1_info[0];
+    realtime_profiler_l1_data_addr =
+        (l1_buf_addr != 0) ? l1_buf_addr : reinterpret_cast<uint32_t>(realtime_profiler_l1_staging);
+
     realtime_profiler_fifo_page_aligned_size =
         realtime_profiler_socket.downstream_fifo_total_size -
         (realtime_profiler_socket.downstream_fifo_total_size % realtime_profiler_page_size);
 
-    // Track write pointer in host buffer
     realtime_profiler_host_write_ptr = data_addr_lo;
     realtime_profiler_host_fifo_start = data_addr_lo;
 
@@ -91,13 +90,7 @@ bool realtime_profiler_init() {
 // buffer_a: true to read from buffer A, false to read from buffer B
 // Returns: true if data was sent, false otherwise
 __attribute__((noinline)) bool realtime_profiler_push(bool buffer_a) {
-    // Try to init if not already initialized
     if (!realtime_profiler_init()) {
-        return false;
-    }
-
-    // Check if L1 data buffer is available
-    if (realtime_profiler_l1_data_addr == 0) {
         return false;
     }
 
@@ -107,24 +100,17 @@ __attribute__((noinline)) bool realtime_profiler_push(bool buffer_a) {
         DeviceZoneScopedN("B");
     }
 
-    // Read 32 bytes from dispatch core's kernel_start_a or kernel_start_b into socket's L1 data buffer
     uint32_t dispatch_data_addr = buffer_a ? DISPATCH_DATA_ADDR_A : DISPATCH_DATA_ADDR_B;
     uint64_t dispatch_noc_addr = get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, dispatch_data_addr);
     noc_async_read(dispatch_noc_addr, realtime_profiler_l1_data_addr, realtime_profiler_timestamp_size);
     noc_async_read_barrier();
 
-    // Initialize NOC for PCIe writes (using command buffer 0)
     noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
-
-    // Wait for space in the receiver's FIFO
     socket_reserve_pages(realtime_profiler_socket, 1);
 
-    // Build 64-bit PCIe destination address
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(realtime_profiler_data_addr_hi) << 32) |
                               static_cast<uint64_t>(realtime_profiler_host_write_ptr);
 
-    // Write data from socket's L1 data buffer to PCIe-mapped host memory
-    // Sends 64 bytes: kernel_start (16B) + kernel_end (16B) + 32B padding
     noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
         NOC_0,
         realtime_profiler_l1_data_addr,
@@ -133,19 +119,14 @@ __attribute__((noinline)) bool realtime_profiler_push(bool buffer_a) {
         realtime_profiler_page_size,
         1);
 
-    // Update host write pointer with wrap-around
     realtime_profiler_host_write_ptr += realtime_profiler_page_size;
     if (realtime_profiler_host_write_ptr >=
         realtime_profiler_host_fifo_start + realtime_profiler_fifo_page_aligned_size) {
         realtime_profiler_host_write_ptr = realtime_profiler_host_fifo_start;
     }
 
-    // Update socket state
     socket_push_pages(realtime_profiler_socket, 1);
-
-    // Notify host via PCIe
     pcie_socket_notify_receiver(realtime_profiler_socket);
-    // Barrier to ensure PCIe write is visible to host
     noc_async_write_barrier();
 
     return true;
@@ -157,34 +138,22 @@ __attribute__((noinline)) bool realtime_profiler_sync_push(uint32_t time_hi, uin
         return false;
     }
 
-    if (realtime_profiler_l1_data_addr == 0) {
-        return false;
-    }
-
-    // Write sync data directly to L1 data buffer
-    // Layout: time_hi, time_lo, id (echoed host_time), header (sync marker)
     tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(realtime_profiler_l1_data_addr);
     l1_data[0] = time_hi;
     l1_data[1] = time_lo;
     l1_data[2] = host_time;
     l1_data[3] = REALTIME_PROFILER_SYNC_MARKER_ID;
-    // Zero out the rest of the page (kernel_end fields)
     l1_data[4] = 0;
     l1_data[5] = 0;
     l1_data[6] = 0;
     l1_data[7] = 0;
 
-    // Initialize NOC for PCIe writes
     noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
-
-    // Wait for space in the receiver's FIFO
     socket_reserve_pages(realtime_profiler_socket, 1);
 
-    // Build 64-bit PCIe destination address
     uint64_t pcie_dest_addr = (static_cast<uint64_t>(realtime_profiler_data_addr_hi) << 32) |
                               static_cast<uint64_t>(realtime_profiler_host_write_ptr);
 
-    // Write data from L1 buffer to host via PCIe
     noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
         NOC_0,
         realtime_profiler_l1_data_addr,
@@ -193,17 +162,13 @@ __attribute__((noinline)) bool realtime_profiler_sync_push(uint32_t time_hi, uin
         realtime_profiler_page_size,
         1);
 
-    // Update host write pointer with wrap-around
     realtime_profiler_host_write_ptr += realtime_profiler_page_size;
     if (realtime_profiler_host_write_ptr >=
         realtime_profiler_host_fifo_start + realtime_profiler_fifo_page_aligned_size) {
         realtime_profiler_host_write_ptr = realtime_profiler_host_fifo_start;
     }
 
-    // Update socket state
     socket_push_pages(realtime_profiler_socket, 1);
-
-    // Notify host via PCIe
     pcie_socket_notify_receiver(realtime_profiler_socket);
     noc_async_write_barrier();
 

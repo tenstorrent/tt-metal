@@ -181,17 +181,11 @@ void pcie_socket_notify_receiver(const SocketSenderInterface& socket) {
     socket_config->bytes_sent = socket.bytes_sent;
 
     uint32_t local_bytes_sent_addr = socket.config_addr;
-    tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket.config_addr);
-    // 8 word of MD + 4 Words of Ack
-    uint32_t pcie_xy_enc = socket_config_words[12];
-    uint32_t bytes_sent_addr_hi = socket_config_words[14];
-    uint32_t bytes_sent_addr_lo = socket_config_words[3];
-
-    uint64_t bytes_sent_pcie_addr =
-        (static_cast<uint64_t>(bytes_sent_addr_hi) << 32) | (static_cast<uint64_t>(bytes_sent_addr_lo));
+    uint64_t bytes_sent_pcie_addr = (static_cast<uint64_t>(socket.d2h.bytes_sent_addr_hi) << 32) |
+                                    (static_cast<uint64_t>(socket.downstream_bytes_sent_addr));
     noc_write_init_state<0>(NOC_0, NOC_UNICAST_WRITE_VC);
     noc_wwrite_with_state<DM_DEDICATED_NOC, 0, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
-        NOC_0, local_bytes_sent_addr, pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
+        NOC_0, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
 }
 
 void fabric_socket_notify_receiver(

@@ -374,8 +374,13 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     // Initialize D2H socket for real-time profiler streaming
     // This uses the dispatch core which runs dispatch_subordinate kernel
-    mesh_device->init_realtime_profiler_socket();
+    if (std::getenv("TT_METAL_DISABLE_REALTIME_PROFILER") == nullptr) {
+        mesh_device->init_realtime_profiler_socket();
+    } else {
+        log_info(tt::LogMetal, "Real-time profiler disabled via TT_METAL_DISABLE_REALTIME_PROFILER");
+    }
 
+    log_info(tt::LogMetal, "MeshDevice::create: returning mesh device");
     return mesh_device;
 }
 
@@ -470,10 +475,15 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     // Initialize D2H socket for real-time profiler streaming on each submesh
     // (parent mesh_device is not fully initialized, but each submesh is)
-    for (auto& [device_id, submesh] : result) {
-        submesh->init_realtime_profiler_socket();
+    if (std::getenv("TT_METAL_DISABLE_REALTIME_PROFILER") == nullptr) {
+        for (auto& [device_id, submesh] : result) {
+            submesh->init_realtime_profiler_socket();
+        }
+    } else {
+        log_info(tt::LogMetal, "Real-time profiler disabled via TT_METAL_DISABLE_REALTIME_PROFILER");
     }
 
+    log_info(tt::LogMetal, "create_unit_meshes: returning {} submeshes", result.size());
     return result;
 }
 
@@ -1310,17 +1320,15 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
             CoreType::WORKER);
 
         // Wait for response from D2H socket
-        dev_state.socket->wait_for_pages(1);
+        constexpr uint32_t kSyncPageWords = 64 / sizeof(uint32_t);
+        std::vector<uint32_t> sync_data(kSyncPageWords);
+        dev_state.socket->read(sync_data.data(), 1);
         int64_t host_after = TracyGetCpuTime() - host_start_time;
-        uint32_t* data = dev_state.socket->get_read_ptr();
 
         // Extract device timestamp and echoed host timestamp
-        uint64_t device_time = (static_cast<uint64_t>(data[0]) << 32) | data[1];
-        uint32_t echoed_host_time = data[2];
-        uint32_t marker = data[3];
-
-        dev_state.socket->pop_pages(1);
-        dev_state.socket->notify_sender();
+        uint64_t device_time = (static_cast<uint64_t>(sync_data[0]) << 32) | sync_data[1];
+        uint32_t echoed_host_time = sync_data[2];
+        uint32_t marker = sync_data[3];
 
         // Discard first sample - can be very off due to cold PCIe path
         if (i == 0) {
@@ -1479,8 +1487,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
     // Using 64 bytes as minimum PCIe-aligned page size on Blackhole
     constexpr uint32_t kRealtimeProfilerFifoSize = 4096;  // 4KB FIFO for real-time profiler data
     constexpr uint32_t kRealtimeProfilerPageSize = 64;    // 64 bytes per page
-    // L1 data buffer - kernel reads address from config
-    constexpr uint32_t kL1DataBufferSize = kRealtimeProfilerPageSize;
 
     // HAL offsets are the same for all devices (same arch)
     const auto& hal = MetalContext::instance().hal();
@@ -1544,19 +1550,8 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             this->id());
 
         dev_state.socket = std::make_unique<D2HSocket>(
-            mesh_device, sender_core, BufferType::L1, kRealtimeProfilerFifoSize, kL1DataBufferSize);
+            mesh_device, sender_core, kRealtimeProfilerFifoSize, kRealtimeProfilerPageSize);
         dev_state.socket->set_page_size(kRealtimeProfilerPageSize);
-
-        // Populate L1 data buffer with test data
-        uint32_t l1_data_addr = dev_state.socket->get_l1_data_buffer_address();
-        if (l1_data_addr != 0) {
-            std::vector<uint32_t> test_data(kRealtimeProfilerPageSize / sizeof(uint32_t));
-            for (uint32_t i = 0; i < test_data.size(); i++) {
-                test_data[i] = 0xDEAD0000 + i;
-            }
-            tt::tt_metal::detail::WriteToDeviceL1(
-                device, realtime_profiler_core, l1_data_addr, test_data, CoreType::WORKER);
-        }
 
         // Write config buffer address to mailbox
         uint32_t config_buffer_addr = dev_state.socket->get_config_buffer_address();
@@ -1756,12 +1751,10 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
         // Wait for device response — emit host mark immediately so it's as close
         // to the device capture moment as possible.
-        dev_state.socket->wait_for_pages(1);
+        std::vector<uint32_t> sync_page(kRealtimeProfilerPageSize / sizeof(uint32_t));
+        dev_state.socket->read(sync_page.data(), 1);
         TracyMessageL("SYNC_CHECK");
-        uint32_t* data = dev_state.socket->get_read_ptr();
-        uint64_t device_time = (static_cast<uint64_t>(data[0]) << 32) | data[1];
-        dev_state.socket->pop_pages(1);
-        dev_state.socket->notify_sender();
+        uint64_t device_time = (static_cast<uint64_t>(sync_page[0]) << 32) | sync_page[1];
 
         // Exit sync mode
         sync_req[0] = 0;
@@ -1795,6 +1788,7 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
 
         // Helper lambda: process one page from a device socket.
         // Returns true if a page was consumed, false if nothing was available.
+        std::vector<uint32_t> page_buf(kRealtimeProfilerPageSize / sizeof(uint32_t));
         auto process_one_page = [&](RealtimeProfilerDeviceState& dev_state) -> bool {
             uint32_t available = dev_state.socket->pages_available();
             if (available == 0) {
@@ -1802,8 +1796,8 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             }
 
             ZoneScopedN("ProcessPage");
-            dev_state.socket->wait_for_pages(1);
-            uint32_t* read_ptr = dev_state.socket->get_read_ptr();
+            dev_state.socket->read(page_buf.data(), 1);
+            uint32_t* read_ptr = page_buf.data();
 
             // Check for sync response packets only when a sync is pending
             uint32_t marker = read_ptr[3];
@@ -1813,8 +1807,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 realtime_profiler_tracy_handler_->PushSyncCheckMarker(
                     dev_state.chip_id, device_time, dev_state.sync_frequency);
-                dev_state.socket->pop_pages(1);
-                dev_state.socket->notify_sender();
                 pages_received++;
                 dev_state.sync_response_received.store(true);
                 return true;
@@ -1842,8 +1834,6 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 tt::InvokeProgramRealtimeProfilerCallbacks(record);
             }
 
-            dev_state.socket->pop_pages(1);
-            dev_state.socket->notify_sender();
             pages_received++;
             return true;
         };

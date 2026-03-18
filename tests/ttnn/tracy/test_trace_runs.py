@@ -54,6 +54,7 @@ def test_with_ops(device):
     ids=["100-5", "5-600"],
 )
 def test_with_ops_single_core(device, capture_count, replay_count):
+    print("DEBUG: test body started", flush=True)
     torch.manual_seed(0)
     m = 1024
     k = 1024
@@ -63,24 +64,36 @@ def test_with_ops_single_core(device, capture_count, replay_count):
 
     a = ttnn.from_torch(torch_a)
     b = ttnn.from_torch(torch_b)
+    print("DEBUG: from_torch done", flush=True)
 
     a = ttnn.to_device(a, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    print("DEBUG: to_device(a) done", flush=True)
     b = ttnn.to_device(b, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    print("DEBUG: to_device(b) done", flush=True)
 
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
+    print("DEBUG: to_layout(a) done", flush=True)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
+    print("DEBUG: to_layout(b) done", flush=True)
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    print("DEBUG: first matmul done", flush=True)
     # Ensure all binaries are compiled/loaded before starting trace capture.
     ttnn.synchronize_device(device)
+    print("DEBUG: synchronize_device done", flush=True)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
+    print("DEBUG: begin_trace_capture done", flush=True)
     for i in range(capture_count):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    print("DEBUG: trace matmuls done", flush=True)
     ttnn.end_trace_capture(device, tid, cq_id=0)
+    print("DEBUG: end_trace_capture done", flush=True)
 
     for i in range(replay_count):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    print("DEBUG: execute_trace done", flush=True)
     ttnn.release_trace(device, tid)
+    print("DEBUG: release_trace done", flush=True)
 
 
 @pytest.mark.parametrize(
