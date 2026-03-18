@@ -20,6 +20,16 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
+ttnn::Tensor reshape_shape_vector_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int32_t>& shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const ttnn::TileReshapeMapMode reshape_tile_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::reshape(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
+}
+
 void bind_reshape_view_operation(nb::module_& mod) {
     const auto* doc = R"doc(
             Note: for a 0 cost view, the following conditions must be met:
@@ -83,14 +93,7 @@ void bind_reshape_view_operation(nb::module_& mod) {
 
         // Overload 3: shape vector (SmallVector<int32_t>)
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                const ttnn::SmallVector<int32_t>& shape,
-                const std::optional<MemoryConfig>& memory_config,
-                const std::optional<PadValue>& pad_value,
-                const ttnn::TileReshapeMapMode reshape_tile_mode,
-                const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return ttnn::reshape(input_tensor, shape, memory_config, pad_value, reshape_tile_mode, sub_core_grids);
-            },
+            &reshape_shape_vector_wrapper,
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),

@@ -19,6 +19,31 @@
 
 namespace ttnn::operations::data_movement::detail {
 
+namespace {
+
+ttnn::Tensor slice_small_vector_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int>& slice_start,
+    const ttnn::SmallVector<int>& slice_end,
+    const std::optional<ttnn::SmallVector<int>>& step,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value,
+    const std::optional<CoreRangeSet>&& sub_core_grids) {
+    const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+    return ttnn::slice(
+        input_tensor,
+        slice_start,
+        slice_end,
+        step_value,
+        memory_config,
+        optional_output_tensor,
+        pad_value,
+        sub_core_grids);
+}
+
+}  // namespace
+
 void bind_slice(nb::module_& mod) {
     const auto* doc = R"doc(
         Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
@@ -89,25 +114,7 @@ void bind_slice(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none()),
         // Overload 3: SmallVector<int> version (int32_t template parameter)
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                const ttnn::SmallVector<int>& slice_start,
-                const ttnn::SmallVector<int>& slice_end,
-                const std::optional<ttnn::SmallVector<int>>& step,
-                const std::optional<ttnn::MemoryConfig>& memory_config,
-                const std::optional<Tensor>& optional_output_tensor,
-                const std::optional<float>& pad_value,
-                const std::optional<CoreRangeSet>&& sub_core_grids) {
-                const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
-                return ttnn::slice(
-                    input_tensor,
-                    slice_start,
-                    slice_end,
-                    step_value,
-                    memory_config,
-                    optional_output_tensor,
-                    pad_value,
-                    sub_core_grids);
-            },
+            &slice_small_vector_wrapper,
             nb::arg("input_tensor"),
             nb::arg("slice_start"),
             nb::arg("slice_end"),

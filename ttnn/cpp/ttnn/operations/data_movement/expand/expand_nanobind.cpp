@@ -16,6 +16,17 @@
 
 namespace ttnn::operations::data_movement {
 
+namespace {
+
+ttnn::Tensor expand_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int32_t>& output_shape,
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    return ttnn::expand(input_tensor, output_shape, memory_config);
+}
+
+}  // namespace
+
 void bind_expand(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -39,11 +50,7 @@ void bind_expand(nb::module_& mod) {
         mod,
         doc,
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                const ttnn::SmallVector<int32_t>& output_shape,
-                const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return ttnn::expand(input_tensor, output_shape, memory_config);
-            },
+            &expand_wrapper,
             nb::arg("input_tensor"),
             nb::arg("output_shape"),
             nb::kw_only(),
