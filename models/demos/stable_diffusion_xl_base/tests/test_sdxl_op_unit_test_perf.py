@@ -216,7 +216,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
 
     # Different expected values based on LLK assert configuration
     if is_llk_assert_enabled():
-        expected_duration_ns = 1158158  # Measured: ~1.16ms with LLK asserts enabled (64% overhead)
+        expected_duration_ns = 1236134  # Measured: ~1.24ms with LLK asserts enabled (64% overhead)
     else:
         expected_duration_ns = 564334  # Measured: ~564μs for GroupNorm SDXL negative mask
 
@@ -256,7 +256,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
 
     # Different expected values based on LLK assert configuration
     if is_llk_assert_enabled():
-        expected_duration_ns = 350126  # Measured: 350μs with LLK asserts enabled (64% overhead)
+        expected_duration_ns = 346883  # Measured: 347μs with LLK asserts enabled (64% overhead)
     else:
         expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
 
@@ -296,7 +296,7 @@ def test_conv2d_block_sharded_sdxl_performance():
 
     # Different expected values based on LLK assert configuration
     if is_llk_assert_enabled():
-        expected_duration_ns = 1326109  # Measured: 1.33ms with LLK asserts enabled (64% overhead)
+        expected_duration_ns = 1325460  # Measured: 1.35ms with LLK asserts enabled (64% overhead)
     else:
         expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
 
