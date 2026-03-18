@@ -115,6 +115,8 @@ void kernel_main() {
 
                     // Copy in0 block into CB, as the default kernel
                     uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
+                    // uint32_t help1 = in0_tensor_row_start_tile_id;
+                    // uint32_t help2 = 0;
                     for (uint32_t h = 0; h < in0_block_h; ++h) {
                         uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                         for (uint32_t w = 0; w < in0_block_w; ++w) {
@@ -140,6 +142,7 @@ void kernel_main() {
 
                             l1_write_addr_in0 += in0_single_tile_size_bytes;
                             in0_tensor_tile_id += in0_tensor_stride_w;
+                            // help2 = in0_tensor_tile_id;
                         }
                         in0_tensor_row_start_tile_id += in0_tensor_stride_h;
                     }
@@ -147,10 +150,16 @@ void kernel_main() {
 
                     // Barrier! make sure the reads are done
                     noc_async_read_barrier();
+                    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                    // DPRINT_DATA1({ DPRINT << " in0 reader - from DRAM " << in0_block_num_tiles << " tiles: (" <<
+                    // help1 << " - " << help2 << ")"  << TileSlice(0, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true,
+                    // false) << ENDL(); });
+
                     // DPRINT << "finished reading " << in0_block_num_tiles << " tiles from DRAM to core" << ENDL();
 
                     // Common for sharded and interleaved paths
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
+                    // DPRINT << "PUSHED BACK " << in0_block_num_tiles << " tiles to CB0" << ENDL();
                 }
             }
             in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;

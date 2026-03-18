@@ -93,11 +93,13 @@ void kernel_main() {
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 
     constexpr uint32_t max_batch_size = (in0_batch > in1_batch) ? in0_batch : in1_batch;
-    // DPRINT_MATH(DPRINT << "max_batch_size: " << max_batch_size << ENDL());
-    // DPRINT_MATH(DPRINT << "num_blocks_w_dim: " << num_blocks_w_dim << ENDL());
-    // DPRINT_MATH(DPRINT << "num_blocks_h_dim: " << num_blocks_h_dim << ENDL());
-    // DPRINT_MATH(DPRINT << "num_blocks_inner_dim: " << num_blocks_inner_dim << ENDL());
-    // DPRINT_MATH(DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL());
+    DPRINT_MATH(DPRINT << "max_batch_size: " << max_batch_size << ENDL());
+    DPRINT_MATH(DPRINT << "num_blocks_w_dim: " << num_blocks_w_dim << ENDL());
+    DPRINT_MATH(DPRINT << "num_blocks_h_dim: " << num_blocks_h_dim << ENDL());
+    DPRINT_MATH(DPRINT << "num_blocks_inner_dim: " << num_blocks_inner_dim << ENDL());
+    DPRINT_MATH(DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL());
+    DPRINT_MATH(DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL());
+    DPRINT_MATH(DPRINT << "in1_block_w: " << in1_block_w << ENDL());
 
     for (uint32_t b = 0; b < max_batch_size; b++) {
         // DPRINT_MATH(DPRINT << "starting computation of batch: " << b << ENDL());
@@ -124,14 +126,27 @@ void kernel_main() {
                     bool last_out = block == (num_blocks_inner_dim - 1);
 
                     if (in0_batch == 1 && in1_batch > 1) {
-                        if (b == 0) {
-                            cb_wait_front(in0_cb_id, in0_block_num_tiles);
-                            // DPRINT_MATH(DPRINT << "get in0 data for batch: " << b << ENDL());
+                        if (b == 0 and block == 0) {
+                            // DPRINT_MATH(DPRINT << "WAITING FOR " << in0_block_num_tiles << " tiles in CB0" <<
+                            // ENDL()); cb_wait_front(in0_cb_id, in0_block_num_tiles); DPRINT_MATH(DPRINT << "RECEIVED "
+                            // << in0_block_num_tiles << " tiles in CB0" << ENDL()); DPRINT_MATH(DPRINT << "get in0 data
+                            // for batch: " << b << ENDL());
                         }
                     } else {
                         cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     }  // TODO JAKSA - clean this up
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                    if (b == 0 && block == 0) {
+                        SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                        DPRINT_UNPACK({
+                            DPRINT << " compute, batch " << b << " data in in0 " << TileSlice(0, 0, sr, true, false)
+                                   << ENDL();
+                        });
+                        DPRINT_UNPACK({
+                            DPRINT << " compute, batch " << b << " data in in1 " << TileSlice(1, 0, sr, true, false)
+                                   << ENDL();
+                        });
+                    }
                     // DPRINT_MATH(DPRINT << "get in1 data for batch: " << b << ENDL());
 
                     int in0_index_subblock_offset = 0;
@@ -157,11 +172,33 @@ void kernel_main() {
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                             // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
+                            // uint32_t in0_index_help1 = in0_index_subblock_offset;
+                            // uint32_t in0_index_help2 = 0;
+                            // uint32_t in1_index_help1 = in1_index_subblock_offset;
+                            // uint32_t in1_index_help2 = 0;
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
+                                // if (in0_batch == 1 && in1_batch > 1) {
+                                //     uint32_t logical_row = h;
+                                //     uint32_t logical_col = (logical_col_start + w) % logical_width;
+                                //     uint32_t in0_index = logical_row * logical_width + logical_col;
+                                // }
+                                if (b == 0) {
+                                    SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                                    DPRINT_UNPACK({
+                                        DPRINT << "batch: " << b << ", block: " << block
+                                               << " - starting matmul of tiles: in0 - index " << in0_index
+                                               << " values: " << TileSlice(0, in0_index, sr, true, false) << ENDL();
+                                    });
+                                    DPRINT_UNPACK({
+                                        DPRINT << "batch: " << b << ", block: " << block
+                                               << " - starting matmul of tiles: in1 - index " << in1_index
+                                               << " values: " << TileSlice(1, in1_index, sr, true, false) << ENDL();
+                                    });
+                                }
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -172,10 +209,20 @@ void kernel_main() {
                                     out_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
+                                // if (!(in0_batch == 1 && in1_batch > 1)) {
+                                //     in0_index++;               // stride right by 1
+                                // }
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
+                                // in0_index_help2 = in0_index;
+                                // in1_index_help2 = in1_index;
                             }
+                            // if (b == 0) {
+                            //     DPRINT_MATH({ DPRINT << " finished matmul with data: in0: " << in0_index_help1 << "-"
+                            //     << in0_index_help2 << ", in1: " << in1_index_help1 << "-" << in1_index_help2 <<
+                            //     ENDL(); });
+                            // }
 
                             if (last_out) {
                                 tile_regs_commit();
