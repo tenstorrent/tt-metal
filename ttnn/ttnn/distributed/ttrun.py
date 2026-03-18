@@ -34,7 +34,7 @@ ORIGINAL_CWD = Path.cwd().resolve()
 class RankfileSyntax(Enum):
     """MPI rankfile syntax variants for different mpirun versions."""
 
-    MAP_BY_RANKFILE_FILE = "map_by_rankfile_file"  # --map-by rankfile:FILE=<path> (OpenMPI 5.x / PRRTE)
+    MAP_BY_RANKFILE_FILE = "map_by_rankfile_file"  # --map-by rankfile:file=<path> (OpenMPI 5.x / PRRTE)
     RANKFILE = "rankfile"  # --rankfile <path> (older OpenMPI)
     MCA_RMAPS_RANKFILE_PATH = "mca_rmaps_rankfile_path"  # -mca rmaps_rankfile_path <path> (fallback)
 
@@ -59,35 +59,48 @@ def get_mpi_launcher() -> str:
     return mpi_launcher
 
 
-def build_rankfile_args(syntax: RankfileSyntax, rankfile: Path) -> List[str]:
+def build_rankfile_args(syntax: RankfileSyntax, rankfile: Path, cwd: Optional[Path] = None) -> List[str]:
     """Build MPI command-line arguments for rankfile based on syntax variant.
 
-    This is a pure function that constructs the appropriate MPI arguments for a given
-    rankfile syntax variant. It does not perform any I/O or subprocess calls.
+    Uses a path relative to cwd when the rankfile is under cwd; otherwise uses absolute path.
 
     Args:
         syntax: The rankfile syntax variant to use
         rankfile: Path to the rankfile
+        cwd: Working directory for the MPI command (default: ORIGINAL_CWD).
+            When rankfile is under cwd, uses relative path; otherwise uses absolute.
 
     Returns:
-        List of MPI command-line arguments (e.g., ["--map-by", "rankfile:FILE=/path/to/rankfile"])
-
-    Examples:
-        >>> build_rankfile_args(RankfileSyntax.MAP_BY_RANKFILE_FILE, Path("/tmp/rankfile"))
-        ['--map-by', 'rankfile:FILE=/tmp/rankfile']
-        >>> build_rankfile_args(RankfileSyntax.RANKFILE, Path("/tmp/rankfile"))
-        ['--rankfile', '/tmp/rankfile']
+        List of MPI command-line arguments (e.g., ["--map-by", "rankfile:file=generated/ttrun/rankfile"])
     """
-    rankfile_str = str(rankfile.resolve())
+    cwd_resolved = (cwd or ORIGINAL_CWD).resolve()
+    rankfile_resolved = rankfile.resolve()
+    try:
+        rankfile_str = str(rankfile_resolved.relative_to(cwd_resolved))
+    except ValueError:
+        rankfile_str = str(rankfile_resolved)
 
     if syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE:
-        return ["--map-by", f"rankfile:FILE={rankfile_str}"]
+        return ["--map-by", f"rankfile:file={rankfile_str}"]
     elif syntax == RankfileSyntax.RANKFILE:
         return ["--rankfile", rankfile_str]
     elif syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH:
         return ["--mca", "rmaps_rankfile_path", rankfile_str]
     else:
         raise ValueError(f"Unknown rankfile syntax: {syntax}")
+
+
+def _parse_rankfile_syntax_option(value: str) -> Optional[RankfileSyntax]:
+    """Convert --rankfile-syntax CLI value to RankfileSyntax enum."""
+    if value == "auto":
+        return None
+    if value == "rankfile":
+        return RankfileSyntax.RANKFILE
+    if value == "map-by":
+        return RankfileSyntax.MAP_BY_RANKFILE_FILE
+    if value == "mca":
+        return RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
+    return None
 
 
 def get_mpi_version(mpi_launcher: str, subprocess_run=subprocess.run) -> Optional[tuple[int, int]]:
@@ -118,9 +131,8 @@ def get_mpi_version(mpi_launcher: str, subprocess_run=subprocess.run) -> Optiona
 def detect_rankfile_syntax(mpi_launcher: str, subprocess_run=subprocess.run) -> RankfileSyntax:
     """Detect which rankfile syntax variant the MPI launcher supports.
 
-    Uses MPI version when available: OpenMPI 5.x uses --map-by rankfile:FILE=,
-    older versions use --rankfile. Falls back to --help parsing if version
-    cannot be determined.
+    Uses MPI version when available: OpenMPI 5.x (mpirun-ulfm) uses --map-by rankfile:file=,
+    older versions use --rankfile. Falls back to --help parsing if version cannot be determined.
 
     Args:
         mpi_launcher: Path or name of MPI launcher (e.g., "mpirun", "mpirun-ulfm")
@@ -163,6 +175,7 @@ def inject_rankfile_mpi_args(
     detect_fn=detect_rankfile_syntax,
     add_host_slots: bool = False,
     force_rankfile_syntax: Optional[RankfileSyntax] = None,
+    cwd: Optional[Path] = None,
 ) -> List[str]:
     """Inject rankfile MPI arguments into base MPI args.
 
@@ -174,14 +187,16 @@ def inject_rankfile_mpi_args(
         base_mpi_args: Existing MPI arguments to prepend to
         mpi_launcher: MPI launcher executable name/path (for detection)
         detect_fn: Function to detect rankfile syntax (injectable for testing)
-        add_host_slots: If True, prepend --host host1:N,host2:N and -np total
-            derived from the rankfile (for Phase 2 real cluster). Skip if user
-            already provided --host in base_mpi_args.
+        add_host_slots: If True, prepend --host host1:N,host2:N derived from the
+            rankfile (for Phase 2 real cluster). Skip if user already provided
+            --host in base_mpi_args.
         force_rankfile_syntax: If set, use this syntax instead of auto-detection
             (e.g. RankfileSyntax.RANKFILE for suggested re-run commands).
+        cwd: Working directory for the MPI command (default: ORIGINAL_CWD).
+            The rankfile path in the command will be relative to this.
 
     Returns:
-        New list with rankfile args prepended: [--host, -np?, rankfile_args..., ...base_mpi_args]
+        New list with rankfile args prepended: [--host?, rankfile_args..., ...base_mpi_args]
     """
     result: List[str] = []
 
@@ -191,10 +206,10 @@ def inject_rankfile_mpi_args(
         if not has_host:
             host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
             if host_str and total_ranks > 0:
-                result.extend(["--host", host_str, "-np", str(total_ranks)])
+                result.extend(["--host", host_str])
 
     syntax = force_rankfile_syntax if force_rankfile_syntax is not None else detect_fn(mpi_launcher)
-    rankfile_args = build_rankfile_args(syntax, rankfile)
+    rankfile_args = build_rankfile_args(syntax, rankfile, cwd=cwd)
     result.extend(rankfile_args)
     result.extend(base_mpi_args or [])
     return result
@@ -244,7 +259,7 @@ def get_generate_rank_bindings_output_paths(output_dir: Path) -> tuple[Path, Pat
     This is a pure function that returns the expected output paths.
 
     Args:
-        output_dir: Base output directory (typically tt-run-generated/)
+        output_dir: Base output directory (typically generated/ttrun)
 
     Returns:
         Tuple of (rank_bindings.yaml path, rankfile path)
@@ -449,7 +464,7 @@ def build_generate_rank_bindings_mpi_cmd(
             cmd.extend(["-x", f"TT_METAL_MOCK_CLUSTER_DESC_PATH={desc_path.resolve()}"])
             cmd.append(str(executable.resolve()))
             cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
-            # Note: generate_rank_bindings doesn't accept --output-dir, it hardcodes output to "tt-run-generated/"
+            cmd.extend(["--output-dir", str(output_dir.resolve())])
 
         # Return early for mock mode (already added executable and args per rank)
         return cmd
@@ -462,7 +477,7 @@ def build_generate_rank_bindings_mpi_cmd(
         cmd.extend(["-np", str(np)])
         cmd.append(str(executable.resolve()))
         cmd.extend(["--mesh-graph-descriptor", str(mgd_path.resolve())])
-        # Note: generate_rank_bindings doesn't accept --output-dir, it hardcodes output to "tt-run-generated/"
+        cmd.extend(["--output-dir", str(output_dir.resolve())])
     else:
         raise ValueError("Either hosts or mock_rank_to_desc must be provided")
 
@@ -500,7 +515,7 @@ def run_phase1_generate_rank_bindings(
     Args:
         mgd_path: Path to mesh graph descriptor
         hosts: List of hostnames (for real cluster) or None (for mock)
-        output_dir: Output directory (typically tt-run-generated/)
+        output_dir: Output directory (typically generated/ttrun)
         subprocess_run: Subprocess run function (injectable for testing)
         sleep_secs: Seconds to sleep after Phase 1 for file sync (default 5)
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
@@ -519,8 +534,8 @@ def run_phase1_generate_rank_bindings(
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
 
-    # generate_rank_bindings writes to tt-run-generated/ relative to cwd
-    exit_code = run_generate_rank_bindings(cmd, cwd=output_dir.parent, subprocess_run=subprocess_run)
+    # generate_rank_bindings writes to output_dir (passed via --output-dir)
+    exit_code = run_generate_rank_bindings(cmd, cwd=ORIGINAL_CWD, subprocess_run=subprocess_run)
 
     if exit_code != 0:
         raise RuntimeError(f"generate_rank_bindings failed with exit code {exit_code}. " f"Command: {' '.join(cmd)}")
@@ -1015,6 +1030,7 @@ def legacy_flow(
     bare: bool,
     tcp_interface: Optional[str],
     rankfile: Optional[Path] = None,
+    rankfile_syntax: Optional[RankfileSyntax] = None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1067,7 +1083,7 @@ def legacy_flow(
 
         For multi-host setups, you typically need BOTH:
             tt-run --rank-binding mesh_config.yaml \\
-                   --mpi-args "--host nodeA,nodeB --map-by rankfile:FILE=/etc/mpirun/rankfile" \\
+                   --mpi-args "--host nodeA,nodeB --map-by rankfile:file=generated/ttrun/rankfile" \\
                    ./my_app
 
         The rank-binding configures what each MPI rank "sees" in terms of TT-Metal devices,
@@ -1316,7 +1332,7 @@ def legacy_flow(
     # Check if user already specified rankfile in mpi_args to avoid conflicts
     if rankfile:
         # Check for existing rankfile-related args in user's mpi_args
-        rankfile_keywords = ["--rankfile", "--map-by", "rankfile:FILE=", "rmaps_rankfile_path"]
+        rankfile_keywords = ["--rankfile", "--map-by", "rankfile:file=", "rmaps_rankfile_path"]
         has_existing_rankfile = False
         if mpi_args:
             mpi_args_str = " ".join(mpi_args)
@@ -1335,19 +1351,19 @@ def legacy_flow(
             mpi_launcher = get_mpi_launcher()
             rankfile_args: List[str] = []
 
-            # Add --host host1:N,host2:N and -np for Phase 2 real cluster (skip when mock)
+            # Add --host host1:N,host2:N for Phase 2 real cluster (skip when mock)
             if not mock_cluster_rank_binding:
                 has_host = "--host" in effective_mpi_args
                 if not has_host:
                     host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
                     if host_str and total_ranks > 0:
-                        rankfile_args.extend(["--host", host_str, "-np", str(total_ranks)])
+                        rankfile_args.extend(["--host", host_str])
                         if verbose:
-                            logger.info(f"{TT_RUN_PREFIX} Injected --host {host_str} -np {total_ranks} from rankfile")
+                            logger.info(f"{TT_RUN_PREFIX} Injected --host {host_str} from rankfile")
 
-            # Detect rankfile syntax and add rankfile args
-            rankfile_syntax = detect_rankfile_syntax(mpi_launcher)
-            rankfile_args.extend(build_rankfile_args(rankfile_syntax, rankfile))
+            # Detect or use forced rankfile syntax and add rankfile args (use relpath from cwd)
+            syntax = rankfile_syntax or detect_rankfile_syntax(mpi_launcher)
+            rankfile_args.extend(build_rankfile_args(syntax, rankfile, cwd=ORIGINAL_CWD))
             effective_mpi_args = rankfile_args + effective_mpi_args
             if verbose:
                 logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
@@ -1390,7 +1406,7 @@ def legacy_flow(
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
     try:
-        result = subprocess.run(mpi_cmd)
+        result = subprocess.run(mpi_cmd, cwd=ORIGINAL_CWD)
         sys.exit(result.returncode)
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
@@ -1412,6 +1428,7 @@ def new_mode_flow(
     skip_executable_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
+    rankfile_syntax: Optional[RankfileSyntax] = None,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor.
 
@@ -1470,9 +1487,9 @@ def new_mode_flow(
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Mock cluster: {len(mock_rank_to_desc)} ranks")
 
-    # Output directory: tt-run-generated/ in /tmp (generate_rank_bindings writes relative to cwd)
-    output_dir = Path("/tmp") / "tt-run-generated"
-    output_dir.mkdir(exist_ok=True)
+    # Output directory: generated/ttrun (create if it doesn't exist)
+    output_dir = ORIGINAL_CWD / "generated" / "ttrun"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {output_dir}")
@@ -1545,13 +1562,23 @@ def new_mode_flow(
     phase2_parts = ["tt-run", "--rank-binding", _path_for_display(rank_bindings_path)]
     if phase2_mock_binding_path:
         phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
+    if rankfile_syntax is not None:
+        syntax_name = (
+            "rankfile"
+            if rankfile_syntax == RankfileSyntax.RANKFILE
+            else "map-by"
+            if rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE
+            else "mca"
+        )
+        phase2_parts.extend(["--rankfile-syntax", syntax_name])
     mpi_launcher = get_mpi_launcher()
-    # Use version-based rankfile syntax (--map-by rankfile:FILE= for OpenMPI 5+, --rankfile for older)
+    # Use version-based rankfile syntax (--map-by rankfile:file= for OpenMPI 5+, --rankfile for older)
     rankfile_args = inject_rankfile_mpi_args(
         rankfile_path,
         mpi_args or [],
         mpi_launcher,
         add_host_slots=False,  # Do not add --host; rankfile alone specifies placement
+        force_rankfile_syntax=rankfile_syntax,
     )
     # Ensure Phase 2 re-run command includes --oversubscribe when applicable
     resolved_rankfile = rankfile_path.resolve()
@@ -1574,6 +1601,7 @@ def new_mode_flow(
         bare=bare,
         tcp_interface=tcp_interface,
         rankfile=rankfile_path,  # Pass generated rankfile
+        rankfile_syntax=rankfile_syntax,
     )
 
 
@@ -1639,6 +1667,13 @@ def new_mode_flow(
     default=None,
     help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
 )
+@click.option(
+    "--rankfile-syntax",
+    type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
+    default="auto",
+    help="Rankfile MPI syntax. 'auto' (default) detects from MPI version. Use 'rankfile' (--rankfile) if "
+    "--map-by rankfile:file= fails with 'unrecognized qualifier' on mpirun-ulfm.",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -1653,6 +1688,7 @@ def main(
     skip_executable_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
+    rankfile_syntax: str,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1704,6 +1740,7 @@ def main(
             skip_executable_check,
             bare,
             tcp_interface,
+            rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
         )
         return
 
@@ -1729,6 +1766,7 @@ def main(
             skip_executable_check,
             bare,
             tcp_interface,
+            rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
         )
         return
 

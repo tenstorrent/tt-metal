@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -435,13 +436,20 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         binding.slot = host_slot_counters[hostname]++;
         binding.env_overrides = {};
 
-        // Build TT_VISIBLE_DEVICES from ChipIds
+        // Build TT_VISIBLE_DEVICES from ChipIds - only include MMIO devices, not remote devices.
+        // For each chip, get its associated MMIO device; remote chips share an MMIO device.
+        const auto& cluster = MetalContext::instance().get_cluster();
+        std::set<tt::ChipId> mmio_device_ids;
+        for (tt::ChipId chip_id : chip_ids) {
+            tt::ChipId mmio_id = cluster.get_associated_mmio_device(chip_id);
+            mmio_device_ids.insert(mmio_id);
+        }
         std::string visible_devices;
-        for (size_t j = 0; j < chip_ids.size(); ++j) {
-            if (j > 0) {
+        for (auto it = mmio_device_ids.begin(); it != mmio_device_ids.end(); ++it) {
+            if (it != mmio_device_ids.begin()) {
                 visible_devices += ",";
             }
-            visible_devices += std::to_string(chip_ids[j]);
+            visible_devices += std::to_string(*it);
         }
         if (!visible_devices.empty()) {
             binding.env_overrides["TT_VISIBLE_DEVICES"] = visible_devices;
@@ -655,6 +663,7 @@ void write_rankfile(const std::vector<RankBindingConfig>& rank_bindings, const s
 struct ProgramArgs {
     std::string mesh_graph_descriptor_path;
     std::optional<std::string> physical_grouping_descriptor_path;
+    std::optional<std::string> output_dir;
 };
 
 /**
@@ -675,6 +684,9 @@ ProgramArgs parse_arguments(int argc, char** argv) {
         cxxopts::value<std::string>())(
         "p,physical-grouping-descriptor",
         "Path to Physical Grouping Descriptor file (.textproto) - OPTIONAL",
+        cxxopts::value<std::string>())(
+        "o,output-dir",
+        "Output directory for rank_bindings.yaml, rankfile, etc. (default: generated/ttrun)",
         cxxopts::value<std::string>())("h,help", "Print usage information");
 
     try {
@@ -694,6 +706,9 @@ ProgramArgs parse_arguments(int argc, char** argv) {
 
         if (result.contains("physical-grouping-descriptor")) {
             args.physical_grouping_descriptor_path = result["physical-grouping-descriptor"].as<std::string>();
+        }
+        if (result.contains("output-dir")) {
+            args.output_dir = result["output-dir"].as<std::string>();
         }
 
         return args;
@@ -774,8 +789,8 @@ int main(int argc, char** argv) {
             // Stage: Write YAML file
             log_info(tt::LogFabric, "Stage: Writing rank bindings to YAML...");
 
-            // Create tt-run-generated directory if it doesn't exist
-            std::filesystem::path output_dir = "tt-run-generated";
+            std::filesystem::path output_dir =
+                args.output_dir.has_value() ? std::filesystem::path(*args.output_dir) : "generated/ttrun";
             std::filesystem::create_directories(output_dir);
 
             std::filesystem::path output_file = output_dir / "rank_bindings.yaml";

@@ -234,7 +234,8 @@ class TestPhase2Helpers:
         assert str(executable.resolve()) in cmd
         assert "--mesh-graph-descriptor" in cmd
         assert str(mgd_path.resolve()) in cmd
-        # Note: generate_rank_bindings doesn't accept --output-dir, it hardcodes output to "tt-run-generated/"
+        assert "--output-dir" in cmd
+        assert str(output_dir.resolve()) in cmd
 
     def test_build_generate_rank_bindings_mpi_cmd_mock(self, temp_dir):
         """Test build_generate_rank_bindings_mpi_cmd with mock cluster."""
@@ -274,6 +275,9 @@ class TestPhase2Helpers:
         # Rank 1 env var should be after the : separator
         rank1_env_idx = next(i for i, arg in enumerate(cmd[colon_idx:]) if arg == "-x")
         assert str(mock_desc1.resolve()) in cmd[colon_idx + rank1_env_idx + 1]
+        # Check --output-dir is passed
+        assert "--output-dir" in cmd
+        assert str(output_dir.resolve()) in cmd
 
     def test_build_generate_rank_bindings_mpi_cmd_no_hosts_no_mock(self, temp_dir):
         """Test build_generate_rank_bindings_mpi_cmd raises ValueError if neither hosts nor mock provided."""
@@ -462,38 +466,47 @@ class TestRankfileInjection:
         assert launcher_basename in ["mpirun", "mpirun-ulfm"]
 
     def test_build_rankfile_args_map_by(self, temp_dir):
-        """Test build_rankfile_args with MAP_BY_RANKFILE_FILE syntax."""
+        """Test build_rankfile_args with MAP_BY_RANKFILE_FILE syntax (relpath from cwd)."""
         rankfile = temp_dir / "rankfile"
         rankfile.touch()
 
-        args = build_rankfile_args(RankfileSyntax.MAP_BY_RANKFILE_FILE, rankfile)
+        args = build_rankfile_args(RankfileSyntax.MAP_BY_RANKFILE_FILE, rankfile, cwd=temp_dir)
 
         assert len(args) == 2
         assert args[0] == "--map-by"
-        assert args[1] == f"rankfile:FILE={rankfile.resolve()}"
+        assert args[1] == "rankfile:file=rankfile"
 
     def test_build_rankfile_args_rankfile(self, temp_dir):
-        """Test build_rankfile_args with RANKFILE syntax."""
+        """Test build_rankfile_args with RANKFILE syntax (relpath from cwd)."""
         rankfile = temp_dir / "rankfile"
         rankfile.touch()
 
-        args = build_rankfile_args(RankfileSyntax.RANKFILE, rankfile)
+        args = build_rankfile_args(RankfileSyntax.RANKFILE, rankfile, cwd=temp_dir)
 
         assert len(args) == 2
         assert args[0] == "--rankfile"
-        assert args[1] == str(rankfile.resolve())
+        assert args[1] == "rankfile"
 
     def test_build_rankfile_args_mca(self, temp_dir):
-        """Test build_rankfile_args with MCA_RMAPS_RANKFILE_PATH syntax."""
+        """Test build_rankfile_args with MCA_RMAPS_RANKFILE_PATH syntax (relpath from cwd)."""
         rankfile = temp_dir / "rankfile"
         rankfile.touch()
 
-        args = build_rankfile_args(RankfileSyntax.MCA_RMAPS_RANKFILE_PATH, rankfile)
+        args = build_rankfile_args(RankfileSyntax.MCA_RMAPS_RANKFILE_PATH, rankfile, cwd=temp_dir)
 
         assert len(args) == 3
         assert args[0] == "--mca"
         assert args[1] == "rmaps_rankfile_path"
-        assert args[2] == str(rankfile.resolve())
+        assert args[2] == "rankfile"
+
+    def test_build_rankfile_args_uses_absolute_when_not_under_cwd(self, temp_dir):
+        """Test build_rankfile_args uses absolute path when rankfile is not under cwd."""
+        rankfile = Path("/other/path/rankfile")
+
+        args = build_rankfile_args(RankfileSyntax.RANKFILE, rankfile, cwd=temp_dir)
+
+        assert args[0] == "--rankfile"
+        assert args[1] == "/other/path/rankfile"
 
     def test_build_rankfile_args_invalid_syntax(self, temp_dir):
         """Test build_rankfile_args raises ValueError for invalid syntax."""
@@ -507,10 +520,10 @@ class TestRankfileInjection:
         fake_syntax = FakeSyntax()
 
         with pytest.raises(ValueError, match="Unknown rankfile syntax"):
-            build_rankfile_args(fake_syntax, rankfile)  # type: ignore
+            build_rankfile_args(fake_syntax, rankfile, cwd=temp_dir)  # type: ignore
 
     def test_inject_rankfile_mpi_args(self, temp_dir):
-        """Test inject_rankfile_mpi_args prepends rankfile args."""
+        """Test inject_rankfile_mpi_args prepends rankfile args (relpath from cwd)."""
         rankfile = temp_dir / "rankfile"
         rankfile.touch()
         base_args = ["--host", "node1,node2"]
@@ -519,11 +532,11 @@ class TestRankfileInjection:
         def mock_detect(launcher, subprocess_run=None):
             return RankfileSyntax.MAP_BY_RANKFILE_FILE
 
-        result = inject_rankfile_mpi_args(rankfile, base_args, "mpirun", detect_fn=mock_detect)
+        result = inject_rankfile_mpi_args(rankfile, base_args, "mpirun", detect_fn=mock_detect, cwd=temp_dir)
 
-        # Should prepend rankfile args
+        # Should prepend rankfile args with relative path
         assert result[0] == "--map-by"
-        assert result[1] == f"rankfile:FILE={rankfile.resolve()}"
+        assert result[1] == "rankfile:file=rankfile"
         assert result[2:] == base_args
 
     def test_legacy_flow_rankfile_conflict(self, runner, sample_rank_binding_yaml, temp_dir):
@@ -564,7 +577,7 @@ class TestRankfileInjection:
         # Test the logic directly - simulate what happens in legacy_flow
         mpi_launcher = get_mpi_launcher()
         rankfile_syntax = detect_rankfile_syntax(mpi_launcher)
-        rankfile_args = build_rankfile_args(rankfile_syntax, rankfile)
+        rankfile_args = build_rankfile_args(rankfile_syntax, rankfile, cwd=temp_dir)
         effective_mpi_args = rankfile_args + []
 
         # Check if --oversubscribe would be added (simulate the logic from legacy_flow)
@@ -589,20 +602,16 @@ class TestDetectRankfileSyntax:
     """Test rankfile syntax detection."""
 
     def test_detect_rankfile_syntax_map_by(self, temp_dir):
-        """Test detection of --map-by rankfile:FILE= syntax."""
+        """Test detection of --map-by rankfile:file= for OpenMPI 5.x (mpirun-ulfm)."""
         from unittest.mock import MagicMock
 
-        # Mock subprocess.run to return help text with --map-by rankfile:FILE=
-        mock_result = MagicMock()
-        mock_result.stdout = """
-OpenMPI/PRRTE help text
---map-by <policy>[:<options>]
-  Map processes according to the specified policy.
-  rankfile:FILE=<path>  Use rankfile for mapping
-"""
-        mock_result.stderr = ""
-
         def mock_run(cmd, **kwargs):
+            mock_result = MagicMock()
+            mock_result.stderr = ""
+            if len(cmd) > 1 and cmd[1] == "--version":
+                mock_result.stdout = "Open MPI) 5.0.0"
+            else:
+                mock_result.stdout = "OpenMPI help"
             return mock_result
 
         syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
