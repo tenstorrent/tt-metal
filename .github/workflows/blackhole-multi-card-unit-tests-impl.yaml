@@ -132,20 +132,20 @@ jobs:
           ## Blackhole DRAM init selector sequence
 
           - `none`
-          - `dram_core_reset_assert`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_fw_reset_deassert`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_fw_reset_deassert,dram_watcher_init`
-          - `dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read`
+          - `dram_bank_to_noc_tables`
+          - `dram_bank_to_noc_tables,dram_core_info`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init`
+          - `dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read`
 
           EOF
       - name: ${{ matrix.test-group.name }} tests
@@ -153,20 +153,20 @@ jobs:
         run: |
           selectors=(
             "none"
-            "dram_core_reset_assert"
-            "dram_core_reset_assert,dram_bank_to_noc_tables"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_fw_reset_deassert"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_fw_reset_deassert,dram_watcher_init"
-            "dram_core_reset_assert,dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read"
+            "dram_bank_to_noc_tables"
+            "dram_bank_to_noc_tables,dram_core_info"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init"
+            "dram_bank_to_noc_tables,dram_core_info,dram_fw_reset_assert,dram_fw_binary,dram_launch_msg,dram_go_msg,dram_fw_launch_rdptr,dram_fw_go_msg_index,dram_reset_pc,dram_cq_launch_rdptr,dram_core_reset_assert,dram_fw_reset_deassert,dram_watcher_init,dram_watcher_mailbox_read"
           )
 
           mapfile -t test_commands <<'COMMANDS_EOF'
