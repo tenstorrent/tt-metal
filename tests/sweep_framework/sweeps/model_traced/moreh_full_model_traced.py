@@ -9,6 +9,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -47,6 +48,9 @@ def mesh_device_fixture():
     Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
     """
     mesh_shape = get_mesh_shape()
+
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
 
     if mesh_shape:
         # Create mesh device based on env var

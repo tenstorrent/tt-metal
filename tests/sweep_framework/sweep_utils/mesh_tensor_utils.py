@@ -294,6 +294,54 @@ def get_mesh_shape() -> Optional[Tuple[int, int]]:
     return None
 
 
+def infer_mesh_shape_from_params(params: Optional[dict]) -> Optional[Tuple[int, int]]:
+    """Scan sweep suite parameters for the largest mesh_device_shape.
+
+    When MESH_DEVICE_SHAPE env var is not set (e.g. in CI), this allows
+    mesh_device_fixture() to auto-detect the mesh shape required by the
+    traced configurations.
+
+    Args:
+        params: The model_traced_params dict returned by
+                MasterConfigLoader.get_suite_parameters().  Its structure
+                is ``{comma_joined_keys: [tuple_per_config, ...]}``.
+
+    Returns:
+        Tuple of (rows, cols) for the largest mesh found, or None.
+    """
+    if not params:
+        return None
+
+    import re
+
+    def _parse(raw):
+        if isinstance(raw, (list, tuple)):
+            return tuple(int(x) for x in raw)
+        if isinstance(raw, str):
+            nums = re.findall(r"\d+", raw)
+            if len(nums) >= 2:
+                return tuple(int(x) for x in nums[:2])
+        return None
+
+    best = None
+    for key, values in params.items():
+        fields = key.split(",")
+        tp_indices = [i for i, f in enumerate(fields) if "tensor_placement" in f]
+        if not tp_indices:
+            continue
+        for val_tuple in values:
+            for idx in tp_indices:
+                if idx >= len(val_tuple):
+                    continue
+                tp = val_tuple[idx]
+                if not isinstance(tp, dict):
+                    continue
+                parsed = _parse(tp.get("mesh_device_shape"))
+                if parsed and (best is None or parsed[0] * parsed[1] > best[0] * best[1]):
+                    best = parsed
+    return best
+
+
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
     """
     Convert a TTNN tensor (mesh or single device) to torch tensor.

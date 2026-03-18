@@ -17,6 +17,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    infer_mesh_shape_from_params,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -51,6 +52,8 @@ def mesh_device_fixture():
     Using explicit DispatchCoreConfig to handle sharded memory configs.
     """
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)

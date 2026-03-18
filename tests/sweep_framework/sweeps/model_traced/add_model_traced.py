@@ -16,6 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -161,12 +162,14 @@ def _build_mesh_tensor(per_device_shape, device, dtype, layout, memory_config, t
 def mesh_device_fixture():
     """
     Override default device fixture.
-    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    Creates mesh device if MESH_DEVICE_SHAPE is set or if the traced configs
+    require a mesh, otherwise single device.
     """
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
 
     if mesh_shape:
-        # Create mesh device based on env var
         try:
             device = create_mesh_device(mesh_shape)
             device_name = ttnn.get_arch_name()
@@ -179,7 +182,6 @@ def mesh_device_fixture():
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        # Single device (default)
         device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)

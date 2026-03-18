@@ -21,6 +21,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
+    infer_mesh_shape_from_params,
 )
 
 TIMEOUT = 300
@@ -83,6 +84,8 @@ def _parse_shard_dims_from_placement(tensor_placement):
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
+    if not mesh_shape:
+        mesh_shape = infer_mesh_shape_from_params(model_traced_params)
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
