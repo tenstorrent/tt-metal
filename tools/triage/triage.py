@@ -54,9 +54,7 @@ from pathlib import Path
 import re
 
 
-def _triage_requirements_path() -> str:
-    return str(Path(__file__).resolve().parent / "requirements.txt")
-
+_triage_requirements_path = str(Path(__file__).resolve().parent / "requirements.txt")
 
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
@@ -65,8 +63,8 @@ except ImportError as e:
     RST = "\033[0m" if utils.should_use_color() else ""
     GREEN = "\033[32m" if utils.should_use_color() else ""  # For instructions
     pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
-    print(f"Module '{e}' not found. Please install requirements by running:")
-    print(f"  {GREEN}{pip_cmd} install -r {_triage_requirements_path()}{RST}")
+    print(f"Module '{e.name}' not found. Please install requirements by running:")
+    print(f"  {GREEN}{pip_cmd} install -r {_triage_requirements_path}{RST}")
     exit(1)
 
 # Import necessary libraries
@@ -686,13 +684,13 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     except Exception:
         skip_check = False
 
-    req_path = _triage_requirements_path()
-
     try:
-        with open(req_path, "r", encoding="utf-8") as f:
+        with open(_triage_requirements_path, "r", encoding="utf-8") as f:
             req_lines = f.read().splitlines()
     except FileNotFoundError:
-        utils.WARN(f"requirements.txt not found. Skipping debugger version check. Expected at: {req_path}")
+        utils.WARN(
+            f"requirements.txt not found. Skipping debugger version check. Expected at: {_triage_requirements_path}"
+        )
         return
     except Exception as e:
         utils.WARN(f"Failed to read requirements.txt: {e}. Skipping debugger version check.")
@@ -713,7 +711,9 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
             continue
 
     if tt_exalens_req is None:
-        utils.WARN(f"tt-exalens not found in requirements.txt ({req_path}). Skipping debugger version check.")
+        utils.WARN(
+            f"tt-exalens not found in requirements.txt ({_triage_requirements_path}). Skipping debugger version check."
+        )
         return
 
     # Get installed version
@@ -723,7 +723,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         utils.DEBUG(f"Installed tt-exalens version: {installed_version_str}")
     except importlib_metadata.PackageNotFoundError:
         pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
-        install_cmd = f"{pip_cmd} install -r {req_path}"
+        install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
         utils.WARN(f"Required debugger component is not installed. Please run: {install_cmd}")
         console.print(f"Module 'tt-exalens' not found. Please install tt-exalens by running:")
         console.print(f"  [command]{install_cmd}[/]")
@@ -732,7 +732,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     # Check if installed version satisfies the requirement
     if installed_version not in tt_exalens_req.specifier:
         pip_cmd = "uv pip" if shutil.which("uv") is not None else "pip"
-        install_cmd = f"{pip_cmd} install -r {req_path}"
+        install_cmd = f"{pip_cmd} install -r {_triage_requirements_path}"
         message = f"Debugger version mismatch.\n  Installed: {installed_version_str}\n  Required:  {tt_exalens_req}"
         if skip_check:
             utils.WARN(message)
