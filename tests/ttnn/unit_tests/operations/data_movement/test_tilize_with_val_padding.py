@@ -640,8 +640,8 @@ def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum_input_interleaved_r
     device, hw, kernel, stride, pad
 ):
     """
-    Tests avg_pool2d -> to_layout(TILE) -> multiply
-    This isolates the to_layout(TILE) step on the avg_pool2d output.
+    Tests avg_pool2d followed by to_layout(TILE) on the avg_pool2d output.
+    This isolates and validates the to_layout(TILE) step on the avg_pool2d result against a PyTorch avg_pool2d reference.
 
     The key for this test is that the output from avg_pool2d, which is the input to to_layout, is a row-major interleaved tensor with a larger padded_shape width than logical_shape width.
     This test aims to test such a scenario where there is a mismatch between the padded_shape width and the logical_shape width for interleaved row major tensors.
