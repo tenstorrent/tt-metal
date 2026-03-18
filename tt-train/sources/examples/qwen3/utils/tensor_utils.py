@@ -111,12 +111,8 @@ def make_dist_replicated_zeros(shape):
 
 def make_dist_sharded(data_np, shard_dim_tensor, shard_dim_mesh):
     device = get_device()
-    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-        device, shard_dim_tensor, shard_dim_mesh
-    )
-    return ttml.autograd.Tensor.from_numpy(
-        data_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-    )
+    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, shard_dim_tensor, shard_dim_mesh)
+    return ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
 
 
 def make_dist_sharded_weight(shape, shard_dim_tensor, shard_dim_mesh, std):
@@ -125,9 +121,7 @@ def make_dist_sharded_weight(shape, shard_dim_tensor, shard_dim_mesh, std):
 
 
 def make_dist_sharded_zeros(shape, shard_dim_tensor, shard_dim_mesh):
-    return make_dist_sharded(
-        np.zeros(shape, dtype=np.float32), shard_dim_tensor, shard_dim_mesh
-    )
+    return make_dist_sharded(np.zeros(shape, dtype=np.float32), shard_dim_tensor, shard_dim_mesh)
 
 
 def make_sharded_weight(shape, shard_dim_tensor, shard_dim_mesh=None, std=0.02):
@@ -138,12 +132,8 @@ def make_sharded_weight(shape, shard_dim_tensor, shard_dim_mesh=None, std=0.02):
         return make_empty_on_device(per_device)
     device = get_device()
     data = (torch.randn(shape) * std).float().numpy()
-    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-        device, shard_dim_tensor, shard_dim_mesh
-    )
-    return ttml.autograd.Tensor.from_numpy(
-        data, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-    )
+    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, shard_dim_tensor, shard_dim_mesh)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
 
 
 def make_sharded_zeros(shape, shard_dim_tensor, shard_dim_mesh=None):
@@ -154,12 +144,8 @@ def make_sharded_zeros(shape, shard_dim_tensor, shard_dim_mesh=None):
         return make_empty_on_device(per_device)
     device = get_device()
     data = np.zeros(shape, dtype=np.float32)
-    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-        device, shard_dim_tensor, shard_dim_mesh
-    )
-    return ttml.autograd.Tensor.from_numpy(
-        data, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-    )
+    mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, shard_dim_tensor, shard_dim_mesh)
+    return ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
 
 
 def make_replicated_ones(shape):
@@ -181,9 +167,7 @@ def make_replicated_weight(shape, std=0.02):
     return make_dist_replicated(data)
 
 
-def gather_mesh_to_cpu(
-    ttnn_val, device, distributed, dp_size, tp_size, per_device_batch
-):
+def gather_mesh_to_cpu(ttnn_val, device, distributed, dp_size, tp_size, per_device_batch):
     """Bring a multi-device tensor to CPU, selecting one copy per sample.
 
     After concat along dim 0, layout is blocks of per_device_batch rows per
@@ -222,9 +206,7 @@ def create_input_tensor_dp(token_ids_np, device):
 def create_causal_mask(seq_len):
     """Create causal attention mask as a ttml Tensor (numpy path)."""
     mask = np.tril(np.ones((1, 1, seq_len, seq_len), dtype=np.float32))
-    return ttml.autograd.Tensor.from_numpy(
-        mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )
+    return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
 def create_input_tensor(x_np, dp_mapper=None):

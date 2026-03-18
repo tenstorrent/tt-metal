@@ -78,9 +78,7 @@ def pytorch_reference(logits_np, targets_np):
     targets_t = torch.from_numpy(targets_np.astype(np.int64))
 
     B, _, S, V = logits_t.shape
-    loss = F.cross_entropy(
-        logits_t.reshape(B * S, V), targets_t.reshape(-1), reduction="mean"
-    )
+    loss = F.cross_entropy(logits_t.reshape(B * S, V), targets_t.reshape(-1), reduction="mean")
     loss.backward()
     return loss.item(), logits_t.grad.numpy()
 
@@ -107,9 +105,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
     # ---- random test data ----
     np.random.seed(42)
     logits_np = np.random.randn(global_batch, 1, seq_len, vocab_size).astype(np.float32)
-    targets_np = np.random.randint(0, vocab_size, size=(global_batch, seq_len)).astype(
-        np.uint32
-    )
+    targets_np = np.random.randint(0, vocab_size, size=(global_batch, seq_len)).astype(np.uint32)
 
     ref_loss, ref_grad = pytorch_reference(logits_np, targets_np)
     print(f"\nPyTorch reference  CE={ref_loss:.6f}")
@@ -155,12 +151,8 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
 
     def test_ce_full():
         ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
-        logits = ttml.autograd.Tensor.from_numpy(
-            logits_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-        )
-        tgt = ttml.autograd.Tensor.from_numpy(
-            targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        )
+        logits = ttml.autograd.Tensor.from_numpy(logits_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
+        tgt = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
         loss = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.MEAN)
         val = extract_loss(loss, device, distributed)
         ctx.reset_graph()
@@ -229,9 +221,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
                 device,
                 0,
             )
-            grad_raw = (
-                ttnn.to_torch(logits.get_grad(), mesh_composer=composer).float().numpy()
-            )
+            grad_raw = ttnn.to_torch(logits.get_grad(), mesh_composer=composer).float().numpy()
 
             # Reconstruct full gradient from per-device shards
             # grad slabs may be tile-padded wider than raw_local_V
@@ -270,10 +260,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
                 passed += 1
             else:
                 failed += 1
-            print(
-                f"  dist CE backward: {tag}  max_diff={max_diff:.6f}  "
-                f"mean_diff={mean_diff:.6f}"
-            )
+            print(f"  dist CE backward: {tag}  max_diff={max_diff:.6f}  " f"mean_diff={mean_diff:.6f}")
 
     # ==================================================================
     # Summary
@@ -287,9 +274,7 @@ def run_test(mesh_shape, batch_size=2, seq_len=32, vocab_size=64):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Test distributed cross-entropy loss with different DP and TP sizes"
-    )
+    parser = argparse.ArgumentParser(description="Test distributed cross-entropy loss with different DP and TP sizes")
     parser.add_argument(
         "--mesh_shape",
         type=int,

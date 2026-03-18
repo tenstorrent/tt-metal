@@ -80,9 +80,7 @@ def _sample_logits_mask(orig_vocab, padded_vocab, device):
 # =====================================================================
 
 
-def _build_padded_input(
-    current_tokens, batch_size, max_seq_len, step, kv_cache, past_kv
-):
+def _build_padded_input(current_tokens, batch_size, max_seq_len, step, kv_cache, past_kv):
     """Build padded token tensor and prediction positions for one step.
 
     Returns (padded [B,1,1,S], pred_positions list[int], seq_len_for_mask).
@@ -232,9 +230,7 @@ def generate_hf(hf_model, tokenizer, all_prompt_tokens, max_tokens, temperature=
                 all_generated[b].append(next_tokens[b].item())
                 all_logits[b].append(next_logits[b].clone())
 
-            attention_mask = torch.cat(
-                [attention_mask, torch.ones(batch_size, 1, dtype=torch.long)], dim=1
-            )
+            attention_mask = torch.cat([attention_mask, torch.ones(batch_size, 1, dtype=torch.long)], dim=1)
 
     for b in range(batch_size):
         text = tokenizer.decode(all_generated[b])
@@ -273,9 +269,7 @@ def generate_ttml(
     We all_gather them to full vocab before sampling or collection — this
     is simpler and avoids the distributed argmax+Gumbel approximation.
     """
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(
-        ttml.autograd.GradMode.DISABLED
-    )
+    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
 
     if isinstance(all_prompt_tokens[0], int):
@@ -306,9 +300,7 @@ def generate_ttml(
             current_tokens, batch_size, max_seq_len, step, kv_cache, past_kv
         )
 
-        attn_mask = (
-            past_kv.get_attn_mask(prefill_len) if past_kv is not None else causal_mask
-        )
+        attn_mask = past_kv.get_attn_mask(prefill_len) if past_kv is not None else causal_mask
 
         if is_dp:
             input_tensor = create_input_tensor_dp(padded.numpy(), device)
@@ -318,9 +310,7 @@ def generate_ttml(
             input_ids_np = padded.numpy()
 
         # --- forward ---
-        logits = model(
-            input_tensor, attn_mask, past_key_values=past_kv, input_ids_np=input_ids_np
-        )
+        logits = model(input_tensor, attn_mask, past_key_values=past_kv, input_ids_np=input_ids_np)
 
         if track_memory and step == 0:
             MemoryUsageTracker.snapshot("GENERATION_STEP_0")
@@ -424,20 +414,13 @@ def compare_logits(all_hf_logits, all_ttml_logits, vocab_size, tokenizer):
         avg_pcc = step_pcc / batch_size
         total_pcc += step_pcc
         total_matches += step_matches
-        match_str = (
-            f"{step_matches}/{batch_size}"
-            if batch_size > 1
-            else ("Y" if step_matches else "N")
-        )
+        match_str = f"{step_matches}/{batch_size}" if batch_size > 1 else ("Y" if step_matches else "N")
         print(f"{i:>5} {avg_pcc:>10.6f} {step_maxdiff:>10.4f} " f"{match_str:>8}")
 
     total = num_steps * batch_size
     print("-" * (40 + len(batch_hdr)))
     print(f"Average PCC:      {total_pcc / total:.6f}")
-    print(
-        f"Top-1 match rate: {total_matches}/{total} "
-        f"({100 * total_matches / total:.1f}%)"
-    )
+    print(f"Top-1 match rate: {total_matches}/{total} " f"({100 * total_matches / total:.1f}%)")
 
 
 # =====================================================================
@@ -476,9 +459,7 @@ def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Qwen3: generation comparison (HF vs ttml)"
-    )
+    parser = argparse.ArgumentParser(description="Qwen3: generation comparison (HF vs ttml)")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="Once upon a time")
     parser.add_argument("--max_tokens", type=int, default=32)
@@ -522,8 +503,7 @@ def main():
         "--no_logits",
         action="store_true",
         default=False,
-        help="On-device sampling without collecting logits (faster, "
-        "disables HF comparison).",
+        help="On-device sampling without collecting logits (faster, " "disables HF comparison).",
     )
     args = parser.parse_args()
 
@@ -535,26 +515,19 @@ def main():
 
     print(f"Loading HuggingFace model: {args.model_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    hf_model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
-    )
+    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     hf_model.eval()
 
     # 2. Build prompts (total = batch_size * dp_size)
     total_prompts = args.batch_size * dp_size
     if total_prompts > 1:
         width = len(str(total_prompts))
-        prompts = [
-            f"{str(i+1).zfill(width)}. {args.prompt}" for i in range(total_prompts)
-        ]
+        prompts = [f"{str(i+1).zfill(width)}. {args.prompt}" for i in range(total_prompts)]
     else:
         prompts = [args.prompt]
 
     all_prompt_tokens = [tokenizer.encode(p) for p in prompts]
-    print(
-        f"Batch size: {args.batch_size}/device, "
-        f"{total_prompts} total (DP={dp_size})"
-    )
+    print(f"Batch size: {args.batch_size}/device, " f"{total_prompts} total (DP={dp_size})")
     for i, p in enumerate(prompts):
         print(f"Prompt[{i}]: {p!r}  ->  {len(all_prompt_tokens[i])} tokens")
 
@@ -635,20 +608,9 @@ def main():
         total_matches += m
         total_tokens += len(hf_tok)
         prefix = f"[{i+1}] " if num_samples > 1 else ""
-        print(
-            f"{prefix}HF  : "
-            f"{tokenizer.decode(all_prompt_tokens[i])}"
-            f"{tokenizer.decode(hf_tok)}"
-        )
-        print(
-            f"{prefix}TTML: "
-            f"{tokenizer.decode(all_prompt_tokens[i])}"
-            f"{tokenizer.decode(ttml_tok)}"
-        )
-    print(
-        f"\nToken match: {total_matches}/{total_tokens} "
-        f"({100 * total_matches / total_tokens:.1f}%)"
-    )
+        print(f"{prefix}HF  : " f"{tokenizer.decode(all_prompt_tokens[i])}" f"{tokenizer.decode(hf_tok)}")
+        print(f"{prefix}TTML: " f"{tokenizer.decode(all_prompt_tokens[i])}" f"{tokenizer.decode(ttml_tok)}")
+    print(f"\nToken match: {total_matches}/{total_tokens} " f"({100 * total_matches / total_tokens:.1f}%)")
 
     # 8. Cleanup
     if args.track_memory:

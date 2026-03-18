@@ -36,7 +36,6 @@ from utils.param_utils import (  # noqa: F401 — re-exported for callers
 
 from utils.memory import memory_snapshot
 
-
 # =====================================================================
 # Configuration
 # =====================================================================
@@ -123,9 +122,7 @@ class ConcatLastDim(ttml.autograd.Function):
         a_last = a_shape[-1]
         # grad_output is a raw tt_metal::Tensor (from Tensor.get_grad()),
         # NOT an autograd Tensor, so use it directly with ttnn ops.
-        grad_a = ttnn.slice(
-            grad_output, [0, 0, 0, 0], [a_shape[0], a_shape[1], a_shape[2], a_last]
-        )
+        grad_a = ttnn.slice(grad_output, [0, 0, 0, 0], [a_shape[0], a_shape[1], a_shape[2], a_last])
         grad_b = ttnn.slice(
             grad_output,
             [0, 0, 0, a_last],
@@ -253,27 +250,16 @@ class Qwen3Attention(AbstractModuleBase):
         q_out = self.num_heads * self.head_dim
         kv_out = self.num_kv_heads * self.head_dim
 
-        self.q_proj = LinearProjection(
-            self.hidden_size, q_out, has_bias=config.attention_bias
-        )
-        self.k_proj = LinearProjection(
-            self.hidden_size, kv_out, has_bias=config.attention_bias
-        )
-        self.v_proj = LinearProjection(
-            self.hidden_size, kv_out, has_bias=config.attention_bias
-        )
-        self.o_proj = LinearProjection(
-            q_out, self.hidden_size, has_bias=config.attention_bias
-        )
+        self.q_proj = LinearProjection(self.hidden_size, q_out, has_bias=config.attention_bias)
+        self.k_proj = LinearProjection(self.hidden_size, kv_out, has_bias=config.attention_bias)
+        self.v_proj = LinearProjection(self.hidden_size, kv_out, has_bias=config.attention_bias)
+        self.o_proj = LinearProjection(q_out, self.hidden_size, has_bias=config.attention_bias)
 
         self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
         rope_scaling = ttml.ops.rope.RopeScalingParams()
-        if (
-            config.rope_scaling_factor != 0.0
-            and config.rope_original_context_length != 0
-        ):
+        if config.rope_scaling_factor != 0.0 and config.rope_original_context_length != 0:
             rope_scaling.original_context_length = config.rope_original_context_length
             rope_scaling.scaling_factor = config.rope_scaling_factor
             rope_scaling.high_freq_factor = config.rope_high_freq_factor
@@ -313,18 +299,14 @@ class Qwen3Attention(AbstractModuleBase):
             query_heads,
             key_heads,
             value_heads,
-        ) = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kvs, self.num_heads, self.num_kv_heads
-        )
+        ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_heads, self.num_kv_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
 
         # KV cache: append new K/V and use full history for attention
         if past_key_values is not None:
-            key_heads, value_heads = past_key_values.update(
-                self.layer_idx, key_heads, value_heads
-            )
+            key_heads, value_heads = past_key_values.update(self.layer_idx, key_heads, value_heads)
 
         q_seq = query_heads.shape()[2]
         k_seq = key_heads.shape()[2]
@@ -370,9 +352,7 @@ class Qwen3DecoderLayer(AbstractModuleBase):
         self.self_attn = Qwen3Attention(config, layer_idx)
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen3RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -410,22 +390,14 @@ class Qwen3Model(AbstractModuleBase):
         self.track_memory = track_memory
         self.use_checkpoint = use_checkpoint
         vocab_size_tiled = ((config.vocab_size + 31) // 32) * 32
-        self.embed_tokens = Parameter(
-            make_weight((1, 1, vocab_size_tiled, config.hidden_size))
-        )
-        self.layers = ModuleList(
-            [Qwen3DecoderLayer(config, i) for i in range(config.num_hidden_layers)]
-        )
+        self.embed_tokens = Parameter(make_weight((1, 1, vocab_size_tiled, config.hidden_size)))
+        self.layers = ModuleList([Qwen3DecoderLayer(config, i) for i in range(config.num_hidden_layers)])
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None):
-        hidden_states = ttml.ops.embedding.embedding(
-            input_ids, self.embed_tokens.tensor
-        )
+        hidden_states = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
         if self.track_memory:
-            hidden_states = memory_snapshot(
-                hidden_states, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD"
-            )
+            hidden_states = memory_snapshot(hidden_states, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
         position_offset = 0
         if past_key_values is not None:
             position_offset = past_key_values.get_seq_length()
@@ -446,9 +418,7 @@ class Qwen3Model(AbstractModuleBase):
                     position_offset=position_offset,
                 )
             if self.track_memory and (i + 1) % self.track_memory == 0:
-                hidden_states = memory_snapshot(
-                    hidden_states, f"AFTER_LAYER_{i}_FWD", f"AFTER_LAYER_{i}_BWD"
-                )
+                hidden_states = memory_snapshot(hidden_states, f"AFTER_LAYER_{i}_FWD", f"AFTER_LAYER_{i}_BWD")
         hidden_states = self.norm(hidden_states)
         return hidden_states
 
@@ -471,24 +441,18 @@ class Qwen3ForCausalLM(AbstractModuleBase):
         self.config = config
         self.tie_word_embeddings = tie_word_embeddings
         self.track_memory = track_memory
-        self.model = Qwen3Model(
-            config, track_memory=track_memory, use_checkpoint=use_checkpoint
-        )
+        self.model = Qwen3Model(config, track_memory=track_memory, use_checkpoint=use_checkpoint)
 
         if tie_word_embeddings:
             self.lm_head_weight = None
         else:
             vocab_size_tiled = ((config.vocab_size + 31) // 32) * 32
-            self.lm_head_weight = Parameter(
-                make_weight((1, 1, vocab_size_tiled, config.hidden_size))
-            )
+            self.lm_head_weight = Parameter(make_weight((1, 1, vocab_size_tiled, config.hidden_size)))
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None, **kwargs):
         hidden_states = self.model(input_ids, attention_mask, past_key_values)
         if self.track_memory:
-            hidden_states = memory_snapshot(
-                hidden_states, "AFTER_NORM_FWD", "AFTER_NORM_BWD"
-            )
+            hidden_states = memory_snapshot(hidden_states, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
         if self.tie_word_embeddings:
             logits = linear(hidden_states, self.model.embed_tokens.tensor, None)
         else:
@@ -522,9 +486,7 @@ def load_weights_from_hf(
     any_key = next(iter(ttml_params))
     root_prefix = any_key.split("/")[0]
 
-    mapping, transforms = build_weight_mapping_single(
-        config, root_prefix, tie_word_embeddings
-    )
+    mapping, transforms = build_weight_mapping_single(config, root_prefix, tie_word_embeddings)
 
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
 
@@ -575,8 +537,7 @@ def load_weights_from_hf(
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [
-            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name))
-            for hf_name, ttml_name in items
+            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name)) for hf_name, ttml_name in items
         ]
 
         for hf_name, ttml_name, future in tqdm(
@@ -588,9 +549,7 @@ def load_weights_from_hf(
             new_tensor = future.result()
             if new_tensor is None:
                 if ttml_name not in ttml_shapes:
-                    print(
-                        f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'"
-                    )
+                    print(f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'")
                 skipped.append(hf_name)
                 continue
             ttml_params[ttml_name].assign(new_tensor)

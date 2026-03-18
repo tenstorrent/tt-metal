@@ -84,9 +84,7 @@ def create_ttml_model(
     return model, config, tie, shard_dim, mode_str
 
 
-def load_hf_weights(
-    model, hf_state_dict, config, *, tie=False, tp=False, shard_dim=None
-):
+def load_hf_weights(model, hf_state_dict, config, *, tie=False, tp=False, shard_dim=None):
     """Load a HuggingFace state-dict into a ttml model, printing timing."""
     print("\nLoading HF weights into ttml model...")
     t0 = time.time()

@@ -131,9 +131,7 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
 
         hf_norm_t = hf_flat.norm()
         ttml_norm_t = ttml_flat.norm()
-        cos_sim = (
-            torch.dot(hf_flat, ttml_flat) / (hf_norm_t * ttml_norm_t + 1e-8)
-        ).item()
+        cos_sim = (torch.dot(hf_flat, ttml_flat) / (hf_norm_t * ttml_norm_t + 1e-8)).item()
         cos_dist = 1.0 - cos_sim
         hf_norm_val = hf_norm_t.item()
         ttml_norm_val = ttml_norm_t.item()
@@ -235,16 +233,13 @@ def _compare_gradients(hf_grads, ttml_grads, mapping, inv_transforms):
 
     name_w = max(max(len(r["name"]) for r in rows), len("HF Parameter"))
     header = COL_SEP.join(
-        [f"{'HF Parameter':>{name_w}}"]
-        + [f"{h:^{_col_w(k)}}" for k, h in zip(col_keys, col_headers)]
+        [f"{'HF Parameter':>{name_w}}"] + [f"{h:^{_col_w(k)}}" for k, h in zip(col_keys, col_headers)]
     )
     print(header)
     print("-" * len(header))
 
     for r in rows:
-        print(
-            COL_SEP.join([f"{r['name']:>{name_w}}"] + [_fmt(r[k], k) for k in col_keys])
-        )
+        print(COL_SEP.join([f"{r['name']:>{name_w}}"] + [_fmt(r[k], k) for k in col_keys]))
 
     print("-" * len(header))
     if count > 0:
@@ -294,18 +289,13 @@ def run_backward_comparison(
     parts = []
     if dp_size > 1:
         parts.append(f"DP={dp_size}")
-    tp_size_disp = (
-        device.shape[shard_dim] if (distributed and shard_dim is not None) else 1
-    )
+    tp_size_disp = device.shape[shard_dim] if (distributed and shard_dim is not None) else 1
     if tp_size_disp > 1:
         parts.append(f"TP={tp_size_disp}")
     mode_str = "distributed " + ", ".join(parts) if parts else "single-device"
     loss_type = "distributed cross-entropy" if sharded_loss else "cross-entropy"
     effective_batch = len(sequences)
-    print(
-        f"Backward pass: gradient comparison ({mode_str}, "
-        f"batch_size={effective_batch}, loss={loss_type})"
-    )
+    print(f"Backward pass: gradient comparison ({mode_str}, " f"batch_size={effective_batch}, loss={loss_type})")
     print("=" * 70)
 
     vocab_size = config.vocab_size
@@ -316,9 +306,7 @@ def run_backward_comparison(
 
     seq_lens = [len(s) for s in sequences]
     max_seq_in_batch = max(seq_lens)
-    assert (
-        max_seq_in_batch <= max_seq_len
-    ), f"Longest sequence ({max_seq_in_batch}) exceeds max_seq_len ({max_seq_len})"
+    assert max_seq_in_batch <= max_seq_len, f"Longest sequence ({max_seq_in_batch}) exceeds max_seq_len ({max_seq_len})"
 
     # ------------------------------------------------------------------
     # 1. HuggingFace backward (CPU, float32)
@@ -339,9 +327,7 @@ def run_backward_comparison(
     hf_target = torch.zeros(effective_batch, max_seq_len, dtype=torch.long)
     for b in range(effective_batch):
         if seq_lens[b] > 1:
-            hf_target[b, : seq_lens[b] - 1] = torch.tensor(
-                sequences[b][1:], dtype=torch.long
-            )
+            hf_target[b, : seq_lens[b] - 1] = torch.tensor(sequences[b][1:], dtype=torch.long)
     hf_loss = F.cross_entropy(
         hf_logits.view(-1, hf_logits.size(-1)),
         hf_target.view(-1),
@@ -377,17 +363,11 @@ def run_backward_comparison(
         input_tensor = create_input_tensor_dp(padded_np, device)
         logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_np)
     else:
-        padded_input = torch.zeros(
-            effective_batch, 1, 1, max_seq_len, dtype=torch.int32
-        )
+        padded_input = torch.zeros(effective_batch, 1, 1, max_seq_len, dtype=torch.int32)
         for b in range(effective_batch):
-            padded_input[b, 0, 0, : seq_lens[b]] = torch.tensor(
-                sequences[b], dtype=torch.int32
-            )
+            padded_input[b, 0, 0, : seq_lens[b]] = torch.tensor(sequences[b], dtype=torch.int32)
         input_tensor = create_input_tensor(padded_input, device)
-        logits = ttml_model(
-            input_tensor, causal_mask, input_ids_np=padded_input.numpy()
-        )
+        logits = ttml_model(input_tensor, causal_mask, input_ids_np=padded_input.numpy())
     if track_memory:
         MemoryUsageTracker.snapshot("FORWARD_PASS")
     print("  Forward pass complete.")
@@ -395,23 +375,15 @@ def run_backward_comparison(
 
     tp_size = device.shape[shard_dim] if (distributed and shard_dim is not None) else 1
     if sharded_loss:
-        print(
-            f"  [Backward] sharded_loss: logits kept sharded, "
-            f"per-device vocab dim = {list(logits.shape())[3]}"
-        )
+        print(f"  [Backward] sharded_loss: logits kept sharded, " f"per-device vocab dim = {list(logits.shape())[3]}")
 
     target_np = np.zeros((effective_batch, max_seq_len), dtype=np.uint32)
     for b in range(effective_batch):
         if seq_lens[b] > 1:
-            target_np[b, : seq_lens[b] - 1] = np.array(
-                sequences[b][1:], dtype=np.uint32
-            )
+            target_np[b, : seq_lens[b] - 1] = np.array(sequences[b][1:], dtype=np.uint32)
 
     if sharded_loss:
-        print(
-            f"  [Backward] using distributed cross-entropy "
-            f"(tp_size={tp_size}, dp_size={dp_size})"
-        )
+        print(f"  [Backward] using distributed cross-entropy " f"(tp_size={tp_size}, dp_size={dp_size})")
         ttml_loss = sharded_cross_entropy_loss(
             logits, target_np, vocab_padded, tp_size, tp_axis=shard_dim, dp_size=dp_size
         )
@@ -421,25 +393,19 @@ def run_backward_comparison(
             target_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, dp_mapper
         )
         print(f"  [Backward] target ttml shape: {list(target_tensor.shape())}")
-        ttml_loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, ttml.ops.ReduceType.MEAN
-        )
+        ttml_loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, ttml.ops.ReduceType.MEAN)
     else:
         target_torch = torch.from_numpy(target_np).to(torch.int32)
         target_host = ttnn.from_torch(target_torch, dtype=ttnn.uint32)
         target_dev = ttnn.to_device(target_host, device)
         target_tensor = ttml.autograd.create_tensor(target_dev, requires_grad=False)
         print(f"  [Backward] target ttml shape: {list(target_tensor.shape())}")
-        ttml_loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, ttml.ops.ReduceType.MEAN
-        )
+        ttml_loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, ttml.ops.ReduceType.MEAN)
     print(f"  [Backward] loss shape: {list(ttml_loss.shape())}")
 
     if distributed:
         loss_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
-        loss_all = ttnn.to_torch(ttml_loss.get_value(), mesh_composer=loss_composer).to(
-            torch.float32
-        )
+        loss_all = ttnn.to_torch(ttml_loss.get_value(), mesh_composer=loss_composer).to(torch.float32)
         if dp_size > 1:
             loss_val = loss_all[::tp_size].mean().item()
         else:
@@ -466,9 +432,7 @@ def run_backward_comparison(
     root_prefix = any_key.split("/")[0]
 
     if distributed:
-        mapping, inv_transforms, gs = _build_grad_mapping_distributed(
-            config, root_prefix, tie_word_embeddings
-        )
+        mapping, inv_transforms, gs = _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings)
 
         ttml_grads = {}
         for hf_name, ttml_name in mapping.items():
@@ -480,9 +444,7 @@ def run_backward_comparison(
             if grad is not None:
                 ttml_grads[ttml_name] = grad
     else:
-        mapping, inv_transforms, _ = _build_grad_mapping_single(
-            config, root_prefix, tie_word_embeddings
-        )
+        mapping, inv_transforms, _ = _build_grad_mapping_single(config, root_prefix, tie_word_embeddings)
 
         ttml_grads = {}
         for name, tensor in ttml_params.items():
@@ -509,9 +471,7 @@ def run_backward_comparison(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Qwen3: backward gradient comparison (HF vs ttml)"
-    )
+    parser = argparse.ArgumentParser(description="Qwen3: backward gradient comparison (HF vs ttml)")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--prompt", type=str, default="Once upon a time")
     parser.add_argument("--max_seq_len", type=int, default=128)
@@ -521,15 +481,13 @@ def main():
         nargs=2,
         default=[1, 1],
         metavar=("ROWS", "COLS"),
-        help="Device mesh shape [rows, cols].  rows = DP degree, "
-        "cols = TP degree.  Default: 1 1 (single device).",
+        help="Device mesh shape [rows, cols].  rows = DP degree, " "cols = TP degree.  Default: 1 1 (single device).",
     )
     parser.add_argument(
         "--checkpoint",
         action="store_true",
         default=False,
-        help="Enable gradient checkpointing (activation recomputation). "
-        "Trades compute for memory during backward.",
+        help="Enable gradient checkpointing (activation recomputation). " "Trades compute for memory during backward.",
     )
     parser.add_argument(
         "--sharded_loss",
@@ -543,8 +501,7 @@ def main():
         "--batch_size",
         type=int,
         default=1,
-        help="Batch size for backward pass. With bs>1 inputs are "
-        "'1. <prompt>', '2. <prompt>', ... (default: 1)",
+        help="Batch size for backward pass. With bs>1 inputs are " "'1. <prompt>', '2. <prompt>', ... (default: 1)",
     )
     parser.add_argument(
         "--track_memory",
@@ -569,9 +526,7 @@ def main():
 
     print(f"Loading HuggingFace model: {args.model_path}")
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    hf_model = AutoModelForCausalLM.from_pretrained(
-        args.model_path, torch_dtype=torch.bfloat16, trust_remote_code=True
-    )
+    hf_model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.bfloat16, trust_remote_code=True)
     hf_model.eval()
     hf_config = hf_model.config
     hf_state_dict = hf_model.state_dict()
@@ -652,10 +607,7 @@ def main():
 
     for i, seq in enumerate(sequences):
         label = f"DP[{i}]" if dp_size > 1 else f"Batch[{i}]"
-        print(
-            f"\n  {label} backward sequence ({len(seq)} tokens): "
-            f"{tokenizer.decode(seq)!r}"
-        )
+        print(f"\n  {label} backward sequence ({len(seq)} tokens): " f"{tokenizer.decode(seq)!r}")
 
     run_backward_comparison(
         hf_model,

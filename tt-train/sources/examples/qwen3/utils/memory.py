@@ -58,9 +58,7 @@ def print_memory_report(title: str = "Memory Usage Report"):
     print()
 
 
-def finalize_memory(
-    memory_guard, label: str = "COMPLETE", title: str = "Memory Usage Report"
-):
+def finalize_memory(memory_guard, label: str = "COMPLETE", title: str = "Memory Usage Report"):
     """End capture, print report, release guard.  No-op if *memory_guard* is ``None``."""
     if memory_guard is None:
         return

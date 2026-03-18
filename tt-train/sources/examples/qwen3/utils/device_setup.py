@@ -9,7 +9,6 @@ import sys
 
 import ttml
 
-
 _MGD_WARNING = """
 ================================================================================
   WARNING: TT_MESH_GRAPH_DESC_PATH is NOT set!
@@ -55,9 +54,7 @@ def setup_device(dp_size: int, tp_size: int, seed: int = 42):
     if distributed:
         ctx.open_device([dp_size, tp_size])
         ctx.initialize_parallelism_context(
-            ttml.autograd.DistributedConfig(
-                enable_ddp=dp_size > 1, enable_tp=tp_size > 1
-            )
+            ttml.autograd.DistributedConfig(enable_ddp=dp_size > 1, enable_tp=tp_size > 1)
         )
     else:
         ctx.open_device()

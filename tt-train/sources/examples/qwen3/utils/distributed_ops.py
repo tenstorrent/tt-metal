@@ -21,7 +21,6 @@ import ttml
 
 from utils.tensor_utils import get_device, get_tp_size
 
-
 # ---------------------------------------------------------------------------
 # Vocab-parallel embedding (Megatron-LM style)
 # ---------------------------------------------------------------------------
@@ -81,15 +80,11 @@ def _vocab_parallel_embedding(input_ids_np, sharded_weight, vocab_size, shard_di
         all_local_ids[k * B : (k + 1) * B, 0, 0, :] = local
         all_valid_mask[k * B : (k + 1) * B, 0, :, 0] = valid.astype(np.float32)
 
-    shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-        device, 0, shard_dim
-    )
+    shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, shard_dim)
     local_ids_t = ttml.autograd.Tensor.from_numpy(
         all_local_ids, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, shard_mapper
     )
-    valid_mask_t = ttml.autograd.Tensor.from_numpy(
-        all_valid_mask, ttnn.Layout.TILE, ttnn.bfloat16, shard_mapper
-    )
+    valid_mask_t = ttml.autograd.Tensor.from_numpy(all_valid_mask, ttnn.Layout.TILE, ttnn.bfloat16, shard_mapper)
 
     h = ttml.ops.embedding.embedding(local_ids_t, sharded_weight)
     h = _BroadcastMul.apply(h, valid_mask_t.get_value())

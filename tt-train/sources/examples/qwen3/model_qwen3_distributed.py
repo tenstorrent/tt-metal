@@ -73,7 +73,6 @@ from utils.distributed_ops import (
     _vocab_parallel_embedding,
 )
 
-
 # ---------------------------------------------------------------------------
 # ColumnParallelLinear
 # ---------------------------------------------------------------------------
@@ -98,13 +97,9 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.gather_output = gather_output
         self.shard_dim = shard_dim
 
-        self.weight = Parameter(
-            make_sharded_weight((1, 1, out_features, in_features), 2, shard_dim)
-        )
+        self.weight = Parameter(make_sharded_weight((1, 1, out_features, in_features), 2, shard_dim))
         if has_bias:
-            self.col_bias = Parameter(
-                make_sharded_zeros((1, 1, 1, out_features), 3, shard_dim)
-            )
+            self.col_bias = Parameter(make_sharded_zeros((1, 1, 1, out_features), 3, shard_dim))
         else:
             self.col_bias = None
 
@@ -113,9 +108,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         bias_t = self.col_bias.tensor if self.col_bias is not None else None
         x = linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            x = ttml.ops.distributed.all_gather(
-                x, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            x = ttml.ops.distributed.all_gather(x, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED)
         return x
 
 
@@ -144,9 +137,7 @@ class RowParallelLinear(AbstractModuleBase):
         self.input_is_parallel = input_is_parallel
         self.shard_dim = shard_dim
 
-        self.weight = Parameter(
-            make_sharded_weight((1, 1, out_features, in_features), 3, shard_dim)
-        )
+        self.weight = Parameter(make_sharded_weight((1, 1, out_features, in_features), 3, shard_dim))
         if has_bias:
             self.row_bias = Parameter(make_replicated_zeros((1, 1, 1, out_features)))
         else:
@@ -170,9 +161,7 @@ class RowParallelLinear(AbstractModuleBase):
 class DistributedQwen3Attention(AbstractModuleBase):
     """TP Qwen3 attention: Q/K/V=ColumnParallel, O=RowParallel."""
 
-    def __init__(
-        self, config: Qwen3Config, layer_idx: int, shard_dim: Optional[int] = None
-    ):
+    def __init__(self, config: Qwen3Config, layer_idx: int, shard_dim: Optional[int] = None):
         super().__init__()
         self.layer_idx = layer_idx
         self.head_dim = config.head_dim
@@ -223,10 +212,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
         self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
 
         rope_scaling = ttml.ops.rope.RopeScalingParams()
-        if (
-            config.rope_scaling_factor != 0.0
-            and config.rope_original_context_length != 0
-        ):
+        if config.rope_scaling_factor != 0.0 and config.rope_original_context_length != 0:
             rope_scaling.original_context_length = config.rope_original_context_length
             rope_scaling.scaling_factor = config.rope_scaling_factor
             rope_scaling.high_freq_factor = config.rope_high_freq_factor
@@ -254,9 +240,7 @@ class DistributedQwen3Attention(AbstractModuleBase):
         B, S = q_shape[0], q_shape[2]
 
         q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_local_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(
-            k, [B, 1, S * self.num_local_kv_heads, self.head_dim]
-        )
+        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_local_kv_heads, self.head_dim])
         q = self.q_norm(q)
         k = self.k_norm(k)
         q = ttml.ops.reshape.reshape(q, q_shape)
@@ -267,17 +251,13 @@ class DistributedQwen3Attention(AbstractModuleBase):
             query_heads,
             key_heads,
             value_heads,
-        ) = ttml.ops.multi_head_utils.grouped_heads_creation(
-            q, kvs, self.num_local_heads, self.num_local_kv_heads
-        )
+        ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_local_heads, self.num_local_kv_heads)
 
         query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
         key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
 
         if past_key_values is not None:
-            key_heads, value_heads = past_key_values.update(
-                self.layer_idx, key_heads, value_heads
-            )
+            key_heads, value_heads = past_key_values.update(self.layer_idx, key_heads, value_heads)
 
         q_seq = query_heads.shape()[2]
         k_seq = key_heads.shape()[2]
@@ -304,9 +284,7 @@ class DistributedQwen3MLP(AbstractModuleBase):
         h, inter = config.hidden_size, config.intermediate_size
         self.gate_proj = ColumnParallelLinear(h, inter, shard_dim=shard_dim)
         self.up_proj = ColumnParallelLinear(h, inter, shard_dim=shard_dim)
-        self.down_proj = RowParallelLinear(
-            inter, h, input_is_parallel=True, shard_dim=shard_dim
-        )
+        self.down_proj = RowParallelLinear(inter, h, input_is_parallel=True, shard_dim=shard_dim)
 
     def forward(self, x):
         gate = ttml.ops.unary.silu(self.gate_proj(x))
@@ -325,9 +303,7 @@ class DistributedQwen3DecoderLayer(AbstractModuleBase):
         self.self_attn = DistributedQwen3Attention(config, layer_idx, shard_dim)
         self.mlp = DistributedQwen3MLP(config, shard_dim)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen3RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
+        self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -372,22 +348,13 @@ class DistributedQwen3Model(AbstractModuleBase):
         self.tied_embed_weight = tied_embed_weight
         vocab_tiled = ((config.vocab_size + 31) // 32) * 32
         if tied_embed_weight is None:
-            self.embed_tokens = Parameter(
-                make_sharded_weight(
-                    (1, 1, vocab_tiled, config.hidden_size), 3, shard_dim
-                )
-            )
+            self.embed_tokens = Parameter(make_sharded_weight((1, 1, vocab_tiled, config.hidden_size), 3, shard_dim))
         self.layers = ModuleList(
-            [
-                DistributedQwen3DecoderLayer(config, i, shard_dim)
-                for i in range(config.num_hidden_layers)
-            ]
+            [DistributedQwen3DecoderLayer(config, i, shard_dim) for i in range(config.num_hidden_layers)]
         )
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(
-        self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None
-    ):
+    def forward(self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None):
         if self.tied_embed_weight is not None:
             h = _vocab_parallel_embedding(
                 input_ids_np,
@@ -397,9 +364,7 @@ class DistributedQwen3Model(AbstractModuleBase):
             )
         else:
             h = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
-            h = ttml.ops.distributed.all_gather(
-                h, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED
-            )
+            h = ttml.ops.distributed.all_gather(h, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED)
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
         position_offset = 0
@@ -407,13 +372,9 @@ class DistributedQwen3Model(AbstractModuleBase):
             position_offset = past_key_values.get_seq_length()
         for i, layer in enumerate(self.layers):
             if self.use_checkpoint:
-                h = checkpoint(
-                    layer, h, attention_mask, past_key_values, position_offset
-                )
+                h = checkpoint(layer, h, attention_mask, past_key_values, position_offset)
             else:
-                h = layer(
-                    h, attention_mask, past_key_values, position_offset=position_offset
-                )
+                h = layer(h, attention_mask, past_key_values, position_offset=position_offset)
             if self.track_memory and (i + 1) % self.track_memory == 0:
                 h = memory_snapshot(h, f"AFTER_LAYER_{i}_FWD", f"AFTER_LAYER_{i}_BWD")
         return self.norm(h)
@@ -475,17 +436,11 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             shard_dim,
             use_checkpoint=use_checkpoint,
             track_memory=track_memory,
-            tied_embed_weight=(
-                self.lm_head.weight.tensor if tie_word_embeddings else None
-            ),
+            tied_embed_weight=(self.lm_head.weight.tensor if tie_word_embeddings else None),
         )
 
-    def forward(
-        self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None
-    ):
-        h = self.model(
-            input_ids, attention_mask, past_key_values, input_ids_np=input_ids_np
-        )
+    def forward(self, input_ids, attention_mask=None, past_key_values=None, input_ids_np=None):
+        h = self.model(input_ids, attention_mask, past_key_values, input_ids_np=input_ids_np)
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
         out = self.lm_head(h)
@@ -507,18 +462,12 @@ def _load_tensor_distributed(weight_np, shard_type, shard_dim, device):
     """
     if shard_type in ("col_w",):
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 2, shard_dim)
-        return ttml.autograd.Tensor.from_numpy(
-            weight_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-        )
+        return ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
     elif shard_type in ("col_b", "row_w"):
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, shard_dim)
-        return ttml.autograd.Tensor.from_numpy(
-            weight_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-        )
+        return ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper)
     else:
-        return ttml.autograd.Tensor.from_numpy(
-            weight_np, ttnn.Layout.TILE, ttnn.bfloat16
-        )
+        return ttml.autograd.Tensor.from_numpy(weight_np, ttnn.Layout.TILE, ttnn.bfloat16)
 
 
 def load_weights_from_hf_distributed(
@@ -540,9 +489,7 @@ def load_weights_from_hf_distributed(
 
     root = next(iter(ttml_params)).split("/")[0]
 
-    mapping, shard_types, transforms = build_weight_mapping_distributed(
-        config, root, tie_word_embeddings
-    )
+    mapping, shard_types, transforms = build_weight_mapping_distributed(config, root, tie_word_embeddings)
 
     tp_size = get_tp_size(shard_dim)
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
@@ -604,8 +551,7 @@ def load_weights_from_hf_distributed(
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [
-            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name))
-            for hf_name, ttml_name in items
+            (hf_name, ttml_name, pool.submit(_prepare_and_transfer, hf_name, ttml_name)) for hf_name, ttml_name in items
         ]
 
         for hf_name, ttml_name, future in tqdm(
@@ -617,9 +563,7 @@ def load_weights_from_hf_distributed(
             new_tensor = future.result()
             if new_tensor is None:
                 if ttml_name not in ttml_shapes:
-                    print(
-                        f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'"
-                    )
+                    print(f"  WARNING: ttml param '{ttml_name}' not found for HF '{hf_name}'")
                 skipped.append(hf_name)
                 continue
             ttml_params[ttml_name].assign(new_tensor)

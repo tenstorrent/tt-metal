@@ -14,7 +14,6 @@ import torch
 import ttnn
 import ttml
 
-
 # =====================================================================
 # Weight permutation utilities (HF → TTML)
 # =====================================================================
@@ -141,9 +140,7 @@ def build_weight_mapping_single(config, root_prefix, tie_word_embeddings):
         transforms[f"{hp}.self_attn.k_norm.weight"] = ("unpermute_norm",)
 
         mapping[f"{hp}.input_layernorm.weight"] = f"{tp}/input_layernorm/weight"
-        mapping[
-            f"{hp}.post_attention_layernorm.weight"
-        ] = f"{tp}/post_attention_layernorm/weight"
+        mapping[f"{hp}.post_attention_layernorm.weight"] = f"{tp}/post_attention_layernorm/weight"
         mapping[f"{hp}.mlp.gate_proj.weight"] = f"{tp}/mlp/gate_proj/weight"
         mapping[f"{hp}.mlp.up_proj.weight"] = f"{tp}/mlp/up_proj/weight"
         mapping[f"{hp}.mlp.down_proj.weight"] = f"{tp}/mlp/down_proj/weight"
@@ -226,9 +223,7 @@ def build_weight_mapping_distributed(config, root_prefix, tie_word_embeddings):
 
         mapping[f"{hp}.input_layernorm.weight"] = f"{tp}/input_layernorm/weight"
         shard_types[f"{hp}.input_layernorm.weight"] = None
-        mapping[
-            f"{hp}.post_attention_layernorm.weight"
-        ] = f"{tp}/post_attention_layernorm/weight"
+        mapping[f"{hp}.post_attention_layernorm.weight"] = f"{tp}/post_attention_layernorm/weight"
         shard_types[f"{hp}.post_attention_layernorm.weight"] = None
 
         mapping[f"{hp}.mlp.gate_proj.weight"] = f"{tp}/mlp/gate_proj/weight"
@@ -293,9 +288,7 @@ def _build_grad_mapping_single(config, root_prefix, tie_word_embeddings):
         inv_transforms[f"{hp}.self_attn.k_norm.weight"] = ("repermute_norm",)
 
         mapping[f"{hp}.input_layernorm.weight"] = f"{tp}/input_layernorm/weight"
-        mapping[
-            f"{hp}.post_attention_layernorm.weight"
-        ] = f"{tp}/post_attention_layernorm/weight"
+        mapping[f"{hp}.post_attention_layernorm.weight"] = f"{tp}/post_attention_layernorm/weight"
         mapping[f"{hp}.mlp.gate_proj.weight"] = f"{tp}/mlp/gate_proj/weight"
         mapping[f"{hp}.mlp.up_proj.weight"] = f"{tp}/mlp/up_proj/weight"
         mapping[f"{hp}.mlp.down_proj.weight"] = f"{tp}/mlp/down_proj/weight"
@@ -382,9 +375,7 @@ def _build_grad_mapping_distributed(config, root_prefix, tie_word_embeddings):
 
         mapping[f"{hp}.input_layernorm.weight"] = f"{tp}/input_layernorm/weight"
         gs[f"{hp}.input_layernorm.weight"] = "replicated"
-        mapping[
-            f"{hp}.post_attention_layernorm.weight"
-        ] = f"{tp}/post_attention_layernorm/weight"
+        mapping[f"{hp}.post_attention_layernorm.weight"] = f"{tp}/post_attention_layernorm/weight"
         gs[f"{hp}.post_attention_layernorm.weight"] = "replicated"
 
         mapping[f"{hp}.mlp.gate_proj.weight"] = f"{tp}/mlp/gate_proj/weight"

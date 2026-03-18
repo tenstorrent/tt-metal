@@ -42,7 +42,6 @@ from .tensor_utils import (
     make_dist_sharded_zeros,
 )
 
-
 LORA_TARGETS_ALL = [
     "q_proj",
     "k_proj",
@@ -73,11 +72,7 @@ class LoRALinearProjection(AbstractModuleBase):
         in_features = w_shape[-1]
         out_features = w_shape[-2]
         self.scaling = alpha / rank
-        self.lora_A = Parameter(
-            torch_to_ttml(
-                torch.randn(1, 1, rank, in_features) * (1.0 / math.sqrt(rank))
-            )
-        )
+        self.lora_A = Parameter(torch_to_ttml(torch.randn(1, 1, rank, in_features) * (1.0 / math.sqrt(rank))))
         self.lora_B = Parameter(torch_to_ttml(torch.zeros(1, 1, out_features, rank)))
 
     def forward(self, x):
@@ -107,22 +102,12 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         in_features = w_shape[-1]
         out_features = w_shape[-2] * get_tp_size(self.shard_dim)
         self.scaling = alpha / rank
-        self.lora_A = Parameter(
-            make_dist_replicated_weight(
-                (1, 1, rank, in_features), std=1.0 / math.sqrt(rank)
-            )
-        )
-        self.lora_B = Parameter(
-            make_dist_sharded_zeros((1, 1, out_features, rank), 2, self.shard_dim)
-        )
+        self.lora_A = Parameter(make_dist_replicated_weight((1, 1, rank, in_features), std=1.0 / math.sqrt(rank)))
+        self.lora_B = Parameter(make_dist_sharded_zeros((1, 1, out_features, rank), 2, self.shard_dim))
 
     def forward(self, x):
         x_b = ttml.ops.distributed.broadcast(x, self.shard_dim)
-        bias_t = (
-            self.base_layer.col_bias.tensor
-            if self.base_layer.col_bias is not None
-            else None
-        )
+        bias_t = self.base_layer.col_bias.tensor if self.base_layer.col_bias is not None else None
         base_out = ttml.ops.linear.linear(x_b, self.base_layer.weight.tensor, bias_t)
         if self.base_layer.gather_output:
             base_out = ttml.ops.distributed.all_gather(
@@ -157,9 +142,7 @@ class LoRARowParallelLinear(AbstractModuleBase):
         in_features = w_shape[-1] * get_tp_size(self.shard_dim)
         self.scaling = alpha / rank
         self.lora_A = Parameter(
-            make_dist_sharded_weight(
-                (1, 1, rank, in_features), 3, self.shard_dim, std=1.0 / math.sqrt(rank)
-            )
+            make_dist_sharded_weight((1, 1, rank, in_features), 3, self.shard_dim, std=1.0 / math.sqrt(rank))
         )
         self.lora_B = Parameter(make_dist_replicated_zeros((1, 1, out_features, rank)))
 

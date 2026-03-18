@@ -29,9 +29,7 @@ class TextDataset:
         # ------------------------------------------------------------------
         # Build a fast cache key: tokenizer identity + corpus fingerprint
         # ------------------------------------------------------------------
-        tok_id = getattr(tokenizer, "name_or_path", None) or str(
-            getattr(tokenizer, "vocab_size", "")
-        )
+        tok_id = getattr(tokenizer, "name_or_path", None) or str(getattr(tokenizer, "vocab_size", ""))
         sample_front = texts[0][:200] if texts else ""
         sample_back = texts[-1][:200] if texts else ""
         fingerprint = f"{tok_id}|{len(texts)}|{sample_front}|{sample_back}"
@@ -50,19 +48,14 @@ class TextDataset:
             import multiprocessing
 
             n_jobs = multiprocessing.cpu_count()
-            print(
-                f"  Tokenizing {len(texts):,} passages ({split or 'data'}) "
-                f"with {n_jobs} workers..."
-            )
+            print(f"  Tokenizing {len(texts):,} passages ({split or 'data'}) " f"with {n_jobs} workers...")
 
             def _encode_batch(batch):
                 return [tokenizer.encode(t) for t in batch]
 
             # Split into per-worker batches for low dispatch overhead
             batch_size = max(1, len(texts) // (n_jobs * 8))
-            batches = [
-                texts[i : i + batch_size] for i in range(0, len(texts), batch_size)
-            ]
+            batches = [texts[i : i + batch_size] for i in range(0, len(texts), batch_size)]
 
             results = Parallel(n_jobs=n_jobs, backend="loky")(
                 delayed(_encode_batch)(b)
@@ -74,15 +67,8 @@ class TextDataset:
                 )
             )
 
-            chunks = [
-                np.array(ids, dtype=np.uint32)
-                for batch_result in results
-                for ids in batch_result
-                if ids
-            ]
-            self._tokens = (
-                np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.uint32)
-            )
+            chunks = [np.array(ids, dtype=np.uint32) for batch_result in results for ids in batch_result if ids]
+            self._tokens = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.uint32)
             os.makedirs(cache_dir, exist_ok=True)
             np.save(cache_path, self._tokens)
             print(f"  Saved {len(self._tokens):,} tokens → {cache_path}")
@@ -91,8 +77,7 @@ class TextDataset:
 
         if len(self._tokens) < seq_len + 1:
             raise ValueError(
-                f"Dataset too small after tokenization: "
-                f"{len(self._tokens)} tokens < seq_len+1={seq_len + 1}"
+                f"Dataset too small after tokenization: " f"{len(self._tokens)} tokens < seq_len+1={seq_len + 1}"
             )
 
     def get_batch(self, batch_size):
@@ -158,8 +143,5 @@ def load_text_datasets(dataset_path):
             val_texts = train_texts[split:]
             train_texts = train_texts[:split]
 
-    print(
-        f"Loaded {len(train_texts):,} train passages, "
-        f"{len(val_texts):,} val passages"
-    )
+    print(f"Loaded {len(train_texts):,} train passages, " f"{len(val_texts):,} val passages")
     return train_texts, val_texts

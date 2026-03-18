@@ -14,7 +14,6 @@ import ttml
 
 from utils.tensor_utils import get_device
 
-
 # =====================================================================
 # Tensor creation helper
 # =====================================================================
@@ -64,18 +63,14 @@ class KVCache:
     def _lazy_init(self, batch_size: int, num_kv_heads: int, head_dim: int) -> None:
         """Create the C++ KvCache on first update call (shape is known)."""
         self._cpp_cache = ttml.models.KvCache(
-            ttml.models.KvCacheConfig(
-                self.num_layers, batch_size, num_kv_heads, self.max_seq_len, head_dim
-            )
+            ttml.models.KvCacheConfig(self.num_layers, batch_size, num_kv_heads, self.max_seq_len, head_dim)
         )
 
     def _ensure_mask(self):
         if self._full_mask is not None:
             return
         device = get_device()
-        mask_torch = torch.tril(
-            torch.ones(1, 1, self.max_seq_len, self.max_seq_len, dtype=torch.bfloat16)
-        )
+        mask_torch = torch.tril(torch.ones(1, 1, self.max_seq_len, self.max_seq_len, dtype=torch.bfloat16))
         host = ttnn.from_torch(mask_torch, dtype=ttnn.bfloat16)
         dev = ttnn.to_device(host, device)
         self._full_mask = ttnn.tilize_with_zero_padding(dev)
@@ -91,9 +86,7 @@ class KVCache:
         self._ensure_mask()
         cache_pos = self.get_seq_length()
         if cache_pos == 0 and seq_len is not None:
-            mask_slice = ttnn.slice(
-                self._full_mask, [0, 0, 0, 0], [1, 1, seq_len, seq_len]
-            )
+            mask_slice = ttnn.slice(self._full_mask, [0, 0, 0, 0], [1, 1, seq_len, seq_len])
         else:
             mask_slice = ttnn.slice(
                 self._full_mask,

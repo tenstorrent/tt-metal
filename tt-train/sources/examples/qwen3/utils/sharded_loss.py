@@ -30,9 +30,7 @@ import ttnn
 import ttml
 
 
-def sharded_cross_entropy_loss(
-    logits, targets_np, vocab_size, tp_size, tp_axis=1, dp_size=1
-):
+def sharded_cross_entropy_loss(logits, targets_np, vocab_size, tp_size, tp_axis=1, dp_size=1):
     """Cross-entropy loss for vocab-sharded logits.
 
     Parameters
@@ -74,18 +72,14 @@ def sharded_cross_entropy_loss(
     local_max = ttnn.max(x, dim=3, keepdim=True)
 
     # 2. All-gather local maxes in float32 for precision  →  [B,1,S,tp]  then local max  →  [B,1,S,1]
-    lm = ttml.autograd.create_tensor(
-        ttnn.typecast(local_max, ttnn.DataType.FLOAT32), False
-    )
+    lm = ttml.autograd.create_tensor(ttnn.typecast(local_max, ttnn.DataType.FLOAT32), False)
     all_max = ttml.ops.distributed.all_gather(lm, dim=3, cluster_axis=tp_axis)
     global_max = ttnn.max(all_max.get_value(), dim=3, keepdim=True)  # float32
 
     # 3. Shifted exp + local sum in float32 for numerical stability  →  all-reduce SUM (tiny!)
     # exp(bfloat16) has only ~7 mantissa bits; accumulating many such values wrecks the sum.
     # Upcasting to float32 before exp and moreh_sum gives full single-precision accuracy.
-    shifted = ttnn.subtract(
-        ttnn.typecast(x, ttnn.DataType.FLOAT32), global_max
-    )  # float32
+    shifted = ttnn.subtract(ttnn.typecast(x, ttnn.DataType.FLOAT32), global_max)  # float32
     local_exp = ttnn.exp(shifted)  # float32
     local_sum = ttnn.sum(local_exp, dim=3, keepdim=True)  # float32, [B,1,S,1]
 
@@ -101,9 +95,7 @@ def sharded_cross_entropy_loss(
     global_B = dp_size * B
     padded_vocab = tp_size * local_V
     onehot = np.zeros((global_B, 1, S, padded_vocab), dtype=np.float32)
-    np.put_along_axis(
-        onehot, targets_np.astype(np.int64).reshape(global_B, 1, S, 1), 1.0, axis=3
-    )
+    np.put_along_axis(onehot, targets_np.astype(np.int64).reshape(global_B, 1, S, 1), 1.0, axis=3)
     # Split vocab into tp shards and stack per-device along dim 0 (to match x's layout)
     onehot = onehot.reshape(dp_size, B, 1, S, tp_size, local_V)
     onehot = np.ascontiguousarray(onehot.transpose(0, 4, 1, 2, 3, 5))
@@ -111,21 +103,15 @@ def sharded_cross_entropy_loss(
     if dp_size > 1:
         shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
     else:
-        shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-            device, 0, cluster_axis=tp_axis
-        )
+        shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, cluster_axis=tp_axis)
 
     onehot_val = ttml.autograd.Tensor.from_numpy(
         onehot, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, shard_mapper
     ).get_value()  # [B,1,S,V/tp]
 
-    target_logit_local = ttnn.sum(
-        ttnn.multiply(x, onehot_val), dim=3, keepdim=True
-    )  # [B,1,S,1]
+    target_logit_local = ttnn.sum(ttnn.multiply(x, onehot_val), dim=3, keepdim=True)  # [B,1,S,1]
 
-    tl = ttml.autograd.create_tensor(
-        ttnn.typecast(target_logit_local, ttnn.DataType.FLOAT32), False
-    )
+    tl = ttml.autograd.create_tensor(ttnn.typecast(target_logit_local, ttnn.DataType.FLOAT32), False)
     target_logit = ttml.ops.distributed.all_reduce(
         tl, noop_backward=True, cluster_axis=tp_axis
     ).get_value()  # float32, [B,1,S,1]
@@ -153,12 +139,8 @@ def sharded_cross_entropy_loss(
 
     def backward():
         grad_out = loss.get_grad()  # [1,1,1,1]
-        softmax_k = ttnn.exp(
-            ttnn.subtract(saved_shifted, ttnn.log(saved_global_sum))
-        )  # float32
-        diff = ttnn.subtract(
-            softmax_k, ttnn.typecast(saved_onehot, ttnn.DataType.FLOAT32)
-        )  # float32, [B,1,S,V/tp]
+        softmax_k = ttnn.exp(ttnn.subtract(saved_shifted, ttnn.log(saved_global_sum)))  # float32
+        diff = ttnn.subtract(softmax_k, ttnn.typecast(saved_onehot, ttnn.DataType.FLOAT32))  # float32, [B,1,S,V/tp]
         grad = ttnn.multiply(diff, 1.0 / float(N))
         grad = ttnn.multiply(grad, ttnn.typecast(grad_out, ttnn.DataType.FLOAT32))
         logits.add_grad(ttnn.typecast(grad, ttnn.DataType.BFLOAT16))
