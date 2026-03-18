@@ -310,6 +310,16 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
           fi
 
+          # [TO REVERT] CI kickoff pruning for PR #39991:
+          # keep only the directly impacted nightly targets.
+          matrix=$(echo "$matrix" | jq -c '[
+            .[]
+            | select(
+                .name == "[WH-T3K] Llama-3.1-8B-Instruct with sampling-tests"
+                or .name == "[WH-GLX] Qwen3-32B device with sampling-tests"
+              )
+          ]')
+
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   vllm-tests:
