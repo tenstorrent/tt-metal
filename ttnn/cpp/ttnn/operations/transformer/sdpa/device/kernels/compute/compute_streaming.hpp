@@ -22,6 +22,14 @@
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
 
+// ---- Per-K-chunk profiling selector ----
+// Define PROFILE_K_CHUNK to profile a single K-chunk iteration:
+//   0 = first K-chunk only
+//   1 = middle K-chunk only (k_num_chunks/2)
+//   2 = last K-chunk only
+// Leave undefined to disable profiling (all chunks use false_type).
+#define PROFILE_K_CHUNK 0
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -1194,13 +1202,29 @@ void sdpa_standard_v2(
             bool is_padded = is_last && padded_k_tiles_inner > 0;
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
             bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
-            call_step(
-                std::false_type{},
-                is_last,
-                is_first,
-                chunk_active_Sk,
-                chunk_reduce_trigger,
-                is_padded ? padded_sbw : full_sbw);
+
+#ifdef PROFILE_K_CHUNK
+            // Profile selected K-chunk: 0=first, 1=middle, 2=last
+            constexpr uint32_t profile_sel = PROFILE_K_CHUNK;
+            bool profile_this = (profile_sel == 0 && is_first) || (profile_sel == 1 && k_chunk == k_num_chunks / 2) ||
+                                (profile_sel == 2 && is_last);
+            if (profile_this) {
+                call_step(
+                    std::true_type{},
+                    is_last,
+                    is_first,
+                    chunk_active_Sk,
+                    chunk_reduce_trigger,
+                    is_padded ? padded_sbw : full_sbw);
+            } else
+#endif
+                call_step(
+                    std::false_type{},
+                    is_last,
+                    is_first,
+                    chunk_active_Sk,
+                    chunk_reduce_trigger,
+                    is_padded ? padded_sbw : full_sbw);
 
             // Post-iteration cleanup
             if (!is_first) {
@@ -1402,42 +1426,59 @@ void sdpa_ring_v2(
                 chunk_sbw = joint_n_sbw;
             }
 
-            sdpa_inner_loop_step<
-                false,  // profiling_enabled
-                Sq_chunk_t,
-                Sk_chunk_t,
-                Skt,
-                DHt,
-                vDHt,
-                scale_fp32,
-                qkt_subblock_h,
-                qkt_subblock_w,
-                qktv_subblock_h,
-                qktv_subblock_w,
-                false,  // use_padded_mask — ring uses ring mask instead
-                true,   // ring_mode
-                true,   // use_ring_mask
+            auto ring_call_step = [&](auto profiling_tag) {
+                sdpa_inner_loop_step<
+                    decltype(profiling_tag)::value,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    Skt,
+                    DHt,
+                    vDHt,
+                    scale_fp32,
+                    qkt_subblock_h,
+                    qkt_subblock_w,
+                    qktv_subblock_h,
+                    qktv_subblock_w,
+                    false,  // use_padded_mask — ring uses ring mask instead
+                    true,   // ring_mode
+                    true,   // use_ring_mask
 
-                uniform_dataformat,
-                cb_q_in,
-                cb_kt_in,
-                cb_v_in,
-                cb_qkt_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_normalized_out,
-                cb_mask_in>(
-                q_prev,
-                q_cur,
-                is_last,
-                is_first,
-                apply_mask,
-                lw_partial_tile_idx,
-                active_Sk_param,
-                can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
-                chunk_sbw);
+                    uniform_dataformat,
+                    cb_q_in,
+                    cb_kt_in,
+                    cb_v_in,
+                    cb_qkt_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_normalized_out,
+                    cb_mask_in>(
+                    q_prev,
+                    q_cur,
+                    is_last,
+                    is_first,
+                    apply_mask,
+                    lw_partial_tile_idx,
+                    active_Sk_param,
+                    can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
+                    chunk_sbw);
+            };
+
+#ifdef PROFILE_K_CHUNK
+            {
+                constexpr uint32_t profile_sel = PROFILE_K_CHUNK;
+                bool profile_this = (profile_sel == 0 && is_first) ||
+                                    (profile_sel == 1 && k_chunk == num_kv_chunks / 2) || (profile_sel == 2 && is_last);
+                if (profile_this) {
+                    ring_call_step(std::true_type{});
+                } else {
+                    ring_call_step(std::false_type{});
+                }
+            }
+#else
+            ring_call_step(std::false_type{});
+#endif
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
