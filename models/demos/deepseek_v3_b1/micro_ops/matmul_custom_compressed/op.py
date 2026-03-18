@@ -46,7 +46,9 @@ _MEM_ZEROS_BASE = 12992
 _ZEROS_ADDR_SHIFTED = _MEM_ZEROS_BASE >> _CB_ADDR_SHIFT  # 812
 
 
-def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list[int]:
+def pack_tile_pairs(
+    assignment_flat: np.ndarray, base_addr_shifted: int, zero_tile_addr: int = _ZEROS_ADDR_SHIFTED
+) -> list[int]:
     """Pack per-pair metadata as two uint32s: lo=[addr0:24|fmt0:8], hi=[addr1:24|fmt1:8].
 
     Kernel loads both uint32s per pair (adjacent in memory). Each uint32 has the
@@ -55,6 +57,8 @@ def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list
     Args:
         assignment_flat: 1D array of format indices (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
         base_addr_shifted: THCON-shifted base address of the weight shard (buffer_address >> 4).
+        zero_tile_addr: Address to use for zero tiles (bfp0). Defaults to _ZEROS_ADDR_SHIFTED.
+            Use 0xFFFFFF for relative-address mode (DRAM streaming).
 
     Returns:
         List of uint32, two per pair (interleaved: info0, info1, info0, info1, ...).
@@ -66,7 +70,7 @@ def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list
         a = int(assignment_flat[i])
         if a == 3:  # bfp0 / zero tile
             fmt = _DATA_FORMATS[2]  # bfp2 format for zero-tile decode
-            addr = _ZEROS_ADDR_SHIFTED
+            addr = zero_tile_addr
         else:
             fmt = _DATA_FORMATS[a]
             addr = base_addr_shifted + cum_offset_shifted
