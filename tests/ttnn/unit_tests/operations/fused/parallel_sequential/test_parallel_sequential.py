@@ -18,6 +18,7 @@ Integration tests for Sequential/Parallel kernel fusion.
 
 import os
 import re
+from pathlib import Path
 
 import pytest
 import torch
@@ -25,6 +26,8 @@ import ttnn
 
 
 from models.common.utility_functions import comp_pcc
+
+REPO_ROOT = Path(__file__).resolve().parents[6]
 
 
 # ---------------------------------------------------------------------------
@@ -1312,13 +1315,26 @@ class TestCrossOpCompilation:
     """
 
     KERNEL_PATHS = {
-        "layernorm": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
-        "rmsnorm_post": "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp",
-        "matmul": "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
-        "batchnorm": "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp",
-        "untilize": "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
-        "eltwise_sfpu": "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp",
-        "typecast": "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp",
+        "layernorm": str(
+            REPO_ROOT / "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"
+        ),
+        "rmsnorm_post": str(
+            REPO_ROOT
+            / "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/rmsnorm_post_allgather.cpp"
+        ),
+        "matmul": str(REPO_ROOT / "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp"),
+        "batchnorm": str(
+            REPO_ROOT / "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_kernel.cpp"
+        ),
+        "untilize": str(
+            REPO_ROOT / "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp"
+        ),
+        "eltwise_sfpu": str(
+            REPO_ROOT / "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"
+        ),
+        "typecast": str(
+            REPO_ROOT / "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp"
+        ),
     }
 
     @staticmethod
