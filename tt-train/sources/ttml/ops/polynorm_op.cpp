@@ -13,6 +13,7 @@
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -76,6 +77,13 @@ std::pair<ttnn::Tensor, ttnn::Tensor> rms_normalize_last_dim(const ttnn::Tensor&
     return {ttnn::multiply(x, inv_rms, std::nullopt, std::nullopt, std::nullopt, none, none, none, false), inv_rms};
 }
 
+ttnn::Tensor rms_normalize_last_dim_fw_kernel(const ttnn::Tensor& x, const ttnn::Tensor& gamma_ones, float epsilon) {
+    auto fw_result = ttml::metal::rmsnorm_fw(x, gamma_ones, /*return_intermediates=*/false, epsilon);
+    TT_FATAL(fw_result.size() == 2U, "rmsnorm_fw should return 2 entries");
+    TT_FATAL(fw_result[0].has_value(), "rmsnorm_fw output tensor missing");
+    return fw_result[0].value();
+}
+
 ttnn::Tensor grad_wrt_rmsnorm_input(
     const ttnn::Tensor& term,
     const ttnn::Tensor& grad_normed_term,
@@ -132,15 +140,16 @@ autograd::TensorPtr polynorm(
     const auto b = extract_bias(bias);
 
     const auto x = tensor->get_value();
+    const uint32_t channels = x.logical_shape()[-1];
+    const auto gamma_ones = core::ones(ttnn::Shape({1, 1, 1, channels}), &autograd::ctx().get_device());
+
     auto x2 = ttnn::square(x);
     auto x3 = ttnn::multiply(x, x2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
 
-    auto [x_norm, x_inv_rms] = rms_normalize_last_dim(x, epsilon);
-    auto [x2_norm, x2_inv_rms] = rms_normalize_last_dim(x2, epsilon);
-    auto [x3_norm, x3_inv_rms] = rms_normalize_last_dim(x3, epsilon);
-    (void)x_inv_rms;
-    (void)x2_inv_rms;
-    (void)x3_inv_rms;
+    // Forward path uses the optimized RMSNorm forward metal op.
+    auto x_norm = rms_normalize_last_dim_fw_kernel(x, gamma_ones, epsilon);
+    auto x2_norm = rms_normalize_last_dim_fw_kernel(x2, gamma_ones, epsilon);
+    auto x3_norm = rms_normalize_last_dim_fw_kernel(x3, gamma_ones, epsilon);
 
     auto out_value = ttnn::add(
         ttnn::add(
