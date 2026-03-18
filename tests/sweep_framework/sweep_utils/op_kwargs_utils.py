@@ -64,6 +64,8 @@ _TENSOR_PREFIXES = (
     "input_tensor_k",
     "input_tensor_v",
     "page_table_tensor",
+    "page_table",
+    "update_idxs_tensor",
 )
 
 

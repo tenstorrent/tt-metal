@@ -194,8 +194,19 @@ def create_tensor_on_mesh(
 
         mesh_shape_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
         if isinstance(mesh_shape_raw, str):
-            mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
-        mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+            mesh_shape_raw = _ast.literal_eval(mesh_shape_raw) if mesh_shape_raw.strip() else [1, 1]
+        if not mesh_shape_raw or not isinstance(mesh_shape_raw, (list, tuple)) or len(mesh_shape_raw) < 2:
+            # Empty or invalid mesh shape — replicate
+            mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            return ttnn.from_torch(
+                torch_tensor,
+                dtype=dtype,
+                layout=layout,
+                device=mesh_device,
+                memory_config=memory_config,
+                mesh_mapper=mesh_mapper,
+            )
+        mesh_shape_tuple = tuple(mesh_shape_raw)
 
         # Check if the actual device mesh can support the traced mesh shape.
         # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
@@ -238,21 +249,19 @@ def create_tensor_on_mesh(
             valid1, nd1 = _normalize_dim(dims_tuple[1])
 
             if not valid0 or not valid1:
-                # Shard dim exceeds tensor rank — pad tensor to required rank.
-                # This happens when the tracer captured a higher-rank view
-                # (e.g., 4D model activation) but the vector stores a 2D weight.
-                max_dim = max(
-                    (dims_tuple[0] if dims_tuple[0] is not None and dims_tuple[0] >= 0 else -1),
-                    (dims_tuple[1] if dims_tuple[1] is not None and dims_tuple[1] >= 0 else -1),
+                # Shard dim exceeds tensor rank — the tracer captured placement
+                # from a higher-rank view (e.g., 4D activation) but the vector
+                # stores a lower-rank tensor (e.g., 2D weight). Replicate instead
+                # of sharding to preserve the original tensor shape.
+                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+                return ttnn.from_torch(
+                    torch_tensor,
+                    dtype=dtype,
+                    layout=layout,
+                    device=mesh_device,
+                    memory_config=memory_config,
+                    mesh_mapper=mesh_mapper,
                 )
-                needed_rank = max_dim + 1
-                if needed_rank > ndim:
-                    # Prepend unit dimensions to reach required rank
-                    for _ in range(needed_rank - ndim):
-                        torch_tensor = torch_tensor.unsqueeze(0)
-                    ndim = torch_tensor.ndim
-                    valid0, nd0 = _normalize_dim(dims_tuple[0])
-                    valid1, nd1 = _normalize_dim(dims_tuple[1])
 
             repeat_factors = [1] * ndim
             if nd0 is not None and valid0:
@@ -270,13 +279,16 @@ def create_tensor_on_mesh(
                 ndim = torch_tensor.ndim
                 norm_dim = dim if dim >= 0 else dim + ndim
                 if norm_dim < 0 or norm_dim >= ndim:
-                    # Pad tensor rank to accommodate shard dim
-                    needed_rank = (dim + 1) if dim >= 0 else ndim
-                    if needed_rank > ndim:
-                        for _ in range(needed_rank - ndim):
-                            torch_tensor = torch_tensor.unsqueeze(0)
-                        ndim = torch_tensor.ndim
-                        norm_dim = dim if dim >= 0 else dim + ndim
+                    # Shard dim exceeds tensor rank — replicate instead
+                    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+                    return ttnn.from_torch(
+                        torch_tensor,
+                        dtype=dtype,
+                        layout=layout,
+                        device=mesh_device,
+                        memory_config=memory_config,
+                        mesh_mapper=mesh_mapper,
+                    )
                 repeat_factors = [1] * ndim
                 repeat_factors[norm_dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
                 torch_tensor = torch_tensor.repeat(*repeat_factors)

@@ -24,7 +24,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -92,19 +92,20 @@ def run(
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    input_c_shape=None,
     input_c_dtype=None,
     input_c_layout=None,
     input_c_memory_config=None,
+    input_d_shape=None,
     input_d_dtype=None,
     input_d_layout=None,
     input_d_memory_config=None,
     output_memory_config=None,
     update_idxs=[],
-    update_idxs_tensor=None,
-    page_table=None,
     share_cache=None,
     batch_offset=0,
     storage_type="StorageType::DEVICE",
@@ -118,29 +119,29 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    _ = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Handle dict input_a_shape from traced configurations (multi-input)
-    if isinstance(input_a_shape, dict):
-        shape_a = input_a_shape.get("input_a", input_a_shape.get("self"))
-        shape_b = input_a_shape.get("input_b", input_a_shape.get("cache"))
-        shape_c = input_a_shape.get("input_c", input_a_shape.get("update_idxs"))
-        shape_d = input_a_shape.get("input_d", input_a_shape.get("page_table"))
-    else:
-        # Fallback for sample configurations
-        if isinstance(input_a_shape, (tuple, list)):
-            shape = tuple(input_a_shape)
-        else:
-            shape = input_a_shape
-        shape_a = shape  # New values to cache
-        shape_b = (1, 32, shape[2], shape[3])  # Cache tensor
-        shape_c = (1, shape[1])  # Update indices
-        shape_d = (1, shape[1])  # Page table
+    # V2 format: shapes are separate params (input_a_shape, input_b_shape, etc.)
+    shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
+
+    def _or_absent(val):
+        return val if val is not None and val != "__ABSENT__" else None
+
+    shape_b = tuple(_or_absent(input_b_shape)) if _or_absent(input_b_shape) else None
+    shape_c = tuple(_or_absent(input_c_shape)) if _or_absent(input_c_shape) else None
+    shape_d = tuple(_or_absent(input_d_shape)) if _or_absent(input_d_shape) else None
+
+    # Fallback for sample configs where only input_a_shape is provided
+    if shape_b is None and input_b_dtype is not None:
+        shape_b = (1, 32, shape_a[2], shape_a[3])
+    if shape_c is None and input_c_dtype is not None:
+        shape_c = shape_a
+    if shape_d is None and input_d_dtype is not None:
+        shape_d = shape_a
 
     # Check which inputs are provided
-    has_input_b = input_b_dtype is not None
-    has_input_c = input_c_dtype is not None
-    has_input_d = input_d_dtype is not None
+    has_input_b = input_b_dtype is not None and input_b_dtype != "__ABSENT__" and shape_b is not None
+    has_input_c = input_c_dtype is not None and input_c_dtype != "__ABSENT__" and shape_c is not None
+    has_input_d = input_d_dtype is not None and input_d_dtype != "__ABSENT__" and shape_d is not None
 
     # Generate input tensors
     torch_input_a = gen_func_with_cast_tt(partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype)(
@@ -156,14 +157,14 @@ def run(
 
     if has_input_c:
         torch_input_c = gen_func_with_cast_tt(
-            partial(torch_random, low=0, high=32, dtype=torch.float32), input_c_dtype
+            partial(torch_random, low=-1, high=1, dtype=torch.float32), input_c_dtype
         )(shape_c)
     else:
         torch_input_c = None
 
     if has_input_d:
         torch_input_d = gen_func_with_cast_tt(
-            partial(torch_random, low=0, high=32, dtype=torch.float32), input_d_dtype
+            partial(torch_random, low=-1, high=1, dtype=torch.float32), input_d_dtype
         )(shape_d)
     else:
         torch_input_d = None
@@ -222,34 +223,33 @@ def run(
     if len(input_tensors) != 4:
         raise ValueError(f"paged_fused_update_cache requires exactly 4 tensor inputs, got {len(input_tensors)}")
 
-    # Handle additional tensor parameters: update_idxs_tensor and page_table
+    # Handle named tensor kwargs: update_idxs_tensor and page_table
+    # V2 format provides flattened params: page_table_shape, page_table_dtype, etc.
     update_idxs_tensor_ttnn = None
-    if update_idxs_tensor is not None and isinstance(update_idxs_tensor, dict):
-        # update_idxs_tensor is a dict with shape, dtype, layout, memory_config
-        shape_e = update_idxs_tensor.get("shape")
-        dtype_e = update_idxs_tensor.get("dtype")
-        layout_e = update_idxs_tensor.get("layout")
-        memory_config_e = update_idxs_tensor.get("memory_config")
-
-        if shape_e:
-            torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=0, high=32, dtype=torch.float32), dtype_e)(
-                shape_e
-            )
-            update_idxs_tensor_ttnn = _to_ttnn(torch_input_e, dtype_e, layout_e, memory_config_e)
+    uit_info = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
+    if uit_info and uit_info.get("shape"):
+        shape_e = uit_info["shape"]
+        dtype_e = uit_info["dtype"]
+        layout_e = uit_info["layout"]
+        mem_config_e = uit_info["memory_config"]
+        torch_input_e = gen_func_with_cast_tt(partial(torch_random, low=0, high=32, dtype=torch.float32), dtype_e)(
+            shape_e
+        )
+        update_idxs_tensor_ttnn = _to_ttnn(
+            torch_input_e, dtype_e, layout_e, mem_config_e, "update_idxs_tensor_tensor_placement"
+        )
 
     page_table_ttnn = None
-    if page_table is not None and isinstance(page_table, dict):
-        # page_table is a dict with shape, dtype, layout, memory_config
-        shape_f = page_table.get("shape")
-        dtype_f = page_table.get("dtype")
-        layout_f = page_table.get("layout")
-        memory_config_f = page_table.get("memory_config")
-
-        if shape_f:
-            torch_input_f = gen_func_with_cast_tt(
-                partial(torch_random, low=0, high=1024, dtype=torch.float32), dtype_f
-            )(shape_f)
-            page_table_ttnn = _to_ttnn(torch_input_f, dtype_f, layout_f, memory_config_f)
+    pt_info = extract_named_tensor_kwargs(kwargs, "page_table")
+    if pt_info and pt_info.get("shape"):
+        shape_f = pt_info["shape"]
+        dtype_f = pt_info["dtype"]
+        layout_f = pt_info["layout"]
+        mem_config_f = pt_info["memory_config"]
+        torch_input_f = gen_func_with_cast_tt(partial(torch_random, low=0, high=1024, dtype=torch.float32), dtype_f)(
+            shape_f
+        )
+        page_table_ttnn = _to_ttnn(torch_input_f, dtype_f, layout_f, mem_config_f, "page_table_tensor_placement")
 
     start_time = start_measuring_time()
 

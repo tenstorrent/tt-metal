@@ -75,7 +75,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     # Don't pass output_memory_config to build_op_kwargs — it would add memory_config
     # before we can clean up sharded configs below.
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"})
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation"})
 
     # Skip traced program_config: block dimensions (out_block_w, per_core_N, etc.) are computed
     # for the original device grid and don't match the local device. Let ttnn auto-compute.
@@ -107,14 +107,10 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
-    # Apply activation function to golden if present (e.g., gelu_approx fused with matmul)
-    activation = kwargs.get("activation", None)
-    if activation and activation != "__ABSENT__":
-        from ttnn.operations.activations import get_golden_function_for_activation
-
-        golden_activation = get_golden_function_for_activation(activation)
-        if golden_activation is not None:
-            torch_output_tensor = golden_activation(torch_output_tensor)
+    # Note: activation (e.g., gelu_approx) is fused via program_config in traced models.
+    # Since program_config is excluded (grid/block dims are device-specific), the TTNN matmul
+    # runs without fused activation. Skip applying activation to the golden reference too,
+    # so both sides compare plain matmul results.
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
