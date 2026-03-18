@@ -154,6 +154,9 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
+    const uint32_t last_active_ring_iter =
+        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -171,6 +174,9 @@ void kernel_main() {
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
         const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+
+        const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+        const bool mux_forward_this_iter = is_mux_writer && !is_last_ring_iter;
 
         uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
@@ -246,7 +252,7 @@ void kernel_main() {
 
                 // K: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
-                if (is_mux_writer) {
+                if (mux_forward_this_iter) {
                     cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
                 }
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
@@ -256,7 +262,7 @@ void kernel_main() {
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_k_in, k_chunk_tiles);
-                    if (is_mux_writer) {
+                    if (mux_forward_this_iter) {
                         cb_push_back(cb_k_writer_in, k_chunk_tiles);
                     }
                 } else {
@@ -269,7 +275,7 @@ void kernel_main() {
                         k_tile_bytes,
                         true /*transpose*/
                     );
-                    if (is_mux_writer) {
+                    if (mux_forward_this_iter) {
                         cb_push_back(cb_k_writer_in, k_chunk_tiles);
                     }
                 }
@@ -326,7 +332,7 @@ void kernel_main() {
 
                 // V: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
-                if (is_mux_writer) {
+                if (mux_forward_this_iter) {
                     cb_reserve_back(cb_v_writer_in, v_chunk_tiles);
                 }
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
@@ -336,7 +342,7 @@ void kernel_main() {
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_v_in, v_chunk_tiles);
-                    if (is_mux_writer) {
+                    if (mux_forward_this_iter) {
                         cb_push_back(cb_v_writer_in, v_chunk_tiles);
                     }
                 } else {
@@ -349,7 +355,7 @@ void kernel_main() {
                         v_tile_bytes,
                         false /*transpose*/
                     );
-                    if (is_mux_writer) {
+                    if (mux_forward_this_iter) {
                         cb_push_back(cb_v_writer_in, v_chunk_tiles);
                     }
                 }
@@ -379,6 +385,7 @@ void kernel_main() {
         }
 
         if (KV_chunks_processed_in_iter % 2 == 0) {
+            DPRINT << " HELP, I'm doing the THING!!!!" << ENDL();
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
