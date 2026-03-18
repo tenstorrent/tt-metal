@@ -25,22 +25,21 @@ ttnn::Tensor embedding(
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
-    Tensor mutable_input_tensor = input_tensor;
     Tensor mutable_weight = weight_arg;
 
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
-    auto original_input_rank = mutable_input_tensor.logical_shape().rank();
+    auto original_input_rank = input_tensor.logical_shape().rank();
     auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
     // If indices tensor is 1 dimensional, batch size is 1
-    auto batch_size = (mutable_input_tensor.logical_shape().rank() == 1) ? 1 : mutable_input_tensor.logical_shape()[0];
-    auto sentence_size = mutable_input_tensor.logical_shape()[-1];
-    auto embedding_input_tensor = mutable_input_tensor;
-    if (mutable_input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        embedding_input_tensor = ttnn::reshape(mutable_input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
+    auto batch_size = (input_tensor.logical_shape().rank() == 1) ? 1 : input_tensor.logical_shape()[0];
+    auto sentence_size = input_tensor.logical_shape()[-1];
+    auto embedding_input_tensor = input_tensor;
+    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
     }
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
