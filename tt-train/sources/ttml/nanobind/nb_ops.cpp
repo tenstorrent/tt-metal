@@ -9,7 +9,6 @@
 #include <nanobind/stl/vector.h>
 
 #include <span>
-#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
@@ -372,9 +371,9 @@ void py_module(nb::module_& m) {
         nb::kw_only(),
         nb::arg("mean") = 0.0f,
         nb::arg("std") = 1.0f,
-        nb::arg("seed") = nb::none(),
-        nb::arg("dtype") = nb::cast(tt::tt_metal::DataType::BFLOAT16),
-        nb::arg("layout") = nb::cast(tt::tt_metal::Layout::TILE));
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE);
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
