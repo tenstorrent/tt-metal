@@ -335,7 +335,8 @@ class TtMinimalMoe(LightweightModule):
         # 1. Apply weights: weights * combined_output (broadcast multiply)
         # 2. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
         # 3. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
+        # combined_output_tiled is too big to fit L1; keep in DRAM for now
+        combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMinimalMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
 
         routed_output = self.reduce_module(combined_output_tiled, weights=weights)

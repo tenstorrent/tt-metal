@@ -114,7 +114,7 @@ def create_shared_expert_weights(
         # Smaller config to fit in L1 memory
         # emb_dim must be divisible by TP factor (4) and tile size (32)
         # seq_len must fit in L1 with emb_dim after sharding
-        (256, 2048, 7 * 1024, 16, 4, 2),
+        (3200, 2048, 7 * 1024, 64, 2, 2),
     ],
     ids=["small-config"],
 )
@@ -520,33 +520,6 @@ def test_ttnn_moe(
             title="Sparse Tensor Validation Results",
         )
 
-    # # ========================================
-    # # Step 7: Compare final output
-    # # ========================================
-    # logger.debug(f"\n{'='*60}")
-    # logger.debug("Comparing final output...")
-    # logger.debug(f"{'='*60}")
-
-    # tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer_2d, dtype=torch.bfloat16)
-    # logger.debug(f"TTNN final output shape: {tt_output_torch.shape}")
-    # logger.debug(f"Torch final output shape: {torch_output.shape}")
-    # logger.debug(f"TTNN output stats - min: {tt_output_torch.min():.4f}, max: {tt_output_torch.max():.4f}")
-    # logger.debug(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
-
-    # # Check for NaN/Inf
-    # assert not torch.isnan(tt_output_torch).any(), "TTNN output contains NaN"
-    # assert not torch.isinf(tt_output_torch).any(), "TTNN output contains Inf"
-
-    # # Shape check
-    # assert (
-    #     tt_output_torch.shape == torch_output.shape
-    # ), f"Shape mismatch: TTNN {tt_output_torch.shape} vs Torch {torch_output.shape}"
-
-    # # Compute PCC for final output
-    # # Note: With only shared expert enabled, this won't match torch's full pipeline output
-    # # The comparison will show the delta caused by missing routed expert path
-    # _, final_pcc = comp_pcc(torch_output, tt_output_torch.float())
-    # logger.debug(f"Final output PCC: {final_pcc:.6f}")
     logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
 
     # Assert intermediate checks passed
