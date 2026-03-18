@@ -18,7 +18,7 @@ from loguru import logger
 
 import ttnn
 
-from diffusers.models.normalization import FP32LayerNorm as _FP32LayerNorm
+from diffusers.models.normalization import FP32LayerNorm
 
 from models.tt_dit.layers.embeddings import WanPatchEmbed, WanTimeTextImageEmbedding
 from models.tt_dit.layers.feedforward import ParallelFeedForward
@@ -30,71 +30,59 @@ from models.tt_dit.utils.mochi import get_rot_transformation_mat
 from models.tt_dit.utils.padding import get_padded_vision_seq_len, pad_vision_seq_parallel
 from models.tt_dit.utils.substate import pop_substate, rename_substate
 from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
+from models.experimental.lingbot_va.reference.transformer_wan import WanAttention as TorchWanAttention
 
-from .attention_wan import WanAttention
 from .wan_rotary_pos_embed import WanRotaryPosEmbed
 
 
-class _FP32LayerNormFallback(Module):
-    """PyTorch FP32LayerNorm fallback; same interface as DistributedLayerNorm for WanTransformerBlock."""
+def _apply_fp32_layernorm_tt(
+    x: ttnn.Tensor,
+    norm: FP32LayerNorm,
+    mesh_device: ttnn.MeshDevice,
+    ccl_manager: CCLManager | None,
+    mesh_axis: int,
+    dynamic_weight: ttnn.Tensor | None = None,
+    dynamic_bias: ttnn.Tensor | None = None,
+    scale_tt: ttnn.Tensor | None = None,
+    shift_tt: ttnn.Tensor | None = None,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+) -> ttnn.Tensor:
+    """Run FP32LayerNorm on TT tensor (match reference numerics): tt -> torch.float -> norm -> tt.
 
-    def __init__(
-        self,
-        embedding_dim: int,
-        norm_eps: float = 1e-5,
-        norm_elementwise_affine: bool = True,
-        bias: bool = True,
-        mesh_axis: int = 0,
-        mesh_device: ttnn.MeshDevice | None = None,
-        ccl_manager: CCLManager | None = None,
-    ) -> None:
-        super().__init__()
-        self.embedding_dim = embedding_dim
-        self.norm_eps = norm_eps
-        self.norm_elementwise_affine = norm_elementwise_affine
-        self.mesh_axis = mesh_axis
-        self.mesh_device = mesh_device
-        self.ccl_manager = ccl_manager
-        self.mesh_width = int(mesh_device.shape[mesh_axis]) if mesh_device is not None else 1
-        self._norm = _FP32LayerNorm(embedding_dim, eps=norm_eps, elementwise_affine=False)
-        if norm_elementwise_affine and mesh_device is not None:
-            self.weight = Parameter(total_shape=(embedding_dim,), device=mesh_device)
-            self.bias = Parameter(total_shape=(embedding_dim,), device=mesh_device)
-        else:
-            self.weight = None
-            self.bias = None
-
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        dynamic_weight: ttnn.Tensor | None = None,
-        dynamic_bias: ttnn.Tensor | None = None,
-        compute_kernel_config=None,
-        dtype: ttnn.DataType | None = None,
-    ) -> ttnn.Tensor:
-        assert (dynamic_weight is None) == (dynamic_bias is None)
-        if self.mesh_width > 1 and self.ccl_manager is not None:
-            x = self.ccl_manager.all_gather_persistent_buffer(x, dim=len(x.shape) - 1, mesh_axis=self.mesh_axis)
-        t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
-        out = self._norm(t)
-        if dynamic_weight is not None:
-            w = ttnn.to_torch(ttnn.get_device_tensors(dynamic_weight)[0]).float()
-            b = ttnn.to_torch(ttnn.get_device_tensors(dynamic_bias)[0]).float()
-            out = out * w + b
-        elif self.weight is not None:
-            w = ttnn.to_torch(ttnn.get_device_tensors(self.weight.data)[0]).float()
-            b = ttnn.to_torch(ttnn.get_device_tensors(self.bias.data)[0]).float()
-            out = out * w + b
-        out_dtype = dtype if dtype is not None else ttnn.bfloat16
-        mesh_axes = None
-        if self.mesh_width > 1:
-            mesh_axes = [None] * (len(x.shape) - 1) + [self.mesh_axis]
-        return from_torch(
-            out.to(torch.bfloat16 if out_dtype == ttnn.bfloat16 else torch.float32),
-            device=self.mesh_device,
-            dtype=out_dtype,
-            mesh_axes=tuple(mesh_axes) if mesh_axes is not None else None,
-        )
+    Optional modulation (match reference .type_as flow):
+    - dynamic_weight/dynamic_bias: global scale/shift (single vector), applied in float32.
+    - scale_tt/shift_tt: per-token scale and shift (same shape as x), applied in float32.
+    """
+    assert (dynamic_weight is None) == (dynamic_bias is None)
+    assert (scale_tt is None) == (shift_tt is None)
+    assert not (dynamic_weight is not None and scale_tt is not None)
+    mesh_width = int(mesh_device.shape[mesh_axis])
+    if mesh_width > 1 and ccl_manager is not None:
+        x = ccl_manager.all_gather_persistent_buffer(x, dim=len(x.shape) - 1, mesh_axis=mesh_axis)
+    t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+    out = norm(t)
+    if dynamic_weight is not None:
+        w = ttnn.to_torch(ttnn.get_device_tensors(dynamic_weight)[0]).float()
+        b = ttnn.to_torch(ttnn.get_device_tensors(dynamic_bias)[0]).float()
+        out = out * w + b
+    elif scale_tt is not None:
+        if mesh_width > 1 and ccl_manager is not None:
+            scale_tt = ccl_manager.all_gather_persistent_buffer(
+                scale_tt, dim=len(scale_tt.shape) - 1, mesh_axis=mesh_axis
+            )
+            shift_tt = ccl_manager.all_gather_persistent_buffer(
+                shift_tt, dim=len(shift_tt.shape) - 1, mesh_axis=mesh_axis
+            )
+        scale_t = ttnn.to_torch(ttnn.get_device_tensors(scale_tt)[0]).float()
+        shift_t = ttnn.to_torch(ttnn.get_device_tensors(shift_tt)[0]).float()
+        out = out * scale_t + shift_t
+    mesh_axes = [None] * (len(x.shape) - 1) + [mesh_axis] if mesh_width > 1 else None
+    return from_torch(
+        out.to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32),
+        device=mesh_device,
+        dtype=dtype,
+        mesh_axes=tuple(mesh_axes) if mesh_axes is not None else None,
+    )
 
 
 # Lingbot-VA config (from reference model.py)
@@ -144,50 +132,27 @@ class WanTransformerBlock(Module):
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.norm1 = _FP32LayerNormFallback(
-            dim,
-            norm_eps=eps,
-            norm_elementwise_affine=False,
-            bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-        )
+        self.norm1 = FP32LayerNorm(dim, eps, elementwise_affine=False)
 
-        self.attn1 = WanAttention(
+        self.attn1 = TorchWanAttention(
             dim=dim,
-            num_heads=num_heads,
+            heads=num_heads,
+            dim_head=dim // num_heads,
             eps=eps,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            is_fsdp=is_fsdp,
-            is_self=True,
+            cross_attention_dim_head=None,
+            attn_mode="torch",
         )
 
-        self.attn2 = WanAttention(
+        self.attn2 = TorchWanAttention(
             dim=dim,
-            num_heads=num_heads,
+            heads=num_heads,
+            dim_head=dim // num_heads,
             eps=eps,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            is_fsdp=is_fsdp,
-            is_self=False,
+            cross_attention_dim_head=dim // num_heads,
+            attn_mode="torch",
         )
 
-        self.norm2 = (
-            _FP32LayerNormFallback(
-                dim,
-                norm_eps=eps,
-                norm_elementwise_affine=True,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-            )
-            if cross_attention_norm
-            else None
-        )
+        self.norm2 = FP32LayerNorm(dim, eps, elementwise_affine=True) if cross_attention_norm else None
 
         self.ffn = ParallelFeedForward(
             dim,
@@ -200,15 +165,7 @@ class WanTransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
-        self.norm3 = _FP32LayerNormFallback(
-            dim,
-            norm_eps=eps,
-            norm_elementwise_affine=False,
-            bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-        )
+        self.norm3 = FP32LayerNorm(dim, eps, elementwise_affine=False)
 
         self.scale_shift_table = Parameter(
             total_shape=[1, 1, 6, dim],
@@ -219,10 +176,34 @@ class WanTransformerBlock(Module):
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+
+    def _load_torch_state_dict_inner(
+        self,
+        state_dict,
+        *,
+        module_key_prefix: str,
+        missing_keys,
+        unexpected_keys,
+        on_host: bool,
+    ) -> None:
+        state_dict = dict(state_dict)
+        for name in ("norm1", "norm2", "norm3"):
+            norm = getattr(self, name, None)
+            if norm is not None:
+                sub = pop_substate(state_dict, name)
+                if sub:
+                    norm.load_state_dict(sub, strict=False)
+        super()._load_torch_state_dict_inner(
+            state_dict,
+            module_key_prefix=module_key_prefix,
+            missing_keys=missing_keys,
+            unexpected_keys=unexpected_keys,
+            on_host=on_host,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -231,6 +212,12 @@ class WanTransformerBlock(Module):
 
         if "scale_shift_table" in state:
             state["scale_shift_table"] = state["scale_shift_table"].unsqueeze(0)
+        attn1_state = pop_substate(state, "attn1")
+        attn2_state = pop_substate(state, "attn2")
+        if attn1_state:
+            self.attn1.load_state_dict(attn1_state, strict=True)
+        if attn2_state:
+            self.attn2.load_state_dict(attn2_state, strict=True)
 
     def forward(
         self,
@@ -241,6 +228,8 @@ class WanTransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
+        update_cache: int = 0,
+        cache_name: str = "pos",
         cached_k: ttnn.Tensor | None = None,
         cached_v: ttnn.Tensor | None = None,
         return_kv: bool = False,
@@ -273,66 +262,125 @@ class WanTransformerBlock(Module):
         gate_msa = ttnn.typecast(gate_msa, dtype=ttnn.bfloat16)
         c_gate_msa = ttnn.typecast(c_gate_msa, dtype=ttnn.bfloat16)
 
+        def _tt_to_torch_bnd(x: ttnn.Tensor) -> torch.Tensor:
+            t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
+            if t.dim() == 4:
+                t = t[0]
+            elif t.dim() > 4:
+                while t.dim() > 3:
+                    t = t.squeeze(0)
+            if t.dim() == 2:
+                t = t.unsqueeze(0)
+            return t.contiguous()
+
+        def _torch_to_tt_1bnd(x: torch.Tensor) -> ttnn.Tensor:
+            if x.dim() == 3:
+                x = x.unsqueeze(0)
+            return bf16_tensor(x.to(torch.bfloat16), device=self.mesh_device)
+
+        def _rope_to_rotary_emb(rope_cos_tt: ttnn.Tensor, rope_sin_tt: ttnn.Tensor) -> torch.Tensor:
+            cos_t = ttnn.to_torch(ttnn.get_device_tensors(rope_cos_tt)[0]).float()
+            sin_t = ttnn.to_torch(ttnn.get_device_tensors(rope_sin_tt)[0]).float()
+            while cos_t.dim() > 3 and cos_t.shape[0] == 1:
+                cos_t = cos_t.squeeze(0)
+                sin_t = sin_t.squeeze(0)
+            if cos_t.dim() == 2:
+                cos_t = cos_t.unsqueeze(0)
+                sin_t = sin_t.unsqueeze(0)
+            half = cos_t.shape[-1] // 2
+            return torch.complex(cos_t[..., :half], sin_t[..., :half])[:, :, None, :].contiguous()
+
+        # 1) Self-attention
+        # Use explicit modulation for per-token conditioning and dynamic layernorm for global conditioning.
         per_token = T_dim != 6
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         if per_token:
-            spatial_normed_1BND = self.norm1(spatial_1BND)
-            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
-                1.0 + scale_msa, spatial_normed_1BND.dtype
-            ) + ttnn.typecast(shift_msa, spatial_normed_1BND.dtype)
-        else:
-            spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=(1.0 + scale_msa), dynamic_bias=shift_msa)
-        if per_token:
-            attn1_out = self.attn1(
-                spatial_1BND=spatial_normed_1BND,
-                N=N,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-                trans_mat=trans_mat,
-                cached_k=cached_k,
-                cached_v=cached_v,
-                return_kv=return_kv,
+            spatial_normed_1BND = _apply_fp32_layernorm_tt(
+                spatial_1BND,
+                self.norm1,
+                self.mesh_device,
+                self.ccl_manager,
+                tp_axis,
+                scale_tt=ttnn.typecast(1.0 + scale_msa, ttnn.float32),
+                shift_tt=ttnn.typecast(shift_msa, ttnn.float32),
             )
-            if return_kv:
-                attn_output, k_cur, v_cur = attn1_out
-            else:
-                attn_output = attn1_out
+            spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
+            rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
+            attn_output = self.attn1(
+                spatial_normed_t,
+                spatial_normed_t,
+                spatial_normed_t,
+                rotary_emb_t,
+                update_cache=update_cache,
+                cache_name=cache_name,
+            )
+            attn_output = _torch_to_tt_1bnd(attn_output)
             spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
         else:
-            attn1_out = self.attn1(
-                spatial_1BND=spatial_normed_1BND,
-                N=N,
-                rope_cos=rope_cos,
-                rope_sin=rope_sin,
-                trans_mat=trans_mat,
-                addcmul_residual=spatial_1BND,
-                addcmul_gate=gate_msa,
-                cached_k=cached_k,
-                cached_v=cached_v,
-                return_kv=return_kv,
+            spatial_normed_1BND = _apply_fp32_layernorm_tt(
+                spatial_1BND,
+                self.norm1,
+                self.mesh_device,
+                self.ccl_manager,
+                tp_axis,
+                dynamic_weight=(1.0 + scale_msa),
+                dynamic_bias=shift_msa,
             )
-            if return_kv:
-                spatial_1BND, k_cur, v_cur = attn1_out
-            else:
-                spatial_1BND = attn1_out
+            spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
+            rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
+            attn_output = self.attn1(
+                spatial_normed_t,
+                spatial_normed_t,
+                spatial_normed_t,
+                rotary_emb_t,
+                update_cache=update_cache,
+                cache_name=cache_name,
+            )
+            attn_output = _torch_to_tt_1bnd(attn_output)
+            spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
 
         # Cross attention on prompt
-        spatial_normed_1BND = self.norm2(spatial_1BND)
+        if self.norm2 is not None:
+            spatial_normed_1BND = _apply_fp32_layernorm_tt(
+                spatial_1BND, self.norm2, self.mesh_device, self.ccl_manager, tp_axis
+            )
+        else:
+            spatial_normed_1BND = spatial_1BND
 
+        spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
+        prompt_t = _tt_to_torch_bnd(prompt_1BLP)
         attn_output_1BND = self.attn2(
-            spatial_1BND=spatial_normed_1BND,
-            N=N,
-            prompt_1BLP=prompt_1BLP,
+            spatial_normed_t,
+            prompt_t,
+            prompt_t,
+            None,
+            update_cache=0,
+            cache_name=cache_name,
         )
+        attn_output_1BND = _torch_to_tt_1bnd(attn_output_1BND)
         spatial_1BND = spatial_1BND + attn_output_1BND
 
-        # Feed Forward
+        # 3) Feed Forward
         if per_token:
-            spatial_normed_1BND = self.norm3(spatial_1BND)
-            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
-                1.0 + c_scale_msa, spatial_normed_1BND.dtype
-            ) + ttnn.typecast(c_shift_msa, spatial_normed_1BND.dtype)
+            spatial_normed_1BND = _apply_fp32_layernorm_tt(
+                spatial_1BND,
+                self.norm3,
+                self.mesh_device,
+                self.ccl_manager,
+                tp_axis,
+                scale_tt=ttnn.typecast(1.0 + c_scale_msa, ttnn.float32),
+                shift_tt=ttnn.typecast(c_shift_msa, ttnn.float32),
+            )
         else:
-            spatial_normed_1BND = self.norm3(spatial_1BND, dynamic_weight=(1.0 + c_scale_msa), dynamic_bias=c_shift_msa)
+            spatial_normed_1BND = _apply_fp32_layernorm_tt(
+                spatial_1BND,
+                self.norm3,
+                self.mesh_device,
+                self.ccl_manager,
+                tp_axis,
+                dynamic_weight=(1.0 + c_scale_msa),
+                dynamic_bias=c_shift_msa,
+            )
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
@@ -344,7 +392,7 @@ class WanTransformerBlock(Module):
         spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa)
 
         if return_kv:
-            return (spatial_1BND, k_cur, v_cur)
+            return (spatial_1BND, cached_k, cached_v)
         return spatial_1BND
 
 
@@ -453,15 +501,7 @@ class WanTransformer3DModel(Module):
             for _ in range(num_layers)
         )
 
-        self.norm_out = _FP32LayerNormFallback(
-            dim,
-            norm_eps=eps,
-            norm_elementwise_affine=False,
-            bias=False,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-        )
+        self.norm_out = FP32LayerNorm(dim, eps, elementwise_affine=False)
 
         self.proj_out = Linear(
             dim,
@@ -494,10 +534,16 @@ class WanTransformer3DModel(Module):
         self._attn_caches: dict[str, list[dict | None]] = {}
 
     def clear_cache(self, cache_name: str) -> None:
+        for block in self.blocks:
+            if hasattr(block.attn1, "clear_cache"):
+                block.attn1.clear_cache(cache_name)
         if cache_name in self._attn_caches:
             self._attn_caches[cache_name] = [None] * len(self.blocks)
 
     def clear_pred_cache(self, cache_name: str) -> None:
+        for block in self.blocks:
+            if hasattr(block.attn1, "clear_pred_cache"):
+                block.attn1.clear_pred_cache(cache_name)
         if cache_name not in self._attn_caches:
             return
         for cache in self._attn_caches[cache_name]:
@@ -517,6 +563,17 @@ class WanTransformer3DModel(Module):
         total_tolen = (attn_window // 2) * latent_token_per_chunk + (attn_window // 2) * action_token_per_chunk
         num_heads = self.num_heads
         head_dim = self.dim // num_heads
+        for block in self.blocks:
+            if hasattr(block.attn1, "init_kv_cache"):
+                block.attn1.init_kv_cache(
+                    cache_name,
+                    total_tolen,
+                    num_heads,
+                    head_dim,
+                    device,
+                    torch.float32,
+                    batch_size,
+                )
         cache_device = device if device.type == "cpu" else torch.device("cpu")
         self._attn_caches[cache_name] = []
         for _ in range(len(self.blocks)):
@@ -859,12 +916,8 @@ class WanTransformer3DModel(Module):
             spatial_1BNI, N = self.preprocess_spatial_input(spatial)
             spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        use_cache = (
-            cache_name in self._attn_caches
-            and self._attn_caches[cache_name] is not None
-            and self.parallel_config.sequence_parallel.factor == 1
-            and self.parallel_config.tensor_parallel.factor == 1
-        )
+        # Disable TT cache-return path when using torch attention in WanTransformerBlock.
+        use_cache = False
         caches = self._attn_caches.get(cache_name) if use_cache else None
 
         block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
@@ -931,6 +984,8 @@ class WanTransformer3DModel(Module):
                     rope_cos=rope_cos_1HND,
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
+                    update_cache=update_cache,
+                    cache_name=cache_name,
                     cached_k=cached_k_tt,
                     cached_v=cached_v_tt,
                     return_kv=True,
@@ -964,6 +1019,8 @@ class WanTransformer3DModel(Module):
                     rope_cos=rope_cos_1HND,
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
+                    update_cache=update_cache,
+                    cache_name=cache_name,
                 )
                 if dump_iter is not None:
                     torch.save(
@@ -971,17 +1028,30 @@ class WanTransformer3DModel(Module):
                         os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
                     )
 
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         if use_per_token:
             sst_shift, sst_scale = ttnn.chunk(self.scale_shift_table.data, 2, dim=-2)
             shift_norm = sst_shift + temb_1BND
             scale_norm = sst_scale + temb_1BND
-            spatial_norm_1BND = self.norm_out(spatial_1BND, dtype=ttnn.float32)
-            spatial_norm_1BND = spatial_norm_1BND * (1 + scale_norm) + shift_norm
+            spatial_norm_1BND = _apply_fp32_layernorm_tt(
+                spatial_1BND,
+                self.norm_out,
+                self.mesh_device,
+                self.ccl_manager,
+                tp_axis,
+                scale_tt=(1 + scale_norm),
+                shift_tt=shift_norm,
+                dtype=ttnn.float32,
+            )
         else:
             scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
             shift_norm, scale_norm = ttnn.chunk(scale_shift_1BSD, 2, -2)
-            spatial_norm_1BND = self.norm_out(
+            spatial_norm_1BND = _apply_fp32_layernorm_tt(
                 spatial_1BND,
+                self.norm_out,
+                self.mesh_device,
+                self.ccl_manager,
+                tp_axis,
                 dynamic_weight=(1 + scale_norm),
                 dynamic_bias=shift_norm,
                 dtype=ttnn.float32,

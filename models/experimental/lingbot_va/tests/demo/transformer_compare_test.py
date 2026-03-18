@@ -42,6 +42,22 @@ def _align_tt_to_torch(tt_t: torch.Tensor, torch_t: torch.Tensor) -> torch.Tenso
     torch_t = torch_t.detach().cpu().float()
     if tt_t.shape == torch_t.shape:
         return tt_t
+    # Common singleton-axis swap case: (L,1,C) <-> (1,L,C)
+    if tt_t.ndim == 3 and torch_t.ndim == 3:
+        if (
+            tt_t.shape[1] == 1
+            and torch_t.shape[0] == 1
+            and tt_t.shape[0] == torch_t.shape[1]
+            and tt_t.shape[2] == torch_t.shape[2]
+        ):
+            return tt_t.permute(1, 0, 2).contiguous()
+        if (
+            tt_t.shape[0] == 1
+            and torch_t.shape[1] == 1
+            and tt_t.shape[1] == torch_t.shape[0]
+            and tt_t.shape[2] == torch_t.shape[2]
+        ):
+            return tt_t.permute(1, 0, 2).contiguous()
     # Same ndim and numel: try permute (e.g. TT (L,B,C) vs torch (B,L,C))
     if tt_t.ndim == torch_t.ndim and tt_t.numel() == torch_t.numel():
         ss_tt = tuple(sorted(tt_t.shape))
@@ -66,6 +82,29 @@ def _align_tt_to_torch(tt_t: torch.Tensor, torch_t: torch.Tensor) -> torch.Tenso
         if tt_t.shape[i] != torch_t.shape[i] and tt_t.shape[i] != 1:
             raise ValueError(f"Cannot align tt {tt_t.shape} to torch {torch_t.shape}: dim {i} mismatch")
     return tt_t.expand(torch_t.shape).clone()
+
+
+def _video_bcfhw_to_reference_seq(
+    tt_video: torch.Tensor, torch_seq_shape: torch.Size, patch_size=(1, 2, 2)
+) -> torch.Tensor:
+    """
+    Convert TT video tensor (B, C, F, H, W) to reference sequence order (B, L*n, C),
+    matching reference: rearrange('b l (n c) -> b (l n) c').
+    """
+    if tt_video.ndim != 5:
+        raise ValueError(f"Expected 5D TT video tensor, got {tt_video.shape}")
+    B, C, F, H, W = tt_video.shape
+    p_t, p_h, p_w = patch_size
+    if F % p_t != 0 or H % p_h != 0 or W % p_w != 0:
+        raise ValueError(f"Video shape {tt_video.shape} is not divisible by patch size {patch_size}")
+    pf, ph, pw = F // p_t, H // p_h, W // p_w
+    # Inverse of data_seq_to_patch in reference.utils.
+    x = tt_video.reshape(B, C, pf, p_t, ph, p_h, pw, p_w)
+    x = x.permute(0, 2, 4, 6, 3, 5, 7, 1).contiguous()  # B, pf, ph, pw, p_t, p_h, p_w, C
+    x = x.reshape(B, pf * ph * pw * p_t * p_h * p_w, C).contiguous()
+    if tuple(x.shape) != tuple(torch_seq_shape):
+        raise ValueError(f"Converted TT video seq shape {x.shape} does not match torch seq shape {torch_seq_shape}")
+    return x
 
 
 def _flatten_pair(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -225,9 +264,10 @@ def _compare_one_pair(
         tt_t, tt_note = _to_compare_tensor(tt_raw, f"{stage}.tt")
 
         try:
-            # final_out_video: TT returns (B, C, F, H, W), torch returns (B, N, C); reshape TT for comparison
+            # final_out_video: TT returns (B, C, F, H, W), torch is (B, L*n, C).
+            # Use exact inverse patch-order mapping to match reference sequence order.
             if stage == "final_out_video" and tt_t.ndim == 5 and torch_t.ndim == 3 and tt_t.numel() == torch_t.numel():
-                tt_t = tt_t.permute(0, 2, 3, 4, 1).reshape(torch_t.shape[0], torch_t.shape[1], torch_t.shape[2])
+                tt_t = _video_bcfhw_to_reference_seq(tt_t, torch_t.shape)
             # text_hidden: TT (L,B,C) vs torch (B,L,C) — permute to match when same sizes
             if (
                 stage == "text_hidden"
