@@ -608,10 +608,10 @@ void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arg
             worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
                                                               [sender_worker_cores[0 + (link * 2)].y];
 
-        worker_reader_sender_forward_runtime_args[kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(1).address();
-        worker_reader_sender_backward_runtime_args[kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(0).address();
-        worker_writer_sender_forward_runtime_args[kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(1).address();
-        worker_writer_sender_backward_runtime_args[kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(0).address();
+        worker_reader_sender_forward_runtime_args[experimental::prim::kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(1).address();
+        worker_reader_sender_backward_runtime_args[experimental::prim::kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(0).address();
+        worker_writer_sender_forward_runtime_args[experimental::prim::kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(1).address();
+        worker_writer_sender_backward_runtime_args[experimental::prim::kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(0).address();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             // sender reader
             worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
