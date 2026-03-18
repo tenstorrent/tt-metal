@@ -5,9 +5,9 @@
 #include "unsqueeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
+ttnn::Tensor unsqueeze(const ttnn::Tensor& input_tensor, const int dim) {
     const auto& tensor_shape = input_tensor.logical_shape();
     const uint32_t rank = tensor_shape.rank();
     const int32_t max_dim = (int)(rank);
@@ -45,4 +45,4 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
     return ttnn::reshape(input_tensor, ttnn::Shape(std::move(output_shape_vector)));
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

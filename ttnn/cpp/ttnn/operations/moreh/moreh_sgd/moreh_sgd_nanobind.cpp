@@ -9,16 +9,18 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_sgd/moreh_sgd.hpp"
 
 namespace ttnn::operations::moreh::moreh_sgd {
 void bind_moreh_sgd_operation(nb::module_& mod) {
-    bind_registered_operation(
+    const auto* doc = "Moreh SGD Operation";
+
+    ttnn::bind_function<"moreh_sgd">(
         mod,
-        ttnn::moreh_sgd,
-        "Moreh SGD Operation",
-        ttnn::nanobind_arguments_t{
+        doc,
+        ttnn::overload_t(
+            &ttnn::moreh_sgd,
             nb::arg("param_in"),
             nb::arg("grad"),
             nb::arg("momentum_buffer_in") = nb::none(),
@@ -33,6 +35,6 @@ void bind_moreh_sgd_operation(nb::module_& mod) {
             nb::arg("momentum_initialized"),
             nb::arg("param_out_memory_config") = nb::none(),
             nb::arg("momentum_buffer_out_memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_sgd

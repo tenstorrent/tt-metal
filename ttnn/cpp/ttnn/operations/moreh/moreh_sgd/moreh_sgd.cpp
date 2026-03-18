@@ -8,8 +8,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_sgd {
-std::vector<std::optional<Tensor>> MorehSgd::invoke(
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_sgd(
     const Tensor& param_in,
     const Tensor& grad,
     const std::optional<Tensor>& momentum_buffer_in,
@@ -41,4 +42,4 @@ std::vector<std::optional<Tensor>> MorehSgd::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_sgd
+}  // namespace ttnn

@@ -39,7 +39,6 @@ void bind_split(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    // Bind the free functions directly - no struct!
     ttnn::bind_function<"split">(
         mod,
         doc,

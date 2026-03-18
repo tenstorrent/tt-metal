@@ -6,8 +6,9 @@
 
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
 
-namespace ttnn::operations::moreh::moreh_bmm {
-Tensor MorehBMM::invoke(
+namespace ttnn {
+
+Tensor moreh_bmm(
     const Tensor& input,
     const Tensor& mat2,
     const std::optional<Tensor>& output,
@@ -15,4 +16,5 @@ Tensor MorehBMM::invoke(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::moreh_matmul(input, mat2, false, false, output, std::nullopt, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_bmm
+
+}  // namespace ttnn

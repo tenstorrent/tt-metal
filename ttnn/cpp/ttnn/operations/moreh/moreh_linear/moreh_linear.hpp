@@ -7,19 +7,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::moreh::moreh_linear {
-struct MorehLinear {
-    static Tensor invoke(
-        const Tensor& input,
-        const Tensor& weight,
-        const std::optional<Tensor>& bias,
-        const std::optional<Tensor>& output,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config);
-};
-}  // namespace ttnn::operations::moreh::moreh_linear
-
 namespace ttnn {
-constexpr auto moreh_linear =
-    ttnn::register_operation<"ttnn::moreh_linear", ttnn::operations::moreh::moreh_linear::MorehLinear>();
-}
+
+Tensor moreh_linear(
+    const Tensor& input,
+    const Tensor& weight,
+    const std::optional<Tensor>& bias = std::nullopt,
+    const std::optional<Tensor>& output = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+
+}  // namespace ttnn
