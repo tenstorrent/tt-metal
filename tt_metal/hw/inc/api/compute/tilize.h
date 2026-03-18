@@ -75,7 +75,7 @@ ALWI void tilizeA_B_reduce_init(
     uint32_t face_r_dim = 16,
     uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1_scaler, ocb, call_line);
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler, face_r_dim, face_r_dim, num_faces, num_faces)));
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true, false, zero_srcA_reduce>(
         icb0, icb1_scaler, block, num_faces, face_r_dim, 1)));
 

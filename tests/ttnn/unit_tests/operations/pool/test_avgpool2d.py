@@ -14,7 +14,6 @@ def tensor_map():
     return tensor_map
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
@@ -116,7 +115,6 @@ def test_avg_pool2d_post_commit(
     )
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_shape, num_slices",  # NCHW
     (

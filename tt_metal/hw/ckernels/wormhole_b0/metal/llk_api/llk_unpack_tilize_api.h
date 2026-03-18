@@ -174,6 +174,9 @@ inline void llk_unpack_tilizeA_B_block(
     std::uint32_t tile_idx_b,
     std::uint32_t num_faces = 4,
     std::uint32_t unpA_face_r_dim = FACE_R_DIM /*unused*/) {
+    llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(operandA, unpA_face_r_dim, num_faces);
+    llk_unpack_reconfig_data_format_srcb<DST_ACCUM_MODE>(operandB);
+
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a, num_faces);
     }
