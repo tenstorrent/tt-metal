@@ -43,7 +43,7 @@ class MultiheadSelfAttention:
         self.q_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
         self.out_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         self.k_proj.load_state_dict(state_dict=state_dict, key="k_proj", module_prefix=module_prefix)
         self.v_proj.load_state_dict(state_dict=state_dict, key="v_proj", module_prefix=module_prefix)
         self.q_proj.load_state_dict(state_dict=state_dict, key="q_proj", module_prefix=module_prefix)
@@ -126,7 +126,9 @@ class TransformerSentenceEncoderLayer:
         self.final_layer_norm_weight: ttnn.Tensor | None = None
         self.final_layer_norm_bias: ttnn.Tensor | None = None
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
         self.self_attn.load_state_dict(state_dict, module_prefix=f"{module_prefix}self_attn.")
         self.fc1.load_state_dict(state_dict=state_dict, key="fc1", module_prefix=module_prefix)
         self.fc2.load_state_dict(state_dict=state_dict, key="fc2", module_prefix=module_prefix)
@@ -241,13 +243,14 @@ class ConvFeatureExtractionModel:
                 device=device, num_channels=conv_layers[0][0], num_groups=conv_layers[0][0]
             )
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
         for i, conv in enumerate(self.conv_layers):
             conv.load_state_dict(state_dict=state_dict, key=f"conv_layers.{i}.0", module_prefix=module_prefix)
-
             if self.mode == "layer_norm":
-                w_key = f"{module_prefix}conv_layers.{i}.1.1.weight" if module_prefix else f"conv_layers.{i}.1.1.weight"
-                b_key = f"{module_prefix}conv_layers.{i}.1.1.bias" if module_prefix else f"conv_layers.{i}.1.1.bias"
+                w_key = f"{module_prefix}conv_layers.{i}.1.1.weight"
+                b_key = f"{module_prefix}conv_layers.{i}.1.1.bias"
                 if w_key not in state_dict:
                     raise KeyError(f"Missing required parameter: {w_key}")
                 if b_key not in state_dict:
@@ -329,7 +332,7 @@ class PositionalConvEmbedding:
         )
         self.remove = 1 if kernel_size % 2 == 0 else 0
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         self.conv.load_state_dict(state_dict=state_dict, key="0", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -368,7 +371,9 @@ class TransformerEncoder:
             layer_norm_first=args["layer_norm_first"],
         )
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
         self.pos_conv.load_state_dict(state_dict=state_dict, module_prefix=f"{module_prefix}pos_conv.")
         self.layer_norm.load_state_dict(state_dict=state_dict, key="layer_norm", module_prefix=module_prefix)
         for i, layer in enumerate(self.layers):

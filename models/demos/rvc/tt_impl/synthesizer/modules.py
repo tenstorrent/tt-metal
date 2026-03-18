@@ -21,7 +21,9 @@ class LayerNorm:
         self.gamma: ttnn.Tensor | None = None
         self.beta: ttnn.Tensor | None = None
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
         gamma_key = f"{module_prefix}gamma" if module_prefix else "gamma"
         beta_key = f"{module_prefix}beta" if module_prefix else "beta"
         if gamma_key not in state_dict:
@@ -94,7 +96,7 @@ class WN:
                 )
             )
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if self.cond_layer is not None:
             self.cond_layer.load_state_dict(state_dict, key="cond_layer", module_prefix=module_prefix)
         for i, layer in enumerate(self.in_layers):
@@ -175,7 +177,7 @@ class ResBlock1:
                 )
             )
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         for i, conv in enumerate(self.convs1):
             conv.load_state_dict(state_dict, key=f"convs1.{i}", module_prefix=module_prefix)
         for i, conv in enumerate(self.convs2):
@@ -215,7 +217,7 @@ class ResBlock2:
                 )
             )
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         for i, conv in enumerate(self.convs):
             conv.load_state_dict(state_dict, key=f"convs.{i}", module_prefix=module_prefix)
 
@@ -262,21 +264,13 @@ class ResidualCouplingLayer:
             out_features=self.half_channels,
         )
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        enc_module_prefix = f"{module_prefix}enc." if module_prefix else "enc."
-        pre_key = (
-            "pre_linear"
-            if (f"{module_prefix}pre_linear.weight" if module_prefix else "pre_linear.weight") in state_dict
-            else "pre"
-        )
-        post_key = (
-            "post_linear"
-            if (f"{module_prefix}post_linear.weight" if module_prefix else "post_linear.weight") in state_dict
-            else "post"
-        )
-        self.pre_linear.load_state_dict(state_dict, key=pre_key, module_prefix=module_prefix)
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
+        enc_module_prefix = f"{module_prefix}enc."
+        self.pre_linear.load_state_dict(state_dict, key="pre_linear", module_prefix=module_prefix)
         self.enc.load_state_dict(state_dict, module_prefix=enc_module_prefix)
-        self.post_linear.load_state_dict(state_dict, key=post_key, module_prefix=module_prefix)
+        self.post_linear.load_state_dict(state_dict, key="post_linear", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x0, x1 = ttnn.chunk(x, 2, dim=-1)

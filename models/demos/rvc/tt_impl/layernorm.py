@@ -32,7 +32,9 @@ class LayerNorm:
         self.dtype = dtype
         self.memory_config = memory_config
 
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str | None = None) -> None:
+        if module_prefix is None:
+            module_prefix = ""
         base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
