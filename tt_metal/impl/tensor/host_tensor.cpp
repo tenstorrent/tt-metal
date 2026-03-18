@@ -39,16 +39,19 @@ HostTensor::HostTensor() = default;
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
     impl(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
-HostTensor::HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<HostTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology))) {}
+HostTensor::HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology) {
+    TT_FATAL(other.impl != nullptr, "Cannot move from a default-constructed or moved-from HostTensor.");
+    impl = std::make_unique<HostTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology));
+}
 
-HostTensor::HostTensor(const HostTensor& other) : impl(std::make_unique<HostTensorImpl>(*other.impl)) {}
+HostTensor::HostTensor(const HostTensor& other) :
+    impl(other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr) {}
 
 HostTensor& HostTensor::operator=(const HostTensor& other) {
     if (this == &other) {
         return *this;
     }
-    impl = std::make_unique<HostTensorImpl>(*other.impl);
+    impl = other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr;
     return *this;
 }
 

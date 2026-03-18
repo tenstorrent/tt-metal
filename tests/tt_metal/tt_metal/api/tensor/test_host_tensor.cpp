@@ -150,6 +150,27 @@ TEST(HostTensorTest, CopyAssignment) {
     EXPECT_EQ(tensor.logical_shape(), shape);
 }
 
+TEST(HostTensorTest, CopyConstructionFromDefaultConstructed) {
+    HostTensor default_tensor;
+    [[maybe_unused]] HostTensor copied(default_tensor);
+    // Both should be in default-constructed state (no assertions, just shouldn't crash)
+}
+
+TEST(HostTensorTest, CopyAssignmentFromDefaultConstructed) {
+    HostTensor default_tensor;
+    [[maybe_unused]] auto tensor = create_simple_host_tensor(Shape{2, 64});
+    tensor = default_tensor;
+    // tensor should now be in default-constructed state (no assertions, just shouldn't crash)
+}
+
+TEST(HostTensorTest, MoveConstructionWithNewSpecFromDefaultConstructedFails) {
+    HostTensor default_tensor;
+    auto new_spec = create_simple_spec(Shape{4, 32}, DataType::FLOAT32);
+    auto new_topology = TensorTopology();
+
+    EXPECT_ANY_THROW(HostTensor(std::move(default_tensor), std::move(new_spec), std::move(new_topology)));
+}
+
 TEST(HostTensorTest, TensorSpecAccess) {
     Shape shape{4, 32};
     auto tensor = create_simple_host_tensor(shape, DataType::FLOAT32);

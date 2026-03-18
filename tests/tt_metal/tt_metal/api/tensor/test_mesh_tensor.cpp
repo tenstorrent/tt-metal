@@ -80,6 +80,18 @@ TEST(MeshTensorTest, ConstructionWithNullMeshBufferFails) {
     EXPECT_ANY_THROW(MeshTensor(nullptr, std::move(spec), std::move(topology)));
 }
 
+TEST(MeshTensorTest, MoveConstructionWithNewSpecFromDefaultConstructedFails) {
+    MeshTensor default_tensor;
+
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto new_spec = TensorSpec(Shape{4, 32}, tensor_layout);
+    auto new_topology = TensorTopology();
+
+    EXPECT_ANY_THROW(MeshTensor(std::move(default_tensor), std::move(new_spec), std::move(new_topology)));
+}
+
 // Device-based tests using GenericMeshDeviceFixture
 using MeshTensorDeviceTest = GenericMeshDeviceFixture;
 

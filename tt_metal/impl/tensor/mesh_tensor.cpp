@@ -63,8 +63,10 @@ MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
 MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
     impl(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
 
-MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<MeshTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology))) {}
+MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology) {
+    TT_FATAL(other.impl != nullptr, "Cannot move from a default-constructed or moved-from MeshTensor.");
+    impl = std::make_unique<MeshTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology));
+}
 
 MeshTensor::~MeshTensor() = default;
 
