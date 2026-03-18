@@ -107,7 +107,7 @@ void init_sync_registers() {
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
-    // DPRINT << "hartid: " << hartid << ENDL();
+    DPRINT << "hartid: " << hartid << ENDL();
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
@@ -126,7 +126,7 @@ extern "C" uint32_t _start1() {
     *trisc_run = RUN_SYNC_MSG_DONE;
 
     DeviceProfilerInit();
-    // DPRINT << "TRISC-FW: initialized" << ENDL();
+    DPRINT << "TRISC-FW: initialized" << ENDL();
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -152,8 +152,7 @@ extern "C" uint32_t _start1() {
         experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #endif
 
-        // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when cache invalidating
-        // functionality is ready for Quasar
+        // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
         rta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset +
                                   MEM_L1_UNCACHED_BASE);
@@ -201,9 +200,9 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
-        // DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
+        DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-        // DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
+        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
     }
 }

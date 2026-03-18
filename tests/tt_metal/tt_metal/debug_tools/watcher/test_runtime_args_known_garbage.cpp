@@ -33,6 +33,7 @@ protected:
         }
         MeshWatcherFixture::SetUp();
     }
+
     // Common test data
     const std::vector<uint32_t> default_rtas{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD, 0xEEEEEEEE};
     const std::vector<uint32_t> default_crtas{0x22222222, 0x33333333, 0x44444444, 0x55555555, 0x66666666, 0x77777777};
@@ -40,73 +41,17 @@ protected:
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-    // Helper: Create DM kernel (arch-aware)
-    // On Quasar, launches kernel on all DMs with compile_args[0] = dm_select so only
-    // the target DM executes; others exit early via get_my_thread_id() guard.
-    // On BH/WH, launches on RISCV_0 (BRISC) only.
-    // l1_scratch_addr: L1 address for writing RTA/CRTA results (passed as compile-time arg)
-    KernelHandle CreateDMKernel(
-        Program& program,
-        const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-        uint32_t l1_scratch_addr,
-        std::map<std::string, std::string> defines = {},
-        uint32_t dm_select = 0) {
-        const auto& hal = MetalContext::instance().hal();
-        if (hal.get_arch() == tt::ARCH::QUASAR) {
-            auto num_dms = hal.get_processor_types_count(
-                HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::DM));
-            return experimental::quasar::CreateKernel(
-                program,
-                rta_crta_kernel_path,
-                core_spec,
-                experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = num_dms,
-                    .compile_args = {dm_select, l1_scratch_addr},
-                    .defines = defines});
-        }
-        return CreateKernel(
-            program,
-            rta_crta_kernel_path,
-            core_spec,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = {l1_scratch_addr},
-                .defines = defines});
-    }
-
-    // Helper: Create compute kernel (arch-aware)
-    KernelHandle CreateComputeKernel(
-        Program& program,
-        const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-        uint32_t compute_scratch_addr,
-        const std::map<std::string, std::string>& defines = {}) {
-        const auto& hal = MetalContext::instance().hal();
-        if (hal.get_arch() == tt::ARCH::QUASAR) {
-            return experimental::quasar::CreateKernel(
-                program,
-                rta_crta_kernel_path,
-                core_spec,
-                experimental::quasar::QuasarComputeConfig{.compile_args = {compute_scratch_addr}, .defines = defines});
-        }
-        return CreateKernel(
-            program,
-            rta_crta_kernel_path,
-            core_spec,
-            ComputeConfig{.compile_args = {compute_scratch_addr}, .defines = defines});
-    }
-
-    // Helper: Read and validate RTA/CRTA results
+    // Helper: Read and validate RTA/CRTA results from L1
     void ValidateArgResults(
         IDevice* device,
         const CoreCoord& core,
-        uint32_t cb_addr,
+        uint32_t l1_addr,
         const std::vector<uint32_t>& expected_rtas,
         const std::vector<uint32_t>& expected_crtas) {
         const uint32_t total_size = (2 + expected_rtas.size() + expected_crtas.size()) * sizeof(uint32_t);
         std::vector<uint32_t> read_result;
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, total_size, read_result);
+        tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_addr, total_size, read_result);
 
         // Validate counts
         EXPECT_EQ(read_result[0], expected_rtas.size());
@@ -163,6 +108,10 @@ class RTAAssertTest : public RTATestFixture, public ::testing::WithParamInterfac
 // - Kernels accessing args when count = 0 trigger "out of bounds" assert
 // - Catches bug: kernel placed on cores but SetRuntimeArgs() only called for subset
 TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
+    const auto& hal = MetalContext::instance().hal();
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Test not yet supported on Quasar";
+    }
     if (IsSlowDispatch()) {
         GTEST_SKIP() << "This test can only be run with fast dispatch mode";
     }
@@ -177,9 +126,11 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
 
         const uint32_t total_read_size = 2 * sizeof(uint32_t);
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        // Separate L1 space for TRISC0 writeback (DM writes 2 words, so offset by 8 bytes)
+        uint32_t compute_scratch_addr = l1_unreserved_base + total_read_size;
 
-        // Zero-init the L1 scratch space on all cores
-        std::vector<uint32_t> zero_init(2, 0);
+        // Zero-init the L1 scratch space on all cores (both DM and compute regions)
+        std::vector<uint32_t> zero_init(4, 0);  // 2 words for DM + 2 words for TRISC0
         for (const auto& core : core_range) {
             tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
         }
@@ -187,8 +138,17 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         distributed::MeshWorkload workload;
         Program program;
 
-        CreateDMKernel(program, core_range_set, l1_unreserved_base);
-        CreateComputeKernel(program, core_range_set, l1_unreserved_base);
+        CreateKernel(
+            program,
+            rta_crta_kernel_path,
+            core_range_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {l1_unreserved_base}});
+
+        CreateKernel(
+            program, rta_crta_kernel_path, core_range_set, ComputeConfig{.compile_args = {compute_scratch_addr}});
 
         // No SetRuntimeArgs called - all cores have RTA/CRTA offset = 0xFFFF pattern
         workload.add_program(device_range, std::move(program));
@@ -204,10 +164,8 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
             EXPECT_EQ(read_result[1], 0);  // crta_count
 
             // TRISC0: verify rta_count = 0, crta_count = 0
-            // Note: Both DM and compute write to the same L1 address, so we're validating
-            // the last writer (compute kernel) here
             read_result.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_read_size, read_result);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core, compute_scratch_addr, total_read_size, read_result);
             EXPECT_EQ(read_result[0], 0);  // rta_count
             EXPECT_EQ(read_result[1], 0);  // crta_count
         }
@@ -219,12 +177,17 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRange cores_without_rtas(CoreCoord(2, 2), CoreCoord(3, 3));
         CoreRangeSet core_range_set(std::vector{cores_with_rtas, cores_without_rtas});
 
-        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-
         distributed::MeshWorkload workload;
         Program program;
 
-        auto kernel = CreateDMKernel(program, core_range_set, l1_unreserved_base, {{"MAX_RTA_IDX", "0"}});
+        auto kernel = CreateKernel(
+            program,
+            rta_crta_kernel_path,
+            core_range_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .defines = {{"MAX_RTA_IDX", "0"}}});  // Kernel will try to read RTA[0]
 
         SetRuntimeArgs(program, kernel, cores_with_rtas, default_rtas);
         // cores_without_rtas has NO RTAs set - 0xBEEF#### pattern -> rta_count = 0 -> assert
@@ -254,7 +217,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     CoreRangeSet core_range_set =
         is_quasar ? CoreRangeSet(std::vector{core_range1}) : CoreRangeSet(std::vector{core_range1, core_range2});
 
-    // Use l1_unreserved space instead of CB for scratch storage
+    // Use l1_unreserved space for RTA/CRTA write back to L1 for verification of correct dispatch payload
     const uint32_t total_word_count = 2 + default_rtas.size() + default_crtas.size();
     uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
@@ -272,18 +235,39 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     distributed::MeshWorkload workload;
     Program program;
 
-    auto kernel = CreateDMKernel(program, core_range_set, l1_unreserved_base);
+    KernelHandle kernel;
+    if (is_quasar) {
+        auto num_dms = hal.get_processor_types_count(
+            HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::DM));
+        // Compile args: [dm_id, l1_scratch_addr]
+        kernel = experimental::quasar::CreateKernel(
+            program,
+            rta_crta_kernel_path,
+            core_range_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = num_dms, .compile_args = {0, l1_unreserved_base}});
+    } else {
+        // Compile args: [l1_scratch_addr]
+        kernel = CreateKernel(
+            program,
+            rta_crta_kernel_path,
+            core_range_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {l1_unreserved_base}});
+    }
 
-    // Range 1 RTAs
+    // Range 1: 5 RTAs per core
     SetRuntimeArgs(program, kernel, core_range1, default_rtas);
 
-    // Range 2: different RTA size (non-Quasar only)
+    // Range 2: 3 RTAs per core (different size than core_range1)
     std::vector<uint32_t> rtas_range2 = {0x1000, 0x1001, 0x1002};
     if (!is_quasar) {
         SetRuntimeArgs(program, kernel, core_range2, rtas_range2);
     }
 
-    // Common args shared across all cores
+    // Common args
     SetCommonRuntimeArgs(program, kernel, default_crtas);
     workload.add_program(device_range, std::move(program));
     RunProgram(mesh_device, workload);
@@ -308,7 +292,8 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
         }
     }
 
-    // Second run: call SetRuntimeArgs again to test re-dispatch with updated arg counts
+    // Second run: call SetRuntimeArgs again. This tests the case when we're memcpying new data
+    // directly into the command issue queue with the arg count
     auto& program_from_workload = workload.get_programs().at(device_range);
     SetRuntimeArgs(program_from_workload, kernel, core_range1, default_rtas);
     if (!is_quasar) {
@@ -316,7 +301,7 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     }
     RunProgram(mesh_device, workload);
 
-    // Validate second run
+    // Validate second run for both core ranges
     for (const auto& core : core_range1) {
         ValidateArgResults(device, core, l1_unreserved_base, default_rtas, default_crtas);
     }
@@ -348,9 +333,6 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     CoreRangeSet core_range_set(std::vector{core_range});
 
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
-
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     distributed::MeshWorkload workload;
     Program program;
@@ -362,14 +344,38 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         defines["MAX_CRTA_IDX"] = std::to_string(default_crtas.size());  // Out of bounds
     }
 
-    // Create kernel based on processor class (arch-specific creation handled by helpers)
     KernelHandle kernel;
     switch (params.processor_class) {
         case HalProcessorClassType::DM:
-            kernel = CreateDMKernel(program, core_range_set, l1_unreserved_base, defines);
+            if (is_quasar) {
+                auto num_dms = hal.get_processor_types_count(
+                    HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::DM));
+                // Compile args: [dm_id]
+                kernel = experimental::quasar::CreateKernel(
+                    program,
+                    rta_crta_kernel_path,
+                    core_range_set,
+                    experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = num_dms, .compile_args = {0}, .defines = defines});
+            } else {
+                kernel = CreateKernel(
+                    program,
+                    rta_crta_kernel_path,
+                    core_range_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+            }
             break;
         case HalProcessorClassType::COMPUTE:
-            kernel = CreateComputeKernel(program, core_range_set, l1_unreserved_base, defines);
+            if (is_quasar) {
+                kernel = experimental::quasar::CreateKernel(
+                    program,
+                    rta_crta_kernel_path,
+                    core_range_set,
+                    experimental::quasar::QuasarComputeConfig{.defines = defines});
+            } else {
+                kernel = CreateKernel(program, rta_crta_kernel_path, core_range_set, ComputeConfig{.defines = defines});
+            }
             break;
         default: TT_THROW("Unsupported processor class");
     }
@@ -403,26 +409,22 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     auto num_dms = hal.get_processor_types_count(
         HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::DM));
 
-    // L1 layout: [sync_counter (8 bytes)] [scratch space for RTA/CRTA results]
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t l1_sync_addr = l1_unreserved_base;
-    uint32_t l1_scratch_addr = l1_unreserved_base + 8;  // After 8-byte sync counter
+    // L1 sync counter for barrier (8 bytes for uint64_t)
+    uint32_t l1_sync_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     distributed::MeshWorkload workload;
     Program program;
 
-    // All DMs sync then attempt OOB RTA access together
     std::map<std::string, std::string> defines = {
         {"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}};
 
+    // Compile args: [num_dms, l1_sync_addr]
     auto kernel = experimental::quasar::CreateKernel(
         program,
         rta_crta_kernel_path,
         core_range_set,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = num_dms,
-            .compile_args = {num_dms, l1_sync_addr, l1_scratch_addr},
-            .defines = defines});
+            .num_threads_per_cluster = num_dms, .compile_args = {num_dms, l1_sync_addr}, .defines = defines});
 
     SetRuntimeArgs(program, kernel, core_range, default_rtas);
     workload.add_program(device_range, std::move(program));
@@ -441,14 +443,14 @@ INSTANTIATE_TEST_SUITE_P(
     WatcherArgAsserts,
     RTAAssertTest,
     ::testing::Values(
-        // RTA out-of-bounds on DM0
+        // RTA tests on DM0
         RTAAssertTestParams{"RTA_DM0", true, "unique runtime arg index out of bounds", HalProcessorClassType::DM},
-        // RTA out-of-bounds on TRISC0
+        // RTA tests on TRISC0
         RTAAssertTestParams{
             "RTA_TRISC0", true, "unique runtime arg index out of bounds", HalProcessorClassType::COMPUTE},
-        // CRTA out-of-bounds on DM0
+        // CRTA tests on DM0
         RTAAssertTestParams{"CRTA_DM0", false, "common runtime arg index out of bounds", HalProcessorClassType::DM},
-        // CRTA out-of-bounds on TRISC0
+        // CRTA tests on TRISC0
         RTAAssertTestParams{
             "CRTA_TRISC0", false, "common runtime arg index out of bounds", HalProcessorClassType::COMPUTE}),
     [](const ::testing::TestParamInfo<RTAAssertTestParams>& info) { return info.param.test_name; });
