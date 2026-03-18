@@ -39,7 +39,7 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32, get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
 class MoeSem:
@@ -832,7 +832,7 @@ class MoeRoutedExpertOp:
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
         device = ttnn.get_device_tensors(shared_residual_mcast_src_tensor)[0].device()
 
-        gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
         mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
         sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
@@ -1361,7 +1361,7 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Per-core bank_id, vc, sender_idx
         # ==================================================================
-        gate_proj_optimal_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        gate_proj_optimal_workers = get_pinned_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
         core_to_bank_id = {}
         for bank_id, core in enumerate(gate_proj_optimal_workers):
             core_to_bank_id[(core.x, core.y)] = bank_id

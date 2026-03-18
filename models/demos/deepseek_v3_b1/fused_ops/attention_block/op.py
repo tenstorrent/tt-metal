@@ -209,7 +209,7 @@ class AttentionBlock:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_ids_tensor,
-        scale,
+        sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -230,7 +230,6 @@ class AttentionBlock:
         bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        sdpa_scale_fp32=1.0,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
@@ -693,10 +692,7 @@ class AttentionBlock:
         sdpa_bwd_r1_sem_id = 10
         sdpa_bwd_r2_sem_id = 11
 
-        # Convert scale to FP32 bits
-        import struct
-
-        sdpa_scale_fp32_bits = struct.unpack(">I", struct.pack(">f", sdpa_scale_fp32))[0]
+        sdpa_scale_fp32_bits = float_to_uint32(sdpa_scale)
 
         # ========================================================================
         # Matmul4 parameters: [1, 512] x [512, 128] -> [1, 128]
@@ -1660,7 +1656,7 @@ class AttentionBlock:
             ("k_chunk_size", k_chunk_size),
             ("num_cores_per_head", num_cores_per_head),
             ("q_heads_parallel_factor", B),
-            ("scale_fp32", float_to_uint32(scale)),
+            ("scale_fp32", sdpa_scale_fp32_bits),
             ("num_tree_reduction_steps", optimized_mla_grid.NUM_TREE_REDUCTION_STEPS),
             ("dst_size", mla_dst_size),
             ("mla_q_in_cb", mla_q_in_cb),
@@ -3857,7 +3853,7 @@ class AttentionBlock:
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
         position_ids_tensor,
-        scale,
+        sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
         sdpa_out_interm_buffer,
@@ -3878,7 +3874,6 @@ class AttentionBlock:
         bcast_secondary_cluster_axis=1,
         reduce_cluster_axis=1,
         sdpa_cluster_axis=0,
-        sdpa_scale_fp32=1.0,
         num_links=1,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
@@ -3905,7 +3900,7 @@ class AttentionBlock:
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
             position_ids_tensor,
-            scale,
+            sdpa_scale,
             output_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
@@ -3926,7 +3921,6 @@ class AttentionBlock:
             bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             sdpa_cluster_axis,
-            sdpa_scale_fp32,
             num_links,
             epsilon,
             fp32_dest_acc_en,
