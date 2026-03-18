@@ -227,6 +227,61 @@ class CompressedTensor:
             assignment_memory_config=assignment_memory_config,
         )
 
+    @classmethod
+    def from_bspm(
+        cls,
+        tensor: torch.Tensor,
+        assignment: np.ndarray,
+        device=None,
+        memory_config=None,
+        assignment_memory_config=None,
+        tile_hw: int = DEFAULT_TILE_HW,
+    ) -> CompressedTensor:
+        """Create CompressedTensor from a pre-computed assignment (e.g., BitSculpt BSPM).
+
+        Bypasses CompressedTensorAssigner — uses the provided assignment directly.
+        The assignment codes must use tt-metal's COMPRESSED_FORMATS ordering:
+        0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0 (use bspm_loader.py to remap from BitSculpt).
+
+        Args:
+            tensor: Original weight tensor (FP32 or BF16). Shape must be divisible
+                by tile_hw in both dimensions.
+            assignment: (tiles_h, tiles_w) int8/uint8 array with tt-metal format indices.
+                Can be obtained from:
+                - integration.ttnn.bspm_loader.load_bspm_for_expert()
+                - integration.ttnn.bspm_loader.load_bspm_for_layer()["codes"][expert_idx, proj_idx]
+            device: ttnn device.
+            memory_config: ttnn.MemoryConfig (must be sharded).
+            assignment_memory_config: Optional separate memory config for assignment tensor.
+            tile_hw: Tile dimension (default 32).
+
+        Returns:
+            CompressedTensor with the BSPM-driven precision assignment.
+
+        Example:
+            from integration.ttnn.bspm_loader import load_bspm_for_expert
+
+            assignment = load_bspm_for_expert(
+                "results/deepseek-r1-0528/layer_30/precision_eval/precision_map_B_3.5.bspm",
+                expert_idx=0,
+                proj_idx=0,
+            )
+            ct = CompressedTensor.from_bspm(
+                weight_tensor,
+                assignment,
+                device=device,
+                memory_config=mem_cfg,
+            )
+        """
+        return cls(
+            tensor,
+            assignment,
+            device=device,
+            memory_config=memory_config,
+            assignment_memory_config=assignment_memory_config,
+            tile_hw=tile_hw,
+        )
+
     def to_torch(self) -> torch.Tensor:
         """Unpack back to float32 torch tensor."""
         data_tensor = self.data
