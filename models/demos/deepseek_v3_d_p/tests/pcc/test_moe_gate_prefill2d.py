@@ -3,14 +3,14 @@
 
 
 import random
+from types import SimpleNamespace
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.deepseek.model import Gate as ReferenceMoEGate
-from models.demos.deepseek_v3_d_p.reference.deepseek.model import linear as referenceLinear
+from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_gate_outputs
 from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGateConfig, MoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
@@ -83,21 +83,32 @@ def test_forward_pass(
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
-    reference_model = ReferenceMoEGate(config)
+    ref_config = SimpleNamespace(
+        num_experts_per_tok=config.n_activated_experts,
+        n_routed_experts=config.n_routed_experts,
+        routed_scaling_factor=config.route_scale,
+        scoring_func=config.score_func,
+        topk_method="noaux_tc",
+        n_group=config.n_expert_groups,
+        topk_group=config.n_limited_groups,
+        norm_topk_prob=True,
+        hidden_size=config.dim,
+    )
+    reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
     tt_model = MoEGatePrefill(config, mesh_device)
 
     torch_input = torch.randn(config.max_seq_len, config.dim, dtype=torch.bfloat16)
 
     torch_weight = torch.randn(reference_model.weight.data.shape, dtype=torch.bfloat16).T
-    torch_bias = torch.randn(reference_model.bias.data.shape, dtype=torch.bfloat16) * 100
-    reference_model.weight.data = torch_weight
-    reference_model.bias.data = torch_bias
+    torch_bias = torch.randn(reference_model.e_score_correction_bias.data.shape, dtype=torch.bfloat16) * 1000
+    reference_model.weight.data = torch_weight.T
+    reference_model.e_score_correction_bias.data = torch_bias
 
     # Reference forward pass
     reference_model.eval()
     reference_model.to(torch.bfloat16)
-    reference_topk_weights, reference_topk_indices = reference_model(torch_input)
-    reference_logits = referenceLinear(torch_input, reference_model.weight)
+    reference_topk_indices, reference_topk_weights = reference_model(torch_input.unsqueeze(0))
+    reference_logits = torch_input @ torch_weight
 
     sharded_mem_config = get_input_mem_config(config, mesh_device.shape)
 
