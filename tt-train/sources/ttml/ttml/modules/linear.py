@@ -19,12 +19,12 @@ def _create_weight(in_features: int, out_features: int, zero_init: bool = False)
     shape = (1, 1, out_features, in_features)
     if zero_init:
         weight_ttnn = ttnn.zeros(
-            shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE
         )
     else:
         init_k = math.sqrt(1.0 / in_features)
         weight_ttnn = ttnn.rand(
-            shape, device=device, dtype=ttnn.bfloat16, low=-init_k, high=init_k
+            shape, device=device, dtype=ttnn.DataType.BFLOAT16, low=-init_k, high=init_k
         )
     return ttml.autograd.create_tensor(weight_ttnn)
 
@@ -34,12 +34,12 @@ def _create_bias(in_features: int, out_features: int, zero_init: bool = False):
     shape = (1, 1, 1, out_features)
     if zero_init:
         bias_ttnn = ttnn.zeros(
-            shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE
         )
     else:
         init_k = math.sqrt(1.0 / in_features)
         bias_ttnn = ttnn.rand(
-            shape, device=device, dtype=ttnn.bfloat16, low=-init_k, high=init_k
+            shape, device=device, dtype=ttnn.DataType.BFLOAT16, low=-init_k, high=init_k
         )
     return ttml.autograd.create_tensor(bias_ttnn)
 

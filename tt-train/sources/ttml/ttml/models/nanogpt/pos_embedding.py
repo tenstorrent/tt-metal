@@ -62,8 +62,8 @@ class PositionalEmbedding(AbstractModuleBase):
         emb_np = emb_np.astype(np.float32)
         emb_np = emb_np.reshape(1, 1, sequence_length, embedding_dim)
         # TODO: Migrate to autograd tensor after branch pruning optimization.
-        emb = ttnn.Tensor(emb_np, ttnn.float32, device, ttnn.TILE_LAYOUT)
-        emb = ttnn.typecast(emb, ttnn.bfloat16)
+        emb = ttnn.Tensor(emb_np, ttnn.DataType.FLOAT32, device, ttnn.Layout.TILE)
+        emb = ttnn.typecast(emb, ttnn.DataType.BFLOAT16)
         self.positional_embedding = emb
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -118,20 +118,22 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
         self.sequence_length = sequence_length
         self.dropout_prob = dropout_prob
 
-        device = ttml.autograd.AutoContext.get_instance().get_device()
         weight_shape = (1, 1, sequence_length, embedding_dim)
         if zero_init:
+            device = ttml.autograd.AutoContext.get_instance().get_device()
             weight_ttnn = ttnn.zeros(
                 weight_shape,
                 device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
             )
+            self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
         else:
-            weight_ttnn = ttml.ops.randn(
-                weight_shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            self.weight = Parameter(
+                ttml.ops.randn(
+                    weight_shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
+                )
             )
-        self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass: add positional embeddings and apply dropout.

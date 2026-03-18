@@ -15,10 +15,16 @@ from typing import Optional, Dict, Literal
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter, ModuleList, RunMode, LinearLayer
+from ttml.modules import (
+    AbstractModuleBase,
+    Embedding,
+    Parameter,
+    ModuleList,
+    RunMode,
+    LinearLayer,
+)
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
-from .embedding import Embedding
 from .pos_embedding import PositionalEmbedding, TrainablePositionalEmbedding
 from .gpt_block import GPTBlock
 
@@ -42,19 +48,20 @@ def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None
         shape = tensor.shape()
 
         if "weight" in name:
-            # Re-initialize weights with normal(0, 0.02)
-            weight_ttnn = ttml.ops.randn(
-                shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            # Initialize weights with normal(0, 0.02)
+            new_tensor = ttml.ops.randn(
+                shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
             )
-            new_tensor = ttml.autograd.create_tensor(weight_ttnn)
             tensor.assign(new_tensor)
         elif "bias" in name:
-            # Re-initialize biases with 0
+            # Initialize biases with 0
             bias_ttnn = ttnn.zeros(
-                shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                shape,
+                device=device,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
             )
-            new_tensor = ttml.autograd.create_tensor(bias_ttnn)
-            tensor.assign(new_tensor)
+            tensor.set_value(bias_ttnn)
 
 
 @dataclass
@@ -150,13 +157,19 @@ class NanoGPT(AbstractModuleBase):
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ln_f_shape = (1, 1, 1, config.n_embd)
         gamma_f_ttnn = ttnn.ones(
-            ln_f_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            ln_f_shape,
+            device=device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.Layout.TILE,
         )
         self.ln_f_gamma = Parameter(ttml.autograd.create_tensor(gamma_f_ttnn))
 
         if config.bias:
             beta_f_ttnn = ttnn.zeros(
-                ln_f_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ln_f_shape,
+                device=device,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
             )
             self.ln_f_beta = Parameter(ttml.autograd.create_tensor(beta_f_ttnn))
         else:
@@ -225,7 +238,6 @@ def create_nanogpt(config: NanoGPTConfig) -> NanoGPT:
 
 
 __all__ = [
-    "Embedding",
     "PositionalEmbedding",
     "TrainablePositionalEmbedding",
     "GPTBlock",

@@ -30,7 +30,10 @@ class RMSNormLayer(AbstractModuleBase):
         gamma_shape = (1, 1, 1, features)
         device = ttml.autograd.AutoContext.get_instance().get_device()
         gamma_ttnn = ttnn.ones(
-            gamma_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            gamma_shape,
+            device=device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.Layout.TILE,
         )
         gamma_tensor = ttml.autograd.create_tensor(gamma_ttnn)
         self.gamma = Parameter(gamma_tensor)

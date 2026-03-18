@@ -9,10 +9,9 @@ from typing import Optional, Dict
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, LinearLayer
+from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
-from .embedding import Embedding
 from .transformer import LlamaBlock, RMSNormLayer
 
 
@@ -80,19 +79,20 @@ def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
         shape = tensor.shape()
 
         if "weight" in name:
-            # Re-initialize weights with normal(0, 0.02)
-            weight_ttnn = ttml.ops.randn(
-                shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            # Initialize weights with normal(0, 0.02)
+            new_tensor = ttml.ops.randn(
+                shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
             )
-            new_tensor = ttml.autograd.create_tensor(weight_ttnn)
             tensor.assign(new_tensor)
         elif "bias" in name:
-            # Re-initialize biases with 0
+            # Initialize biases with 0
             bias_ttnn = ttnn.zeros(
-                shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                shape,
+                device=device,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
             )
-            new_tensor = ttml.autograd.create_tensor(bias_ttnn)
-            tensor.assign(new_tensor)
+            tensor.set_value(bias_ttnn)
 
 
 class Llama(AbstractModuleBase):

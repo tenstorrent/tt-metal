@@ -2,13 +2,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Embedding layer for Llama."""
+"""Embedding layer for ttml models."""
 
 from __future__ import annotations
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Parameter
+
+from .module_base import AbstractModuleBase
+from .parameter import Parameter
 
 
 class Embedding(AbstractModuleBase):
@@ -28,21 +30,22 @@ class Embedding(AbstractModuleBase):
 
         # Initialize weight tensor: shape [1, 1, num_embeddings, embedding_dim]
         # Weight must be in TILE layout because embedding calls untilize on it
-        device = ttml.autograd.AutoContext.get_instance().get_device()
         weight_shape = (1, 1, num_embeddings, embedding_dim)
         if zero_init:
+            device = ttml.autograd.AutoContext.get_instance().get_device()
             weight_ttnn = ttnn.zeros(
                 weight_shape,
                 device=device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
             )
+            self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
         else:
-            weight_ttnn = ttml.ops.randn(
-                weight_shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
+            self.weight = Parameter(
+                ttml.ops.randn(
+                    weight_shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
+                )
             )
-        weight_tensor = ttml.autograd.create_tensor(weight_ttnn)
-        self.weight = Parameter(weight_tensor)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of embedding layer.

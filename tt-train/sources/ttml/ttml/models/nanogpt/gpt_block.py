@@ -40,13 +40,19 @@ class LayerNorm(AbstractModuleBase):
         device = ttml.autograd.AutoContext.get_instance().get_device()
         ln_shape = (1, 1, 1, embedding_dim)
         gamma_ttnn = ttnn.ones(
-            ln_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            ln_shape,
+            device=device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.Layout.TILE,
         )
         self.gamma = Parameter(ttml.autograd.create_tensor(gamma_ttnn))
 
         if bias:
             beta_ttnn = ttnn.zeros(
-                ln_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ln_shape,
+                device=device,
+                dtype=ttnn.DataType.BFLOAT16,
+                layout=ttnn.Layout.TILE,
             )
             self.beta = Parameter(ttml.autograd.create_tensor(beta_ttnn))
         else:

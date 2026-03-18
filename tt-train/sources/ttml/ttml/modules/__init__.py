@@ -8,6 +8,7 @@
 from .._ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
+from .embedding import Embedding
 from .linear import LinearLayer
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
@@ -15,6 +16,7 @@ from .parameter import Buffer, Parameter
 __all__ = [
     "AbstractModuleBase",
     "Buffer",
+    "Embedding",
     "InferenceMode",
     "LinearLayer",
     "ModuleBase",

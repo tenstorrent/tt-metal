@@ -4,19 +4,19 @@
 
 #pragma once
 
-#include <core/ttnn_all_includes.hpp>
+#include <cstdint>
 #include <optional>
+
+#include "autograd/tensor.hpp"
 
 namespace ttml::ops {
 
-tt::tt_metal::Tensor randn(
+autograd::TensorPtr randn(
     const ttnn::Shape& shape,
-    MeshDevice& device,
-    DataType dtype = DataType::BFLOAT16,
-    Layout layout = Layout::TILE,
-    const MemoryConfig& memory_config = ttnn::types::DRAM_MEMORY_CONFIG,
     float mean = 0.0f,
     float stddev = 1.0f,
-    std::optional<uint32_t> seed = std::nullopt);
+    std::optional<uint32_t> seed = std::nullopt,
+    tt::tt_metal::DataType dtype = tt::tt_metal::DataType::BFLOAT16,
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE);
 
 }  // namespace ttml::ops
