@@ -681,9 +681,12 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
     logger.info(f"DRAM streaming matmul + {fused_activation} + mul + scalar test passed!")
 
 
-@pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
-@pytest.mark.parametrize("m", [1, 4, 8])
-@pytest.mark.parametrize("fused_activation", [None, "silu"])
+@pytest.mark.parametrize(
+    "k, n, fused_activation",
+    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None)],
+    ids=["up_proj", "gate_proj", "down_proj"],
+)
+@pytest.mark.parametrize("m", [1, 4, 8], ids=["m1", "m4", "m8"])
 def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     """Test simplified DRAM streaming matmul with optional fused activation.
 
@@ -850,18 +853,22 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     else:
         expected_pcc = 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
+    logger.debug(f"tt_out: {tt_out}")
+    logger.debug(f"pt_out: {pt_out}")
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
     logger.info(f"DRAM streaming matmul{activation_str} test passed!")
 
 
-@pytest.mark.parametrize("k, n", [(7168, 256)])
+@pytest.mark.parametrize(
+    "k, n, fused_activation, seed", [(7168, 256, None, 520), (7168, 256, "silu", 2005)], ids=["up_proj", "gate_proj"]
+)
 @pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("num_experts", [256])
 @pytest.mark.parametrize("selected_experts_k", [8])
-@pytest.mark.parametrize("fused_activation", [None])
-@pytest.mark.skip_post_commit
-def test_dram_streaming_matmul_with_all_experts(device, k, n, m, num_experts, selected_experts_k, fused_activation):
+def test_dram_streaming_matmul_with_all_experts(
+    device, k, n, m, num_experts, selected_experts_k, fused_activation, seed
+):
     """Test DRAM streaming matmul with all K selected experts run in a single kernel invocation.
 
     Simulates the sharded-expert MoE flow where each device holds 1/8th of every
@@ -881,7 +888,6 @@ def test_dram_streaming_matmul_with_all_experts(device, k, n, m, num_experts, se
     assert selected_experts_k <= 16, "selected_experts_k must fit in the [1, 16] index tile"
     tile_h = m
     tile_w = 32
-    torch.manual_seed(2005)
 
     in0_tile = ttnn.Tile([tile_h, tile_w])
     out_tile = ttnn.Tile([tile_h, tile_w])
@@ -914,6 +920,7 @@ def test_dram_streaming_matmul_with_all_experts(device, k, n, m, num_experts, se
         [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
     )
 
+    torch.manual_seed(seed)
     in0 = torch.randn(in0_shape).bfloat16().float()
 
     # ========== Select K expert indices ==========
@@ -1072,6 +1079,8 @@ def test_dram_streaming_matmul_with_all_experts(device, k, n, m, num_experts, se
 
     expected_pcc = 0.98 if fused_activation else 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
+    logger.debug(f"tt_out: {tt_out}")
+    logger.debug(f"pt_out: {pt_out}")
     logger.info(output)
     assert passing, f"PCC check failed: {output}"
     logger.info(f"Multi-expert DRAM streaming matmul{activation_str} test passed!")
