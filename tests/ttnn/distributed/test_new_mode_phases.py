@@ -183,7 +183,7 @@ class TestNewModePhase1Phase2:
         phase2_cmd = build_mpi_command(config, program, effective_mpi_args)
 
         # Phase 2 should have rankfile injection (auto-detected syntax)
-        # Check for rankfile-related args (could be --map-by rankfile:file=, --rankfile, or -mca rmaps_rankfile_path)
+        # Check for rankfile-related args (could be --map-by rankfile:FILE=, --rankfile, or -mca rmaps_rankfile_path)
         cmd_str = " ".join(phase2_cmd)
         has_rankfile = "--rankfile" in phase2_cmd or "--map-by" in phase2_cmd or "rmaps_rankfile_path" in cmd_str
         assert has_rankfile, f"Phase 2 command should include rankfile args. Command: {phase2_cmd}"
