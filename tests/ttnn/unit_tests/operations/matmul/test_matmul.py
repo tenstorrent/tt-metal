@@ -262,7 +262,9 @@ def test_matmul_reuse_config_sharded_fd_column(
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=k // 32,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -365,7 +367,9 @@ def test_matmul_reuse_config_sharded_tiny_tile(
     out_subblock_h, out_subblock_w, _ = find_max_subblock(out_block_h, out_block_w)
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=k // 32,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -676,7 +680,9 @@ def run_matmul_2d_multiple_output_blocks_per_core(
 
     with device.cache_entries_counter.measure():
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -871,7 +877,9 @@ def run_matmul_2d_tiny_tile(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -1056,7 +1064,9 @@ def run_matmul_1d_tiny_tile(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -1366,7 +1376,9 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -1521,7 +1533,7 @@ def test_padded_2d_matmul(device, side, tile_count):
         per_core_N = 176
     torch.manual_seed(0)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_block_h=out_block_h,
         out_block_w=out_block_w,
@@ -1622,7 +1634,7 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
         mcast_in0 = True
     if has_program_config:
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(4, 4),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
             in0_block_w=1,
             out_block_h=out_block_h,
             out_block_w=out_block_w,
@@ -2342,7 +2354,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
             64,
             512,
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(1, 2),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -2357,7 +2369,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
             64,
             512,
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(2, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -2372,7 +2384,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
             32,
             256,
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(4, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=8,
@@ -2387,7 +2399,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
             64,
             512,
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -2405,7 +2417,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
             64,
             512,
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(1, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -2423,7 +2435,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
             64,
             512,
             ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -2636,7 +2648,9 @@ def test_matmul_in0_in1_bias_sharded(
 
     mm_core_grid = core_grid_size_for_num_cores(num_compute_cores)
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=mm_core_grid,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mm_core_grid[0] - 1, mm_core_grid[1] - 1))}
+        ),
         in0_block_w=K // num_compute_cores // 32,  # K // num_cores // 32; how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4; per_core_N = 5 so can only use 1 here
@@ -2917,7 +2931,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         packer_l1_acc=True,
     )
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(1, 2),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -2998,7 +3012,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         # Uses reader_bmm_tile_layout_in0.cpp
         (
             ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(3, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -3012,7 +3026,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         # Uses reader_bmm_tile_layout_in0_sender_padding.cpp
         (
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(3, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -3029,7 +3043,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         # Uses reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp
         (
             ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(3, 1),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
                 in0_block_w=1,
                 out_subblock_h=1,
                 out_subblock_w=1,
