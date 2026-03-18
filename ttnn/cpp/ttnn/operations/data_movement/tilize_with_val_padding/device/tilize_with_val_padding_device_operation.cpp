@@ -80,7 +80,12 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
 void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
-    const auto& input_shape = input_tensor.logical_shape();
+    const auto& memory_layout = input_tensor.memory_config().memory_layout();
+    const bool use_padded =
+        memory_layout == TensorMemoryLayout::INTERLEAVED || memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
+    // Page size for row-major interleaved and height-sharded tensors is the padded width of the tensor, so we must
+    // ensure that the outpus padded width is larger than this value in those cases.
+    const auto& input_shape = use_padded ? input_tensor.padded_shape() : input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
@@ -122,13 +127,24 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         TILE_HEIGHT);
 
-    if (input_tensor.memory_config().is_sharded()) {
+    const uint32_t alignment_requirement = hal::get_l1_alignment();
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+        uint32_t l1_address_increment_size =
+            operation_attributes.output_padded_shape[-1] *
+            input_tensor.element_size();  // For height-sharded and interleaved tensors, the l1 address in the reader
+                                          // kernel gets incremented by the output padded width size.
+        TT_FATAL(
+            l1_address_increment_size % alignment_requirement == 0,
+            "Output padded width size {} must be aligned to {} bytes for HEIGHT_SHARDED or INTERLEAVED tensors",
+            l1_address_increment_size,
+            alignment_requirement);
+    } else if (input_tensor.memory_config().is_sharded()) {
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
 
         const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
             page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "

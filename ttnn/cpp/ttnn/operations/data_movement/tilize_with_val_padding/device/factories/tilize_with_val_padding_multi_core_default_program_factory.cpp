@@ -49,7 +49,13 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
 
     bool has_cliff = !core_range_cliff.empty();
 
-    uint32_t unpadded_row_size_bytes = a.logical_shape()[-1] * a.element_size();    // Assuming bfloat16 dataformat
+    uint32_t unpadded_row_size_bytes =
+        ((!a.is_sharded() || a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED)
+             ? a.padded_shape()[-1]
+             : a.logical_shape()[-1]) *
+        a.element_size();  // For height-sharded and interleaved row-major tensors, the page_size = padded_shape width
+                           // of the tensor.
+    // Assuming bfloat16 dataformat above
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
