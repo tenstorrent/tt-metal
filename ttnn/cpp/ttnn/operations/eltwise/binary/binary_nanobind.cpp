@@ -184,6 +184,24 @@ using BinaryOverloadScalarFn =
 using BinaryOverloadTensorFn =
     Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<CoreRangeSet>&);
 using PreluTensorArrayFn = Tensor (*)(const Tensor&, const std::array<float, 1>&, const std::optional<MemoryConfig>&);
+using InplaceFastApproxScalarFn = Tensor (*)(
+    const Tensor&,
+    float,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>,
+    std::optional<bool>,
+    const std::optional<CoreRangeSet>&);
+using InplaceFastApproxTensorFn = Tensor (*)(
+    const Tensor&,
+    const Tensor&,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>,
+    std::optional<bool>,
+    const std::optional<CoreRangeSet>&);
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_inplace_operation(
@@ -1484,140 +1502,6 @@ void bind_inplace_operation(
             nb::arg("sub_core_grids") = nb::none()));
 }
 
-// Free functions for inplace multiply and divide with fast_and_approximate_mode
-Tensor multiply_inplace_fast_approx_tensor_scalar(
-    const Tensor& input_tensor_a,
-    float scalar,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    bool fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::multiply_(
-        input_tensor_a,
-        scalar,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
-        std::optional<bool>(fast_and_approximate_mode),
-        sub_core_grids);
-}
-
-Tensor multiply_inplace_fast_approx_tensor_tensor(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    bool fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::multiply_(
-        input_tensor_a,
-        input_tensor_b,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
-        std::optional<bool>(fast_and_approximate_mode),
-        sub_core_grids);
-}
-
-Tensor divide_inplace_fast_approx_tensor_scalar(
-    const Tensor& input_tensor_a,
-    float scalar,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    bool fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::divide_(
-        input_tensor_a,
-        scalar,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
-        std::optional<bool>(fast_and_approximate_mode),
-        sub_core_grids);
-}
-
-Tensor divide_inplace_fast_approx_tensor_tensor(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    bool fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::divide_(
-        input_tensor_a,
-        input_tensor_b,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
-        std::optional<bool>(fast_and_approximate_mode),
-        sub_core_grids);
-}
-
-template <typename InplaceFastApproxOp>
-Tensor inplace_fast_approx_binding_tensor_scalar(
-    const Tensor& input_tensor_a,
-    float scalar,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    bool fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return InplaceFastApproxOp::tensor_scalar(
-        input_tensor_a,
-        scalar,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
-        fast_and_approximate_mode,
-        sub_core_grids);
-}
-template <typename InplaceFastApproxOp>
-Tensor inplace_fast_approx_binding_tensor_tensor(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
-    const std::optional<bool>& use_legacy,
-    bool fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return InplaceFastApproxOp::tensor_tensor(
-        input_tensor_a,
-        input_tensor_b,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
-        use_legacy,
-        fast_and_approximate_mode,
-        sub_core_grids);
-}
-
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_inplace_operation_with_fast_approx(
     nb::module_& mod,
@@ -2349,8 +2233,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs in-place multiplication operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|multiply|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::multiply_inplace_fast_approx_tensor_scalar,
-        &detail::multiply_inplace_fast_approx_tensor_tensor,
+        static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::multiply_),
+        static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::multiply_),
         R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
@@ -2361,8 +2245,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs in-place division operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::divide_inplace_fast_approx_tensor_scalar,
-        &detail::divide_inplace_fast_approx_tensor_tensor,
+        static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::divide_),
+        static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::divide_),
         R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
