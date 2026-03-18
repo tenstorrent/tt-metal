@@ -76,21 +76,6 @@ def mesh_device_fixture():
         del device
 
 
-def _is_valid_placement(placement):
-    """Check if a tensor placement dict has a valid mesh_device_shape."""
-    if not placement or not isinstance(placement, dict):
-        return False
-    mesh_shape = placement.get("mesh_device_shape", "")
-    if isinstance(mesh_shape, str):
-        mesh_shape = mesh_shape.strip()
-        if not mesh_shape or mesh_shape == "[]":
-            return False
-    elif isinstance(mesh_shape, list):
-        if len(mesh_shape) < 2:
-            return False
-    return True
-
-
 def run(
     input_a_shape,
     input_a_dtype,
@@ -109,9 +94,9 @@ def run(
     torch.manual_seed(0)
 
     raw_placement_a = kwargs.get("input_a_tensor_placement", None)
-    input_a_tensor_placement = raw_placement_a if _is_valid_placement(raw_placement_a) else None
+    input_a_tensor_placement = raw_placement_a
     raw_placement_b = kwargs.get("input_b_tensor_placement", None)
-    input_b_tensor_placement = raw_placement_b if _is_valid_placement(raw_placement_b) else None
+    input_b_tensor_placement = raw_placement_b
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
 

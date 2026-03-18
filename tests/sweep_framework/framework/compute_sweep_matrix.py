@@ -192,10 +192,10 @@ def compute_lead_models_matrix(modules, batch_size, dynamic_hw=False):
                 base_modules = sorted(set(strip_mesh_suffix(m) for m in shape_modules))
                 # T3K runners are scarce — cap to 5 jobs per mesh shape
                 if "t3k" in runner_config["test_group_name"]:
-                    t3k_jobs = 5
-                    effective_batch_size = max(1, -(-len(base_modules) // t3k_jobs))
+                    max_jobs = 5
+                    effective_batch_size = max(1, -(-len(base_modules) // max_jobs))
                 else:
-                    effective_batch_size = batch_size
+                    effective_batch_size = 5
                 shape_batches = chunk_modules(base_modules, effective_batch_size)
                 batches.extend(shape_batches)
                 for batch in shape_batches:

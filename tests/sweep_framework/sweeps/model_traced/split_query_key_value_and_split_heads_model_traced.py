@@ -19,31 +19,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 300
-
-# Load traced configurations from real model tests (V2 format)
-loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("split_query_key_value_and_split_heads")
-
-# Parameters provided to the test vector generator are defined here.
-parameters = {
-    # Quick sample test with basic configurations for fast validation
-    "model_traced_sample": {
-        "input_a_shape": [(1, 1, 32, 96)],  # Must be divisible for QKV split
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "storage_type": ["StorageType::DEVICE"],
-        "num_heads": [1],
-    },
-}
-
-# Only add model_traced suite if it has valid configurations
-if model_traced_params:
-    parameters["model_traced"] = model_traced_params
-
 
 def mesh_device_fixture():
     mesh_shape = get_mesh_shape()

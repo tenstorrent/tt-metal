@@ -61,25 +61,6 @@ def mesh_device_fixture():
         del device
 
 
-def _is_valid_placement(placement):
-    """Check if a tensor placement dict has a valid mesh_device_shape.
-
-    Placements with empty mesh_device_shape (e.g., from HOST-only tensors) cannot
-    be used with create_tensor_on_mesh and should be treated as no placement.
-    """
-    if not placement or not isinstance(placement, dict):
-        return False
-    mesh_shape = placement.get("mesh_device_shape", "")
-    if isinstance(mesh_shape, str):
-        mesh_shape = mesh_shape.strip()
-        if not mesh_shape or mesh_shape == "[]":
-            return False
-    elif isinstance(mesh_shape, list):
-        if len(mesh_shape) < 2:
-            return False
-    return True
-
-
 def run(
     input_a_shape,
     input_a_dtype,
@@ -95,8 +76,7 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    raw_placement = kwargs.get("input_a_tensor_placement", None)
-    input_a_tensor_placement = raw_placement if _is_valid_placement(raw_placement) else None
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 

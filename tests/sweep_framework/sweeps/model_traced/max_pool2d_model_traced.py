@@ -68,37 +68,59 @@ def mesh_device_fixture():
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
-    output_memory_config=None,
-    batch_size=None,
-    input_h=None,
-    input_w=None,
-    channels=None,
-    kernel_size=None,
-    stride=None,
-    padding=None,
-    dilation=None,
-    applied_shard_scheme=None,
-    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     """
-    Run max_pool2d test with parameters extracted from traced JSON.
-    All parameters are now extracted from JSON including applied_shard_scheme.
+    Run max_pool2d test with parameters extracted from traced JSON (V2 format).
+
+    The V2 loader names tensor params after the JSON argument name.  For
+    max_pool2d the tensor argument is called ``input_tensor``, so the loader
+    generates ``input_tensor_shape``, ``input_tensor_dtype``, etc.  We also
+    accept the ``input_a_*`` naming for backward compatibility with the
+    sample suite.
     """
     torch.manual_seed(0)
 
-    # Extract kwargs
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # --- Resolve tensor parameters (V2 uses input_tensor_*, fallback to input_a_*) ---
+    input_a_shape = kwargs.get("input_tensor_shape", kwargs.get("input_a_shape"))
+    input_a_dtype = kwargs.get("input_tensor_dtype", kwargs.get("input_a_dtype"))
+    input_a_layout = kwargs.get("input_tensor_layout", kwargs.get("input_a_layout"))
+    input_a_memory_config = kwargs.get("input_tensor_memory_config", kwargs.get("input_a_memory_config"))
+    raw_placement = kwargs.get("input_tensor_tensor_placement", kwargs.get("input_a_tensor_placement"))
+    input_a_tensor_placement = raw_placement
+
+    output_memory_config = kwargs.get("output_memory_config", None)
+    storage_type = kwargs.get("storage_type", "StorageType::DEVICE")
+
+    # Pool-specific parameters from traced JSON
+    batch_size = kwargs.get("batch_size", None)
+    input_h = kwargs.get("input_h", None)
+    input_w = kwargs.get("input_w", None)
+    channels = kwargs.get("channels", None)
+    kernel_size = kwargs.get("kernel_size", None)
+    stride = kwargs.get("stride", None)
+    padding = kwargs.get("padding", None)
+    dilation = kwargs.get("dilation", None)
+    applied_shard_scheme = kwargs.get("applied_shard_scheme", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Exclude pool-specific params already handled above so they don't leak via op_kwargs
+    _pool_keys = {
+        "batch_size",
+        "input_h",
+        "input_w",
+        "channels",
+        "kernel_size",
+        "stride",
+        "padding",
+        "dilation",
+        "applied_shard_scheme",
+    }
+    op_kwargs = build_op_kwargs(kwargs, exclude=_pool_keys, output_memory_config=output_memory_config)
 
     # All parameters must be extracted from JSON - no fallbacks
     if batch_size is None or input_h is None or input_w is None or channels is None:
@@ -199,7 +221,7 @@ def run(
 
     if not input_is_sharded:
         if applied_shard_scheme is None:
-            applied_shard_scheme = kwargs.get("applied_shard_scheme", "BLOCK_SHARDED")
+            applied_shard_scheme = "BLOCK_SHARDED"
 
         if applied_shard_scheme == "BLOCK_SHARDED":
             applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED

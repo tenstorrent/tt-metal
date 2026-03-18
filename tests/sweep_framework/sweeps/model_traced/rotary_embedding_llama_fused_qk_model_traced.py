@@ -9,6 +9,16 @@ This operation fuses rotary position embedding with Q/K preparation in one kerne
 optimizing memory bandwidth and reducing overhead in transformer attention layers.
 
 The operation returns two tensors: rotated Q and rotated K.
+
+C++ validation constraints (from rotary_embedding_llama_fused_qk_device_operation.cpp):
+  - ALL 5 tensors MUST be HEIGHT_SHARDED (not DRAM interleaved)
+  - Q and K must have equal batch_size (dim[1]) and batch_size <= 32
+  - Q and K shard grids must NOT overlap
+  - cos/sin batch_size must equal q_batch + k_batch
+  - trans_mat must be sharded over >= (q_num_cores + k_num_cores) cores
+  - trans_mat shard shape must be (32, 32)
+  - q_num_cores + k_num_cores <= 64
+  - head_dim must be a multiple of 32
 """
 
 import torch
@@ -84,39 +94,76 @@ def mesh_device_fixture():
         del device
 
 
-def _safe_memory_config(memory_config, tensor_shape, device):
-    """Return memory_config if compatible with tensor/device, else DRAM_MEMORY_CONFIG.
+def _validate_shard_grid_for_device(memory_config, device):
+    """Check if a sharded memory config's core grid is valid for the given device.
 
-    Traced shard specs are computed for a specific device topology and may use
-    core grids that are invalid on the test device (different harvesting, grid sizes).
-    Always fall back to DRAM interleaved for sharded configs to avoid TT_FATAL.
+    Returns True if valid (or not sharded), False if the grid exceeds device limits.
     """
     if memory_config is None:
-        return ttnn.DRAM_MEMORY_CONFIG
+        return False
     if not (hasattr(memory_config, "is_sharded") and memory_config.is_sharded()):
-        return memory_config
-    # Sharded memory configs from traced runs have device-specific shard specs.
-    # Rather than trying to validate each shard spec against the test device grid,
-    # fall back to DRAM interleaved which works universally.
-    return ttnn.DRAM_MEMORY_CONFIG
+        return True
+    try:
+        shard_spec = memory_config.shard_spec
+        if shard_spec is None:
+            return False
+        # Try to access grid properties -- if the grid references cores
+        # beyond device limits, this will be caught at tensor creation time.
+        # Here we do a basic check: ensure num_cores > 0
+        grid = shard_spec.grid
+        num_cores = grid.num_cores()
+        return num_cores > 0
+    except Exception:
+        return False
 
 
 def _create_tensor_on_device(torch_tensor, device, dtype, layout, memory_config, is_mesh_device, placement):
-    """Create tensor on device, falling back to DRAM interleaved if shard spec is incompatible."""
-    # Always validate shard spec compatibility before creating tensor.
-    # Traced shard specs may have core grids from a different device topology.
-    safe_mc = _safe_memory_config(memory_config, torch_tensor.shape, device)
+    """Create tensor on device with the exact traced sharded memory config.
+
+    This op REQUIRES HEIGHT_SHARDED for all inputs.  We must use the traced
+    memory configs directly -- falling back to DRAM_MEMORY_CONFIG would cause
+    a TT_FATAL in the C++ validation layer.
+
+    For mesh devices, we first create with DRAM interleaved then reshard,
+    since ttnn.from_torch with mesh_mapper may not support sharded configs
+    directly for all placement types.
+    """
+    if memory_config is None:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     if is_mesh_device and placement:
-        return create_tensor_on_mesh(torch_tensor, device, dtype, layout, safe_mc, placement)
+        # For mesh: create on mesh, then reshard if needed
+        # create_tensor_on_mesh handles mesh placement (ShardTensor2dMesh etc.)
+        # First place with DRAM, then move to sharded if memory_config is sharded
+        is_sharded = hasattr(memory_config, "is_sharded") and memory_config.is_sharded()
+        if is_sharded:
+            tensor = create_tensor_on_mesh(torch_tensor, device, dtype, layout, ttnn.DRAM_MEMORY_CONFIG, placement)
+            tensor = ttnn.to_memory_config(tensor, memory_config)
+            return tensor
+        else:
+            return create_tensor_on_mesh(torch_tensor, device, dtype, layout, memory_config, placement)
 
-    return ttnn.from_torch(
-        torch_tensor,
-        dtype=dtype,
-        layout=layout,
-        device=device,
-        memory_config=safe_mc,
-    )
+    # Single device or mesh without placement: create directly
+    is_sharded = hasattr(memory_config, "is_sharded") and memory_config.is_sharded()
+    if is_sharded:
+        # Create on DRAM first, then move to sharded config
+        tensor = ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tensor = ttnn.to_memory_config(tensor, memory_config)
+        return tensor
+    else:
+        return ttnn.from_torch(
+            torch_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
 
 
 def run(
@@ -144,46 +191,55 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    def _is_valid_placement(placement):
-        if not placement or not isinstance(placement, dict):
-            return False
-        mesh_shape = placement.get("mesh_device_shape", "")
-        if isinstance(mesh_shape, str):
-            mesh_shape = mesh_shape.strip()
-            if not mesh_shape or mesh_shape == "[]":
-                return False
-        elif isinstance(mesh_shape, list):
-            if len(mesh_shape) < 2:
-                return False
-        return True
-
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    if not _is_valid_placement(input_a_tensor_placement):
+    if not input_a_tensor_placement:
         input_a_tensor_placement = None
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
-    if not _is_valid_placement(input_b_tensor_placement):
+    if not input_b_tensor_placement:
         input_b_tensor_placement = None
     input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
-    if not _is_valid_placement(input_c_tensor_placement):
+    if not input_c_tensor_placement:
         input_c_tensor_placement = None
     input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
-    if not _is_valid_placement(input_d_tensor_placement):
+    if not input_d_tensor_placement:
         input_d_tensor_placement = None
     input_e_tensor_placement = kwargs.get("input_e_tensor_placement", None)
-    if not _is_valid_placement(input_e_tensor_placement):
+    if not input_e_tensor_placement:
         input_e_tensor_placement = None
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Handle dict input_a_shape from traced configurations (multi-input)
-    if isinstance(input_a_shape, dict):
-        shape_a = input_a_shape.get("input_a", input_a_shape.get("q_input_tensor"))  # Q tensor
-        shape_b = input_a_shape.get("input_b", input_a_shape.get("k_input_tensor"))  # K tensor
-        shape_c = input_a_shape.get("input_c", input_a_shape.get("cos_cache"))  # cos cache
-        shape_d = input_a_shape.get("input_d", input_a_shape.get("sin_cache"))  # sin cache
-        shape_e = input_a_shape.get("input_e", input_a_shape.get("trans_mat"))  # trans_mat
+    # Extract shapes for all 5 inputs.
+    # V2 loader puts shapes as separate keys: input_b_shape, input_c_shape, etc.
+    # These end up in **kwargs since only input_a_shape is a named parameter.
+    # Filter out "__ABSENT__" sentinel used by V2 loader for missing keys.
+    def _get_shape(key):
+        val = kwargs.get(key, None)
+        if val is None or val == "__ABSENT__":
+            return None
+        return val
+
+    shape_b_from_kwargs = _get_shape("input_b_shape")
+    shape_c_from_kwargs = _get_shape("input_c_shape")
+    shape_d_from_kwargs = _get_shape("input_d_shape")
+    shape_e_from_kwargs = _get_shape("input_e_shape")
+
+    if shape_b_from_kwargs is not None:
+        # V2 loader format: each input has its own shape key
+        shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+        shape_b = tuple(shape_b_from_kwargs) if isinstance(shape_b_from_kwargs, (list, tuple)) else shape_b_from_kwargs
+        shape_c = tuple(shape_c_from_kwargs) if shape_c_from_kwargs is not None else None
+        shape_d = tuple(shape_d_from_kwargs) if shape_d_from_kwargs is not None else None
+        shape_e = tuple(shape_e_from_kwargs) if shape_e_from_kwargs is not None else None
+    elif isinstance(input_a_shape, dict):
+        # Legacy dict format (multi-input packed into input_a_shape)
+        shape_a = input_a_shape.get("input_a", input_a_shape.get("q_input_tensor"))
+        shape_b = input_a_shape.get("input_b", input_a_shape.get("k_input_tensor"))
+        shape_c = input_a_shape.get("input_c", input_a_shape.get("cos_cache"))
+        shape_d = input_a_shape.get("input_d", input_a_shape.get("sin_cache"))
+        shape_e = input_a_shape.get("input_e", input_a_shape.get("trans_mat"))
     else:
-        # Fallback for sample configurations
+        # Fallback for sample configurations (simple tuple shape)
         if isinstance(input_a_shape, (tuple, list)):
             shape = tuple(input_a_shape)
         else:
@@ -195,85 +251,146 @@ def run(
         shape_d = (1, 1, seq_len, head_dim)
         shape_e = (1, 1, head_dim, head_dim)
 
+    # Validate: all shapes must be present for this 5-input op
+    if shape_a is None or shape_b is None or shape_c is None or shape_d is None:
+        return [(False, "Missing required input shapes (need all 5: Q, K, cos, sin, trans_mat)"), 0]
+
+    # Pre-validate C++ constraints before creating tensors:
+    # 1. Q and K batch_size must be equal
+    q_batch = shape_a[1] if len(shape_a) >= 2 else 1
+    k_batch = shape_b[1] if len(shape_b) >= 2 else 1
+    if q_batch != k_batch:
+        return [(False, f"Q batch ({q_batch}) != K batch ({k_batch}), C++ requires equal batch sizes"), 0]
+
+    # 2. Q and K batch_size must be <= 32
+    if q_batch > 32:
+        return [(False, f"Q/K batch_size ({q_batch}) > 32, C++ limit is 32"), 0]
+
+    # 3. head_dim must be a multiple of 32
+    head_dim = shape_a[-1]
+    if head_dim % 32 != 0:
+        return [(False, f"head_dim ({head_dim}) is not a multiple of 32"), 0]
+
     # Use random tensors with exact traced shapes for all 5 inputs.
-    # Production models use compute_gather_cos_sin and get_rot_transformation_mat
-    # which produce model-specific shapes (e.g., trans_mat [1,1,2048,32] not [1,1,head_dim,head_dim]).
-    # Using exact traced shapes ensures the op gets properly shaped tensors.
     torch_input_a = (torch.rand(shape_a) * 2 - 1).to(torch.bfloat16)
     torch_input_b = (torch.rand(shape_b) * 2 - 1).to(torch.bfloat16)
     torch_input_c = (torch.rand(shape_c) * 2 - 1).to(torch.bfloat16)
     torch_input_d = (torch.rand(shape_d) * 2 - 1).to(torch.bfloat16)
     torch_input_e = (torch.rand(shape_e) * 2 - 1).to(torch.bfloat16) if shape_e else None
 
-    # Create ttnn tensors with fallback for sharded memory configs
-    input_tensor_a = _create_tensor_on_device(
-        torch_input_a,
-        device,
-        input_a_dtype,
-        input_a_layout,
-        input_a_memory_config,
-        is_mesh_device,
-        input_a_tensor_placement,
-    )
-    input_tensor_b = _create_tensor_on_device(
-        torch_input_b,
-        device,
-        input_b_dtype,
-        input_b_layout,
-        input_b_memory_config,
-        is_mesh_device,
-        input_b_tensor_placement,
-    )
-    input_tensor_c = _create_tensor_on_device(
-        torch_input_c,
-        device,
-        input_c_dtype,
-        input_c_layout,
-        input_c_memory_config,
-        is_mesh_device,
-        input_c_tensor_placement,
-    )
-    input_tensor_d = _create_tensor_on_device(
-        torch_input_d,
-        device,
-        input_d_dtype,
-        input_d_layout,
-        input_d_memory_config,
-        is_mesh_device,
-        input_d_tensor_placement,
-    )
+    # This op REQUIRES HEIGHT_SHARDED for all inputs.  Validate shard grids
+    # before attempting tensor creation to avoid TT_FATAL crashes.
+    # If any memory config is not HEIGHT_SHARDED (e.g., DRAM from sample suite),
+    # we skip validation since the C++ op will reject it cleanly.
+    all_mem_configs = [
+        ("Q input", input_a_memory_config),
+        ("K input", input_b_memory_config),
+        ("cos", input_c_memory_config),
+        ("sin", input_d_memory_config),
+        ("trans_mat", input_e_memory_config),
+    ]
 
-    if torch_input_e is not None:
-        input_tensor_e = _create_tensor_on_device(
-            torch_input_e,
+    # Check if ALL memory configs are sharded (required by C++ op)
+    all_sharded = all(mc is not None and hasattr(mc, "is_sharded") and mc.is_sharded() for _, mc in all_mem_configs)
+
+    if not all_sharded:
+        # For the sample suite with DRAM configs, the op will fail at C++ validation.
+        # Skip gracefully rather than hitting TT_FATAL.
+        non_sharded = [
+            name for name, mc in all_mem_configs if mc is None or not (hasattr(mc, "is_sharded") and mc.is_sharded())
+        ]
+        return [
+            (
+                False,
+                f"rotary_embedding_llama_fused_qk requires HEIGHT_SHARDED for all inputs, "
+                f"but {non_sharded} are not sharded. Skipping to avoid TT_FATAL.",
+            ),
+            0,
+        ]
+
+    try:
+        # Create ttnn tensors with the exact traced sharded memory configs.
+        # The traced shard specs define the core grids used by the real model run
+        # and encode the Q/K non-overlapping grid constraint.
+        input_tensor_a = _create_tensor_on_device(
+            torch_input_a,
             device,
-            input_e_dtype or ttnn.bfloat16,
-            input_e_layout or ttnn.TILE_LAYOUT,
-            input_e_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            input_a_dtype,
+            input_a_layout,
+            input_a_memory_config,
             is_mesh_device,
-            input_e_tensor_placement,
+            input_a_tensor_placement,
         )
-    else:
-        torch_input_e = torch.randn(1, 1, 64, 32).to(torch.bfloat16)
-        input_tensor_e = ttnn.from_torch(
-            torch_input_e,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        input_tensor_b = _create_tensor_on_device(
+            torch_input_b,
+            device,
+            input_b_dtype,
+            input_b_layout,
+            input_b_memory_config,
+            is_mesh_device,
+            input_b_tensor_placement,
         )
+        input_tensor_c = _create_tensor_on_device(
+            torch_input_c,
+            device,
+            input_c_dtype,
+            input_c_layout,
+            input_c_memory_config,
+            is_mesh_device,
+            input_c_tensor_placement,
+        )
+        input_tensor_d = _create_tensor_on_device(
+            torch_input_d,
+            device,
+            input_d_dtype,
+            input_d_layout,
+            input_d_memory_config,
+            is_mesh_device,
+            input_d_tensor_placement,
+        )
+
+        if torch_input_e is not None:
+            input_tensor_e = _create_tensor_on_device(
+                torch_input_e,
+                device,
+                input_e_dtype or ttnn.bfloat16,
+                input_e_layout or ttnn.TILE_LAYOUT,
+                input_e_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                is_mesh_device,
+                input_e_tensor_placement,
+            )
+        else:
+            torch_input_e = torch.randn(1, 1, 64, 32).to(torch.bfloat16)
+            input_tensor_e = _create_tensor_on_device(
+                torch_input_e,
+                device,
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                input_e_memory_config or ttnn.DRAM_MEMORY_CONFIG,
+                is_mesh_device,
+                input_e_tensor_placement,
+            )
+    except Exception as e:
+        # Shard spec incompatible with device (e.g., traced on T3K but running on N300
+        # with a grid that exceeds available cores after harvesting).
+        # Return a clean failure instead of crashing.
+        return [(False, f"Failed to create sharded tensors on device: {e}"), 0]
 
     start_time = start_measuring_time()
 
-    # rotary_embedding_llama_fused_qk returns a tuple of (Q_rotated, K_rotated)
-    result = ttnn.experimental.rotary_embedding_llama_fused_qk(
-        input_tensor_a,
-        input_tensor_b,
-        input_tensor_c,
-        input_tensor_d,
-        input_tensor_e,
-        **op_kwargs,
-    )
+    try:
+        # rotary_embedding_llama_fused_qk returns a tuple of (Q_rotated, K_rotated)
+        result = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            input_tensor_a,
+            input_tensor_b,
+            input_tensor_c,
+            input_tensor_d,
+            input_tensor_e,
+            **op_kwargs,
+        )
+    except Exception as e:
+        e2e_perf = stop_measuring_time(start_time)
+        return [(False, f"Op execution failed: {e}"), e2e_perf]
 
     # The operation returns a tuple of (Q_rotated, K_rotated)
     if isinstance(result, (list, tuple)) and len(result) == 2:

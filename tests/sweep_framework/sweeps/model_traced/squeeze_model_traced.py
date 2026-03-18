@@ -72,6 +72,8 @@ def run(
     input_a_layout,
     input_a_memory_config,
     dim=None,
+    output_memory_config=None,
+    memory_config=None,
     storage_type="StorageType::DEVICE",
     *,
     device,
@@ -81,10 +83,12 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    output_memory_config = kwargs.get("output_memory_config", None)
     op_kwargs = build_op_kwargs(
         kwargs, output_memory_config=output_memory_config
     )  # op_kwargs available but op does not accept extra kwargs
+
+    if output_memory_config is None and memory_config is not None:
+        output_memory_config = memory_config
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -96,6 +100,9 @@ def run(
     # In V2 format, dim comes as arg1 (positional parameter)
     if dim is None:
         dim = kwargs.get("arg1", 0)
+    # Handle __ABSENT__ sentinel from V2 loader
+    if dim == "__ABSENT__":
+        dim = 0
     torch_output_tensor = torch.squeeze(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch

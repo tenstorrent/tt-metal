@@ -225,27 +225,42 @@ def create_tensor_on_mesh(
 
             # Traced shapes are per-device (post-shard). ShardTensor2dMesh expects
             # global (pre-shard) shapes. Expand by tiling shard dims by mesh sizes.
-            # If any shard dim is out of range for the tensor's ndim, fall back to
-            # replicate (the traced config may have been for a higher-rank view).
             ndim = torch_tensor.ndim
 
-            def _dim_valid(d):
-                return d is not None and -ndim <= d < ndim
+            def _normalize_dim(d):
+                """Normalize negative dim and return (valid, normalized_dim)."""
+                if d is None:
+                    return True, None
+                nd = d if d >= 0 else d + ndim
+                return 0 <= nd < ndim, nd
 
-            if _dim_valid(dims_tuple[0]) or dims_tuple[0] is None:
-                if _dim_valid(dims_tuple[1]) or dims_tuple[1] is None:
-                    # All shard dims are valid — expand and shard
-                    repeat_factors = [1] * ndim
-                    if _dim_valid(dims_tuple[0]):
-                        repeat_factors[dims_tuple[0]] = mesh_shape_tuple[0]
-                    if _dim_valid(dims_tuple[1]):
-                        repeat_factors[dims_tuple[1]] = mesh_shape_tuple[1]
-                    torch_tensor = torch_tensor.repeat(*repeat_factors)
-                    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
-                else:
-                    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-            else:
-                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            valid0, nd0 = _normalize_dim(dims_tuple[0])
+            valid1, nd1 = _normalize_dim(dims_tuple[1])
+
+            if not valid0 or not valid1:
+                # Shard dim exceeds tensor rank — pad tensor to required rank.
+                # This happens when the tracer captured a higher-rank view
+                # (e.g., 4D model activation) but the vector stores a 2D weight.
+                max_dim = max(
+                    (dims_tuple[0] if dims_tuple[0] is not None and dims_tuple[0] >= 0 else -1),
+                    (dims_tuple[1] if dims_tuple[1] is not None and dims_tuple[1] >= 0 else -1),
+                )
+                needed_rank = max_dim + 1
+                if needed_rank > ndim:
+                    # Prepend unit dimensions to reach required rank
+                    for _ in range(needed_rank - ndim):
+                        torch_tensor = torch_tensor.unsqueeze(0)
+                    ndim = torch_tensor.ndim
+                    valid0, nd0 = _normalize_dim(dims_tuple[0])
+                    valid1, nd1 = _normalize_dim(dims_tuple[1])
+
+            repeat_factors = [1] * ndim
+            if nd0 is not None and valid0:
+                repeat_factors[nd0] = mesh_shape_tuple[0]
+            if nd1 is not None and valid1:
+                repeat_factors[nd1] = mesh_shape_tuple[1]
+            torch_tensor = torch_tensor.repeat(*repeat_factors)
+            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
         elif len(entries) == 1:
             shard_match = re.search(r"PlacementShard\((-?\d+)\)", entries[0])
             if shard_match:
@@ -253,13 +268,19 @@ def create_tensor_on_mesh(
                 dims_tuple = (None, dim)
 
                 ndim = torch_tensor.ndim
-                if -ndim <= dim < ndim:
-                    repeat_factors = [1] * ndim
-                    repeat_factors[dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
-                    torch_tensor = torch_tensor.repeat(*repeat_factors)
-                    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
-                else:
-                    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+                norm_dim = dim if dim >= 0 else dim + ndim
+                if norm_dim < 0 or norm_dim >= ndim:
+                    # Pad tensor rank to accommodate shard dim
+                    needed_rank = (dim + 1) if dim >= 0 else ndim
+                    if needed_rank > ndim:
+                        for _ in range(needed_rank - ndim):
+                            torch_tensor = torch_tensor.unsqueeze(0)
+                        ndim = torch_tensor.ndim
+                        norm_dim = dim if dim >= 0 else dim + ndim
+                repeat_factors = [1] * ndim
+                repeat_factors[norm_dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
+                torch_tensor = torch_tensor.repeat(*repeat_factors)
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         else:
