@@ -1170,10 +1170,18 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
 
+        # OLMo: use bfloat16 for xqkv at ISL <= 2048 to preserve Q/K norm and RoPE precision.
+        # For ISL >= 4096: ring SDPA casts Q/K/V to bfloat8_b anyway, and
+        # reduce_scatter_minimal_async does not support bfloat16 at the 4096×896 size —
+        # use ccl_dtype (bfloat8_b) to match what ring SDPA requires.
+        if self.is_olmo:
+            xqkv_dtype = ttnn.bfloat16 if seq_len <= 2048 else self.ccl_dtype
+        else:
+            xqkv_dtype = self.ccl_dtype if self.TG else ttnn.bfloat16
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv_interleaved,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+            dtype=xqkv_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
@@ -1190,20 +1198,21 @@ class TtLlamaAttention(LightweightModule):
         if not skip_input_dealloc:
             ttnn.deallocate(x_11SH)
 
+        # Use QKV_BF16 (bfloat16 all-gather buffer) only for ISL <= 2048 where xqkv is bf16.
+        # For ISL >= 4096, xqkv is bfloat8_b → use the standard "QKV" buffer.
+        qkv_buffer_key = "QKV_BF16" if (self.is_olmo and seq_len <= 2048) else "QKV"
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="QKV",
+            buffer_key=qkv_buffer_key,
             batch_size=batch_size,
         )
         ttnn.deallocate(xqkv)
 
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-
-        # OLMo QK-norm is applied AFTER nlp_create_qkv_heads (per-head, like decode path)
 
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
@@ -1236,15 +1245,8 @@ class TtLlamaAttention(LightweightModule):
         if self.qk_norm and not self.is_olmo:
             q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
         elif self.is_olmo and self.qk_norm:
-            # OLMo QK-norm: distributed RMS across 8 row devices for exact global normalization.
-            # HF normalizes Q over 5120 dims (all 40 heads) before head split.
-            # Each row device has 640 dims (5 heads × 128). Use rms_norm_pre/post_all_gather
-            # with all_gather on cluster_axis=0 to compute global variance over 5120 dims.
-            #
-            # Q shape is [1, n_heads, seq, head_dim]. Must transpose to [1, seq, n_heads, head_dim]
-            # before flattening so heads are contiguous per position (not per head across positions).
             q_seq = q_heads_1QSD_pre_rot.shape[2]
-            q_transposed = ttnn.transpose(q_heads_1QSD_pre_rot, 1, 2)  # [1, seq, 5, 128]
+            q_transposed = ttnn.transpose(q_heads_1QSD_pre_rot, 1, 2)
             ttnn.deallocate(q_heads_1QSD_pre_rot)
             q_flat = ttnn.reshape(q_transposed, [1, 1, q_seq, self.n_local_heads * self.head_dim])
             ttnn.deallocate(q_transposed)
@@ -1264,7 +1266,7 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(q_flat)
             q_unflat = ttnn.reshape(q_normed_flat, [1, q_seq, self.n_local_heads, self.head_dim])
             ttnn.deallocate(q_normed_flat)
-            q_heads_1QSD_pre_rot = ttnn.transpose(q_unflat, 1, 2)  # [1, 5, seq, 128]
+            q_heads_1QSD_pre_rot = ttnn.transpose(q_unflat, 1, 2)
             ttnn.deallocate(q_unflat)
 
         self._capture_prefill_attn("q_after_norm", q_heads_1QSD_pre_rot)
@@ -1289,9 +1291,6 @@ class TtLlamaAttention(LightweightModule):
         if self.qk_norm and not self.is_olmo:
             k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
         elif self.is_olmo and self.qk_norm:
-            # OLMo K norm: distributed RMS across 8 row devices for exact global normalization.
-            # HF normalizes K over 1024 dims (all 8 KV heads). Each row device has 128.
-            # all_gather on cluster_axis=0 to compute global variance over 1024 dims.
             k_heads_1KSD_pre_rot = ttnn.to_layout(k_heads_1KSD_pre_rot, ttnn.TILE_LAYOUT)
             k_stats = ttnn.rms_norm_pre_all_gather(
                 k_heads_1KSD_pre_rot, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
@@ -1324,14 +1323,22 @@ class TtLlamaAttention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
+        # Determine SDPA path before K/V handling so we know which dtypes to keep.
+        # ring_distributed_sdpa needs seqlen//8 to be at least one tile (32).
+        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
+
+        # Cast K and V to bfloat8_b for KV cache fill (cache is always bf8).
+        # For OLMo non-ring SDPA: keep the bfloat16 K/V alive for the SDPA call;
+        # the bf8 copies are only needed for the cache fill.
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(k_heads_1KSD)
+        if not (self.is_olmo and not ring_distributed_sdpa):
+            ttnn.deallocate(k_heads_1KSD)
 
         k_fill = k_heads_1KSD_8b
 
         v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-
-        ttnn.deallocate(v_heads_1VSD)
+        if not (self.is_olmo and not ring_distributed_sdpa):
+            ttnn.deallocate(v_heads_1VSD)
 
         v_fill = v_heads_1VSD_8b
 
@@ -1367,20 +1374,30 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        # OLMo non-ring path: use bfloat16 Q, K, V for SDPA — xqkv matmul now outputs bfloat16,
+        # so Q/K/V carry true bfloat16 precision through QK-norm and RoPE. Deallocate bf8 K/V here
+        # since the cache fill is complete and we no longer need them.
+        # Run ring_distributed_sdpa for > 1k seqlen; regular SDPA is used for <=1k seqlen.
+        if self.is_olmo and not ring_distributed_sdpa:
+            ttnn.deallocate(k_heads_1KSD_8b)
+            ttnn.deallocate(v_heads_1VSD_8b)
+            q_sdpa = q_heads_1QSD  # bfloat16
+            k_sdpa = k_heads_1KSD  # bfloat16
+            v_sdpa = v_heads_1VSD  # bfloat16
+        else:
+            q_sdpa = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q_heads_1QSD)
+            k_sdpa = k_heads_1KSD_8b  # bfloat8_b
+            v_sdpa = v_heads_1VSD_8b  # bfloat8_b
 
-        # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
-        # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
-        ring_distributed_sdpa = seq_len > 1024 and batch_size == 1
         if ring_distributed_sdpa:
             # Ring attention splits seqlen into 8 chunks and computes chunk i and chunk ring_size - i - 1 per device
             # where i (device id on a mesh column) ranges from 0 to ring_size-1 (0 to 3), so ring_size - i - 1 ranges from 3 to 0
             # This ensures each device processes two complementary chunks of the attention matrix
             attn_output_1QSD = ttnn.transformer.ring_distributed_scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
+                q_sdpa,
+                k_sdpa,
+                v_sdpa,
                 ring_size=4,  # Number of devices in the ring topology (4 devices per row in 8x4 mesh)
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
@@ -1389,9 +1406,9 @@ class TtLlamaAttention(LightweightModule):
             )
         else:
             attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                k_heads_1KSD_8b,
-                v_heads_1VSD_8b,
+                q_sdpa,
+                k_sdpa,
+                v_sdpa,
                 is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
@@ -1401,10 +1418,10 @@ class TtLlamaAttention(LightweightModule):
                 sliding_window_size=self.sliding_window_size,  # OLMo: 4096 or None for full attention
             )
 
-        # deallocate keys and values
-        ttnn.deallocate(q_heads_1QSD_8b)
-        ttnn.deallocate(k_heads_1KSD_8b)
-        ttnn.deallocate(v_heads_1VSD_8b)
+        # deallocate Q, K, V (handles both bfloat16 and bfloat8_b cases)
+        ttnn.deallocate(q_sdpa)
+        ttnn.deallocate(k_sdpa)
+        ttnn.deallocate(v_sdpa)
 
         ###
         # Output matmul
@@ -1454,12 +1471,23 @@ class TtLlamaAttention(LightweightModule):
         ## For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         # OLMo: Use unpadded WO for prefill (padded WO is for decode with padded Q heads)
         wo_weight = self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
+        # OLMo: bfloat16 output to avoid quantization error in WO projection.
+        # - ttnn.linear path (seq_len < 4096): use hifi2 (FP32 accum) for best precision.
+        # - minimal_matmul path (seq_len >= 4096): use hifi2_fp16 (FP16 accum) because
+        #   minimal_matmul's subblock configs (product=8) exceed max_dest_volume=4 when
+        #   fp32_dest_acc_en=True. At ISL≥4096, ring SDPA is used so SDPA inputs are
+        #   already bfloat8_b; FP32 accumulation in WO provides minimal additional benefit.
+        wo_compute_cfg_linear = (
+            self.compute_kernel_config_hifi2 if self.is_olmo else self.compute_kernel_config_hifi2_fp16
+        )
+        wo_compute_cfg_minimal = self.compute_kernel_config_hifi2_fp16
+        wo_dtype = ttnn.bfloat16 if self.is_olmo else ttnn.bfloat8_b
         if seq_len < 4096 or batch_size > 1:
             output_11SH = ttnn.linear(
                 attn_output_11SH,
                 wo_weight,
-                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
+                compute_kernel_config=wo_compute_cfg_linear,
+                dtype=wo_dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
             )
@@ -1468,7 +1496,7 @@ class TtLlamaAttention(LightweightModule):
                 input_tensor=attn_output_11SH,
                 weight_tensor=wo_weight,
                 config=self.model_config["WO_PREFILL_MINIMAL_PROGCFG"](seq_len),
-                compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=wo_compute_cfg_minimal,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -1476,12 +1504,17 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
+        # OLMo: select all-reduce buffer based on WO output dtype.
+        # - seq_len < 4096: ttnn.linear with bfloat16 output → use WO_AG_BF16 (bfloat16 buffer).
+        # - seq_len >= 4096: minimal_matmul (bf8 inputs → bf8 output, ring SDPA was already bf8)
+        #   → use WO_AG (bfloat8_b buffer).
+        wo_ag_key = "WO_AG_BF16" if self.is_olmo and seq_len < 4096 else ("WO_AG" if seq_len <= 4096 else "WO")
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO_AG" if seq_len <= 4096 else "WO",
+            buffer_key=wo_ag_key,
         )
         output_11SH.deallocate()
 

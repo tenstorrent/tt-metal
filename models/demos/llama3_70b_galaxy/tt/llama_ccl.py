@@ -344,6 +344,23 @@ class TT_CCL:
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
+        # OLMo decode: bfloat16 version of BINARY_MUL — same shape/memcfg but bfloat16.
+        # Used by line_all_gather for ff1ff3 (SwiGLU output) to avoid the bfloat8_b
+        # quantisation error that compounds across 64 layers. The optimal-CCL path
+        # (use_optimal_ccl_for_llama=True) has hardcoded bfloat8_b assumptions in the
+        # C++ kernel, so we keep use_optimal_ccl_for_llama=False; providing a persistent
+        # output tensor here makes the call trace-safe (no per-iteration allocation).
+        if self.is_olmo:
+            tt_buffer_bf16 = ttnn.from_torch(
+                torch.zeros((1, 1, self.max_batch_size, binary_mul_width)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=binary_mul_mem_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            persistent_buffers["BINARY_MUL_BF16"] = tt_buffer_bf16
+
         return persistent_buffers
 
     def get_persistent_buffers(self):
@@ -673,11 +690,21 @@ class TT_CCL:
                 # - dim_per_tp = 5120 / 4 = 1280
                 buffers_dict = {
                     "QKV": [(1, 1, seqlen, 896)],  # qkv_size_per_device (unpadded for all_gather)
+                    # QKV_BF16: bfloat16 output buffer for the xqkv all_reduce in forward_prefill.
+                    # OLMo uses bfloat16 xqkv to avoid bfloat8_b quantization error before SDPA.
+                    "QKV_BF16": [(1, 1, seqlen, 896)],
                     "SDPA": [(1, 1, seqlen // 2, 640)],  # n_local_heads * head_dim = 5 * 128
                     "SDPA_REVERSE": [(1, 1, seqlen // 2, 640)],
                     "WO_AG": [(8, 1, seqlen, 1280)],  # dim_per_tp = 5120/4
+                    # WO_AG_BF16: bfloat16 output buffer for the WO all_reduce in forward_prefill.
+                    # WO projection outputs bfloat16 for OLMo to preserve attention output precision.
+                    "WO_AG_BF16": [(8, 1, seqlen, 1280)],
                     "FF1": [(1, 1, seqlen, 3456)],  # intermediate/8
                     "FF3": [(1, 1, seqlen, 3456)],
+                    # FF3_BF16: bfloat16 output buffer for the SwiGLU all_gather in forward_prefill.
+                    # Using bfloat8_b (FF3) would re-quantize the bfloat16 ff1ff3 result and defeat
+                    # the precision gain that keeps 64L prefill PCC near 0.99.
+                    "FF3_BF16": [(1, 1, seqlen, 3456)],
                     "FF2": [(1, 1, seqlen, 1280)],  # dim_per_tp
                     "LAYERNORM": [(1, 1, seqlen, 128)],  # head_dim
                 }
@@ -704,11 +731,14 @@ class TT_CCL:
                     "LAYERNORM": [(1, 1, seqlen, 128)],
                 }
             for key, shape in buffers_dict.items():
+                # LAYERNORM, FF3_BF16 (OLMo SwiGLU gather), WO_AG_BF16 (OLMo WO projection),
+                # and QKV_BF16 (OLMo xqkv matmul output) need bfloat16 precision.
+                use_bf16 = key in ("LAYERNORM", "FF3_BF16", "WO_AG_BF16", "QKV_BF16")
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16 if key == "LAYERNORM" else ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16 if use_bf16 else ttnn.bfloat8_b,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     cache_file_name=self.weight_cache_path / ("pb_ag_" + key + str(seqlen)),
@@ -787,7 +817,7 @@ class TT_CCL:
                 persistent_buffer.deallocate(True)
 
         else:
-            if buffer_key == "WO_AG" or lm_head:
+            if buffer_key in ("WO_AG", "WO_AG_BF16") or lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
                     input_tensor_mesh,
                     dim=0,
@@ -1273,7 +1303,7 @@ class TT_CCL:
             # This condition excludes SDPA tensors (which use dim=2) from reshaping
             # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
-            if buffer_key not in ["LM_HEAD", "WO_AG"]:
+            if buffer_key not in ["LM_HEAD", "WO_AG", "WO_AG_BF16"]:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -1484,6 +1514,7 @@ def tt_sharded_distributed_rmsnorm(
         epsilon=epsilon,
         weight=gamma,
         stats=persistent_buffer,
+        dtype=ttnn.bfloat16,
         memory_config=output_mem_config,
         use_noc1_only=use_noc1_only,
     )

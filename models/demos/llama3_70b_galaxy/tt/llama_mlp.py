@@ -290,11 +290,15 @@ class TtLlamaMLP(LightweightModule):
             ttnn.deallocate(w3_out)
 
         ff1ff3_mem_config = ttnn.DRAM_MEMORY_CONFIG if is_olmo else self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+        # OLMo: use bfloat16 for SwiGLU output (ff1ff3) in both prefill and decode to preserve
+        # precision feeding W2 matmul.  bfloat8_b quantizes ff1ff3 per layer causing ~3-8%
+        # relative error that compounds to >50% over 64 layers, collapsing hidden-state PCC.
+        ff1ff3_dtype = ttnn.bfloat16 if is_olmo else ttnn.bfloat8_b
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
+            dtype=ff1ff3_dtype,
             memory_config=ff1ff3_mem_config,
         )
         self._debug_check_mlp("ff1ff3 (silu*gate)", ff1ff3)
@@ -303,14 +307,31 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w1_out_reduced)
 
         if is_olmo and mode == "decode":
+            # Use the pre-allocated bfloat16 persistent buffer (BINARY_MUL_BF16) so the
+            # all_gather does not allocate a new tensor on every call — allocating inside
+            # a Metal trace is unsafe and causes a segfault after ~30 decode iterations.
+            # use_optimal_ccl_for_llama=False avoids the C++ path that assumes bfloat8_b.
             w2_in = self.tt_ccl.line_all_gather(
                 ff1ff3,
                 dim=3,
                 cluster_axis=1,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                buffer_key="BINARY_MUL",
-                use_optimal_ccl_for_llama=True,
+                buffer_key="BINARY_MUL_BF16",
+                use_optimal_ccl_for_llama=False,
+            )
+        elif is_olmo and mode == "prefill":
+            # Prefill is not traced so allocating a fresh bfloat16 tensor is safe.
+            # buffer_key=None avoids the bfloat8_b-typed BINARY_MUL persistent buffer
+            # which would re-quantize the bfloat16 ff1ff3 and defeat the precision gain.
+            w2_in = self.tt_ccl.line_all_gather(
+                ff1ff3,
+                dim=3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key=None,
+                use_optimal_ccl_for_llama=False,
             )
         else:
             w2_in = self.tt_ccl.line_all_gather(
@@ -332,7 +353,7 @@ class TtLlamaMLP(LightweightModule):
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(w2_in)
+            # w2_in IS the BINARY_MUL_BF16 persistent buffer — do NOT deallocate it.
             self._debug_check_mlp("w2_out", w2_out)
             w2_out_sharded = ttnn.to_memory_config(w2_out, self.model_config["FF2_OUT_RING_MEMCFG_OLMO"])
             ttnn.deallocate(w2_out)
@@ -379,7 +400,15 @@ class TtLlamaMLP(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
-        use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
+        is_olmo = getattr(self.args, "is_olmo", False)
+        if is_olmo:
+            # OLMo: always use w1_interleaved (DRAM) in prefill.
+            # The sharded w1 (W1W3_RING_MEMCFG) combined with MatmulMultiCoreReuseMultiCast
+            # is incompatible with OLMo's intermediate_dim (3456 ≠ Llama's 3584) for
+            # seqlens 1024-3072, causing ~0 PCC (garbage) output.
+            use_w1_w3_interleaved = True
+        else:
+            use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
 
@@ -404,10 +433,16 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
+            # For seq_len == 4096 the ring_reduce_scatter uses a persistent bfloat8_b buffer
+            # (support_seqlens = [128, 1024, 2048, 4096]); the input dtype must match.
+            # For seq_len >= 8192 there is no persistent buffer → dynamic alloc works with
+            # the default (bfloat16 from input); forcing bfloat8_b hangs the ring path.
+            w1_minimal_dtype = ttnn.bfloat8_b if seq_len <= 4096 else None
             w1_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w1_interleaved if use_w1_w3_interleaved else self.w1,
                 config=minimal_pc_1_3,
+                dtype=w1_minimal_dtype,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -438,10 +473,12 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
+            w3_minimal_dtype = ttnn.bfloat8_b if seq_len <= 4096 else None
             w3_out = ttnn.experimental.minimal_matmul(
                 input_tensor=x,
                 weight_tensor=self.w3_interleaved if use_w1_w3_interleaved else self.w3,
                 config=minimal_pc_1_3,
+                dtype=w3_minimal_dtype,
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -457,21 +494,37 @@ class TtLlamaMLP(LightweightModule):
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
+        # OLMo: bfloat8_b for ff1ff3 introduces ~3-8% relative error per layer that
+        # compounds to >50% over 64 layers.  Use bfloat16 to preserve precision.
+        ff1ff3_dtype = ttnn.bfloat16 if is_olmo else ttnn.bfloat8_b
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            dtype=ff1ff3_dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        w2_in_gathered = self.tt_ccl.line_all_gather(
-            w2_in,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=w3_out.memory_config(),
-            buffer_key="FF3",
-            dim=3,
-        )
+        if is_olmo:
+            # Use the pre-allocated bfloat16 persistent buffer (FF3_BF16) so the
+            # all_gather preserves the bfloat16 ff1ff3 values.  Using "FF3" (bfloat8_b)
+            # would re-quantize ff1ff3 and defeat the precision gain.
+            w2_in_gathered = self.tt_ccl.line_all_gather(
+                w2_in,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="FF3_BF16",
+                dim=3,
+            )
+        else:
+            w2_in_gathered = self.tt_ccl.line_all_gather(
+                w2_in,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=w3_out.memory_config(),
+                buffer_key="FF3",
+                dim=3,
+            )
         ttnn.deallocate(w2_in)
 
         if seq_len < 4096 or batch_size > 1:
@@ -484,10 +537,13 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
+            # FF2 persistent buffer also only exists for seq_len <= 4096.
+            w2_minimal_dtype = ttnn.bfloat8_b if seq_len <= 4096 else None
             w2_out = ttnn.experimental.minimal_matmul(
                 input_tensor=w2_in_gathered,
                 weight_tensor=self.w2_interleaved,
                 config=minimal_pc_2,
+                dtype=w2_minimal_dtype,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )

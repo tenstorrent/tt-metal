@@ -264,6 +264,11 @@ class TtTransformerBlock(LightweightModule):
             x_res_dram = ttnn.to_memory_config(x_combined, ttnn.DRAM_MEMORY_CONFIG)
             if not self.enable_trace and h is not None:
                 x_combined.deallocate(True)
+            # Ensure bfloat16 residual to prevent bfloat8_b quantization at every layer
+            if x_res_dram.dtype != ttnn.bfloat16:
+                x_res_b16 = ttnn.typecast(x_res_dram, ttnn.bfloat16)
+                ttnn.deallocate(x_res_dram)
+                x_res_dram = x_res_b16
             attn_in = ttnn.to_memory_config(x_res_dram, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
 
             attn_out = self.attention.forward(

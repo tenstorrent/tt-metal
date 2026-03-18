@@ -7,7 +7,7 @@
 
 ## Standards
 - PCC > 0.99 is MANDATORY for all ttnn blocks.
-- NEVER run device reset commands (tt-smi -r, tt-smi -glx_reset, etc.) yourself. Always ask the user to reset the device when needed (after hangs/segfaults).
+- Run `tt-smi -glx_reset` yourself when the device needs to be reset (after hangs/segfaults). Do not ask the user to do it. tt-smi is in `python_env/bin/tt-smi` — always `source python_env/bin/activate` before calling it.
 - Follow the "Relay Race" flow: Architecture -> Reference -> TTNN -> Debug -> Opt.
 
 ## Session Management

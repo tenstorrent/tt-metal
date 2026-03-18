@@ -125,13 +125,23 @@ class TestOlmoE2EPCC:
         self._run_prefill_pcc(mesh_device, n_layers=1)
 
     @torch.no_grad()
-    def _run_prefill_pcc(self, mesh_device, n_layers):
+    def test_prefill_pcc_64layers_isl1k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: full 64-layer model at 1k ISL (padded_len=1024)."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=1024)
+
+    @torch.no_grad()
+    def test_prefill_pcc_64layers_isl2k(self, mesh_device, reset_seeds, ensure_gc):
+        """Prefill PCC: full 64-layer model at 2k ISL (padded_len=2048)."""
+        self._run_prefill_pcc(mesh_device, n_layers=64, padded_len=2048)
+
+    @torch.no_grad()
+    def _run_prefill_pcc(self, mesh_device, n_layers, padded_len=128):
         """Shared implementation for prefill PCC tests."""
         hf_model_path = os.environ.get("HF_MODEL")
         if not hf_model_path:
             pytest.skip("HF_MODEL not set")
 
-        max_seq_len = 256
+        max_seq_len = max(256, padded_len * 2)
         batch_size = 1
         dtype = ttnn.bfloat8_b
 
@@ -172,10 +182,18 @@ class TestOlmoE2EPCC:
         if tokenizer is None:
             tokenizer = GPT2Tokenizer.from_pretrained(model_args.TOKENIZER_PATH)
 
-        prompt = "What is your favorite condiment?"
+        # Use a longer prompt for larger padded_len so there are enough real tokens
+        if padded_len <= 128:
+            prompt = "What is your favorite condiment?"
+        else:
+            # For larger ISL tests, repeat a paragraph to fill up to padded_len tokens.
+            # The exact content doesn't matter for PCC measurement.
+            base = "The quick brown fox jumps over the lazy dog. " * 50
+            prompt = base
         input_ids = tokenizer.encode(prompt, add_special_tokens=True)
+        # Cap input_ids to padded_len - 1 real tokens so padding is at least 1 token
+        input_ids = input_ids[: padded_len - 1]
         seq_len = len(input_ids)
-        padded_len = 128  # match demo
         input_ids_padded = input_ids + [tokenizer.eos_token_id or 50256] * (padded_len - seq_len)
         tokens_pt = torch.tensor(input_ids_padded, dtype=torch.long).unsqueeze(0)
 
@@ -1076,6 +1094,461 @@ class TestOlmoE2EPCC:
                 f"xv_std={ref_xv_std:.4f}  sdpa_out_std={ref_sdpa_std:.4f}  attn_weight_max={ref_attn_max:.4f}"
             )
         logger.info("=" * 70)
+
+    @torch.no_grad()
+    def test_decode_per_position_64layers(self, mesh_device, reset_seeds, ensure_gc):
+        """Per-position, per-layer element-wise diagnostic for 64-layer decode.
+
+        For each layer, captures the full hidden state and compares element-by-element
+        against the CPU reference to find:
+        - Which positions accumulate error fastest
+        - Whether error is concentrated in specific dim ranges (col-device shards)
+        - Which sub-blocks (attn vs MLP vs norm) contribute most error per layer
+        - Whether drift is multiplicative (std ratio) or additive
+        """
+        hf_model_path = os.environ.get("HF_MODEL")
+        if not hf_model_path:
+            pytest.skip("HF_MODEL not set")
+
+        n_layers = 64
+        max_seq_len = 256
+        batch_size = 32
+        start_pos = 127
+        dtype = ttnn.bfloat8_b
+
+        logger.info("Loading HF state dict...")
+        hf_sd = load_hf_raw_state_dict(hf_model_path)
+
+        # ===== CPU Reference =====
+        logger.info(f"Building CPU reference ({n_layers} layers)...")
+        ref_model = build_ref_model(hf_sd, n_layers=n_layers, max_seq_len=max_seq_len, max_batch_size=batch_size)
+
+        torch.manual_seed(42)
+        pt_input = torch.randn(batch_size, 1, 5120)
+        embeddings_ref = pt_input.float()
+
+        # Capture per-layer hidden states from reference
+        ref_layer_outputs = []  # list of (layer_idx, [batch, 1, 5120]) tensors
+
+        def make_hook(layer_idx):
+            def hook(module, inp, out):
+                ref_layer_outputs.append((layer_idx, out.detach().clone()))
+
+            return hook
+
+        hooks = [layer.register_forward_hook(make_hook(i)) for i, layer in enumerate(ref_model.layers)]
+        ref_model.forward(embeddings_ref, start_pos=start_pos, mode="decode")
+        for h in hooks:
+            h.remove()
+
+        # Also capture sub-block intermediates for all layers
+        from models.demos.llama3_70b_galaxy.reference.olmo import TransformerBlock as RefBlock
+
+        ref_subblock_captures = [{} for _ in range(n_layers)]
+        original_fwd = RefBlock.forward
+
+        def patched_fwd(self_blk, x, start_pos, freqs_cis, mask):
+            li = self_blk.layer_id
+            ref_subblock_captures[li]["layer_in"] = x.detach().clone()
+            attn_raw = self_blk.attention(x, start_pos, freqs_cis, mask)
+            ref_subblock_captures[li]["attn_out"] = attn_raw.detach().clone()
+            attn_normed = self_blk.attention_norm(attn_raw)
+            ref_subblock_captures[li]["attn_normed"] = attn_normed.detach().clone()
+            h_val = x + attn_normed
+            ref_subblock_captures[li]["h_attn"] = h_val.detach().clone()
+            ff_raw = self_blk.feed_forward(h_val)
+            ref_subblock_captures[li]["ff_out"] = ff_raw.detach().clone()
+            ff_normed = self_blk.ffn_norm(ff_raw)
+            ref_subblock_captures[li]["ff_normed"] = ff_normed.detach().clone()
+            out_val = h_val + ff_normed
+            ref_subblock_captures[li]["layer_out"] = out_val.detach().clone()
+            return out_val
+
+        RefBlock.forward = patched_fwd
+        ref_model.forward(embeddings_ref, start_pos=start_pos, mode="decode")
+        RefBlock.forward = original_fwd
+
+        # ===== TTNN Model =====
+        logger.info(f"Building TTNN model ({n_layers} layers)...")
+        model_args = TtOlmoModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+        model_args.n_layers = n_layers
+        state_dict = model_args.load_state_dict()
+
+        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=4096)
+        tt_model = TtTransformer(
+            args=model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            decode_mode_only=True,
+        )
+
+        # Enable capture on every layer
+        for layer in tt_model.layers:
+            layer.capture_intermediates = True
+
+        page_table = torch.argsort(torch.randperm(paged_attention_config.max_num_blocks)).reshape(
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        )
+        tt_input = model_args.prepare_residual_tensor_decode(
+            pt_input.clone(), model_args.model_config["DECODE_RESIDUAL_MEMCFG"]
+        )
+        current_pos = torch.tensor([start_pos] * batch_size)
+        current_pos_tensor = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=model_args.cluster_shape),
+        )
+        rot_mats, _ = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+
+        tt_model.forward(
+            tt_input,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+            kv_cache=[layer.attention.layer_past for layer in tt_model.layers],
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        # ===== Extraction helpers =====
+        # TTNN decoder captures use ConcatMesh2dToTensor(dims=(3,1)):
+        #   Shape: [1, 4, 32, 10240]
+        #   dim1=4 col groups (each holds 1280 hidden dims), dim2=32 batch, dim3=10240 = 8 row devs × 1280
+        #   All 32 batch users are present on every col device (batch is replicated, hidden is sharded).
+        #   Row devices are identical after all_reduce, so we use [:slice_dim] from any one row device.
+        def extract_hidden_all_users(tt_t, batch_size=32):
+            """Reconstruct [batch, 5120] for ALL users from TTNN decode capture."""
+            n_col = tt_t.shape[1]  # 4 col devices
+            slice_dim = tt_t.shape[3] // 8  # 1280 per col device (one row device's share)
+            # Col device j holds hidden dims [j*slice_dim : (j+1)*slice_dim]
+            # All 32 users are on each col device (hidden sharded, batch replicated)
+            hidden_per_col = [tt_t[0, j, :batch_size, :slice_dim] for j in range(n_col)]
+            return torch.cat(hidden_per_col, dim=1).float()  # [32, 5120]
+
+        def extract_hidden_u0(tt_t):
+            """Reconstruct [5120] hidden state for user 0 only (backward compat)."""
+            return extract_hidden_all_users(tt_t)[0]
+
+        # ===== Per-layer analysis =====
+        logger.info("=" * 80)
+        logger.info("PER-LAYER ELEMENT-WISE DECODE ANALYSIS (all users, 64 layers)")
+        logger.info(
+            f"{'Layer':>5}  {'MaxAbsErr':>10}  {'P99Err':>8}  {'MeanAbsErr':>11}  "
+            f"{'StdRatio':>9}  {'WorstUser':>9}  "
+            f"{'Col0Err':>8}  {'Col1Err':>8}  {'Col2Err':>8}  {'Col3Err':>8}  "
+            f"{'SubBlkMax':>10}"
+        )
+        logger.info("-" * 120)
+
+        # Track which sub-block contributes most error each layer
+        def subblock_errors(ref_caps, tt_layer_obj):
+            """Return dict of mean abs error per sub-block for all users (mean across users)."""
+            errs = {}
+            cap_keys = ["attn_out", "attn_normed", "h_attn", "ff_out", "ff_normed", "layer_out"]
+            for key in cap_keys:
+                ref_t = ref_caps.get(key)
+                tt_t = tt_layer_obj.captured.get(key)
+                if ref_t is None or tt_t is None:
+                    continue
+                ref_all = ref_t[:, 0, :].float()  # [32, 5120]
+                tt_all = extract_hidden_all_users(tt_t)[:, :5120]  # [32, 5120]
+                errs[key] = (ref_all - tt_all).abs().mean().item()
+            return errs
+
+        def subblock_errors_detailed(ref_caps, tt_layer_obj):
+            """Return dict of {mean_abs_err, ref_std, rel_err} per sub-block for all users."""
+            results = {}
+            cap_keys = ["attn_out", "attn_normed", "h_attn", "ff_out", "ff_normed", "layer_out"]
+            for key in cap_keys:
+                ref_t = ref_caps.get(key)
+                tt_t = tt_layer_obj.captured.get(key)
+                if ref_t is None or tt_t is None:
+                    continue
+                ref_all = ref_t[:, 0, :].float()  # [32, 5120]
+                tt_all = extract_hidden_all_users(tt_t)[:, :5120]  # [32, 5120]
+                abs_err = (ref_all - tt_all).abs().mean().item()
+                ref_std = ref_all.std().item()
+                rel_err = abs_err / (ref_std + 1e-8)
+                results[key] = {"abs_err": abs_err, "ref_std": ref_std, "rel_err": rel_err}
+            return results
+
+        for li in range(n_layers):
+            tt_layer = tt_model.layers[li]
+            ref_all_out = ref_layer_outputs[li][1][:, 0, :].float()  # [32, 5120]
+
+            tt_cap = tt_layer.captured.get("layer_out")
+            if tt_cap is None:
+                logger.warning(f"  Layer {li:2d}: missing TTNN layer_out capture")
+                continue
+
+            tt_all = extract_hidden_all_users(tt_cap)[:, :5120]  # [32, 5120]
+
+            abs_err_all = (ref_all_out - tt_all).abs()  # [32, 5120]
+
+            # Aggregate stats (across all users and all dims)
+            max_abs_err = abs_err_all.max().item()
+            p99_err = abs_err_all.quantile(0.99).item()
+            mean_abs_err = abs_err_all.mean().item()
+
+            # Reference and TT std (across all elements)
+            std_ratio = tt_all.std().item() / (ref_all_out.std().item() + 1e-8)
+
+            # Per-user mean error: which user is worst?
+            per_user_mean = abs_err_all.mean(dim=1)  # [32]
+            worst_user = per_user_mean.argmax().item()
+            worst_user_err = per_user_mean[worst_user].item()
+
+            # Per col-device shard errors (each shard holds 1280 dims of the 5120 hidden state)
+            col_errs = []
+            for col in range(4):
+                col_errs.append(abs_err_all[:, col * 1280 : (col + 1) * 1280].mean().item())
+
+            # Sub-block breakdown
+            sb_errs = subblock_errors(ref_subblock_captures[li], tt_layer)
+            sb_max_key = max(sb_errs, key=sb_errs.get) if sb_errs else "N/A"
+            sb_max_val = sb_errs.get(sb_max_key, 0.0)
+
+            layer_type = "sliding" if (li % 4) != 3 else "full"
+            logger.info(
+                f"  {li:3d} [{layer_type:7s}]  "
+                f"max={max_abs_err:8.4f}  p99={p99_err:6.4f}  mean={mean_abs_err:8.5f}  "
+                f"std_ratio={std_ratio:7.4f}  worst_u={worst_user:2d}({worst_user_err:.4f})  "
+                f"cols=[{col_errs[0]:.4f},{col_errs[1]:.4f},{col_errs[2]:.4f},{col_errs[3]:.4f}]  "
+                f"worst_subblk={sb_max_key}({sb_max_val:.5f})"
+            )
+
+        logger.info("=" * 80)
+
+        # ===== Top-K worst (user, dim) pairs across all 32 users in layer 63 =====
+        logger.info("\nTop-20 worst (user, dim) pairs in layer 63 output:")
+        last_tt_layer = tt_model.layers[n_layers - 1]
+        last_ref_out = ref_layer_outputs[n_layers - 1][1][:, 0, :].float()  # [32, 5120]
+        last_tt_cap = last_tt_layer.captured.get("layer_out")
+        if last_tt_cap is not None:
+            last_tt_all = extract_hidden_all_users(last_tt_cap)[:, :5120]  # [32, 5120]
+            abs_err_last = (last_ref_out - last_tt_all).abs()  # [32, 5120]
+            flat_err = abs_err_last.reshape(-1)  # [32*5120]
+            topk_vals, topk_flat_idx = flat_err.topk(20)
+            for rank, (flat_idx, err) in enumerate(zip(topk_flat_idx.tolist(), topk_vals.tolist())):
+                user = flat_idx // 5120
+                dim = flat_idx % 5120
+                col_dev = dim // 1280
+                ref_val = last_ref_out[user, dim].item()
+                tt_val = last_tt_all[user, dim].item()
+                sign = "SIGN_FLIP" if (ref_val * tt_val < 0) else ""
+                logger.info(
+                    f"  rank {rank+1:2d}: user={user:2d} dim={dim:5d} (col={col_dev})  "
+                    f"abs_err={err:.4f}  ref={ref_val:.4f}  tt={tt_val:.4f}  {sign}"
+                )
+
+        # ===== Per-user error summary for layer 63 =====
+        logger.info("\nPer-user mean abs error at layer 63:")
+        if last_tt_cap is not None:
+            per_user_mean_l63 = abs_err_last.mean(dim=1)  # [32]
+            per_user_max_l63 = abs_err_last.max(dim=1).values  # [32]
+            for u in range(batch_size):
+                logger.info(f"  user {u:2d}: mean={per_user_mean_l63[u]:.5f}  max={per_user_max_l63[u]:.4f}")
+            # Uniformity check: if all users have similar errors, bug is systematic (not batch-index)
+            err_cv = per_user_mean_l63.std().item() / (per_user_mean_l63.mean().item() + 1e-8)
+            logger.info(f"\n  Cross-user error CoV (low=uniform/systematic, high=user-specific): {err_cv:.4f}")
+
+        # ===== Per-sub-block summary for first and last layer =====
+        for li in [0, 15, 31, 47, 63]:
+            if li >= n_layers:
+                continue
+            logger.info(f"\n--- Sub-block detail for layer {li} ---")
+            sb = subblock_errors_detailed(ref_subblock_captures[li], tt_model.layers[li])
+            for key, d in sorted(sb.items(), key=lambda x: x[1]["abs_err"], reverse=True):
+                logger.info(
+                    f"  {key:12s}: abs_err={d['abs_err']:.5f}  ref_std={d['ref_std']:.4f}  rel_err={d['rel_err']:.2%}"
+                )
+
+        logger.info("\nDECODE 64L PER-POSITION DIAGNOSTIC COMPLETE")
+
+    @torch.no_grad()
+    def test_decode_2step_elementwise(self, mesh_device, reset_seeds, ensure_gc):
+        """Quick 2-step autoregressive element-wise decode diagnostic.
+
+        Runs exactly 2 decode steps in closed-loop fashion:
+          Step 1: random input → 64 layers → compare element-wise
+          Step 2: each model feeds its OWN step-1 output as next input → compare element-wise
+
+        Shows error compounding in the closed-loop scenario (same as real inference).
+        Only 2 forward passes → fast run, low hang risk.
+        """
+        hf_model_path = os.environ.get("HF_MODEL")
+        if not hf_model_path:
+            pytest.skip("HF_MODEL not set")
+
+        n_layers = 64
+        n_steps = 2
+        max_seq_len = 256
+        batch_size = 32
+        start_pos = 127
+        dtype = ttnn.bfloat8_b
+
+        logger.info("Loading HF state dict...")
+        hf_sd = load_hf_raw_state_dict(hf_model_path)
+
+        # ===== CPU Reference =====
+        logger.info(f"Building CPU reference ({n_layers} layers)...")
+        ref_model = build_ref_model(hf_sd, n_layers=n_layers, max_seq_len=max_seq_len, max_batch_size=batch_size)
+
+        # ===== TTNN Model =====
+        logger.info(f"Building TTNN model ({n_layers} layers)...")
+        model_args = TtOlmoModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+        model_args.n_layers = n_layers
+        state_dict = model_args.load_state_dict()
+
+        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=4096)
+        tt_model = TtTransformer(
+            args=model_args,
+            mesh_device=mesh_device,
+            dtype=dtype,
+            state_dict=state_dict,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+            paged_attention_config=paged_attention_config,
+            decode_mode_only=True,
+        )
+        # Only capture the last layer to keep overhead low
+        tt_model.layers[-1].capture_intermediates = True
+
+        page_table = torch.argsort(torch.randperm(paged_attention_config.max_num_blocks)).reshape(
+            model_args.batch_size_per_device_group,
+            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        )
+
+        def extract_hidden_all_users(tt_t, batch_size=32):
+            """Reconstruct [batch, 5120] for ALL users from TTNN decode capture."""
+            n_col = tt_t.shape[1]
+            slice_dim = tt_t.shape[3] // 8
+            return torch.cat([tt_t[0, j, :batch_size, :slice_dim] for j in range(n_col)], dim=1).float()
+
+        def log_elemwise(step, ref_all, tt_all):
+            """Log element-wise stats across all users and return abs diff."""
+            diff = (ref_all.float() - tt_all.float()).abs()  # [32, 5120]
+            max_err = diff.max().item()
+            p99_err = diff.quantile(0.99).item()
+            mean_err = diff.mean().item()
+            ref_std = ref_all.float().std().item()
+            std_ratio = tt_all.float().std().item() / (ref_std + 1e-8)
+            per_user_mean = diff.mean(dim=1)  # [32]
+            worst_u = per_user_mean.argmax().item()
+            cov = per_user_mean.std().item() / (per_user_mean.mean().item() + 1e-8)
+            logger.info(
+                f"  [step {step}] max={max_err:.5f}  p99={p99_err:.5f}  mean={mean_err:.5f}  "
+                f"std_ratio={std_ratio:.4f}  worst_user={worst_u}({per_user_mean[worst_u]:.5f})  CoV={cov:.4f}"
+            )
+            # Top-5 worst (user, dim) pairs
+            topk_vals, topk_idx = diff.reshape(-1).topk(5)
+            for rank, (flat_i, err) in enumerate(zip(topk_idx.tolist(), topk_vals.tolist())):
+                u, d = flat_i // 5120, flat_i % 5120
+                rv, tv = ref_all[u, d].item(), tt_all[u, d].item()
+                sign = " SIGN_FLIP" if (rv * tv < 0) else ""
+                logger.info(f"    top{rank+1}: user={u:2d} dim={d:5d} ref={rv:.4f} tt={tv:.4f} diff={err:.4f}{sign}")
+            return diff
+
+        # ===== Initial shared input =====
+        torch.manual_seed(42)
+        pt_input = torch.randn(batch_size, 1, 5120)
+        ref_hidden = pt_input.float()  # reference feeds forward its own output each step
+        tt_hidden_cpu = None  # TTNN's last-layer output on CPU (for closed-loop input)
+
+        logger.info("=" * 80)
+        logger.info(f"2-STEP CLOSED-LOOP AUTOREGRESSIVE ELEMENTWISE ({n_layers}L, {batch_size} users)")
+        logger.info("=" * 80)
+
+        for step in range(n_steps):
+            pos = start_pos + step
+            logger.info(f"\n{'='*60}")
+            logger.info(f"STEP {step + 1}/{n_steps}  (position {pos})")
+            logger.info(f"{'='*60}")
+
+            # ----- Reference step -----
+            ref_layer_outs_this_step = []
+
+            def _make_hook(li):
+                def _hook(module, inp, out):
+                    ref_layer_outs_this_step.append((li, out.detach().clone()))
+
+                return _hook
+
+            hooks = [layer.register_forward_hook(_make_hook(i)) for i, layer in enumerate(ref_model.layers)]
+            ref_model.forward(ref_hidden, start_pos=pos, mode="decode")
+            for h in hooks:
+                h.remove()
+
+            ref_out_all = ref_layer_outs_this_step[-1][1][:, 0, :].float()  # [32, 5120]
+
+            # ----- TTNN step -----
+            # Step 0: use the same random input as reference.
+            # Step 1+: TTNN feeds its own previous output (closed-loop).
+            if tt_hidden_cpu is None:
+                tt_src = pt_input.clone()  # [32, 1, 5120]
+            else:
+                tt_src = tt_hidden_cpu.unsqueeze(1)  # [32, 1, 5120]
+
+            tt_input = model_args.prepare_residual_tensor_decode(
+                tt_src, model_args.model_config["DECODE_RESIDUAL_MEMCFG"]
+            )
+            current_pos = torch.tensor([pos] * batch_size)
+            current_pos_tensor = ttnn.from_torch(
+                current_pos,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=model_args.cluster_shape),
+            )
+            rot_mats, _ = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
+
+            tt_model.forward(
+                tt_input,
+                current_pos_tensor,
+                rot_mats=rot_mats,
+                mode="decode",
+                page_table=page_table_tt,
+                kv_cache=[layer.attention.layer_past for layer in tt_model.layers],
+            )
+            ttnn.synchronize_device(mesh_device)
+
+            # ----- Extract TTNN last-layer output -----
+            last_cap = tt_model.layers[-1].captured.get("layer_out")
+            if last_cap is None:
+                logger.warning(f"  Step {step + 1}: no layer_out capture available!")
+                continue
+            tt_out_all = extract_hidden_all_users(last_cap)[:, :5120]  # [32, 5120]
+
+            # ----- Compare -----
+            logger.info(f"\nElement-wise comparison (last layer output, all {batch_size} users):")
+            log_elemwise(step + 1, ref_out_all, tt_out_all)
+
+            # ----- Prepare inputs for next step (closed-loop) -----
+            # Reference feeds its own output; TTNN feeds its own output.
+            ref_hidden = ref_layer_outs_this_step[-1][1].detach()  # [32, 1, 5120]
+            tt_hidden_cpu = tt_out_all.detach()  # [32, 5120]
+
+            # Clear capture for next step
+            tt_model.layers[-1].captured.clear()
+
+        logger.info("\n2-STEP DECODE ELEMENTWISE COMPLETE")
 
     @torch.no_grad()
     def _run_decode_pcc(self, mesh_device, n_layers):

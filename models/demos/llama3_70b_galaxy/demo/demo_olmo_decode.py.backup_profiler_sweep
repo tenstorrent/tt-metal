@@ -558,7 +558,7 @@ def run_olmo_demo(
     for u in range(batch_size):
         # skip_special_tokens avoids None entries from EOS/special tokens at long ISL
         prompt_text = _safe_decode(tokenizer, encoded_prompts[u])
-        generated_ids = all_outputs_per_user[u][len(encoded_prompts[u]) :]
+        generated_ids = all_outputs_per_user[u][len(encoded_prompts[u]):]
         generated_text = _safe_decode(tokenizer, generated_ids)
         logger.info(f"\n--- User {u} ---")
         logger.info(f"  PROMPT   : {prompt_text[:200]}")
@@ -914,12 +914,12 @@ def run_olmo_demo(
         "mini-stress-test",  # mini stress test with 2048 max_generated_tokens
         "measure-device-perf",  # 10L demo for device performance measurements
         "nd-hang-test",  # testing for nd-hang across multiple iterations
-        "isl-128-b1",  # ISL sweep: 128-token prefill, batch=1
-        "isl-1k-b1",  # ISL sweep: 1k-token prefill, batch=1
-        "isl-2k-b1",  # ISL sweep: 2k-token prefill, batch=1
-        "isl-4k-b1",  # ISL sweep: 4k-token prefill, batch=1
-        "isl-8k-b1",  # ISL sweep: 8k-token prefill, batch=1
-        "isl-16k-b1",  # ISL sweep: 16k-token prefill, batch=1
+        "isl-128-b1",   # ISL sweep: 128-token prefill, batch=1
+        "isl-1k-b1",    # ISL sweep: 1k-token prefill, batch=1
+        "isl-2k-b1",    # ISL sweep: 2k-token prefill, batch=1
+        "isl-4k-b1",    # ISL sweep: 4k-token prefill, batch=1
+        "isl-8k-b1",    # ISL sweep: 8k-token prefill, batch=1
+        "isl-16k-b1",   # ISL sweep: 16k-token prefill, batch=1
     ],
 )
 @pytest.mark.parametrize(

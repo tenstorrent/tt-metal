@@ -83,7 +83,10 @@ def load_inputs_simple(user_input, batch, instruct_mode, cache_dir):
                 )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
-            prompt = context_text
+            if instruct_mode:
+                prompt = "```" + context_text + "```\n\n" + prompt
+            else:
+                prompt = context_text
         in_prompt.append(prompt)
     return in_prompt
 
