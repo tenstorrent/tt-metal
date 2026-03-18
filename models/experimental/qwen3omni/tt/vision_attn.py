@@ -97,14 +97,7 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
             tensor = raw
         return tensor
 
-    def forward(
-        self,
-        hidden_states,
-        cu_seqlens,
-        rotary_pos_emb=None,
-        position_embeddings=None,
-        **kwargs,
-    ):
+    def forward(self, hidden_states, cu_seqlens, rotary_pos_emb=None, position_embeddings=None, **kwargs):
         """
         hidden_states: (seq_len, hidden_size)
         """
@@ -144,6 +137,16 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
         k = ttnn.unsqueeze(k, 0)
         v = ttnn.unsqueeze(v, 0)
 
+        # SDPA requires logical_shape[3] == padded_shape[3] on head_dim (no padding).
+        # When head_dim is not a multiple of TILE_SIZE, ttnn tiles add padding and SDPA fails.
+        # Pad Q,K,V to a tile-aligned head_dim so SDPA runs without fallback, then slice back.
+        head_dim_padded = ((self.head_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if head_dim_padded != self.head_dim:
+            pad_size = head_dim_padded - self.head_dim
+            q = ttnn.pad(q, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+            k = ttnn.pad(k, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+            v = ttnn.pad(v, ((0, 0), (0, 0), (0, 0), (0, pad_size)), value=0.0)
+
         attn_output = self.sdpa(
             self,
             q,
@@ -155,6 +158,9 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
             is_causal=False,
             transpose_output=True,
         )
+
+        if head_dim_padded != self.head_dim:
+            attn_output = attn_output[:, :, :, : self.head_dim]
 
         # Under symbiote, attn_output can be TorchTTNNTensor; reshape expects raw ttnn.Tensor.
         attn_output = ttnn.reshape(
