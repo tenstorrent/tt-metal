@@ -160,12 +160,32 @@ def run(
     if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
         del op_kwargs["memory_config"]
 
-    # Remove traced program_config entirely — it is tuned for the specific
-    # hardware topology and mesh shape where the model was traced.  Running
-    # with a mismatched program_config produces silently incorrect results
-    # (low PCC) rather than a clean error.  Without program_config, TTNN
-    # auto-selects a valid configuration for the current device.
-    op_kwargs.pop("program_config", None)
+    # Traced program_config (grid dims, chunk sizes) is tightly coupled to the
+    # mesh topology where the model was traced.  Only use it when running on
+    # matching hardware (MESH_DEVICE_SHAPE matches the traced mesh).
+    # On different hardware the chunk/grid values produce incorrect results.
+    pc = op_kwargs.get("program_config")
+    if pc is not None:
+        import os
+
+        mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+        traced_mesh = kwargs.get("traced_machine_info", {})
+        if isinstance(traced_mesh, dict):
+            traced_shape = traced_mesh.get("mesh_device_shape", [])
+        else:
+            traced_shape = []
+        # Compare: mesh_env "1x2" vs traced [1, 2]
+        if mesh_env and traced_shape:
+            try:
+                env_parts = mesh_env.lower().split("x")
+                env_mesh = [int(env_parts[0]), int(env_parts[1])]
+                if env_mesh != list(traced_shape):
+                    op_kwargs.pop("program_config", None)
+            except (ValueError, IndexError):
+                op_kwargs.pop("program_config", None)
+        elif not mesh_env:
+            # Single device run — program_config from multi-device trace won't work
+            op_kwargs.pop("program_config", None)
 
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     if isinstance(input_a_shape, dict):

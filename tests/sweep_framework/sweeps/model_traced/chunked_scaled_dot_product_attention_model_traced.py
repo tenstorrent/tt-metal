@@ -95,12 +95,34 @@ def mesh_device_fixture():
 
 
 def run(
+    input_a_shape,
+    input_a_dtype,
+    input_a_layout,
+    input_a_memory_config,
+    input_b_shape=None,
+    input_b_dtype=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
+    input_c_shape=None,
+    input_c_dtype=None,
+    input_c_layout=None,
+    input_c_memory_config=None,
+    input_d_shape=None,
+    input_d_dtype=None,
+    input_d_layout=None,
+    input_d_memory_config=None,
+    output_memory_config=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
 
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
+    input_d_tensor_placement = kwargs.get("input_d_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
     # --- Extract tensor parameters ---

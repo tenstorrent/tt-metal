@@ -68,42 +68,37 @@ def mesh_device_fixture():
 
 
 def run(
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    batch_size=None,
+    input_h=None,
+    input_w=None,
+    channels=None,
+    kernel_size=None,
+    stride=None,
+    padding=None,
+    dilation=None,
+    applied_shard_scheme=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,
 ) -> list:
     """
-    Run max_pool2d test with parameters extracted from traced JSON (V2 format).
-
-    The V2 loader names tensor params after the JSON argument name.  For
-    max_pool2d the tensor argument is called ``input_tensor``, so the loader
-    generates ``input_tensor_shape``, ``input_tensor_dtype``, etc.  We also
-    accept the ``input_a_*`` naming for backward compatibility with the
-    sample suite.
+    Run max_pool2d test with parameters extracted from traced JSON.
+    V2 loader may use input_tensor_* naming; fall back to input_a_* from signature.
     """
     torch.manual_seed(0)
 
-    # --- Resolve tensor parameters (V2 uses input_tensor_*, fallback to input_a_*) ---
-    input_a_shape = kwargs.get("input_tensor_shape", kwargs.get("input_a_shape"))
-    input_a_dtype = kwargs.get("input_tensor_dtype", kwargs.get("input_a_dtype"))
-    input_a_layout = kwargs.get("input_tensor_layout", kwargs.get("input_a_layout"))
-    input_a_memory_config = kwargs.get("input_tensor_memory_config", kwargs.get("input_a_memory_config"))
-    raw_placement = kwargs.get("input_tensor_tensor_placement", kwargs.get("input_a_tensor_placement"))
-    input_a_tensor_placement = raw_placement
-
-    output_memory_config = kwargs.get("output_memory_config", None)
-    storage_type = kwargs.get("storage_type", "StorageType::DEVICE")
-
-    # Pool-specific parameters from traced JSON
-    batch_size = kwargs.get("batch_size", None)
-    input_h = kwargs.get("input_h", None)
-    input_w = kwargs.get("input_w", None)
-    channels = kwargs.get("channels", None)
-    kernel_size = kwargs.get("kernel_size", None)
-    stride = kwargs.get("stride", None)
-    padding = kwargs.get("padding", None)
-    dilation = kwargs.get("dilation", None)
-    applied_shard_scheme = kwargs.get("applied_shard_scheme", None)
+    # V2 loader uses input_tensor_* naming for this op; fall back to named params
+    input_a_shape = kwargs.get("input_tensor_shape", input_a_shape)
+    input_a_dtype = kwargs.get("input_tensor_dtype", input_a_dtype)
+    input_a_layout = kwargs.get("input_tensor_layout", input_a_layout)
+    input_a_memory_config = kwargs.get("input_tensor_memory_config", input_a_memory_config)
+    input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement", kwargs.get("input_a_tensor_placement"))
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
