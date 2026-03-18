@@ -137,6 +137,9 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const uint32_t max_sticks_per_core =
         any_sharded ? input_nsticks_per_core : std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
+    const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
+    // CB total size must be an even multiple of batch_size (required by cb_push_back/cb_pop_front API)
+    num_cb_pages = (num_cb_pages / batch_size) * batch_size;
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
@@ -167,7 +170,6 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         any_sharded ? output_tensor.buffer() : nullptr);
 
     const bool fill_is_zero = (fill_value_bf16 == 0);
-    const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
 
     const uint32_t effective_stick_nbytes = any_sharded ? effective_channels * element_size : input_stick_nbytes;
 
