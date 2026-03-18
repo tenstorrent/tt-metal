@@ -22,6 +22,10 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
+def is_watcher_enabled():
+    return os.environ.get("TT_METAL_WATCHER") is not None
+
+
 # ============================================================================
 # Helper Functions: Chunk Ordering
 # ============================================================================
@@ -1050,6 +1054,7 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
     ],
 )
 @pytest.mark.parametrize("ring_index", list(range(32)))
+@pytest.mark.skipif(is_watcher_enabled(), reason="Watcher enabled")
 def test_profile_ring_joint_sdpa_production_scale(
     device, ring_index: int, total_seq: int, q_chunk_size: int, k_chunk_size: int
 ):
