@@ -168,23 +168,6 @@ class TtResnetBlock2D(LightweightModule):
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
-        if is_blackhole() and not ("up_blocks.2.resnets.0" in self.module_path):
-            # Due to the contraints of the GroupNorm op, it cannot run on larger grid than 8x8. However, we want to utitilize as much cores as possible for conv2d ops to gain perf benefits of BH.
-            # Therefore, we need to reshard the tensor to larger core grid. Unfortunately, even though the conv2d supports reshard_if_not_optimal, we cannot use it because of the Issue #39708
-            # which is related to reshard op. Thus, we manully reshard the tensor to 10x8 before conv2d and let the convolution run from that starting point.
-            sharded_mem_config_ = ttnn.create_sharded_memory_config_(
-                shape=hidden_states.shape,
-                core_grid=ttnn.CoreGrid(y=8, x=10),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config_)
-
-        if is_blackhole() and "up_blocks.2.resnets.0" in self.module_path:
-            # Most conv2d have reshard_if_not_optimal=True so it will sometimes reshard again for BH but it is cheap
-            # Only conv2d ops in up_blocks.2.resnets.0 have reshard_if_not_optimal=False to avoid resharding overhead of the host code (See Issue #39723)
-            self.conv1_config.reshard_if_not_optimal = False
-
         [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
@@ -251,20 +234,6 @@ class TtResnetBlock2D(LightweightModule):
         )
 
         ttnn.silu(hidden_states, output_tensor=hidden_states)
-
-        if is_blackhole() and not ("up_blocks.2.resnets.0" in self.module_path):
-            # The same reason for resharding before conv1 applies here as well.
-            sharded_mem_config_ = ttnn.create_sharded_memory_config_(
-                shape=hidden_states.shape,
-                core_grid=ttnn.CoreGrid(y=8, x=10),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config_)
-
-        if is_blackhole() and "up_blocks.2.resnets.0" in self.module_path:
-            # The same reason for setting reshard_if_not_optimal to False for conv1 applies here as well for conv2 in up_blocks.2.resnets.0
-            self.conv2_config.reshard_if_not_optimal = False
 
         [hidden_states, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
