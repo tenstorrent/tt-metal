@@ -11,6 +11,9 @@ on:
   workflow_dispatch:
   merge_group:
 
+permissions:
+  packages: write
+
 concurrency:
   group: >-
     ${{ github.workflow }}-
@@ -21,7 +24,7 @@ concurrency:
 
 jobs:
   build-docker-image:
-    if: ${{ inputs.docker-image == '' }}
+    if: ${{ !inputs.docker-image }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
 
