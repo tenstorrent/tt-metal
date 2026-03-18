@@ -198,8 +198,6 @@ def preprocess_inputs_prefill_ttnn(
 
         # Initialize prefill tensors full of pad tokens
         input_padding = ttnn.expand(pad_embedding, (prefill_seq_len - actual_prompt_len, -1))
-        logger.info(f"input_padding: {input_padding.shape}")
-        logger.info(f"input_embed: {input_embed.shape}")
         input_prefill_i = ttnn.concat([input_embed[:actual_prompt_len, :], input_padding], dim=0)
         input_prefill.append(input_prefill_i)
         deepstack_visual_embeds_i = (
