@@ -21,6 +21,14 @@ public:
     }
 };
 
+TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
+    std::vector<std::string> messages = {
+        "Hello world!",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", messages);
+}
+
 TEST_F(DevicePrintOutputFixture, PrintSingleUintArg) {
     std::vector<uint32_t> runtime_args = {42};
     std::vector<std::string> messages = {
