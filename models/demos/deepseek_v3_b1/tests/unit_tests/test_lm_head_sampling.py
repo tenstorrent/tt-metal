@@ -1243,6 +1243,8 @@ def test_d2d_to_d2h_pipeline(
     final_mesh_coord,
     seed,
 ):
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     """4x2 mesh fused LM-head + argmax with D2D output routed through D2D forwarding to D2H."""
     if not is_slow_dispatch():
         pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
@@ -1560,6 +1562,8 @@ def test_4stage_galaxy_1_iteration(
     seed,
 ):
     """4x2 mesh lm_head pipeline with H2D ingress + D2D ingress before compute, then D2D->D2H egress."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
 
