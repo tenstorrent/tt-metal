@@ -21,33 +21,6 @@ bool is_legacy_only(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
 
 template <BinaryOpType binary_op_type>
-struct BinaryOperation {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static Tensor invoke(
-        const ttnn::Tensor& lhs,
-        float rhs,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
 struct BinaryOperationWithFastApprox {
     static Tensor invoke(
         const Tensor& lhs,
@@ -358,7 +331,7 @@ Tensor invoke_binary_ng(
 }  // namespace operations::binary
 
 // Binary public API uses the same two-layer pattern as ternary: free function -> implementation
-// (detail::invoke_binary_ng). BinaryOperation<Op> and related structs remain for internal
+// (detail::invoke_binary_ng). Related structs remain for internal
 // call-sites (composite ops, inplace, nanobind, etc.) and may be migrated away in a follow-up.
 
 template <operations::binary::BinaryOpType Op>

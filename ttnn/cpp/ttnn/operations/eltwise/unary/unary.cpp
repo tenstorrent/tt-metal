@@ -116,15 +116,17 @@ Tensor deg2rad(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     constexpr float DEG_TO_RAD = 0.017453292519943295f;  // pi/180
-    return operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+    return ttnn::multiply(
         input_tensor,
         DEG_TO_RAD,
-        input_tensor.dtype(),
+        std::optional(input_tensor.dtype()),
         memory_config,
         optional_output_tensor,
         {},
         {},
         {},
+        std::nullopt,
+        std::nullopt,
         std::nullopt);
 }
 
@@ -133,15 +135,17 @@ Tensor rad2deg(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     constexpr float RAD_TO_DEG = 57.29577951308232f;  // 180/pi
-    return operations::binary::BinaryOperation<operations::binary::BinaryOpType::MUL>::invoke(
+    return ttnn::multiply(
         input_tensor,
         RAD_TO_DEG,
-        input_tensor.dtype(),
+        std::optional(input_tensor.dtype()),
         memory_config,
         optional_output_tensor,
         {},
         {},
         {},
+        std::nullopt,
+        std::nullopt,
         std::nullopt);
 }
 
