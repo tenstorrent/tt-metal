@@ -250,6 +250,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
         )
 
+        if enable_mtp and sample_on_device:
+            raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
