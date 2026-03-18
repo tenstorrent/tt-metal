@@ -728,12 +728,13 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--trace-params"] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
-        cmd = [python_cmd, test_path, "--trace-params"] + extra_args
+        cmd = [python_cmd, test_path] + extra_args
 
     # Set environment variable to specify custom trace directory
     # The operation_tracer.py checks TTNN_OPERATION_TRACE_DIR env var
     env = os.environ.copy()
     env["TTNN_OPERATION_TRACE_DIR"] = trace_dir
+    env["TTNN_TRACE_PARAMS"] = "1"
 
     # Disable fast runtime mode to enable operation tracing
     # Fast mode skips the tracing decorator for performance
