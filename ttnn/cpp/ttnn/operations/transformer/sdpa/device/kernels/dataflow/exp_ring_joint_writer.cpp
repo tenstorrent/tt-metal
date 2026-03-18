@@ -405,30 +405,27 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect(mux_conn);
     }
 
-    // ---- K/V All-Gather setup (termination master only) ----
-    // State is declared in the outer scope so it can be accessed from the ring loop below.
-    // Phase 1 (send local slice) runs at ring_iter==0; Phase 2 steps (store-and-forward)
-    // run one-per-ring_iter thereafter, interleaved with SDPA output writes to avoid deadlock.
+    // ---- MUX writer setup: parsed by all MUX writers with valid connections ----
     bool do_ag = false;
+    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_injector_sem = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem = nullptr;
     uint32_t ag_direction = 0;
     uint32_t ag_input_Wt = 0, ag_input_Ht = 0, ag_output_Wt = 0, ag_output_Ht = 0;
     uint32_t ag_gather_dim = 0, ag_batch_head_count = 0;
     uint32_t ag_tile_id_start = 0, ag_tile_id_end = 0, ag_ring_size = 0;
     uint32_t ag_writes_expected = 0, ag_slice_writes = 0;
     uint32_t kv_scratch_addr = 0;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write = nullptr;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem = nullptr;
-    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = nullptr;
     OpSignaler op_signaler;
     uint32_t ag_local_gathered_tile_id_start = 0;
-    // DRAM base addresses for K/V input and gathered output; updated inside the if-block.
-    // TensorAccessors are constructed as temporaries at the call sites to avoid the
-    // non-assignable const member restriction in InterleavedAddrGen.
     uint32_t k_addr_ag_rt = 0, v_addr_ag_rt = 0;
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
 
-    if (is_termination_master && mux_connection_valid) {
-        // Parse AG RT args
+    if (mux_connection_valid) {
+        const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
+        const uint32_t injector_noc_x = get_arg_val<uint32_t>(argidx++);
+        const uint32_t injector_noc_y = get_arg_val<uint32_t>(argidx++);
         ag_direction = get_arg_val<uint32_t>(argidx++);
         ag_input_Wt = get_arg_val<uint32_t>(argidx++);
         ag_input_Ht = get_arg_val<uint32_t>(argidx++);
@@ -439,7 +436,6 @@ void kernel_main() {
         ag_tile_id_start = get_arg_val<uint32_t>(argidx++);
         ag_tile_id_end = get_arg_val<uint32_t>(argidx++);
         ag_ring_size = get_arg_val<uint32_t>(argidx++);
-        const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
         k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
@@ -447,34 +443,44 @@ void kernel_main() {
 
         op_signaler = OpSignaler(argidx);
 
+        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
+
         // Allocate L1 scratch for one packet of K or V tiles
         cb_reserve_back(ag_kv_scratch_cb_id, ag_packet_size_in_pages);
         kv_scratch_addr = get_write_ptr(ag_kv_scratch_cb_id);
         cb_push_back(ag_kv_scratch_cb_id, ag_packet_size_in_pages);
 
-        // Allocate two packet header slots: one for data writes, one for sem_inc
+        // Allocate three packet header slots: data writes, self sem_inc, injector sem_inc
         cb_reserve_back(ag_pkt_hdr_cb_id, 1);
         const uint32_t pkt_hdr_write_addr = get_write_ptr(ag_pkt_hdr_cb_id);
         cb_push_back(ag_pkt_hdr_cb_id, 1);
         cb_reserve_back(ag_pkt_hdr_cb_id, 1);
         const uint32_t pkt_hdr_sem_addr = get_write_ptr(ag_pkt_hdr_cb_id);
         cb_push_back(ag_pkt_hdr_cb_id, 1);
+        cb_reserve_back(ag_pkt_hdr_cb_id, 1);
+        const uint32_t pkt_hdr_injector_sem_l1 = get_write_ptr(ag_pkt_hdr_cb_id);
+        cb_push_back(ag_pkt_hdr_cb_id, 1);
 
         pkt_hdr_write = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_write_addr);
         pkt_hdr_sem = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_sem_addr);
+        pkt_hdr_injector_sem = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_injector_sem_l1);
 
         // Set routing: always 1 hop in direction (store-and-forward handles multi-hop)
         fabric_set_unicast_route<false>(pkt_hdr_write, 1);
         fabric_set_unicast_route<false>(pkt_hdr_sem, 1);
+        fabric_set_unicast_route<false>(pkt_hdr_injector_sem, 1);
 
-        // Semaphore on this core that remote senders will atomically increment via fabric
-        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
-
-        // Destination for sem_inc packets: same physical NOC coordinates on all chips
+        // Destination for self sem_inc packets: same physical NOC coordinates on all chips
         const uint64_t remote_out_ready_sem_noc_addr =
             safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
         pkt_hdr_sem->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_out_ready_sem_noc_addr, 1});
+
+        // Packet header for signaling the injector core on the next device
+        const uint64_t injector_out_ready_sem_noc_addr =
+            safe_get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr, 0);
+        pkt_hdr_injector_sem->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{injector_out_ready_sem_noc_addr, 1});
 
         // Tile offset of our chip's local slice in the gathered output tensor
         ag_local_gathered_tile_id_start =
@@ -801,7 +807,7 @@ void kernel_main() {
                 }
 
 #ifdef USE_MUX
-                if (do_ag) {
+                if (mux_connection_valid) {
                     for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                         const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
                         const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
@@ -839,6 +845,7 @@ void kernel_main() {
                         // TODO: Read K chunk here
                         // TODO: Read V chunk here
                     }
+                    tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
                 }
 #endif
 
