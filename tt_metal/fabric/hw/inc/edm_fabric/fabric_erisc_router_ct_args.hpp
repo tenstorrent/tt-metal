@@ -80,9 +80,11 @@ constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_L
 constexpr size_t MAX_NUM_SENDER_CHANNELS = NAMED_CT_ARG("MAX_NUM_SENDER_CHANNELS");
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("MAX_NUM_RECEIVER_CHANNELS");
 constexpr size_t MAX_NUM_VCS = NAMED_CT_ARG("MAX_NUM_VCS");
-// VC0 and VC1 and VC2 channel counts derived from actual per-VC counts emitted by builder.
-// Z_ROUTER: typically 5 VC0 + 4 VC1 + 1 VC2 = 10 total (when VC2 active)
-// MESH:     typically 4 VC0 + 4 VC1 + 1 VC2 = 9 total (when VC2 active)
+// Actual per-VC sender counts (emitted by builder, must be declared before use)
+constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
+constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
+constexpr size_t ACTUAL_VC2_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC2_SENDER_CHANNELS");
+// VC boundary derivation from actual counts (replaces old >= 9 heuristic)
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = ACTUAL_VC0_SENDER_CHANNELS;
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = ACTUAL_VC1_SENDER_CHANNELS;
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC2 = ACTUAL_VC2_SENDER_CHANNELS;
@@ -151,10 +153,6 @@ constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_C
 constexpr bool z_router_enabled = NAMED_CT_ARG("Z_ROUTER_ENABLED");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
-constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
-constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
-constexpr size_t ACTUAL_VC2_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC2_SENDER_CHANNELS");
-
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
 

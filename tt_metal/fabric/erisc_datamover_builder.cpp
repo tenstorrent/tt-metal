@@ -1084,13 +1084,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id;
     named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id;
 
-    // --- Max channel counts (conditional on VC2 enablement) ---
-    bool vc2_enabled = actual_sender_channels_vc2 > 0;
-    named_args["MAX_NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(
-        vc2_enabled ? builder_config::num_max_sender_channels : builder_config::num_max_sender_channels_without_vc2);
-    named_args["MAX_NUM_RECEIVER_CHANNELS"] = static_cast<uint32_t>(
-        vc2_enabled ? builder_config::num_max_receiver_channels
-                    : builder_config::num_max_receiver_channels_without_vc2);
+    // --- Max channel counts (always global max — instance counts use NUM_SENDER/RECEIVER_CHANNELS) ---
+    named_args["MAX_NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(builder_config::num_max_sender_channels);
+    named_args["MAX_NUM_RECEIVER_CHANNELS"] = static_cast<uint32_t>(builder_config::num_max_receiver_channels);
     named_args["MAX_NUM_VCS"] = static_cast<uint32_t>(builder_config::MAX_NUM_VCS);
 
     // --- Downstream tensix connections ---
