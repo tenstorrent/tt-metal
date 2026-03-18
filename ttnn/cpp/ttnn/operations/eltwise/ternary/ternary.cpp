@@ -149,7 +149,7 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
 
-    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
+    return binary::where_operation_with_scalar<binary::BinaryOpType::WHERE_TTS>(
         condition,
         t_true,
         scalar_false,
@@ -172,7 +172,7 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_false.dtype());
     }
 
-    return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
+    return binary::where_operation_with_scalar<binary::BinaryOpType::WHERE_TST>(
         condition,
         t_false,
         scalar_true,

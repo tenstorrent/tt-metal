@@ -21,89 +21,13 @@ bool is_legacy_only(
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations);
 
 template <BinaryOpType binary_op_type>
-struct InplaceLogicalBinary {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& lhs,
-        float rhs,
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
-struct InplaceMulOperationWithFastApprox {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        std::optional<bool> fast_and_approximate_mode = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& lhs,
-        float rhs,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        std::optional<bool> fast_and_approximate_mode = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
-struct BinaryOperationAddalpha {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
-struct BinaryOperationSubalpha {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        float alpha,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
-struct BinaryOperationHypot {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
-struct WhereOperationWithScalar {
-    // For TTS / TST variant
-    static Tensor invoke(
-        const Tensor& condition,
-        const Tensor& true_false_tensor,  // For TTS variant, true_tensor; For TST variant, false_tensor
-        unary::ScalarVariant scalar_value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
+Tensor where_operation_with_scalar(
+    const Tensor& condition,
+    const Tensor& true_false_tensor,
+    unary::ScalarVariant scalar_value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 namespace detail {
 

@@ -608,7 +608,7 @@ Tensor inplace_relational_binary(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceLogicalBinary<binary_op_type>::invoke(
+Tensor inplace_logical_binary(
     const Tensor& lhs,
     const Tensor& rhs,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -632,7 +632,7 @@ Tensor InplaceLogicalBinary<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceLogicalBinary<binary_op_type>::invoke(
+Tensor inplace_logical_binary(
     const ttnn::Tensor& lhs,
     const float rhs,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -656,7 +656,7 @@ Tensor InplaceLogicalBinary<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
+Tensor inplace_mul_operation_with_fast_approx(
     const Tensor& lhs,
     const Tensor& rhs,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -683,7 +683,7 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
+Tensor inplace_mul_operation_with_fast_approx(
     const ttnn::Tensor& lhs,
     const float rhs,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -710,7 +710,7 @@ Tensor InplaceMulOperationWithFastApprox<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
+Tensor binary_operation_addalpha(
     const Tensor& lhs,
     const Tensor& rhs,
     float alpha,
@@ -733,7 +733,7 @@ Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
+Tensor binary_operation_subalpha(
     const Tensor& lhs,
     const Tensor& rhs,
     float alpha,
@@ -756,7 +756,7 @@ Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor BinaryOperationHypot<binary_op_type>::invoke(
+Tensor binary_operation_hypot(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -777,7 +777,7 @@ Tensor BinaryOperationHypot<binary_op_type>::invoke(
 }
 
 template <BinaryOpType binary_op_type>
-Tensor WhereOperationWithScalar<binary_op_type>::invoke(
+Tensor where_operation_with_scalar(
     const Tensor& condition,
     const Tensor& true_false_tensor,
     unary::ScalarVariant scalar_value,
@@ -800,18 +800,20 @@ Tensor WhereOperationWithScalar<binary_op_type>::invoke(
         sub_core_grids);  // sub_core_grids
 }
 
-template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_AND>;
-template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
-template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_XOR>;
-
-template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
-template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
-template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
-
-template struct InplaceMulOperationWithFastApprox<BinaryOpType::MUL>;
-
-template struct WhereOperationWithScalar<BinaryOpType::WHERE_TST>;
-template struct WhereOperationWithScalar<BinaryOpType::WHERE_TTS>;
+template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TST>(
+    const Tensor&,
+    const Tensor&,
+    unary::ScalarVariant,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+template Tensor where_operation_with_scalar<BinaryOpType::WHERE_TTS>(
+    const Tensor&,
+    const Tensor&,
+    unary::ScalarVariant,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
 
 }  // namespace ttnn::operations::binary
 
@@ -2237,7 +2239,7 @@ Tensor multiply_(
     std::optional<bool> use_legacy,
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceMulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>::invoke(
+    return operations::binary::inplace_mul_operation_with_fast_approx<operations::binary::BinaryOpType::MUL>(
         lhs,
         rhs,
         post_activations,
@@ -2256,7 +2258,7 @@ Tensor multiply_(
     std::optional<bool> use_legacy,
     std::optional<bool> fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceMulOperationWithFastApprox<operations::binary::BinaryOpType::MUL>::invoke(
+    return operations::binary::inplace_mul_operation_with_fast_approx<operations::binary::BinaryOpType::MUL>(
         lhs,
         rhs,
         post_activations,
@@ -2362,7 +2364,7 @@ Tensor logical_and_(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_AND>::invoke(
+    return operations::binary::inplace_logical_binary<operations::binary::BinaryOpType::LOGICAL_AND>(
         lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
 }
 Tensor logical_and_(
@@ -2373,7 +2375,7 @@ Tensor logical_and_(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_AND>::invoke(
+    return operations::binary::inplace_logical_binary<operations::binary::BinaryOpType::LOGICAL_AND>(
         lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
 }
 Tensor logical_or_(
@@ -2384,7 +2386,7 @@ Tensor logical_or_(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_OR>::invoke(
+    return operations::binary::inplace_logical_binary<operations::binary::BinaryOpType::LOGICAL_OR>(
         lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
 }
 Tensor logical_or_(
@@ -2395,7 +2397,7 @@ Tensor logical_or_(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_OR>::invoke(
+    return operations::binary::inplace_logical_binary<operations::binary::BinaryOpType::LOGICAL_OR>(
         lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
 }
 Tensor logical_xor_(
@@ -2406,7 +2408,7 @@ Tensor logical_xor_(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_XOR>::invoke(
+    return operations::binary::inplace_logical_binary<operations::binary::BinaryOpType::LOGICAL_XOR>(
         lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
 }
 Tensor logical_xor_(
@@ -2417,7 +2419,7 @@ Tensor logical_xor_(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return operations::binary::InplaceLogicalBinary<operations::binary::BinaryOpType::LOGICAL_XOR>::invoke(
+    return operations::binary::inplace_logical_binary<operations::binary::BinaryOpType::LOGICAL_XOR>(
         lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
 }
 Tensor eq_(
@@ -2558,7 +2560,7 @@ Tensor addalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    return operations::binary::BinaryOperationAddalpha<operations::binary::BinaryOpType::ADDALPHA>::invoke(
+    return operations::binary::binary_operation_addalpha<operations::binary::BinaryOpType::ADDALPHA>(
         lhs, rhs, alpha, memory_config, output);
 }
 Tensor subalpha(
@@ -2567,7 +2569,7 @@ Tensor subalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    return operations::binary::BinaryOperationSubalpha<operations::binary::BinaryOpType::SUBALPHA>::invoke(
+    return operations::binary::binary_operation_subalpha<operations::binary::BinaryOpType::SUBALPHA>(
         lhs, rhs, alpha, memory_config, output);
 }
 Tensor hypot(
@@ -2575,7 +2577,7 @@ Tensor hypot(
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return operations::binary::BinaryOperationHypot<operations::binary::BinaryOpType::HYPOT>::invoke(
+    return operations::binary::binary_operation_hypot<operations::binary::BinaryOpType::HYPOT>(
         input_tensor_a, input_tensor_b, memory_config, optional_output_tensor);
 }
 
