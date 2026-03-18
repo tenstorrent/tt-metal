@@ -337,9 +337,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
-        # Repeat + Permute Expert weights
+        # # Repeat + Permute Expert weights
 
-        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+        # topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
         # MOE
 
@@ -352,6 +352,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             batch_size,
             seq_len,
         )
+        ttnn.deallocate(topk_experts_weights)
+        ttnn.deallocate(topk_experts_indices)
 
         # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
 
@@ -396,17 +398,24 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Chunk along local batch dimension to keep all_to_all_dispatch output small in prefill.
-        chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
+        chunk_size = min(batch_size_per_device, max(1, int(cfg.get("moe_chunk_size", min(batch_size_per_device, 256)))))
         output_chunks: list[ttnn.Tensor] = []
 
         def _slice_topk_weights(batch_start: int, batch_end: int) -> ttnn.Tensor:
             token_start = batch_start * seq_len
             token_end = batch_end * seq_len
-            return ttnn.slice(
+            topk_weights_chunk = ttnn.slice(
                 topk_experts_weights,
                 [0, 0, token_start, 0],
-                [cfg["num_experts_per_tok"], 1, token_end, cfg["hidden_size"]],
+                [1, 1, token_end, cfg["num_experts_per_tok"]],
             )
+            topk_weights_chunk_rm = ttnn.to_layout(topk_weights_chunk, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(topk_weights_chunk)
+            topk_weights_chunk_rm = ttnn.repeat(topk_weights_chunk_rm, **cfg["topk_weights_repeat"])
+            topk_weights_chunk_rm = ttnn.permute(topk_weights_chunk_rm, (3, 1, 2, 0))
+            topk_weights_chunk = ttnn.to_layout(topk_weights_chunk_rm, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(topk_weights_chunk_rm)
+            return topk_weights_chunk
 
         for batch_start in range(0, batch_size_per_device, chunk_size):
             batch_end = min(batch_start + chunk_size, batch_size_per_device)
@@ -470,10 +479,14 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
 
             topk_weights_chunk = _slice_topk_weights(batch_start, batch_end)
-            post_combine_output_tensor = ttnn.mul(
+            post_combine_weighted_output_tensor = ttnn.mul(
                 post_combine_output_tensor, topk_weights_chunk, **cfg["mul_experts_output_with_weights"]
             )
+            ttnn.deallocate(post_combine_output_tensor)
             ttnn.deallocate(topk_weights_chunk)
+
+            post_combine_output_tensor = ttnn.sum(post_combine_weighted_output_tensor, dim=0, keepdim=True)
+            ttnn.deallocate(post_combine_weighted_output_tensor)
 
             output_chunks.append(post_combine_output_tensor)
 
