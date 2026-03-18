@@ -2109,6 +2109,7 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
     }
 #endif
 
+#if !defined(ARCH_QUASAR)
     noc_fast_write_dw_inline_multicast<noc_mode, dst_type, flush>(
         noc,
         write_at_cmd_buf,
@@ -2120,6 +2121,7 @@ FORCE_INLINE void noc_inline_mcast_dw_write(
         posted,  // posted
         customized_src_addr,
         num_dest);
+#endif
 
     WAYPOINT("NWID");
 }

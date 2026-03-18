@@ -5,7 +5,6 @@
 #include <vector>
 #include <gtest/gtest.h>
 
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -18,8 +17,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/host_api.hpp>
 #include "debug_tools_fixture.hpp"
-#include "impl/buffers/circular_buffer.hpp"
-#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -43,20 +40,15 @@ protected:
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-    // Helper: Create CB config for RTA/CRTA tests
-    CircularBufferConfig CreateArgCBConfig(uint32_t word_count) {
-        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-        uint32_t cb_size = tt::align(word_count * sizeof(uint32_t), l1_alignment);
-        return CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float32}}).set_page_size(0, cb_size);
-    }
-
     // Helper: Create DM kernel (arch-aware)
     // On Quasar, launches kernel on all DMs with compile_args[0] = dm_select so only
     // the target DM executes; others exit early via get_my_thread_id() guard.
     // On BH/WH, launches on RISCV_0 (BRISC) only.
+    // l1_scratch_addr: L1 address for writing RTA/CRTA results (passed as compile-time arg)
     KernelHandle CreateDMKernel(
         Program& program,
         const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+        uint32_t l1_scratch_addr,
         std::map<std::string, std::string> defines = {},
         uint32_t dm_select = 0) {
         const auto& hal = MetalContext::instance().hal();
@@ -68,14 +60,19 @@ protected:
                 rta_crta_kernel_path,
                 core_spec,
                 experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = num_dms, .compile_args = {dm_select}, .defines = defines});
+                    .num_threads_per_cluster = num_dms,
+                    .compile_args = {dm_select, l1_scratch_addr},
+                    .defines = defines});
         }
         return CreateKernel(
             program,
             rta_crta_kernel_path,
             core_spec,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {l1_scratch_addr},
+                .defines = defines});
     }
 
     // Helper: Create compute kernel (arch-aware)
@@ -179,41 +176,38 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRangeSet core_range_set(std::vector{core_range});
 
         const uint32_t total_read_size = 2 * sizeof(uint32_t);
-        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-        uint32_t cb_size = tt::align(total_read_size, l1_alignment);
-        CircularBufferConfig cb0(cb_size, {{tt::CBIndex::c_0, tt::DataFormat::Float32}});
-        cb0.set_page_size(tt::CBIndex::c_0, cb_size);
-        uint32_t compute_scratch_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+        // Zero-init the L1 scratch space on all cores
+        std::vector<uint32_t> zero_init(2, 0);
+        for (const auto& core : core_range) {
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+        }
 
         distributed::MeshWorkload workload;
         Program program;
-        CBHandle cb0_handle = CreateCircularBuffer(program, core_range_set, cb0);
 
-        CreateDMKernel(program, core_range_set);
-        CreateComputeKernel(program, core_range_set, compute_scratch_addr);
+        CreateDMKernel(program, core_range_set, l1_unreserved_base);
+        CreateComputeKernel(program, core_range_set, l1_unreserved_base);
 
         // No SetRuntimeArgs called - all cores have RTA/CRTA offset = 0xFFFF pattern
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device, workload);
 
-        auto& program_from_workload = workload.get_programs().at(device_range);
         std::vector<uint32_t> read_result;
 
         for (const auto& core : core_range) {
             // DM: verify rta_count = 0, crta_count = 0
             read_result.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core,
-                program_from_workload.impl().get_circular_buffer(cb0_handle)->address(),
-                total_read_size,
-                read_result);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_read_size, read_result);
             EXPECT_EQ(read_result[0], 0);  // rta_count
             EXPECT_EQ(read_result[1], 0);  // crta_count
 
             // TRISC0: verify rta_count = 0, crta_count = 0
+            // Note: Both DM and compute write to the same L1 address, so we're validating
+            // the last writer (compute kernel) here
             read_result.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(device, core, compute_scratch_addr, total_read_size, read_result);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_read_size, read_result);
             EXPECT_EQ(read_result[0], 0);  // rta_count
             EXPECT_EQ(read_result[1], 0);  // crta_count
         }
@@ -225,13 +219,12 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRange cores_without_rtas(CoreCoord(2, 2), CoreCoord(3, 3));
         CoreRangeSet core_range_set(std::vector{cores_with_rtas, cores_without_rtas});
 
-        CircularBufferConfig cb_config = CreateArgCBConfig(default_rtas.size());
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
         distributed::MeshWorkload workload;
         Program program;
-        CreateCircularBuffer(program, core_range_set, cb_config);
 
-        auto kernel = CreateDMKernel(program, core_range_set, {{"MAX_RTA_IDX", "0"}});
+        auto kernel = CreateDMKernel(program, core_range_set, l1_unreserved_base, {{"MAX_RTA_IDX", "0"}});
 
         SetRuntimeArgs(program, kernel, cores_with_rtas, default_rtas);
         // cores_without_rtas has NO RTAs set - 0xBEEF#### pattern -> rta_count = 0 -> assert
@@ -261,16 +254,25 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
     CoreRangeSet core_range_set =
         is_quasar ? CoreRangeSet(std::vector{core_range1}) : CoreRangeSet(std::vector{core_range1, core_range2});
 
-    // Configure CB to store read-back args
-    const uint32_t total_read_size = 2 + default_rtas.size() + default_crtas.size();
-    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    CircularBufferConfig cb_config = CreateArgCBConfig(total_read_size);
+    // Use l1_unreserved space instead of CB for scratch storage
+    const uint32_t total_word_count = 2 + default_rtas.size() + default_crtas.size();
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+
+    // Zero-init the L1 scratch space on all cores before running
+    std::vector<uint32_t> zero_init(total_word_count, 0);
+    for (const auto& core : core_range1) {
+        tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+    }
+    if (!is_quasar) {
+        for (const auto& core : core_range2) {
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+        }
+    }
 
     distributed::MeshWorkload workload;
     Program program;
-    CreateCircularBuffer(program, core_range_set, cb_config);
 
-    auto kernel = CreateDMKernel(program, core_range_set);
+    auto kernel = CreateDMKernel(program, core_range_set, l1_unreserved_base);
 
     // Range 1 RTAs
     SetRuntimeArgs(program, kernel, core_range1, default_rtas);
@@ -288,11 +290,21 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Validate first run
     for (const auto& core : core_range1) {
-        ValidateArgResults(device, core, cb_addr, default_rtas, default_crtas);
+        ValidateArgResults(device, core, l1_unreserved_base, default_rtas, default_crtas);
     }
     if (!is_quasar) {
         for (const auto& core : core_range2) {
-            ValidateArgResults(device, core, cb_addr, rtas_range2, default_crtas);
+            ValidateArgResults(device, core, l1_unreserved_base, rtas_range2, default_crtas);
+        }
+    }
+
+    // Zero-init again before second run
+    for (const auto& core : core_range1) {
+        tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+    }
+    if (!is_quasar) {
+        for (const auto& core : core_range2) {
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
         }
     }
 
@@ -306,11 +318,11 @@ TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
 
     // Validate second run
     for (const auto& core : core_range1) {
-        ValidateArgResults(device, core, cb_addr, default_rtas, default_crtas);
+        ValidateArgResults(device, core, l1_unreserved_base, default_rtas, default_crtas);
     }
     if (!is_quasar) {
         for (const auto& core : core_range2) {
-            ValidateArgResults(device, core, cb_addr, rtas_range2, default_crtas);
+            ValidateArgResults(device, core, l1_unreserved_base, rtas_range2, default_crtas);
         }
     }
 }
@@ -338,12 +350,10 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
 
-    const uint32_t total_read_size = 2 + default_rtas.size() + default_crtas.size();
-    CircularBufferConfig cb_config = CreateArgCBConfig(total_read_size);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     distributed::MeshWorkload workload;
     Program program;
-    CreateCircularBuffer(program, core_range_set, cb_config);
 
     std::map<std::string, std::string> defines;
     if (params.test_rta) {
@@ -355,11 +365,12 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     // Create kernel based on processor class (arch-specific creation handled by helpers)
     KernelHandle kernel;
     switch (params.processor_class) {
-        case HalProcessorClassType::DM: kernel = CreateDMKernel(program, core_range_set, defines); break;
-        case HalProcessorClassType::COMPUTE: {
-            uint32_t compute_scratch_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-            kernel = CreateComputeKernel(program, core_range_set, compute_scratch_addr, defines);
-        } break;
+        case HalProcessorClassType::DM:
+            kernel = CreateDMKernel(program, core_range_set, l1_unreserved_base, defines);
+            break;
+        case HalProcessorClassType::COMPUTE:
+            kernel = CreateComputeKernel(program, core_range_set, l1_unreserved_base, defines);
+            break;
         default: TT_THROW("Unsupported processor class");
     }
 
@@ -389,18 +400,16 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
     auto mesh_device = devices_[0];
     auto* device = mesh_device->get_devices()[0];
 
-    const uint32_t total_read_size = 2 + default_rtas.size() + default_crtas.size();
-    CircularBufferConfig cb_config = CreateArgCBConfig(total_read_size);
-
-    distributed::MeshWorkload workload;
-    Program program;
-    CreateCircularBuffer(program, core_range_set, cb_config);
-
     auto num_dms = hal.get_processor_types_count(
         HalProgrammableCoreType::TENSIX, static_cast<uint32_t>(HalProcessorClassType::DM));
 
-    // Allocate L1 scratch space for the sync barrier counter (8 bytes for uint64_t)
-    uint32_t l1_sync_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    // L1 layout: [sync_counter (8 bytes)] [scratch space for RTA/CRTA results]
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_sync_addr = l1_unreserved_base;
+    uint32_t l1_scratch_addr = l1_unreserved_base + 8;  // After 8-byte sync counter
+
+    distributed::MeshWorkload workload;
+    Program program;
 
     // All DMs sync then attempt OOB RTA access together
     std::map<std::string, std::string> defines = {
@@ -411,7 +420,9 @@ TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
         rta_crta_kernel_path,
         core_range_set,
         experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = num_dms, .compile_args = {num_dms, l1_sync_addr}, .defines = defines});
+            .num_threads_per_cluster = num_dms,
+            .compile_args = {num_dms, l1_sync_addr, l1_scratch_addr},
+            .defines = defines});
 
     SetRuntimeArgs(program, kernel, core_range, default_rtas);
     workload.add_program(device_range, std::move(program));
