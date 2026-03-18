@@ -1280,11 +1280,11 @@ def test_ring_joint_sdpa_dit_bh_glx_custom(
     rp_axis, rp_factor, up_axis, up_factor = parallel_config_map["bh_glx"]["wan_14b_720p"]  # (0, 8, 1, 4)
     q_chunk_size = 224
     k_chunk_size = 512
-    n_iters = 5
+    n_iters = 1
     trace_enabled = False
     skip_check = False
-    pcc_threshold = 0.9
-    max_mse = 1
+    pcc_threshold = 0.9993
+    max_mse = 8e-5
 
     if nh % up_factor != 0:
         nh = math.ceil(nh / up_factor) * up_factor
