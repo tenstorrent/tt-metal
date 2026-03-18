@@ -12,12 +12,12 @@ namespace ttnn::operations::unary_ng {
 
 namespace detail {
 
-inline Tensor unary_ng_impl(
+Tensor unary_ng_impl(
     const Tensor& input_tensor,
     const std::vector<unary::EltwiseUnaryWithParam>& op_chain,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
     DataType output_dtype = input_dtype;
@@ -51,21 +51,25 @@ inline Tensor unary_ng_impl(
 
 }  // namespace detail
 
-Tensor Abs::invoke(
+}  // namespace ttnn::operations::unary_ng
+
+namespace ttnn {
+
+Tensor abs(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    unary::UnaryOpType op_type = unary::UnaryOpType::ABS;
+    using namespace operations::unary;
+    UnaryOpType op_type = UnaryOpType::ABS;
     if (input_tensor.dtype() == DataType::INT32) {
-        op_type = unary::UnaryOpType::ABS_INT32;
+        op_type = UnaryOpType::ABS_INT32;
     }
-    Tensor out =
-        detail::unary_ng_impl(input_tensor, {unary::UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
-    return out;
+    return operations::unary_ng::detail::unary_ng_impl(
+        input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
-Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
+Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
-}  // namespace ttnn::operations::unary_ng
+}  // namespace ttnn

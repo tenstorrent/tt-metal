@@ -4,29 +4,31 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn::operations::unary_ng {
 
-// Ops registered here use the unary_ng device operation (single compute kernel, layout flexibility, etc.).
-// Add and register op by op as needed.
+namespace detail {
 
-struct Abs {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+Tensor unary_ng_impl(
+    const Tensor& input_tensor,
+    const std::vector<unary::EltwiseUnaryWithParam>& op_chain,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-    static Tensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config);
-};
+}  // namespace detail
 
 }  // namespace ttnn::operations::unary_ng
 
 namespace ttnn {
 
-// Registered unary_ng ops (one by one). Single API: ttnn::abs uses NG implementation.
-inline constexpr auto abs = ttnn::register_operation<"ttnn::abs", ttnn::operations::unary_ng::Abs>();
+Tensor abs(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config);
 
 }  // namespace ttnn
