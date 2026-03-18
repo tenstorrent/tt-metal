@@ -160,7 +160,7 @@ jobs:
           ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
 
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          # Dense layer first (~60s) for fast signal, then MoE layer (~180s)
+          # Running only decode and prefill-128 tests with HF weights for moe and mlp layer
           MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.0 and (mode_decode or mode_prefill_seq_128)" --timeout 60 --durations=0;
           MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_decoder_block.py -k "model.layers.3 and (mode_decode or mode_prefill_seq_128)" --timeout 180 --durations=0;
 

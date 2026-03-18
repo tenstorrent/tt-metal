@@ -209,7 +209,6 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
-        # Dense (layer 0) variants first — ~30s each, gives fast signal
         pytest.param(
             DecoderBlock2D,
             None,
