@@ -61,6 +61,11 @@ DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> da
             continue;
         }
 
+        // Special case where Fp8_e4m3 can be used with any format
+        if (format == DataFormat::Fp8_e4m3) {
+            continue;
+        }
+
         if (format != DataFormat::Invalid) {
             TT_FATAL(ALL_VALID_FORMATS.contains(format), "Format = {} not supported", format);
 
@@ -213,7 +218,7 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Invalid) {
         pack_src_format = DataFormat::Invalid;
     } else if (data_format == DataFormat::Fp8_e4m3) {
-        pack_src_format = DataFormat::Float16;
+        pack_src_format = DataFormat::Float16;  // TODO: fix this???
     } else if (fp32_dest_acc_en) {
         if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
