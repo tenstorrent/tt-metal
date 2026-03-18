@@ -153,7 +153,7 @@ TEST(HostTensorTest, CopyAssignment) {
 
 TEST(HostTensorTest, CopyConstructionFromDefaultConstructed) {
     HostTensor default_tensor;
-    HostTensor copied(default_tensor);
+    const HostTensor& copied(default_tensor);
     (void)copied;
     // Both should be in default-constructed state (no assertions, just shouldn't crash)
 }
