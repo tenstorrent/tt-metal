@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize.hpp"
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 
 namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::detail {
