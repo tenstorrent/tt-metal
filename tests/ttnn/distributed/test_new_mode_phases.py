@@ -71,7 +71,7 @@ class TestNewModePhase1Phase2:
 
         # Should have executable and args
         assert "--mesh-graph-descriptor" in captured_cmd
-        # Note: generate_rank_bindings doesn't accept --output-dir, it hardcodes output to "tt-run-generated/"
+        # Note: generate_rank_bindings accepts --output-dir (default: generated/ttrun)
 
     def test_phase1_mock_cluster_per_rank_segments(self, temp_dir):
         """Test Phase 1 command uses per-rank -np 1 segments for mock cluster."""
@@ -217,9 +217,9 @@ class TestNewModePhase1Phase2:
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
-        # Use /tmp/tt-run-generated for output (as new_mode_flow does)
-        output_dir = Path("/tmp") / "tt-run-generated"
-        output_dir.mkdir(exist_ok=True)
+        # Use temp_dir for output (tests use temp to avoid writing to generated/ttrun)
+        output_dir = temp_dir / "generated" / "ttrun"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # Create generated rank_bindings.yaml with 3 ranks (different from Phase 1)
         rank_bindings_path = output_dir / "rank_bindings.yaml"
@@ -406,9 +406,9 @@ class TestNewModePhase1Phase2:
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
-        # Use /tmp/tt-run-generated for output (as new_mode_flow does)
-        output_dir = Path("/tmp") / "tt-run-generated"
-        output_dir.mkdir(exist_ok=True)
+        # Use temp_dir for output (tests use temp to avoid writing to generated/ttrun)
+        output_dir = temp_dir / "generated" / "ttrun"
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # Create generated rank_bindings.yaml with asymmetrical distribution:
         # node1: 3 ranks (slots 0, 1, 2)

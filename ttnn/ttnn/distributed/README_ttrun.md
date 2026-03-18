@@ -20,7 +20,7 @@ In the auto allocation mode, you provide:
 tt-run automatically:
 
 1. Runs `generate_rank_bindings` on the specified hosts with the MGD file
-2. Writes `/tmp/tt-run-generated/rank_bindings.yaml` and `/tmp/tt-run-generated/rankfile`
+2. Writes `generated/ttrun/rank_bindings.yaml` and `generated/ttrun/rankfile` (relative to launch directory)
 3. Waits 5 seconds for file sync (e.g., NFS)
 4. Launches your program with those generated files
 
@@ -42,12 +42,12 @@ tt-run --mesh-graph-descriptor path/to/mgd.textproto \
 
 ### Generated Outputs
 
-Auto allocation mode writes to `/tmp/tt-run-generated/`:
+Auto allocation mode writes to `generated/ttrun/` (relative to launch directory):
 
 | File | Description |
 |------|-------------|
-| `/tmp/tt-run-generated/rank_bindings.yaml` | Rank bindings in tt-run format |
-| `/tmp/tt-run-generated/rankfile` | OpenMPI rankfile |
+| `generated/ttrun/rank_bindings.yaml` | Rank bindings in tt-run format |
+| `generated/ttrun/rankfile` | OpenMPI rankfile |
 
 ---
 
@@ -88,12 +88,12 @@ tt-run --mesh-graph-descriptor path/to/mesh.textproto \
 **Step 2: Use with legacy mode:**
 
 ```bash
-tt-run --rank-binding /tmp/tt-run-generated/rank_bindings.yaml \
-  --mpi-args "--map-by rankfile:file=/tmp/tt-run-generated/rankfile" \
+tt-run --rank-binding generated/ttrun/rank_bindings.yaml \
+  --mpi-args "--map-by rankfile:file=generated/ttrun/rankfile" \
   ./my_app
 ```
 
-**Step 3 (optional):** Edit `/tmp/tt-run-generated/rank_bindings.yaml` or `/tmp/tt-run-generated/rankfile` before Step 2 to adjust `env_overrides` (e.g., `TT_VISIBLE_DEVICES`), change host/slot mapping, or add/remove ranks—just keep both files consistent.
+**Step 3 (optional):** Edit `generated/ttrun/rank_bindings.yaml` or `generated/ttrun/rankfile` before Step 2 to adjust `env_overrides` (e.g., `TT_VISIBLE_DEVICES`), change host/slot mapping, or add/remove ranks—just keep both files consistent.
 
 ### Rank Bindings Format
 
@@ -132,7 +132,7 @@ rank 3=hostname3 slot=0
 | **Required args** | `--mesh-graph-descriptor` and `--hosts` (unless `--mock-cluster-rank-binding`) | `--rank-binding` |
 | **Rank bindings** | Auto-generated | You supply |
 | **Rankfile** | Auto-generated | You supply via `--mpi-args` |
-| **Output location** | `/tmp/tt-run-generated/` | N/A |
+| **Output location** | `generated/ttrun/` | N/A |
 | **Use case** | Quick launch with MGD + host list | Full control, hand-crafted or generated configs |
 
 ---
