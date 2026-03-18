@@ -79,14 +79,16 @@ public:
         H2DMode h2d_mode);
 
     /**
-     * @brief Connects to an existing H2DSocket from another process via a descriptor file.
+     * @brief Connects to an existing H2DSocket from another process.
      *
-     * Opens the named shared memory created by the owner process and sets up TLB access
-     * to the same device core. Does not allocate device-side buffers or pin memory.
-     * The returned socket is fully functional for write() and barrier() operations.
+     * Waits for the flatbuffer descriptor exported by the owner, opens the named
+     * shared memory, and sets up PCIe write access to the device core via
+     * PCIeCoreWriter (bypasses MetalContext). Does not allocate device-side buffers
+     * or pin memory. The returned socket is fully functional for write() and
+     * barrier() operations.
      *
-     * @param mesh_device The mesh device (must contain the same physical device as the owner).
-     * @param descriptor_path Path to the JSON descriptor file exported by the owner.
+     * @param socket_id The identifier used when the owner called export_descriptor().
+     * @param timeout_ms Max time to wait for the descriptor file (default 10s).
      * @return A connected H2DSocket ready for data transfer.
      */
     static std::unique_ptr<H2DSocket> connect(
@@ -95,9 +97,9 @@ public:
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
-     * Writes a JSON file to /dev/shm/ containing all metadata needed for a remote
-     * process to connect: shared memory name, buffer layout, device addresses, and
-     * core coordinates.
+     * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
+     * a remote process to connect: shared memory name, buffer layout, device
+     * addresses, pre-resolved core coordinates, and PCIe alignment.
      *
      * @param socket_id A user-provided identifier used in the descriptor filename.
      * @return The full path to the written descriptor file.

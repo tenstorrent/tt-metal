@@ -5,25 +5,19 @@
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
-#include "tt_metal/distributed/socket_descriptor.hpp"
+#include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {
-
-static std::string generate_shm_name(const std::string& prefix) {
-    static std::atomic<uint32_t> counter{0};
-    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
-}
 
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -36,7 +30,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: Bytes_acked buffer must be aligned to the PCIe alignment.");
-
+    // NamedShm::create zero-initializes the region; no explicit memset needed.
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
         tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
@@ -181,12 +175,14 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     }
     auto arch = MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+        // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
         pcie_writer = [&](void* data, uint32_t num_bytes, uint64_t device_addr) {
             receiver_core_tlb_->write_block(device_addr, data, num_bytes);
         };
     } else {
+        // Mesh Device not owned - use dynamic TLBs through UMD.
         // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
         // since the device address space is not statically mapped.
         pcie_writer = [recv_device_id, recv_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
@@ -194,9 +190,6 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
             cluster.write_core(data, num_bytes, tt_cxy_pair(recv_device_id, recv_virtual_core), device_addr);
         };
     }
-    // else {
-    //     TT_THROW("Unsupported architecture: {}", arch);
-    // }
 }
 
 H2DSocket::H2DSocket(
@@ -249,6 +242,11 @@ H2DSocket::H2DSocket(
 
 H2DSocket::~H2DSocket() noexcept {
     if (!exported_) {
+        // Wait for 1000ms for the device to acknowledge all data over the socket.
+        // This may need to be tuned in future, depending on the application and
+        // the amount of data being sent.
+        // Realistically a hang should not be seen here since most user workloads
+        // synchronize with the device before the application exits and destructors are called.
         barrier(1000);
     }
     if (is_owner_) {
@@ -354,21 +352,21 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
 
-    SocketDescriptor desc;
+    HDSocketDescriptor desc;
     desc.populate_from_owner("h2d", *shm_, fifo_size_, config_buffer_address_, mesh_device_, recv_core_);
     desc.bytes_acked_offset = (h2d_mode_ == H2DMode::DEVICE_PULL) ? fifo_size_ : 0;
     desc.h2d_mode = static_cast<uint32_t>(h2d_mode_);
     desc.aligned_data_buf_start = aligned_data_buf_start_;
 
-    descriptor_path_ = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
+    descriptor_path_ = descriptor_path_for_socket("h2d", socket_id);
     desc.write_to_file(descriptor_path_);
     exported_ = true;
     return descriptor_path_;
 }
 
 std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
-    auto desc = SocketDescriptor::wait_and_read(
-        fmt::format("/dev/shm/tt_h2d_{}.json", socket_id), "h2d", timeout_ms.value_or(10000));
+    auto desc = HDSocketDescriptor::wait_and_read(
+        descriptor_path_for_socket("h2d", socket_id), "h2d", timeout_ms.value_or(10000));
 
     auto socket = std::unique_ptr<H2DSocket>(new H2DSocket());
     socket->is_owner_ = false;

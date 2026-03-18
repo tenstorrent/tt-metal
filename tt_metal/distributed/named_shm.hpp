@@ -29,7 +29,7 @@ public:
     /**
      * @brief Create a new named shared memory region.
      *
-     * Creates the shm object via shm_open(O_CREAT|O_RDWR), sets its size via ftruncate,
+     * Creates the shm object via shm_open(O_CREAT|O_EXCL|O_RDWR), sets its size via ftruncate,
      * and maps it with mmap(MAP_SHARED). The region is zero-initialized.
      *
      * @param name POSIX shm name (e.g. "/tt_h2d_abc123"). Must start with '/'.
@@ -52,17 +52,12 @@ public:
     /**
      * @brief Unmap the shared memory region from this process.
      *
-     * Calls munmap. The shm object itself remains until unlink() is called.
-     * Safe to call multiple times; subsequent calls are no-ops.
      */
     void close();
 
     /**
      * @brief Remove the named shared memory object from the filesystem.
      *
-     * Calls shm_unlink. Only the creator should call this, and only after all
-     * other processes have closed their mappings. Also calls close() if the
-     * mapping is still active.
      */
     void unlink();
 
@@ -78,5 +73,10 @@ private:
     void* ptr_ = nullptr;
     size_t size_ = 0;
 };
+
+/**
+ * @brief Generate a unique POSIX shm name: /tt_{prefix}_{pid}_{counter}.
+ */
+std::string generate_shm_name(const std::string& prefix);
 
 }  // namespace tt::tt_metal::distributed

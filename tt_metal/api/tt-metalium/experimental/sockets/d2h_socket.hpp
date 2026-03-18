@@ -76,13 +76,15 @@ public:
     D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
 
     /**
-     * @brief Connects to an existing D2HSocket from another process via a descriptor file.
+     * @brief Connects to an existing D2HSocket from another process.
      *
-     * Opens the named shared memory created by the owner process and sets up TLB access
-     * to the same device core. The returned socket is fully functional for read() and
-     * barrier() operations.
+     * Waits for the flatbuffer descriptor exported by the owner, opens the named
+     * shared memory, and sets up PCIe write access to the device core via
+     * PCIeCoreWriter (bypasses MetalContext). The returned socket is fully
+     * functional for read() and barrier() operations.
      *
      * @param socket_id The identifier used when the owner called export_descriptor().
+     * @param timeout_ms Max time to wait for the descriptor file (default 10s).
      * @return A connected D2HSocket ready for data transfer.
      */
     static std::unique_ptr<D2HSocket> connect(
@@ -91,9 +93,9 @@ public:
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
-     * Writes a JSON file to /dev/shm/ containing all metadata needed for a remote
-     * process to connect: shared memory name, buffer layout, device addresses, and
-     * core coordinates.
+     * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
+     * a remote process to connect: shared memory name, buffer layout, device
+     * addresses, pre-resolved core coordinates, and PCIe alignment.
      *
      * @param socket_id A user-provided identifier used in the descriptor filename.
      * @return The full path to the written descriptor file.
@@ -103,6 +105,9 @@ public:
     /**
      * @brief Destroys the D2HSocket.
      *
+     * Releases pinned memory mappings before freeing the underlying host buffers.
+     * This ensures the DMA mappings are properly cleaned up to avoid "File exists"
+     * errors when re-pinning memory at the same virtual address.
      * Owner: waits for device acknowledgement, unpins memory, unlinks shared memory,
      * removes descriptor file.
      * Connector: unmaps shared memory via NamedShm destructor.

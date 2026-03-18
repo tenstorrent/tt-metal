@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <fmt/format.h>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -16,14 +17,16 @@ class NamedShm;
 /**
  * @brief Serializable descriptor for cross-process H2D/D2H socket attachment.
  *
- * The owner process creates a socket and exports a descriptor (as JSON) containing
- * everything a remote process needs to attach: named shared memory identifiers,
- * buffer layout, device-side L1 addresses, and core coordinates.
+ * The owner process creates an H2D or D2H socket and exports a flatbuffer
+ * descriptor containing everything a remote process needs to attach: named
+ * shared memory identifiers, buffer layout, device-side L1 addresses, and
+ * pre-resolved core coordinates for PCIe writes.
  *
  * The connecting process reads this descriptor, opens the named shared memory,
- * and reconstructs the host-side socket state without re-allocating device resources.
+ * and reconstructs the host-side socket state without re-allocating device
+ * resources or initializing MetalContext.
  */
-struct SocketDescriptor {
+struct HDSocketDescriptor {
     // --- Socket identity ---
     std::string socket_type;  // "h2d" or "d2h"
 
@@ -71,27 +74,31 @@ struct SocketDescriptor {
         const MeshCoreCoord& core);
 
     /**
-     * @brief Serialize this descriptor to a JSON file.
-     * @param path File path to write (e.g. "/dev/shm/tt_socket_<id>.json").
+     * @brief Serialize this descriptor to a flatbuffer file.
+     * @param path File path to write (e.g. "/dev/shm/tt_socket_<id>.bin").
      */
     void write_to_file(const std::string& path) const;
 
     /**
-     * @brief Deserialize a descriptor from a JSON file.
+     * @brief Deserialize a descriptor from a flatbuffer file.
      * @param path File path to read.
-     * @return Populated SocketDescriptor.
+     * @return Populated HDSocketDescriptor.
      */
-    static SocketDescriptor read_from_file(const std::string& path);
+    static HDSocketDescriptor read_from_file(const std::string& path);
 
     /**
      * @brief Wait for a descriptor file to appear and read it.
-     * @param descriptor_path Full path to the JSON descriptor file.
+     * @param descriptor_path Full path to the descriptor file.
      * @param expected_type Expected socket_type ("h2d" or "d2h").
      * @param timeout_ms Max wait time in milliseconds (default 10000).
-     * @return Populated SocketDescriptor.
+     * @return Populated HDSocketDescriptor.
      */
-    static SocketDescriptor wait_and_read(
+    static HDSocketDescriptor wait_and_read(
         const std::string& descriptor_path, const std::string& expected_type, uint32_t timeout_ms = 10000);
 };
+
+inline std::string descriptor_path_for_socket(const std::string& type, const std::string& socket_id) {
+    return fmt::format("/dev/shm/tt_{}_{}.bin", type, socket_id);
+}
 
 }  // namespace tt::tt_metal::distributed

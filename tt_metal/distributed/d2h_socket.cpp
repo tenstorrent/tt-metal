@@ -5,7 +5,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
-#include "tt_metal/distributed/socket_descriptor.hpp"
+#include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
@@ -20,11 +20,6 @@
 
 namespace tt::tt_metal::distributed {
 
-static std::string generate_d2h_shm_name(const std::string& prefix) {
-    static std::atomic<uint32_t> counter{0};
-    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
-}
-
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -33,6 +28,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     // Buffer layout: [data_region (fifo_size bytes)][bytes_sent (4 bytes)]
     uint32_t total_buffer_size_bytes = fifo_size_ + sizeof(uint32_t);
     uint32_t total_buffer_size_words = total_buffer_size_bytes / sizeof(uint32_t);
+    // Round up to page boundary
     size_t page_size = sysconf(_SC_PAGESIZE);
     size_t alloc_size = align(total_buffer_size_bytes, page_size);
 
@@ -42,7 +38,6 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
     // NamedShm::create zero-initializes the region; no explicit memset needed.
-    // No-op deleter: NamedShm owns the memory.
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
@@ -133,10 +128,16 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     auto arch = MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+        // This process owns a mesh_device and hence has statically initialized TLBs.
+        // Entire device address space for Blackhole is statically mapped.
+        // Safe to use static TLBs without requiring the driver to do a reconfig.
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_tlb_->write_block(device_addr, data, num_bytes);
         };
     } else {
+        // Mesh Device not owned - use dynamic TLBs through UMD.
+        // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
+        // since the device address space is not statically mapped.
         pcie_writer_ = [sender_device_id, sender_virtual_core](void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
             cluster.write_core(data, num_bytes, tt_cxy_pair(sender_device_id, sender_virtual_core), device_addr);
@@ -154,7 +155,7 @@ D2HSocket::D2HSocket(
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    std::string shm_name = generate_d2h_shm_name("d2h");
+    std::string shm_name = generate_shm_name("d2h");
     PinnedBufferInfo data_info = init_host_buffer(mesh_device, sender_device_range_set, pcie_alignment, shm_name);
 
     // bytes_sent is located at the end of the data buffer in the same pinned memory
@@ -174,6 +175,11 @@ D2HSocket::D2HSocket(
 
 D2HSocket::~D2HSocket() noexcept {
     if (!exported_) {
+        // Wait for 1000ms for the device to acknowledge all data over the socket.
+        // This may need to be tuned in future, depending on the application and
+        // the amount of data being sent.
+        // Realistically a hang should not be seen here since most user workloads
+        // synchronize with the device before the application exits and destructors are called.
         barrier(1000);
     }
     if (is_owner_) {
@@ -289,20 +295,20 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
 
-    SocketDescriptor desc;
+    HDSocketDescriptor desc;
     desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
     desc.bytes_sent_offset = fifo_size_;
     desc.bytes_acked_device_offset = bytes_acked_device_offset_;
 
-    descriptor_path_ = fmt::format("/dev/shm/tt_d2h_{}.json", socket_id);
+    descriptor_path_ = descriptor_path_for_socket("d2h", socket_id);
     desc.write_to_file(descriptor_path_);
     exported_ = true;
     return descriptor_path_;
 }
 
 std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
-    auto desc = SocketDescriptor::wait_and_read(
-        fmt::format("/dev/shm/tt_d2h_{}.json", socket_id), "d2h", timeout_ms.value_or(10000));
+    auto desc = HDSocketDescriptor::wait_and_read(
+        fmt::format("/dev/shm/tt_d2h_{}.bin", socket_id), "d2h", timeout_ms.value_or(10000));
 
     auto socket = std::unique_ptr<D2HSocket>(new D2HSocket());
     socket->is_owner_ = false;

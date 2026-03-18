@@ -5,7 +5,9 @@
 #include "tt_metal/distributed/named_shm.hpp"
 
 #include <tt_stl/assert.hpp>
+#include <fmt/format.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -100,6 +102,11 @@ void NamedShm::unlink() {
         shm_unlink(name_.c_str());
         name_.clear();
     }
+}
+
+std::string generate_shm_name(const std::string& prefix) {
+    static std::atomic<uint32_t> counter{0};
+    return fmt::format("/tt_{}_{}_{}", prefix, getpid(), counter.fetch_add(1));
 }
 
 }  // namespace tt::tt_metal::distributed
