@@ -435,11 +435,13 @@ def run_demo(
     cache_dir = Path(cache_dir)
 
     if sampling_temperature < 0:
-        raise SystemExit("--sampling-temperature must be > 0 (use 0 for greedy decoding).")
+        raise SystemExit("--sampling-temperature must be >= 0 (use 0 for greedy decoding).")
     if not (0.0 < sampling_top_p <= 1.0):
         raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
     if sampling_top_k < 0:
-        raise SystemExit("--sampling-top-k must be >= 0.")
+        raise SystemExit(
+            "--sampling-top-k must be >= 0. For top-k=0, use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
+        )
     if sampling_top_k == 0 and sample_on_device:
         raise SystemExit(
             "--sampling-top-k=0 is not supported when sampling on device. Use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
