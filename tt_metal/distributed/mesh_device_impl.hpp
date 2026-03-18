@@ -94,7 +94,7 @@ private:
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config,
-            ContextId context_id = DEFAULT_CONTEXT_ID);
+            ContextId context_id);
         ScopedDevices(
             const std::vector<MaybeRemote<int>>& all_device_ids,
             const std::vector<MaybeRemote<int>>& active_device_ids,
@@ -103,7 +103,7 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
-            ContextId context_id = DEFAULT_CONTEXT_ID);
+            ContextId context_id);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -179,8 +179,8 @@ public:
     MeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {},
-        ContextId context_id = DEFAULT_CONTEXT_ID);
+        std::shared_ptr<MeshDevice> parent_mesh,
+        ContextId context_id);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
