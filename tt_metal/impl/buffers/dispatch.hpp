@@ -67,9 +67,10 @@ struct BufferReadDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     uint32_t cq_id = 0;
     IDevice* device = nullptr;
+    uint32_t page_size = 0;
     uint32_t padded_page_size = 0;
     uint32_t src_page_index = 0;
-    uint32_t unpadded_dst_offset = 0;
+    uint64_t unpadded_dst_offset = 0;
     uint32_t pages_per_txn = 0;
     uint32_t address = 0;
     uint32_t total_pages_to_read = 0;
@@ -93,6 +94,7 @@ struct BufferReadDispatchParams {
         this->total_pages_to_read -= this->pages_per_txn;
         this->total_pages_read += this->pages_per_txn;
         this->src_page_index += this->pages_per_txn;
+        this->unpadded_dst_offset += static_cast<uint64_t>(this->pages_per_txn) * this->page_size;
     }
 };
 
