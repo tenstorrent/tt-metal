@@ -314,7 +314,8 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_5_free_slots_stream_id,
     sender_channel_6_free_slots_stream_id,
     sender_channel_7_free_slots_stream_id,
-    0};
+    0,   // Z-router extra sender (no free-slots stream)
+    0};  // VC2 sender (free-slots managed via vc2_sender_free_slots_stream_id)
 static_assert(sender_channel_free_slots_stream_ids[0] == 22);
 static_assert(sender_channel_free_slots_stream_ids[1] == 23);
 static_assert(sender_channel_free_slots_stream_ids[2] == 24);
@@ -3104,7 +3105,8 @@ void kernel_main() {
                 local_sender_channel_5_connection_info_addr,
                 local_sender_channel_6_connection_info_addr,
                 local_sender_channel_7_connection_info_addr,
-                local_sender_channel_8_connection_info_addr});
+                local_sender_channel_8_connection_info_addr,
+                local_sender_channel_9_connection_info_addr});
 
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
