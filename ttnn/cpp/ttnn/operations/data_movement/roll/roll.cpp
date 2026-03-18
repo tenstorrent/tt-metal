@@ -9,9 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor RollOperation::invoke(
+ttnn::Tensor roll(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int>& shifts, const ttnn::SmallVector<int>& input_dims) {
     ttnn::Tensor result = input_tensor;
     auto size = result.logical_shape();
@@ -78,7 +78,7 @@ ttnn::Tensor RollOperation::invoke(
     return result;
 }
 
-ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int shift) {
+ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift) {
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
@@ -93,18 +93,18 @@ ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int s
     // Flatten the input tensor to shape [1, total_elements]
     ttnn::Tensor result = ttnn::reshape(input_tensor, ttnn::Shape({1, total_elements}));
 
-    result = invoke(result, shifts, dims);
+    result = roll(result, shifts, dims);
     // Reshape back to the original shape
     result = ttnn::reshape(result, ttnn::Shape(original_shape));
 
     return result;
 }
 
-ttnn::Tensor RollOperation::invoke(const ttnn::Tensor& input_tensor, const int shift, const int dim) {
+ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift, const int dim) {
     ttnn::SmallVector<int> shifts = {shift};
     ttnn::SmallVector<int> dims = {dim};
 
-    return invoke(input_tensor, shifts, dims);
+    return roll(input_tensor, shifts, dims);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn
