@@ -9,25 +9,62 @@ namespace tt::tt_metal {
 class MeshTensorImpl {
 public:
     MeshTensorImpl(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
-        mesh_buffer_(std::move(mesh_buffer)), spec_(std::move(spec)), topology_(std::move(topology)) {}
+        MeshTensorImpl(std::move(mesh_buffer), std::move(spec), std::move(topology), nullptr) {}
 
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer() const& { return mesh_buffer_; }
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const&& { return mesh_buffer_; }
+    MeshTensorImpl(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
+        TensorSpec spec,
+        TensorTopology topology,
+        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
+        mesh_buffer_(std::move(mesh_buffer)),
+        spec_(std::move(spec)),
+        topology_(std::move(topology)),
+        root_mesh_buffer_(std::move(root_mesh_buffer)) {
+        TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
+        TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
+        TT_FATAL(
+            mesh_buffer_->size() >= spec.compute_packed_buffer_size_bytes(),
+            "MeshBuffer must be large enough to hold the tensor.");
+    }
+
+    // Two step construction for MeshTensor,
+    // for transiet purpose.
+    MeshTensorImpl(MeshTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
+        mesh_buffer_(std::move(other.mesh_buffer_)),
+        spec_(std::move(spec)),
+        topology_(std::move(topology)),
+        root_mesh_buffer_(std::move(other.root_mesh_buffer_)) {}
+
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer() const { return mesh_buffer_; }
     const TensorSpec& spec() const { return spec_; }
     const TensorTopology& topology() const { return topology_; }
+    void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
 
 private:
+    // Invariant:
+    // 1. Cannot be nullptr and must be allocated.
+    // 2. Must be large enough to hold a tensor describale with spec_
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
     TensorSpec spec_;
+    // TODO(river): What is the invariant of topology?
     TensorTopology topology_;
+
+    // Experimental feature: Accomodates #38101
+    // This keeps mesh_buffer_ alive in limited cases.
+    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer_;
 };
+
+MeshTensor::MeshTensor() = default;
+
+MeshTensor::MeshTensor(MeshTensor&& other) noexcept = default;
+
+MeshTensor& MeshTensor::operator=(MeshTensor&& other) noexcept = default;
 
 MeshTensor::MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
     impl(std::make_unique<MeshTensorImpl>(std::move(mesh_buffer), std::move(spec), std::move(topology))) {}
 
 MeshTensor::MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<MeshTensorImpl>(std::move(other.impl)->mesh_buffer(), std::move(spec), std::move(topology))) {
-}
+    impl(std::make_unique<MeshTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology))) {}
 
 MeshTensor::~MeshTensor() = default;
 
@@ -87,5 +124,10 @@ std::size_t MeshTensor::element_size() const {
 }
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+
+void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
+    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    impl->update_topology(std::move(tensor_topology));
+}
 
 }  // namespace tt::tt_metal

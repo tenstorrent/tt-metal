@@ -63,7 +63,7 @@ public:
     /**
      * Constructs a host tensor in the default constructed state, acting like a nullptr.
      */
-    HostTensor() = default;
+    HostTensor();
 
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
@@ -207,7 +207,8 @@ public:
     // Applies a transformation function to each host buffer across devices in parallel, returning a new HostTensor.
     HostTensor transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
 
-    // void update_tensor_topology(TensorTopology tensor_topology);
+    // Updates the topology of the HostTensor post construction.
+    void update_tensor_topology(TensorTopology tensor_topology);
 
 private:
     std::unique_ptr<HostTensorImpl> impl;

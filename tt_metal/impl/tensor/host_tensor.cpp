@@ -17,10 +17,16 @@ public:
     HostTensorImpl& operator=(HostTensorImpl&& other) noexcept = default;
     ~HostTensorImpl() = default;
 
+    // Two step construction for HostTensor,
+    // for transiet purpose.
+    HostTensorImpl(HostTensorImpl&& other, TensorSpec spec, TensorTopology topology) :
+        buffer_(std::move(other.buffer_)), spec_(std::move(spec)), topology_(std::move(topology)) {}
+
     const DistributedHostBuffer& buffer() const& { return buffer_; }
     DistributedHostBuffer buffer() const&& { return buffer_; }
     const TensorSpec& spec() const { return spec_; }
     const TensorTopology& topology() const { return topology_; }
+    void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
 
 private:
     DistributedHostBuffer buffer_;
@@ -28,11 +34,13 @@ private:
     TensorTopology topology_;
 };
 
+HostTensor::HostTensor() = default;
+
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
     impl(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
 HostTensor::HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<HostTensorImpl>(std::move(other.impl)->buffer(), std::move(spec), std::move(topology))) {}
+    impl(std::make_unique<HostTensorImpl>(std::move(*other.impl), std::move(spec), std::move(topology))) {}
 
 HostTensor::HostTensor(const HostTensor& other) : impl(std::make_unique<HostTensorImpl>(*other.impl)) {}
 
@@ -108,6 +116,11 @@ HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer
     auto transformed_buffer =
         buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
     return HostTensor(std::move(transformed_buffer), tensor_spec(), tensor_topology());
+}
+
+void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
+    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    impl->update_topology(std::move(tensor_topology));
 }
 
 }  // namespace tt::tt_metal

@@ -58,7 +58,7 @@ public:
     /**
      * Construct a tensor that does not own any device memory.
      */
-    MeshTensor() = default;
+    MeshTensor();
 
     // Internal Constructor for transition.
     explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
@@ -92,14 +92,14 @@ public:
      *
      * post-condition: The other MeshTensor will be in a default constructed state.
      */
-    MeshTensor(MeshTensor&& other) = default;
+    MeshTensor(MeshTensor&& other) noexcept;
 
     /**
      * Transfer ownership of the underlying device memory to the other MeshTensor.
      *
      * post-condition: The other MeshTensor will be in a default constructed state.
      */
-    MeshTensor& operator=(MeshTensor&& other) = default;
+    MeshTensor& operator=(MeshTensor&& other) noexcept;
 
     // End special member functions
 
@@ -171,6 +171,9 @@ public:
 
     Strides strides() const;
 
+    // Update the topology of the MeshTensor post construction.
+    // TODO(river): Is this a good idea? Would a move constructor be better?
+    // Is a MeshTensor with a new tensor topology fundamentally different?
     void update_tensor_topology(TensorTopology tensor_topology);
 
 private:
