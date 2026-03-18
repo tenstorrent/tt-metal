@@ -14,6 +14,21 @@
 
 namespace ttnn::operations::data_movement {
 
+namespace {
+
+// Python binding overload: takes W, Z, Y, X as separate parameters
+ttnn::Tensor reshape_on_device_wrapper(
+    const ttnn::Tensor& input_tensor,
+    int W,
+    int Z,
+    int Y,
+    int X,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    return reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config_arg);
+}
+
+}  // namespace
+
 void bind_reshape(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -54,7 +69,7 @@ void bind_reshape(nb::module_& mod) {
         doc,
         ttnn::overload_t(
             nb::overload_cast<const ttnn::Tensor&, int, int, int, int, const std::optional<ttnn::MemoryConfig>&>(
-                &ttnn::reshape_on_device),
+                &reshape_on_device_wrapper),
             nb::arg("input_tensor"),
             nb::arg("W"),
             nb::arg("Z"),

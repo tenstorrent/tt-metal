@@ -25,13 +25,4 @@ ttnn::Tensor reshape_on_device(
     ttsl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 
-// Python binding overload: takes W, Z, Y, X as separate parameters
-ttnn::Tensor reshape_on_device(
-    const ttnn::Tensor& input_tensor,
-    int W,
-    int Z,
-    int Y,
-    int X,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
-
 }  // namespace ttnn

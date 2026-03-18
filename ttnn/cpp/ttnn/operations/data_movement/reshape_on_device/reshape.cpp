@@ -108,14 +108,4 @@ ttnn::Tensor reshape_on_device(
         memory_config_arg);
 }
 
-ttnn::Tensor reshape_on_device(
-    const ttnn::Tensor& input_tensor,
-    int W,
-    int Z,
-    int Y,
-    int X,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    return reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{W, Z, Y, X}, memory_config_arg);
-}
-
 }  // namespace ttnn
