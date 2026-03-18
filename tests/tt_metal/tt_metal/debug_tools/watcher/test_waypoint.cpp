@@ -70,20 +70,21 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     CoreCoord xy_end = is_quasar ? CoreCoord{0, 0} : CoreCoord{4, 4};
 
     // Allocate and zero-init L1 sync flag for host-device handshake
-    uint32_t sync_flag_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t tensix_sync_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t idle_eth_sync_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     std::vector<uint32_t> zero_data = {0};
 
     // Zero-init sync flag on all tensix cores
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, CoreCoord{x, y}, sync_flag_addr, zero_data);
+            tt::tt_metal::detail::WriteToDeviceL1(device, CoreCoord{x, y}, tensix_sync_addr, zero_data);
         }
     }
 
     // Runtime args differ by core type:
-    // - TENSIX / idle ERISC: sync_flag_addr (arg 0) - blocks until host writes 1
+    // - TENSIX / idle ERISC: tensix_sync_addr/idle_eth_sync_addr (arg 0) - blocks until host writes 1
     // - Active ERISC: delay_cycles (arg 0) - timed wait, can't block due to tunneling
-    const std::vector<uint32_t> args = {sync_flag_addr};
+    const std::vector<uint32_t> tensix_args = {tensix_sync_addr};
     uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
     uint32_t delay_cycles = clk_mhz * 3000000;  // 3 seconds - enough for watcher to capture waypoint
     const std::vector<uint32_t> active_eth_args = {delay_cycles};
@@ -101,8 +102,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             kernel_path,
             CoreRange(xy_start, xy_end),
             tt::tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4});
-        SetCommonRuntimeArgs(program_, dm_kid, args);
-        SetCommonRuntimeArgs(program_, compute_kid, args);
+        SetCommonRuntimeArgs(program_, dm_kid, tensix_args);
+        SetCommonRuntimeArgs(program_, compute_kid, tensix_args);
     } else {
         auto brisc_kid = CreateKernel(
             program_,
@@ -115,9 +116,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
             CoreRange(xy_start, xy_end),
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
         auto trisc_kid = CreateKernel(program_, kernel_path, CoreRange(xy_start, xy_end), ComputeConfig{});
-        SetCommonRuntimeArgs(program_, brisc_kid, args);
-        SetCommonRuntimeArgs(program_, ncrisc_kid, args);
-        SetCommonRuntimeArgs(program_, trisc_kid, args);
+        SetCommonRuntimeArgs(program_, brisc_kid, tensix_args);
+        SetCommonRuntimeArgs(program_, ncrisc_kid, tensix_args);
+        SetCommonRuntimeArgs(program_, trisc_kid, tensix_args);
     }
 
     // Create kernels for ethernet cores
@@ -136,9 +137,10 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     if (has_idle_eth_cores) {
         std::set<CoreRange> ranges;
+        const std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             ranges.insert(CoreRange(core, core));
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, sync_flag_addr, zero_data, CoreType::ETH);
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, zero_data, CoreType::ETH);
         }
         // Create kernel for each idle ETH processor (use HAL to get count)
         uint32_t num_idle_eth_processors = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
@@ -149,7 +151,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                 kernel_path,
                 ranges,
                 tt_metal::EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = processor});
-            SetCommonRuntimeArgs(program_, kid, args);
+            SetCommonRuntimeArgs(program_, kid, idle_eth_args);
         }
     }
 
@@ -190,12 +192,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     std::vector<uint32_t> release_data = {1};
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, CoreCoord{x, y}, sync_flag_addr, release_data);
+            tt::tt_metal::detail::WriteToDeviceL1(device, CoreCoord{x, y}, tensix_sync_addr, release_data);
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            tt::tt_metal::detail::WriteToDeviceL1(device, core, sync_flag_addr, release_data, CoreType::ETH);
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, release_data, CoreType::ETH);
         }
     }
     distributed::Finish(mesh_device->mesh_command_queue());
