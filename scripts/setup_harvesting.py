@@ -40,7 +40,7 @@ def clone_repos():
     repos = {
         "tt-flash": "https://github.com/tenstorrent/tt-flash",
         "tt-firmware": "https://github.com/tenstorrent/tt-firmware.git",
-        "tt-system-firmware": "git@github.com:tenstorrent/tt-system-firmware.git",
+        "tt-system-firmware": "https://github.com/tenstorrent/tt-system-firmware.git",
     }
 
     for name, url in repos.items():
