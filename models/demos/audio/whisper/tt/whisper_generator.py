@@ -252,7 +252,7 @@ class WhisperGenerator:
                 ttnn.release_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key])
                 self.trace_id_prefill_decoder[trace_key] = None
                 self.trace_input_prefill_decoder[trace_key] = None
-                self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key] = None
+                self.trace_output_prefill_decoder[trace_key] = None
                 logger.debug(f"Released prefill trace for batch size per device {trace_key}")
 
         # Release decode traces (persistent enlarged trace)
@@ -337,7 +337,7 @@ class WhisperGenerator:
 
         # Capture trace (decoder only)
         self.trace_id_prefill_decoder[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key] = traced_decoder_fn(
+        self.trace_output_prefill_decoder[trace_key] = traced_decoder_fn(
             trace_key, self.trace_input_prefill_decoder[trace_key]
         )
 
@@ -398,7 +398,7 @@ class WhisperGenerator:
         # Execute trace (non-blocking to allow Q1 overlap on next iteration)
         ttnn.execute_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key], cq_id=0, blocking=False)
 
-        return self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key]
+        return self.trace_output_prefill_decoder[trace_key]
 
     def _capture_decode_trace(self, trace_key, decode_pos, batch_size):
         """
@@ -1010,7 +1010,7 @@ class WhisperGenerator:
             ttnn.release_trace(self.mesh_device, self.trace_id_prefill_decoder[trace_key])
             self.trace_id_prefill_decoder[trace_key] = None
             self.trace_input_prefill_decoder[trace_key] = None
-            self.traself.trace_output_prefill_decoderce_input_prefill_decoder[trace_key] = None
+            self.trace_output_prefill_decoder[trace_key] = None
             logger.info("Released prefill trace before decode loop")
 
         # If persistent decode trace exists, write current token to device buffer
