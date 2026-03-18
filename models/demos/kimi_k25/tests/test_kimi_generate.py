@@ -26,6 +26,11 @@ CPU-only (no hardware required):
                                   model is structurally compatible with Kimi
                                   K2.5 architecture without needing hardware or
                                   large RAM.
+  TestKimiQuantizationConfig    — ``KimiK25Config.quantization_config`` property
+                                  returns a dict with ``weight_block_size`` key,
+                                  enabling ``prepare_model_state_dict`` and
+                                  ``dequantize_state_dict`` to work with
+                                  ``KimiK25Config`` in the random-weights test path.
 
 Hardware (requires ``MESH_DEVICE=TG`` / ``DUAL`` / ``QUAD``):
 
@@ -36,6 +41,12 @@ Hardware (requires ``MESH_DEVICE=TG`` / ``DUAL`` / ``QUAD``):
                                   ``hf_config_short`` (384 experts, n_group=1,
                                   64 attn heads).  Pass criterion: no crash,
                                   output tensor is finite (no NaN/Inf).
+  test_pcc_correctness_random_weights
+                                — PCC comparison between TT prefill logits and
+                                  CPU ``DeepseekV3ForCausalLM`` reference using
+                                  shared random weights (same seed, same state
+                                  dict).  Pass criterion: PCC ≥ 0.95 on logits.
+                                  Uses 2-layer model and seq_len=4 for speed.
   test_full_model               — 61-layer random-weights stress test.
                                   ``@pytest.mark.slow``; timeout=3600s.
 
@@ -47,8 +58,11 @@ Notes
 * The hardware test ``test_forward_pass`` is the key M5 deliverable: it
   exercises the full layer chain (embed → 1 dense MLA → 1 MoE → … → lm_head)
   end-to-end with random weights on real silicon.
-* PCC comparison against a reference model is **not** required here (that is
-  M4 correctness work).  We only check for finite outputs in smoke tests.
+* ``test_pcc_correctness_random_weights`` extends M5 by verifying numerical
+  agreement between TT and CPU reference.  Shared random weights are built with
+  ``prepare_model_state_dict(random_weights=True)`` (which requires
+  ``KimiK25Config.quantization_config``); the reference path recovers BF16 via
+  ``dequantize_state_dict``.
 """
 
 from __future__ import annotations
@@ -501,6 +515,115 @@ class TestKimiFullModelReference:
 
 
 # ============================================================================
+# CPU-only: quantization_config property
+# ============================================================================
+
+
+class TestKimiQuantizationConfig:
+    """CPU-only: validate KimiK25Config.quantization_config property.
+
+    ``prepare_model_state_dict(random_weights=True)`` calls
+    ``add_inv_scale_to_state_dict(state, block_shape=hf_config.quantization_config["weight_block_size"])``.
+    ``dequantize_state_dict(state, hf_config)`` reads the same key.
+
+    Without this property, both functions raise ``AttributeError`` when given a
+    ``KimiK25Config``.  These tests guard against regression.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _cfg(self):
+        from models.demos.kimi_k25.utils.config_adapter import KimiK25Config
+
+        self.cfg = KimiK25Config.from_fixture()
+
+    def test_quantization_config_exists(self):
+        """KimiK25Config must have a quantization_config attribute."""
+        assert hasattr(self.cfg, "quantization_config"), (
+            "KimiK25Config is missing quantization_config — "
+            "prepare_model_state_dict(random_weights=True) will crash without it"
+        )
+
+    def test_quantization_config_is_dict(self):
+        """quantization_config must return a dict (not None or another type)."""
+        qc = self.cfg.quantization_config
+        assert isinstance(qc, dict), (
+            f"quantization_config must be a dict, got {type(qc).__name__}"
+        )
+
+    def test_quantization_config_has_weight_block_size(self):
+        """quantization_config must contain 'weight_block_size' key."""
+        qc = self.cfg.quantization_config
+        assert "weight_block_size" in qc, (
+            "quantization_config must have 'weight_block_size' key — "
+            "dequantize_state_dict reads qc['weight_block_size']"
+        )
+
+    def test_weight_block_size_is_list_of_two_ints(self):
+        """weight_block_size must be a list/tuple of two positive ints."""
+        wbs = self.cfg.quantization_config["weight_block_size"]
+        assert isinstance(wbs, (list, tuple)), (
+            f"weight_block_size must be a list or tuple, got {type(wbs).__name__}"
+        )
+        assert len(wbs) == 2, f"weight_block_size must have length 2, got {len(wbs)}"
+        assert all(isinstance(x, int) and x > 0 for x in wbs), (
+            f"weight_block_size elements must be positive ints, got {wbs}"
+        )
+
+    def test_weight_block_size_is_128x128(self):
+        """weight_block_size must match DSV3's [128, 128] block shape.
+
+        The TT weight converters were built for DSV3's FP8 block quantization with
+        128×128 blocks.  Kimi K2.5 uses the same TT model infrastructure, so the
+        random-weights test path must use the same block shape.
+        """
+        wbs = self.cfg.quantization_config["weight_block_size"]
+        assert list(wbs) == [128, 128], (
+            f"weight_block_size must be [128, 128] to match DSV3 TT converters, got {list(wbs)}"
+        )
+
+    def test_quantization_config_is_read_only_property(self):
+        """quantization_config must be a property (not a mutable dataclass field).
+
+        If it were a mutable field, accidental mutation in one test could affect
+        subsequent tests.  Verify it is a property on the *class*, not an instance
+        attribute set by __post_init__.
+
+        Note: ``type(KimiK25Config)`` is ``type`` (the metaclass), not the class
+        itself.  For dataclasses, we must use ``KimiK25Config.__dict__`` to inspect
+        descriptors defined on the class.
+        """
+        from models.demos.kimi_k25.utils.config_adapter import KimiK25Config
+
+        descriptor = KimiK25Config.__dict__.get("quantization_config")
+        assert isinstance(descriptor, property), (
+            f"quantization_config must be a @property on KimiK25Config, "
+            f"got {type(descriptor).__name__} — mutable fields can be mutated across tests"
+        )
+
+    def test_prepare_model_state_dict_source_reads_quantization_config(self):
+        """prepare_model_state_dict source must reference quantization_config.
+
+        Source-inspection guard: if the DSV3 implementation changes and stops
+        reading this key, this test will fail to remind us to update KimiK25Config.
+
+        Soft-skips if the DSV3 utilities are not importable (e.g. loguru not
+        installed in the scheduling container — all DSV3 utils require loguru).
+        """
+        import inspect
+
+        try:
+            from models.demos.deepseek_v3.utils import hf_model_utils
+        except ImportError as exc:
+            pytest.skip(f"DSV3 utils not importable in this environment: {exc}")
+
+        src = inspect.getsource(hf_model_utils.prepare_model_state_dict)
+        assert "quantization_config" in src, (
+            "prepare_model_state_dict no longer reads quantization_config — "
+            "KimiK25Config.quantization_config property may be obsolete"
+        )
+
+
+# ============================================================================
 # Hardware: full-model random-weights smoke test
 # ============================================================================
 
@@ -734,6 +857,193 @@ def test_forward_pass(
         force_recalculate=force_recalculate_weight_config,
         num_layers=2,
     )
+
+# ============================================================================
+# Hardware: PCC correctness with random weights (prefill)
+# ============================================================================
+
+
+def _run_kimi_pcc_reference_forward(
+    *,
+    torch_input: "torch.Tensor",
+    state_dict: dict,
+    hf_config,
+) -> "torch.Tensor":
+    """Run CPU reference forward pass for PCC comparison (prefill only).
+
+    Loads ``state_dict`` into ``DeepseekV3ForCausalLM`` (dequantizing FP8 to BF16)
+    and runs a causal-LM forward pass on ``torch_input``.
+
+    Args:
+        torch_input:  LongTensor of shape ``(1, seq_len)`` — batch=1 for prefill.
+        state_dict:   Random weights as returned by ``prepare_model_state_dict``.
+                      May contain FP8-quantized tensors with ``_scale_inv`` suffixes
+                      that ``dequantize_state_dict`` will convert to BF16.
+        hf_config:    ``KimiK25Config`` (must expose ``.quantization_config``).
+
+    Returns:
+        Float32 logits tensor of shape ``(1, seq_len, vocab_size)``.
+    """
+    import torch
+    from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+    from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
+
+    with torch.device("meta"):
+        reference_model = DeepseekV3ForCausalLM(hf_config).eval()
+    reference_model = reference_model.to_empty(device=torch.device("cpu"))
+    reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+    reference_model = reference_model.to(torch.bfloat16)
+
+    with torch.no_grad():
+        output = reference_model(
+            torch_input,
+            output_attentions=False,
+            use_cache=False,
+        )
+
+    logits = output.logits.float().cpu()  # (1, seq_len, vocab_size)
+    del reference_model, output
+    return logits
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("seq_len", [4, 16], ids=["seq_4", "seq_16"])
+def test_pcc_correctness_random_weights(
+    seq_len,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+):
+    """M5 PCC test — compare TT prefill logits vs CPU reference with shared random weights.
+
+    Both paths use the same random state dict (seeded at 42) so any numerical
+    deviation between TT and CPU reveals model-level errors rather than weight
+    initialisation differences.
+
+    Flow
+    ----
+    1. Build random FP8-quantised state dict via
+       ``prepare_model_state_dict(cfg, random_weights=True)`` (uses
+       ``KimiK25Config.quantization_config["weight_block_size"]``).
+    2. CPU reference: load dequantised BF16 weights into
+       ``DeepseekV3ForCausalLM`` and run a causal-LM forward pass.
+    3. TT forward: run ``RowBatchedModel.forward_prefill`` with the same
+       quantised state dict.
+    4. Compare logits with ``assert_hidden_dim_pcc(pcc_required=0.95)``.
+
+    Model size: 2 layers (``hf_config_short``), seq_len=``seq_len`` tokens.
+    Timeout: 900 s (weight compile on TG may take several minutes for 2 layers).
+    Hardware: requires ``MESH_DEVICE=TG`` (or DUAL / QUAD) via ``mesh_device`` fixture.
+    """
+    import torch
+    import ttnn
+    from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+    from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+    from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+    from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+    from models.demos.deepseek_v3.utils.run_config import create_run_config
+    from models.demos.deepseek_v3.utils.test_utils import (
+        assert_hidden_dim_pcc,
+        get_model_config,
+        get_rope_tensors,
+        get_test_weight_config,
+    )
+
+    # 2-layer config (hf_config_short already has num_hidden_layers constrained)
+    cfg = deepcopy(hf_config_short)
+    cfg.num_hidden_layers = 2
+    if hasattr(cfg, "first_k_dense_replace"):
+        cfg.first_k_dense_replace = min(cfg.first_k_dense_replace, cfg.num_hidden_layers)
+
+    # Seeded random input (batch=1 for prefill)
+    torch.manual_seed(42)
+    torch_input = torch.randint(0, cfg.vocab_size - 1, (1, seq_len), dtype=torch.long)
+
+    # Build shared random state dict — FP8 block-quantised MLP weights
+    random_state_dict = prepare_model_state_dict(cfg, random_weights=True)
+
+    # -----------------------------------------------------------------------
+    # Step 1: CPU reference forward (dequantise FP8 → BF16, run on CPU)
+    # -----------------------------------------------------------------------
+    reference_logits = _run_kimi_pcc_reference_forward(
+        torch_input=torch_input,
+        state_dict=random_state_dict,
+        hf_config=cfg,
+    )
+    # reference_logits shape: (1, seq_len, vocab_size)
+
+    # -----------------------------------------------------------------------
+    # Step 2: TT forward (prefill)
+    # -----------------------------------------------------------------------
+    dp_factor = mesh_device.shape[1]
+    paged_config = MLA2D.get_valid_paged_config(cfg.max_seq_len, USERS_PER_ROW, dp_factor)
+
+    # Page table for prefill (no KV cache)
+    total_global_users = mesh_device.shape[0] * USERS_PER_ROW
+    num_devices = mesh_device.shape[0] * dp_factor
+    batches_per_device = total_global_users // num_devices
+    blocks_per_batch = paged_config.max_num_blocks // batches_per_device
+    torch_page_table = torch.arange(paged_config.max_num_blocks, dtype=torch.int32).reshape(
+        batches_per_device, blocks_per_batch
+    )
+    torch_page_tables = (torch_page_table,) * cfg.num_hidden_layers
+    tt_page_tables = tuple(
+        MLA2D.create_page_table(page_table=tpt, paged_config=paged_config, mesh_device=mesh_device)
+        for tpt in torch_page_tables
+    )
+
+    weight_config = get_test_weight_config(
+        RowBatchedModel,
+        cfg,
+        (random_state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_kimi_pcc",
+        real_weights=False,
+    )
+    model_config = get_model_config(RowBatchedModel, "prefill", cfg, mesh_device)
+    model_state = RowBatchedModel.create_state(cfg, paged_config, mesh_device, ccl, None)
+    model_shared_state = RowBatchedModel.create_shared_state(cfg, mesh_device)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
+
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(0),  # (1, 1, seq_len)
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    rope_tensors = get_rope_tensors(cfg, 1, seq_len, None, mesh_device)
+
+    tt_output = RowBatchedModel.forward_prefill(tt_input, 0, run_config, rope_tensors, tt_page_tables)
+    ttnn.synchronize_device(mesh_device)
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+    ).float()
+
+    ttnn.deallocate(tt_output)
+
+    # Sanity: output must be finite before PCC check
+    assert torch.isfinite(tt_output_torch).all(), (
+        "TT prefill output contains NaN/Inf with random weights — "
+        "check layer configuration before measuring PCC"
+    )
+
+    # -----------------------------------------------------------------------
+    # Step 3: PCC comparison (logits, pcc_required=0.95)
+    # -----------------------------------------------------------------------
+    # assert_hidden_dim_pcc handles shape mismatches on the second-to-last dim
+    # (TT may pad vocab or batch dim) and chunked PCC for large outputs.
+    assert_hidden_dim_pcc(tt_output_torch, reference_logits, pcc_required=0.95)
+
 
 # ============================================================================
 # Hardware: 61-layer full-model random-weights smoke test

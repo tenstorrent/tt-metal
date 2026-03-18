@@ -200,6 +200,32 @@ class KimiK25Config:
         self.padded_vocab_size = ((self.vocab_size + 63) // 64) * 64  # 163840 already aligned
 
     # ------------------------------------------------------------------
+    # DSV3 compatibility properties
+    # ------------------------------------------------------------------
+
+    @property
+    def quantization_config(self) -> dict:
+        """DSV3-compatible quantization config dict for the FP8 block-quantization path.
+
+        The TT random-weights test path (``prepare_model_state_dict(random_weights=True)``)
+        uses ``add_inv_scale_to_state_dict`` and ``dequantize_state_dict`` which both
+        read ``hf_config.quantization_config["weight_block_size"]``.  This property
+        provides that interface so ``KimiK25Config`` can be used wherever a DSV3
+        ``transformers.PretrainedConfig`` object is expected.
+
+        Block shape ``[128, 128]`` matches the DSV3 FP8 quantization block size used by
+        the TT weight converters (see ``models/demos/deepseek_v3/reference/config.json``).
+
+        Note
+        ----
+        Kimi K2.5 *real* checkpoints use INT4 group-32 quantization for routed-expert
+        weights, handled transparently by ``KimiLazyStateDict``.  This property is only
+        needed for the synthetic random-weights test path where we simulate the DSV3
+        FP8 weight format to exercise the TT model without real checkpoints.
+        """
+        return {"weight_block_size": [128, 128]}
+
+    # ------------------------------------------------------------------
     # Constructors
     # ------------------------------------------------------------------
 
