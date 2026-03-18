@@ -165,7 +165,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         profile_decode: bool = False,
         sample_on_device: bool = False,
         enable_mtp: bool = False,
-        sampling_params: None = None,
+        sampling_params: SamplingParams | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -226,6 +226,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                 top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
             )
         )
+        if self._get_sampling_value(self.sampling_params.top_k, 0) == 0 and self.sample_on_device:
+            raise SystemExit(
+                "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
+            )
         if self.sample_on_device:
             enable_internal_trace_sampling = enable_trace and self.sample_on_device
             self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
@@ -241,9 +245,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
         logger.info(
             f"Sampling parameters for first user (other users may have different values): "
-            + f"temperature={self.sampling_params.temperature[0]}, "
-            + f"top_p={self.sampling_params.top_p[0]}, "
-            + f"top_k={self.sampling_params.top_k[0]}"
+            + f"temperature={self._get_sampling_value(self.sampling_params.temperature, 0)}, "
+            + f"top_p={self._get_sampling_value(self.sampling_params.top_p, 0)}, "
+            + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
         )
 
         # Weight cache to avoid loading weights multiple times
@@ -669,9 +673,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         self.sampling_generator.reset_sampling_params(sampling_params)
         seed = getattr(sampling_params, "seed", None)
-        if seed is not None:
-            user_ids = list(range(batch_size))
-            self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
+        user_ids = list(range(batch_size))
+        self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
         self.sampling_generator.reset_prompt_tokens(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
         self.sampling_generator.reset_output_state(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
 

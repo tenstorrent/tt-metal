@@ -434,12 +434,16 @@ def run_demo(
         raise SystemExit("Missing cache directory. Provide --cache-dir.")
     cache_dir = Path(cache_dir)
 
-    if sampling_temperature <= 0:
-        raise SystemExit("--sampling-temperature must be > 0.")
+    if sampling_temperature < 0:
+        raise SystemExit("--sampling-temperature must be > 0 (use 0 for greedy decoding).")
     if not (0.0 < sampling_top_p <= 1.0):
         raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
     if sampling_top_k < 0:
         raise SystemExit("--sampling-top-k must be >= 0.")
+    if sampling_top_k == 0 and sample_on_device:
+        raise SystemExit(
+            "--sampling-top-k=0 is not supported when sampling on device. Use --sample-on-host. See https://github.com/tenstorrent/tt-metal/issues/40236"
+        )
 
     # Validate model directory per mode
     validate_model_path(
