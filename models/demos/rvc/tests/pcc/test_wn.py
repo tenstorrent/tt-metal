@@ -43,7 +43,7 @@ def test_wn(device):
         num_layers=num_layers,
         gin_channels=gin_channels,
     )
-    tt_layer.load_state_dict(parameters=torch_layer.state_dict())
+    tt_layer.load_state_dict(state_dict=torch_layer.state_dict())
 
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16).permute(0, 2, 1),
@@ -60,8 +60,6 @@ def test_wn(device):
 
     tt_output = tt_layer(tt_x, g=tt_g)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
-    print(f"torch_output shape: {torch_output.shape}")
-    print(f"tt_output_torch shape before reshape: {tt_output_torch.shape}")
     tt_output_torch = tt_output_torch.permute(0, 2, 1)
 
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.98)

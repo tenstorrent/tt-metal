@@ -34,16 +34,16 @@ class Linear:
         self.compute_config = compute_config
         self.activation = activation
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
         base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 
-        if weight_key not in parameters:
+        if weight_key not in state_dict:
             raise KeyError(f"Missing required parameter: {weight_key}")
 
         # Torch Linear weight is [out_features, in_features]. For ttnn.linear use [in_features, out_features].
-        wt = parameters[weight_key].reshape(self.out_features, self.in_features).transpose(0, 1).contiguous()
+        wt = state_dict[weight_key].reshape(self.out_features, self.in_features).transpose(0, 1).contiguous()
         self.weight_tensor = ttnn.from_torch(
             wt,
             dtype=ttnn.bfloat16,
@@ -52,9 +52,9 @@ class Linear:
         )
 
         self.bias_tensor = None
-        if bias_key in parameters and parameters[bias_key] is not None:
+        if bias_key in state_dict and state_dict[bias_key] is not None:
             self.bias_tensor = ttnn.from_torch(
-                parameters[bias_key].reshape(1, 1, self.out_features),
+                state_dict[bias_key].reshape(1, 1, self.out_features),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,

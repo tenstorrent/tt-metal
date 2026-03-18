@@ -29,11 +29,11 @@ def test_layernorm(device):
         eps=1e-5,
         dtype=ttnn.bfloat16,
     )
-    parameters = {
+    state_dict = {
         "norm.layernorm.weight": torch_layernorm.weight,
         "norm.layernorm.bias": torch_layernorm.bias,
     }
-    tt_layernorm.load_state_dict(parameters=parameters, key="layernorm", module_prefix="norm.")
+    tt_layernorm.load_state_dict(state_dict=state_dict, key="layernorm", module_prefix="norm.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16),

@@ -117,7 +117,7 @@ def _load_synthesizer(
         0: SynthesizerTrnMsNSF_nono,
     }
     synthesizer = synthesizer_class[if_f0](device=tt_device, **synthesizer_config["model"])
-    synthesizer.load_state_dict(parameters=synthesizer_state)
+    synthesizer.load_state_dict(state_dict=synthesizer_state)
     return synthesizer, synthesizer_config["data"]
 
 

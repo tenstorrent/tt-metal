@@ -44,7 +44,7 @@ def test_multiheadattention(device, window_size):
         window_size=window_size,
     )
 
-    parameters = {
+    state_dict = {
         "encoder.attn.linear_q.weight": torch_mha.linear_q.weight,
         "encoder.attn.linear_q.bias": torch_mha.linear_q.bias,
         "encoder.attn.linear_k.weight": torch_mha.linear_k.weight,
@@ -55,9 +55,9 @@ def test_multiheadattention(device, window_size):
         "encoder.attn.linear_o.bias": torch_mha.linear_o.bias,
     }
     if window_size is not None:
-        parameters["encoder.attn.emb_rel_k"] = torch_mha.emb_rel_k
-        parameters["encoder.attn.emb_rel_v"] = torch_mha.emb_rel_v
-    tt_mha.load_state_dict(parameters=parameters, module_prefix="encoder.attn.")
+        state_dict["encoder.attn.emb_rel_k"] = torch_mha.emb_rel_k
+        state_dict["encoder.attn.emb_rel_v"] = torch_mha.emb_rel_v
+    tt_mha.load_state_dict(state_dict=state_dict, module_prefix="encoder.attn.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16).permute(0, 2, 1),

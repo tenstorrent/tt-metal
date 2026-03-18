@@ -65,41 +65,41 @@ class MultiHeadAttention:
         self.relative_position_cache: dict[int : ttnn.Tensor] = {}
         self.index_cache: dict[int : ttnn.Tensor] = {}
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         q_key = (
             "linear_q"
-            if (f"{module_prefix}linear_q.weight" if module_prefix else "linear_q.weight") in parameters
+            if (f"{module_prefix}linear_q.weight" if module_prefix else "linear_q.weight") in state_dict
             else "conv_q"
         )
         k_key = (
             "linear_k"
-            if (f"{module_prefix}linear_k.weight" if module_prefix else "linear_k.weight") in parameters
+            if (f"{module_prefix}linear_k.weight" if module_prefix else "linear_k.weight") in state_dict
             else "conv_k"
         )
         v_key = (
             "linear_v"
-            if (f"{module_prefix}linear_v.weight" if module_prefix else "linear_v.weight") in parameters
+            if (f"{module_prefix}linear_v.weight" if module_prefix else "linear_v.weight") in state_dict
             else "conv_v"
         )
         o_key = (
             "linear_o"
-            if (f"{module_prefix}linear_o.weight" if module_prefix else "linear_o.weight") in parameters
+            if (f"{module_prefix}linear_o.weight" if module_prefix else "linear_o.weight") in state_dict
             else "conv_o"
         )
-        self.linear_q.load_state_dict(parameters=parameters, key=q_key, module_prefix=module_prefix)
-        self.linear_k.load_state_dict(parameters=parameters, key=k_key, module_prefix=module_prefix)
-        self.linear_v.load_state_dict(parameters=parameters, key=v_key, module_prefix=module_prefix)
-        self.linear_o.load_state_dict(parameters=parameters, key=o_key, module_prefix=module_prefix)
+        self.linear_q.load_state_dict(state_dict=state_dict, key=q_key, module_prefix=module_prefix)
+        self.linear_k.load_state_dict(state_dict=state_dict, key=k_key, module_prefix=module_prefix)
+        self.linear_v.load_state_dict(state_dict=state_dict, key=v_key, module_prefix=module_prefix)
+        self.linear_o.load_state_dict(state_dict=state_dict, key=o_key, module_prefix=module_prefix)
         if self.window_size is not None:
             key_emb_rel_k = f"{module_prefix}emb_rel_k" if module_prefix else "emb_rel_k"
             key_emb_rel_v = f"{module_prefix}emb_rel_v" if module_prefix else "emb_rel_v"
-            if key_emb_rel_k not in parameters:
+            if key_emb_rel_k not in state_dict:
                 raise KeyError(f"Missing required parameter: {key_emb_rel_k}")
-            if key_emb_rel_v not in parameters:
+            if key_emb_rel_v not in state_dict:
                 raise KeyError(f"Missing required parameter: {key_emb_rel_v}")
 
-            emb_rel_k = parameters[key_emb_rel_k].reshape(1, 1, -1, self.features_per_head)
-            emb_rel_v = parameters[key_emb_rel_v].reshape(1, 1, -1, self.features_per_head)
+            emb_rel_k = state_dict[key_emb_rel_k].reshape(1, 1, -1, self.features_per_head)
+            emb_rel_v = state_dict[key_emb_rel_v].reshape(1, 1, -1, self.features_per_head)
             self.emb_rel_k = ttnn.from_torch(
                 emb_rel_k,
                 dtype=ttnn.bfloat16,
@@ -230,9 +230,9 @@ class FFN:
             padding="same",
         )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.conv_1.load_state_dict(parameters=parameters, key="conv_1", module_prefix=module_prefix)
-        self.conv_2.load_state_dict(parameters=parameters, key="conv_2", module_prefix=module_prefix)
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.conv_1.load_state_dict(state_dict=state_dict, key="conv_1", module_prefix=module_prefix)
+        self.conv_2.load_state_dict(state_dict=state_dict, key="conv_2", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.conv_1(x)

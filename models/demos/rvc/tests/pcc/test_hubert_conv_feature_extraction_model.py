@@ -35,8 +35,8 @@ def test_hubert_conv_feature_extraction_model(device, mode):
         conv_bias=conv_bias,
     )
 
-    parameters = {f"fe.{k}": v for k, v in torch_model.state_dict().items()}
-    tt_model.load_state_dict(parameters=parameters, module_prefix="fe.")
+    state_dict = {f"fe.{k}": v for k, v in torch_model.state_dict().items()}
+    tt_model.load_state_dict(state_dict=state_dict, module_prefix="fe.")
 
     torch_x = torch.randn(batch_size, input_length, dtype=torch.float32)
     torch_output = torch_model(torch_x)
@@ -48,9 +48,7 @@ def test_hubert_conv_feature_extraction_model(device, mode):
         device=device,
     )
     tt_output = tt_model(tt_x)
-    print(f"Output shape from TT model: {tt_output.shape}")
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).permute(0, 2, 1)
-    print(f"Output shape after converting to Torch: {tt_output_torch.shape}")
 
     assert tuple(tt_output_torch.shape) == tuple(torch_output.shape)
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.95)

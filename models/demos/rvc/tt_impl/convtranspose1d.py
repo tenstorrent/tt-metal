@@ -221,10 +221,10 @@ class ConvTranspose1d:
         self.compute_config = compute_config
         self.memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
         base_key = f"{module_prefix}{key}" if module_prefix else key
         bias_key = f"{base_key}.bias"
-        wt_torch = parameters[f"{base_key}.weight"]
+        wt_torch = state_dict[f"{base_key}.weight"]
         wt = wt_torch.reshape(
             self.configuration.in_channels,
             self.configuration.out_channels // self.configuration.groups,
@@ -237,9 +237,9 @@ class ConvTranspose1d:
         )
 
         self.bias_tensor = None
-        if bias_key in parameters and parameters[bias_key] is not None:
+        if bias_key in state_dict and state_dict[bias_key] is not None:
             self.bias_tensor = ttnn.from_torch(
-                parameters[bias_key].reshape(1, 1, 1, -1),
+                state_dict[bias_key].reshape(1, 1, 1, -1),
                 dtype=ttnn.bfloat16,
             )
 

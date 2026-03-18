@@ -72,8 +72,8 @@ def test_synthesizer_trn_ms_nsf(device):
         gin_channels=gin_channels,
         sr=sr,
     )
-    parameters = {f"net_g.{k}": v for k, v in torch_model.state_dict().items()}
-    tt_model.load_state_dict(parameters, module_prefix="net_g.")
+    state_dict = {f"net_g.{k}": v for k, v in torch_model.state_dict().items()}
+    tt_model.load_state_dict(state_dict, module_prefix="net_g.")
 
     torch_phone = torch.randn(batch_size, seq_len, embedding_dims, dtype=torch.float32)
     torch_pitch = torch.randint(0, 255, (batch_size, seq_len), dtype=torch.int64)

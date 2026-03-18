@@ -40,13 +40,13 @@ def test_ffn(device):
         kernel_size=kernel_size,
     )
 
-    parameters = {
+    state_dict = {
         "encoder.ffn.conv_1.weight": torch_ffn.conv_1.weight,
         "encoder.ffn.conv_1.bias": torch_ffn.conv_1.bias,
         "encoder.ffn.conv_2.weight": torch_ffn.conv_2.weight,
         "encoder.ffn.conv_2.bias": torch_ffn.conv_2.bias,
     }
-    tt_ffn.load_state_dict(parameters=parameters, module_prefix="encoder.ffn.")
+    tt_ffn.load_state_dict(state_dict=state_dict, module_prefix="encoder.ffn.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16).permute(0, 2, 1),

@@ -51,8 +51,8 @@ def test_generator_nsf(device):
         gin_channels=gin_channels,
         sr=sr,
     )
-    parameters = {f"dec.{k}": v for k, v in torch_generator.state_dict().items()}
-    tt_generator.load_state_dict(parameters, module_prefix="dec.")
+    state_dict = {f"dec.{k}": v for k, v in torch_generator.state_dict().items()}
+    tt_generator.load_state_dict(state_dict, module_prefix="dec.")
 
     torch_x = torch.randn(batch_size, initial_channel, input_length, dtype=torch.float32)
     torch_f0 = torch.rand(batch_size, input_length, dtype=torch.float32) * 300.0

@@ -302,7 +302,7 @@ class Conv1d:
 
     def load_state_dict(
         self,
-        parameters: dict[str, torch.Tensor],
+        state_dict: dict[str, torch.Tensor],
         key: str,
         module_prefix: str = "",
     ) -> None:
@@ -310,15 +310,15 @@ class Conv1d:
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 
-        wt = parameters[weight_key].reshape(
+        wt = state_dict[weight_key].reshape(
             self.configuration.out_channels,
             self.configuration.in_channels // self.configuration.groups,
             1,
             self.configuration.kernel_size,
         )
         # Keep a torch-reference copy for internal F.conv1d parity check.
-        self.torch_weight = parameters[weight_key].detach().to(torch.float32).contiguous()
-        bias = parameters[bias_key] if bias_key in parameters and parameters[bias_key] is not None else None
+        self.torch_weight = state_dict[weight_key].detach().to(torch.float32).contiguous()
+        bias = state_dict[bias_key] if bias_key in state_dict and state_dict[bias_key] is not None else None
         self.torch_bias = None if bias is None else bias.detach().to(torch.float32).contiguous()
         self.weight_tensor = ttnn.from_torch(wt, dtype=ttnn.bfloat16)
         self.bias_tensor = None
