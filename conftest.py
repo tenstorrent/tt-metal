@@ -229,7 +229,7 @@ class CIv2ModelDownloadUtils_:
                     local_path.name,
                     "--max-connection-per-server=16",
                     "--split=16",
-                    "--min-split-size=512K",
+                    "--min-split-size=5M",
                     "--continue=true",
                     "--max-tries=5",
                     "--retry-wait=3",
