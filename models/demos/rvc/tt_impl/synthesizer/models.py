@@ -402,9 +402,7 @@ class SourceModuleHnNSF:
     ) -> None:
         self.device = device
         self.l_sin_gen = SineGen(device, sampling_rate, harmonic_num, sine_amp, add_noise_std, voiced_threshod)
-        self.l_linear = Linear(
-            device=device, in_features=harmonic_num + 1, out_features=1, dtype=ttnn.bfloat16, activation="tanh"
-        )
+        self.l_linear = Linear(device=device, in_features=harmonic_num + 1, out_features=1, activation="tanh")
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         self.l_linear.load_state_dict(state_dict=state_dict, key="l_linear", module_prefix=module_prefix)

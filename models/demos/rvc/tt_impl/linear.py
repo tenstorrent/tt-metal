@@ -17,21 +17,15 @@ class Linear:
         device: ttnn.MeshDevice,
         in_features: int,
         out_features: int,
-        weight_tensor: ttnn.Tensor | None = None,
-        bias_tensor: ttnn.Tensor | None = None,
         dtype: ttnn.DataType | None = None,
-        memory_config: ttnn.MemoryConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
         activation: str | None = None,
     ) -> None:
         self.device = device
         self.in_features = in_features
         self.out_features = out_features
-        self.weight_tensor = weight_tensor
-        self.bias_tensor = bias_tensor
-        self.dtype = dtype
-        self.memory_config = memory_config if memory_config is not None else ttnn.L1_MEMORY_CONFIG
-        self.compute_config = compute_config
+        self.dtype = ttnn.bfloat16 if dtype is None else dtype
+        self.memory_config = None
+        self.compute_config = None
         self.activation = activation
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str | None = None) -> None:
