@@ -193,11 +193,7 @@ class T5RMSNorm(RMSNorm):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return super().forward(
-            x,
-            compute_kernel_config=self.compute_kernel_config,
-            program_config=ttnn.LayerNormDefaultProgramConfig(legacy_reduction=True, legacy_rsqrt=True),
-        )
+        return super().forward(x, compute_kernel_config=self.compute_kernel_config)
 
     def reference(self, x: ttnn.Tensor) -> ttnn.Tensor:
         variance = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
@@ -417,9 +413,7 @@ class T5Attention(Module):
         scores = ttnn.matmul(q, k)
 
         scores = scores + position_bias
-        attn_weights = ttnn.softmax(
-            scores, dim=-1, numeric_stable=False, compute_kernel_config=self.layer_norm.compute_kernel_config
-        )
+        attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
         attn_output = ttnn.matmul(attn_weights, v)
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
