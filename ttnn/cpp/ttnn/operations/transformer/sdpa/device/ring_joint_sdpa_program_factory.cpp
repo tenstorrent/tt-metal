@@ -265,7 +265,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Init fused op signaler
     sdpa_fused_op_signaler->init_fused_op(program, mesh_device, core_grid);
 
-    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_info(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
         tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
     log_debug(tt::LogOp, "grid_size: {}", grid_size);
@@ -284,7 +284,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t all_heads_num_q_chunks = B * NH * num_q_chunks;
     const uint32_t q_per_core = tt::div_up(all_heads_num_q_chunks, num_cores);
 
-    const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+    // const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
+    const uint32_t q_buffer_factor = 1;
 
     log_debug(tt::LogOp, "q_per_core: {}", q_per_core);
 
@@ -581,118 +582,187 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
-    // Q input
-    auto c_in0_config = CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
+    log_info(tt::LogOp, "=== CIRCULAR BUFFER SIZES ===");
+    uint32_t total_cb_size = 0;
 
+    // Q input
+    uint32_t cb_q_size = q_tiles * q_tile_size;
+    total_cb_size += cb_q_size;
+    log_info(tt::LogOp, "CB c_0  (Q input):              {} tiles * {} bytes/tile = {} bytes", q_tiles, q_tile_size, cb_q_size);
+    auto c_in0_config = CircularBufferConfig(cb_q_size, {{tt::CBIndex::c_0, q_df}})
+                            .set_page_size(tt::CBIndex::c_0, q_tile_size);
     CreateCircularBuffer(program, core_grid, c_in0_config);
+
     // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+    uint32_t cb_k_size = k_tiles * k_tile_size;
+    total_cb_size += cb_k_size;
+    log_info(tt::LogOp, "CB c_1  (K input):              {} tiles * {} bytes/tile = {} bytes", k_tiles, k_tile_size, cb_k_size);
+    auto c_in1_config = CircularBufferConfig(cb_k_size, {{tt::CBIndex::c_1, k_df}})
                             .set_page_size(tt::CBIndex::c_1, k_tile_size);
     CreateCircularBuffer(program, core_grid, c_in1_config);
+
     // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+    uint32_t cb_v_size = v_tiles * v_tile_size;
+    total_cb_size += cb_v_size;
+    log_info(tt::LogOp, "CB c_2  (V input):              {} tiles * {} bytes/tile = {} bytes", v_tiles, v_tile_size, cb_v_size);
+    auto c_in2_config = CircularBufferConfig(cb_v_size, {{tt::CBIndex::c_2, v_df}})
                             .set_page_size(tt::CBIndex::c_2, v_tile_size);
     CreateCircularBuffer(program, core_grid, c_in2_config);
 
     if (args.is_causal) {
         // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+        uint32_t cb_mask_size = mask_tiles * mask_tile_size;
+        total_cb_size += cb_mask_size;
+        log_info(tt::LogOp, "CB c_3  (mask input - causal):  {} tiles * {} bytes/tile = {} bytes", mask_tiles, mask_tile_size, cb_mask_size);
+        auto c_in3_config = CircularBufferConfig(cb_mask_size, {{tt::CB::c_in3, mask_df}})
                                 .set_page_size(tt::CB::c_in3, mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
     }
     else {
         // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
         if (needs_lightweight_mask) {
+            uint32_t cb_mask_size = total_lightweight_mask_tiles * mask_tile_size;
+            total_cb_size += cb_mask_size;
+            log_info(tt::LogOp, "CB c_3  (mask lightweight):     {} tiles * {} bytes/tile = {} bytes", total_lightweight_mask_tiles, mask_tile_size, cb_mask_size);
             auto c_in3_config =
-                CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                CircularBufferConfig(cb_mask_size, {{tt::CB::c_in3, mask_df}})
                     .set_page_size(tt::CB::c_in3, mask_tile_size);
             CreateCircularBuffer(program, core_grid, c_in3_config);
         }
     }
 
     // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
+    uint32_t cb_scale_size = scale_tiles * scalar_tile_size;
+    total_cb_size += cb_scale_size;
+    log_info(tt::LogOp, "CB c_4  (scale input):          {} tiles * {} bytes/tile = {} bytes", scale_tiles, scalar_tile_size, cb_scale_size);
+    auto c_in4_config = CircularBufferConfig(cb_scale_size, {{tt::CBIndex::c_4, scalar_df}})
                             .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in4_config);
 
     // identity scale input
-    auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
+    uint32_t cb_identity_scale_size = scale_tiles * scalar_tile_size;
+    total_cb_size += cb_identity_scale_size;
+    log_info(tt::LogOp, "CB c_5  (identity scale):       {} tiles * {} bytes/tile = {} bytes", scale_tiles, scalar_tile_size, cb_identity_scale_size);
+    auto c_in5_config = CircularBufferConfig(cb_identity_scale_size, {{tt::CBIndex::c_5, scalar_df}})
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
     // lse input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
+    uint32_t cb_lse_size = statistics_tiles * im_tile_size;
+    total_cb_size += cb_lse_size;
+    log_info(tt::LogOp, "CB c_6  (lse input):            {} tiles * {} bytes/tile = {} bytes", statistics_tiles, im_tile_size, cb_lse_size);
+    auto c_in6_config = CircularBufferConfig(cb_lse_size, {{tt::CBIndex::c_6, im_df}})
                             .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
+    uint32_t cb_prev_out_size = out_im_tiles * out_tile_size;
+    total_cb_size += cb_prev_out_size;
+    log_info(tt::LogOp, "CB c_7  (prev block output):    {} tiles * {} bytes/tile = {} bytes", out_im_tiles, out_tile_size, cb_prev_out_size);
+    auto c_in7_config = CircularBufferConfig(cb_prev_out_size, {{tt::CBIndex::c_7, out_df}})
                             .set_page_size(tt::CBIndex::c_7, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_in7_config);
 
     // column identity input
-    auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
+    uint32_t cb_col_identity_size = scale_tiles * scalar_tile_size;
+    total_cb_size += cb_col_identity_size;
+    log_info(tt::LogOp, "CB c_8  (column identity):      {} tiles * {} bytes/tile = {} bytes", scale_tiles, scalar_tile_size, cb_col_identity_size);
+    auto c_in8_config = CircularBufferConfig(cb_col_identity_size, {{tt::CBIndex::c_8, scalar_df}})
                             .set_page_size(tt::CBIndex::c_8, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in8_config);
 
     // cb_qk_im
-    auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{tt::CBIndex::c_24, im_df}})
+    uint32_t cb_qk_im_size = qk_tiles * im_tile_size;
+    total_cb_size += cb_qk_im_size;
+    log_info(tt::LogOp, "CB c_24 (qk_im):                {} tiles * {} bytes/tile = {} bytes", qk_tiles, im_tile_size, cb_qk_im_size);
+    auto c_intermed0_config = CircularBufferConfig(cb_qk_im_size, {{tt::CBIndex::c_24, im_df}})
                                   .set_page_size(tt::CBIndex::c_24, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed0_config);
 
     // cb_out_im
-    auto c_intermed1_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
+    uint32_t cb_out_im_size = out_im_tiles * im_tile_size;
+    total_cb_size += cb_out_im_size;
+    log_info(tt::LogOp, "CB c_25 (out_im):               {} tiles * {} bytes/tile = {} bytes", out_im_tiles, im_tile_size, cb_out_im_size);
+    auto c_intermed1_config = CircularBufferConfig(cb_out_im_size, {{tt::CBIndex::c_25, im_df}})
                                   .set_page_size(tt::CBIndex::c_25, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed1_config);
 
     // cb_out_accumulate_im
-    auto c_intermed2_config = CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
+    uint32_t cb_out_acc_im_size = out_im_tiles * im_tile_size;
+    total_cb_size += cb_out_acc_im_size;
+    log_info(tt::LogOp, "CB c_26 (out_accumulate_im):    {} tiles * {} bytes/tile = {} bytes", out_im_tiles, im_tile_size, cb_out_acc_im_size);
+    auto c_intermed2_config = CircularBufferConfig(cb_out_acc_im_size, {{tt::CBIndex::c_26, im_df}})
                                   .set_page_size(tt::CBIndex::c_26, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed2_config);
 
     // cb_cur_max
-    auto c_intermed3_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
+    uint32_t cb_cur_max_size = statistics_tiles * stats_tile_size;
+    total_cb_size += cb_cur_max_size;
+    log_info(tt::LogOp, "CB c_27 (cur_max):              {} tiles * {} bytes/tile = {} bytes", statistics_tiles, stats_tile_size, cb_cur_max_size);
+    auto c_intermed3_config = CircularBufferConfig(cb_cur_max_size, {{tt::CBIndex::c_27, stats_df}})
                                   .set_page_size(tt::CBIndex::c_27, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed3_config);
 
     // cb_prev_max
-    auto c_intermed4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
+    uint32_t cb_prev_max_size = statistics_tiles * stats_tile_size;
+    total_cb_size += cb_prev_max_size;
+    log_info(tt::LogOp, "CB c_28 (prev_max):             {} tiles * {} bytes/tile = {} bytes", statistics_tiles, stats_tile_size, cb_prev_max_size);
+    auto c_intermed4_config = CircularBufferConfig(cb_prev_max_size, {{tt::CBIndex::c_28, stats_df}})
                                   .set_page_size(tt::CBIndex::c_28, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed4_config);
 
     // cb_cur_sum
-    auto c_intermed5_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
+    uint32_t cb_cur_sum_size = statistics_tiles * stats_tile_size;
+    total_cb_size += cb_cur_sum_size;
+    log_info(tt::LogOp, "CB c_29 (cur_sum):              {} tiles * {} bytes/tile = {} bytes", statistics_tiles, stats_tile_size, cb_cur_sum_size);
+    auto c_intermed5_config = CircularBufferConfig(cb_cur_sum_size, {{tt::CBIndex::c_29, stats_df}})
                                   .set_page_size(tt::CBIndex::c_29, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed5_config);
 
     // cb_prev_sum
-    auto c_intermed6_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
+    uint32_t cb_prev_sum_size = statistics_tiles * stats_tile_size;
+    total_cb_size += cb_prev_sum_size;
+    log_info(tt::LogOp, "CB c_30 (prev_sum):             {} tiles * {} bytes/tile = {} bytes", statistics_tiles, stats_tile_size, cb_prev_sum_size);
+    auto c_intermed6_config = CircularBufferConfig(cb_prev_sum_size, {{tt::CBIndex::c_30, stats_df}})
                                   .set_page_size(tt::CBIndex::c_30, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
     // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
+    uint32_t cb_exp_max_diff_size = statistics_tiles * stats_tile_size;
+    total_cb_size += cb_exp_max_diff_size;
+    log_info(tt::LogOp, "CB c_31 (exp_max_diff):         {} tiles * {} bytes/tile = {} bytes", statistics_tiles, stats_tile_size, cb_exp_max_diff_size);
+    auto c_intermed7_config = CircularBufferConfig(cb_exp_max_diff_size, {{tt::CBIndex::c_31, stats_df}})
                                   .set_page_size(tt::CBIndex::c_31, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
     // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
+    uint32_t cb_out_size = out0_t * out_tile_size;
+    total_cb_size += cb_out_size;
+    log_info(tt::LogOp, "CB c_16 (output):               {} tiles * {} bytes/tile = {} bytes", out0_t, out_tile_size, cb_out_size);
+    auto c_out0_config = CircularBufferConfig(cb_out_size, {{tt::CBIndex::c_16, out_df}})
                              .set_page_size(tt::CBIndex::c_16, out_tile_size);
     CreateCircularBuffer(program, core_grid, c_out0_config);
 
     // lse output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+    uint32_t cb_lse_out_size = statistics_tiles * im_tile_size;
+    total_cb_size += cb_lse_out_size;
+    log_info(tt::LogOp, "CB c_17 (lse output):           {} tiles * {} bytes/tile = {} bytes", statistics_tiles, im_tile_size, cb_lse_out_size);
+    auto c_out1_config = CircularBufferConfig(cb_lse_out_size, {{tt::CBIndex::c_17, im_df}})
                              .set_page_size(tt::CBIndex::c_17, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_out1_config);
 
     // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
     // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
     if (use_streaming_compute) {
-        auto c_recip_scratch_config = CircularBufferConfig(1 * im_tile_size, {{tt::CBIndex::c_9, im_df}})
+        uint32_t cb_recip_size = 1 * im_tile_size;
+        total_cb_size += cb_recip_size;
+        log_info(tt::LogOp, "CB c_9  (recip scratch):        {} tiles * {} bytes/tile = {} bytes", 1, im_tile_size, cb_recip_size);
+        auto c_recip_scratch_config = CircularBufferConfig(cb_recip_size, {{tt::CBIndex::c_9, im_df}})
                                           .set_page_size(tt::CBIndex::c_9, im_tile_size);
         CreateCircularBuffer(program, core_grid, c_recip_scratch_config);
     }
+
+    log_info(tt::LogOp, "=== TOTAL CB SIZE: {} bytes ({} KB, {:.2f} MB) ===", total_cb_size, total_cb_size / 1024, total_cb_size / (1024.0 * 1024.0));
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
     uint32_t k_addr = input_tensor_k.buffer()->address();
