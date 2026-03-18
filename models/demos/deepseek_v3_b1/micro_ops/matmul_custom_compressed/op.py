@@ -142,7 +142,7 @@ class MatmulCustomCompressed:
         cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
 
         # CB1: compressed data — per-core or lockstep depending on ct mode
-        cb1_descs = ct.cb_descriptor_from_compressed_tensor(cb_in1, total_size=ct.max_shard_size)
+        cb1_descs = ct.cb_descriptor_from_compressed_tensor(cb_in1)
 
         # CB2: output — standard
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)

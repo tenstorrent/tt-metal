@@ -272,40 +272,46 @@ class CompressedTensor:
     def get_assignment_tensor(self) -> ttnn.Tensor:
         return self.assignment
 
-    def cb_descriptor_from_compressed_tensor(self, cb_index, total_size=0):
+    def cb_descriptor_from_compressed_tensor(self, cb_index):
         """Create CB descriptor(s) for the compressed data tensor.
 
         In per_core_allocation mode, returns a list of CBDescriptors — one per core,
-        each pointing to that core's individual tensor buffer via cb_descriptor_from_sharded_tensor.
+        each pointing to that core's individual tensor buffer.
         In lockstep mode, returns a single-element list with the standard sharded descriptor.
         All share the same cb_index so they map to the same CB slot.
+        Each CB's page_size matches its tensor's actual buffer size.
         """
         tile_32x32 = ttnn.Tile([32, 32])
-        cb_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb_index,
-            data_format=ttnn.bfloat8_b,
-            page_size=total_size if total_size > 0 else self.max_shard_size,
-            tile=ttnn.TileDescriptor(tile_32x32),
-        )
 
         if self._per_core_allocation:
             descs = []
             for core_tensor in self._data_per_core.values():
-                desc = ttnn.cb_descriptor_from_sharded_tensor(
-                    cb_index,
-                    core_tensor,
-                    total_size=total_size,
-                )
-                desc.format_descriptors = [cb_fmt]
+                desc = ttnn.cb_descriptor_from_sharded_tensor(cb_index, core_tensor)
+                core_size = desc.total_size  # set by C++ from tensor.buffer()->aligned_size_per_bank()
+                desc.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=cb_index,
+                        data_format=ttnn.bfloat8_b,
+                        page_size=core_size,
+                        tile=ttnn.TileDescriptor(tile_32x32),
+                    )
+                ]
                 descs.append(desc)
             return descs
         else:
             desc = ttnn.cb_descriptor_from_sharded_tensor(
                 cb_index,
                 self.data,
-                total_size=total_size,
+                total_size=self.max_shard_size,
             )
-            desc.format_descriptors = [cb_fmt]
+            desc.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=cb_index,
+                    data_format=ttnn.bfloat8_b,
+                    page_size=self.max_shard_size,
+                    tile=ttnn.TileDescriptor(tile_32x32),
+                )
+            ]
             return [desc]
 
     def get_data_l1_address(self) -> int:

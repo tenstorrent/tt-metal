@@ -286,3 +286,70 @@ def test_per_core_and_lockstep_coexist(device):
     # Validate: all remaining tensors are still allocated
     for label, t in tensors.items():
         assert t.is_allocated(), f"{label} should still be allocated"
+
+
+def test_all_cores_lockstep_then_per_core_then_reverse(device):
+    """Allocate on ALL L1 cores: lockstep first then per-core, then deallocate and reverse order.
+
+    This stresses the dependency-aware path in the bank manager:
+    - Phase 1: lockstep on all cores → per-core on all cores (lockstep first, deps empty initially)
+    - Phase 2: deallocate all → per-core on all cores → lockstep on all cores (deps non-empty for lockstep)
+    Validates no overlaps in either phase.
+    """
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    cores = []
+    for y in range(grid.y):
+        for x in range(grid.x):
+            cores.append(ttnn.CoreCoord(x, y))
+
+    shard_bytes = 2048
+
+    # --- Phase 1: lockstep first, then per-core ---
+    lockstep_tensors = {}
+    per_core_tensors = {}
+
+    # Lockstep on all cores
+    for i, core in enumerate(cores):
+        lockstep_tensors[i] = _create_lockstep_tensor(device, core, shard_bytes)
+
+    # Per-core on all cores
+    for i, core in enumerate(cores):
+        per_core_tensors[i] = _create_single_core_tensor(device, core, shard_bytes)
+
+    # Validate: no overlaps between lockstep and per-core on same core
+    for i in range(num_cores):
+        ls_addr = lockstep_tensors[i].buffer_address()
+        pc_addr = per_core_tensors[i].buffer_address()
+        assert not _addr_ranges_overlap(
+            ls_addr, shard_bytes, pc_addr, shard_bytes
+        ), f"Phase 1 overlap on core {i}: lockstep={ls_addr:#x} per_core={pc_addr:#x}"
+
+    # Deallocate all
+    lockstep_tensors.clear()
+    per_core_tensors.clear()
+
+    # --- Phase 2: per-core first, then lockstep ---
+
+    # Per-core on all cores (varying sizes)
+    pc_sizes = [1024 + (i % 4) * 1024 for i in range(num_cores)]  # 1024, 2048, 3072, 4096, ...
+    for i, core in enumerate(cores):
+        per_core_tensors[i] = _create_single_core_tensor(device, core, pc_sizes[i])
+
+    # Lockstep on all cores — this triggers the dependency-aware path
+    # because per-bank allocators now have allocations
+    for i, core in enumerate(cores):
+        lockstep_tensors[i] = _create_lockstep_tensor(device, core, shard_bytes)
+
+    # Validate: no overlaps
+    for i in range(num_cores):
+        ls_addr = lockstep_tensors[i].buffer_address()
+        pc_addr = per_core_tensors[i].buffer_address()
+        assert not _addr_ranges_overlap(ls_addr, shard_bytes, pc_addr, pc_sizes[i]), (
+            f"Phase 2 overlap on core {i}: lockstep={ls_addr:#x}+{shard_bytes} " f"per_core={pc_addr:#x}+{pc_sizes[i]}"
+        )
+
+    # All tensors still alive
+    for i in range(num_cores):
+        assert lockstep_tensors[i].is_allocated()
+        assert per_core_tensors[i].is_allocated()
