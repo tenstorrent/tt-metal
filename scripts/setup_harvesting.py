@@ -68,7 +68,7 @@ def setup_tt_flash_venv():
     else:
         print("\n✓ Virtual environment already exists")
 
-    print("\nInstalling tt-flash in editable mode...")
+    print("\nInstalling tt-flash into the virtual environment...")
     run_command(f"./venv/bin/pip install --upgrade pip", cwd=tt_flash_dir)
     run_command(f"./venv/bin/pip install .", cwd=tt_flash_dir)
 
