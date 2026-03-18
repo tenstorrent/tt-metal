@@ -400,6 +400,7 @@ class BlazeMoeGate(AbstractModule):
                 scores_correction_bias, ttnn.Shape((batch_size_per_device + padding_size, 1))
             )
             scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
+            scores_correction_bias = ttnn.transpose(scores_correction_bias, dim1=-2, dim2=-1)
             scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
             scores_correction_bias = ttnn.to_memory_config(
                 scores_correction_bias, memory_config=input_output_mem_config
@@ -462,8 +463,12 @@ class BlazeMoeGate(AbstractModule):
         topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
         topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=cfg["output_memory_config"])
         topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=cfg["output_memory_config"])
+        # if we do typecast on a row_major tensor, then we may see a hang
+        # topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
+        breakpoint()
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
-        topk_experts_indices = topk_experts_indices[:, :, :, :8]
+        # topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_indices = ttnn.slice(topk_experts_indices, [0, 0, 0, 0], [1, 1, topk_experts_indices.shape[2], 8])
 
         return topk_experts_weights, topk_experts_indices
 

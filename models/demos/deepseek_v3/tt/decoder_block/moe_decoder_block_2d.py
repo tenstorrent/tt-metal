@@ -14,6 +14,7 @@ from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -23,6 +24,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
@@ -65,6 +67,24 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 output_path / "moe",
                 mesh_device,
             ),
+        }
+
+    @classmethod
+    def create_state(
+        cls,
+        hf_config: PretrainedConfig,
+        paged_config: PagedAttentionConfig,
+        mesh_device: ttnn.MeshDevice,
+        ccl: CCL,
+        mla_cache: torch.Tensor | None = None,
+        kv_cache_override: KvCacheConfig | None = None,
+    ) -> ModelState:
+        return {
+            "mla_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
+            "mla": cls.create_mla_state(hf_config, paged_config, mesh_device, ccl, mla_cache, kv_cache_override),
+            "mlp_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
+            "mlp": cls.create_mlp_state(hf_config, mesh_device, ccl),
+            "moe": MoE.create_state(hf_config, mesh_device, ccl),
         }
 
     @classmethod
