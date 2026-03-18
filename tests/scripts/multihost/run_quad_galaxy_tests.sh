@@ -17,13 +17,15 @@ run_quad_galaxy_unit_tests() {
   # tt-run --tcp-interface handles tcp and tag flags
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="cnx1"
-  local mpi_host="--host g05glx04,g05glx03,g05glx02,g05glx01"
+  local hosts="g05glx04,g05glx03,g05glx02,g05glx01"
+  local mpi_host="--host $hosts"
   local mpi_args="$mpi_host $mpi_args_base"
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
-  local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+  local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
+  local tt_run_mpi_args="--tag-output"
   local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   # TODO: Currently failing
@@ -31,12 +33,12 @@ run_quad_galaxy_unit_tests() {
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
-  #tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
+  #tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -65,10 +67,10 @@ _resolve_deepseekv3_cache() {
 }
 
 setup_dual_galaxy_env() {
-    export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+    export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
     export HOSTS="g05glx01,g05glx02"
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export MPI_ARGS="--bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
@@ -77,8 +79,8 @@ setup_dual_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-    if ! test -f "$RANK_BINDING_YAML"; then
-        echo "File '$RANK_BINDING_YAML' does not exist."
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
     fi
 
@@ -88,10 +90,10 @@ setup_dual_galaxy_env() {
 }
 
 setup_quad_galaxy_env() {
-    export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+    export MESH_GRAPH_DESCRIPTOR="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
     export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
     export RANKFILE=/etc/mpirun/rankfile
-    export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
+    export MPI_ARGS="--bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
@@ -100,8 +102,8 @@ setup_quad_galaxy_env() {
         echo "File '$RANKFILE' does not exist."
         exit 1
     fi
-    if ! test -f "$RANK_BINDING_YAML"; then
-        echo "File '$RANK_BINDING_YAML' does not exist."
+    if ! test -f "$MESH_GRAPH_DESCRIPTOR"; then
+        echo "File '$MESH_GRAPH_DESCRIPTOR' does not exist."
         exit 1
     fi
 
@@ -125,7 +127,7 @@ _demo_timeout() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
+    tt-run --tcp-interface $TCP_INTERFACE --mesh-graph-descriptor "$MESH_GRAPH_DESCRIPTOR" --hosts "$HOSTS" \
         --mpi-args "$MPI_ARGS" \
         "$@"
 }
