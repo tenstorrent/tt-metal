@@ -15,7 +15,7 @@ on:
           - falcon40b
           # - llama3.2-vision # Tier 3 models
           # - n300 mesh llama3.2-vision # Tier 3 models
-          - llama3.2-90b-vision # Tier 3 models
+          - llama3.2-90b-vision # Tier 2 model
           - llama3
           - llama3 accuracy
           - llama3_70n90b accuracy
