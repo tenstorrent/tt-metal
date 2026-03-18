@@ -18,8 +18,7 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
 
-using SenderKernelConfigType =
-    SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
+using SenderKernelConfigType = SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
 
 // Static assertion to ensure this config fits within the allocated kernel config region
 static_assert(
@@ -63,17 +62,20 @@ void kernel_main() {
     uint64_t total_packets_sent = 0;
     uint32_t loop_count = 0;
 
-    // Round-robin packet sending: send one packet from each config per iteration
-    uint64_t start_timestamp = get_timestamp();
-    constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
+    auto send_packets_stateful = [&](){
+        auto* traffic_config = sender_config->traffic_config_ptrs[0];
+        auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_);
+        const uint32_t num_packets = traffic_config->metadata.num_packets;
+        const uint32_t num_warmup = conn->num_buffers_per_channel;
 
-    while (packets_left_to_send) {
-        packets_left_to_send = false;
+        traffic_config->template send_packets_stateful<BENCHMARK_MODE>(num_packets, num_warmup);
+    };
 
-        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto* traffic_config = sender_config->traffic_config_ptrs[i];
+    auto send_one_packet =
+        [&](uint8_t idx) {
+            auto* traffic_config = sender_config->traffic_config_ptrs[idx];
             if (!traffic_config->has_packets_to_send()) {
-                continue;
+                return;
             }
 
             // Send one packet (credit management is automatic, inside send_one_packet)
@@ -82,24 +84,41 @@ void kernel_main() {
             if (!sent) {
                 // Packet blocked (no credits) - keep trying
                 packets_left_to_send = true;
-                continue;
+                return;
             }
 
             // Check if more packets remain
             packets_left_to_send |= traffic_config->has_packets_to_send();
-        }
+        };
 
-        loop_count++;
+    // Round-robin packet sending: send one packet from each config per iteration
+    uint64_t start_timestamp = get_timestamp();
+    constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
 
-        // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
-        if constexpr (!BENCHMARK_MODE) {
-            if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
-                // Calculate total packets sent across all traffic configs
-                uint64_t progress_packets_sent = 0;
-                for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-                    progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+    if constexpr (NUM_TRAFFIC_CONFIGS == 1 && BENCHMARK_MODE) {
+        // Stateful sends optimized for single traffic config tests
+        send_packets_stateful();
+    } else {
+        while (packets_left_to_send) {
+            packets_left_to_send = false;
+
+            // Round robin sends
+            for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                send_one_packet(i);
+            }
+
+            loop_count++;
+
+            // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
+            if constexpr (!BENCHMARK_MODE) {
+                if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
+                    // Calculate total packets sent across all traffic configs
+                    uint64_t progress_packets_sent = 0;
+                    for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                        progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                    }
+                    write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
                 }
-                write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
             }
         }
     }
