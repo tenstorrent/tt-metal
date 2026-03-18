@@ -21,17 +21,17 @@
  * Uses llk_math_custom_mm.h as the low-level implementation.
  *************************************************************************/
 
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <MathFidelity math_fidelity, bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void llk_math_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
+    _llk_math_custom_mm_init_<math_fidelity, transpose, split_acc, dense_packing>(operandB_face_r_dim, ct_dim);
 }
 
-template <bool finalize = true>
+template <MathFidelity math_fidelity, bool finalize = true>
 inline void llk_math_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -42,5 +42,5 @@ inline void llk_math_custom_mm(
     const std::uint32_t operandB_id = get_operand_id(operand0);
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
-    _llk_math_custom_mm_<finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
+    _llk_math_custom_mm_<math_fidelity, finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }

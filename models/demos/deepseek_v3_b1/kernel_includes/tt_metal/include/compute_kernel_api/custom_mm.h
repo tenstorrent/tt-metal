@@ -40,7 +40,12 @@ namespace ckernel {
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    bool transpose = false,
+    bool split_acc = false,
+    bool dense_packing = false,
+    bool fp32_dest_acc_en = DST_ACCUM_MODE,
+    MathFidelity math_fidelity = MathFidelity::LoFi>
 ALWI void custom_mm_block_init(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -52,7 +57,7 @@ ALWI void custom_mm_block_init(
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<math_fidelity, transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, false>()));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -91,7 +96,11 @@ ALWI void custom_mm_block_init(
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <
+    bool transpose = false,
+    bool split_acc = false,
+    bool dense_packing = false,
+    MathFidelity math_fidelity = MathFidelity::LoFi>
 ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -99,7 +108,7 @@ ALWI void custom_mm_block_init_short(
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<math_fidelity, transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((llk_pack_init<false, false>(out_cb_id)));
     if constexpr (dense_packing) {
@@ -141,7 +150,11 @@ ALWI void custom_mm_block_init_short(
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true, bool read_transposed = false, bool clear_src = true>
+template <
+    bool finalize = true,
+    bool read_transposed = false,
+    bool clear_src = true,
+    MathFidelity math_fidelity = MathFidelity::LoFi>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -152,7 +165,7 @@ ALWI void custom_mm_block(
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed, clear_src>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
-    MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<math_fidelity, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -225,14 +238,14 @@ ALWI void custom_mm_block_unpack(
  * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true>
+template <bool finalize = true, MathFidelity math_fidelity = MathFidelity::LoFi>
 ALWI void custom_mm_block_math(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<math_fidelity, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off

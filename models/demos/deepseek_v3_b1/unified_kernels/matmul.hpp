@@ -116,6 +116,8 @@ struct Matmul {
             constexpr bool dense_packing = true;
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
+            constexpr bool clear_src = true;
+            constexpr MathFidelity math_fidelity = MathFidelity::LoFi;
 
             reconfig_data_format<false, true>(args.in1, args.in0);
             pack_reconfig_data_format<true>(args.out);
@@ -132,7 +134,8 @@ struct Matmul {
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
 
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
+            custom_mm_block_init_short<transpose, split_acc, dense_packing, math_fidelity>(
+                args.in0, args.in1, args.out, out_w);
 
             if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
                 // Initialize activation on PACK thread
@@ -146,7 +149,8 @@ struct Matmul {
                 for (uint32_t w = 0; w < out_w; w++) {
                     tile_regs_acquire();
 
-                    custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
+                    custom_mm_block<finalize, read_transposed, clear_src, math_fidelity>(
+                        args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
 
                     tile_regs_commit();
 
@@ -173,7 +177,8 @@ struct Matmul {
                 // Batch processing - all tiles at once
                 tile_regs_acquire();
 
-                custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
+                custom_mm_block<finalize, read_transposed, clear_src, math_fidelity>(
+                    args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
                 tile_regs_commit();
 

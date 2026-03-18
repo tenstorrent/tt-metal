@@ -52,6 +52,7 @@ inline void custom_mm_configure_addrmod() {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = ADDR_MOD_2_DEST_INCR, .clr = 0, .cr = 1},
+        .fidelity = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_2);  // Move to the next tile in width dimension,
                            // if dense_packing next tile starts at row 32 instead of 64
@@ -60,6 +61,7 @@ inline void custom_mm_configure_addrmod() {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 0, .clr = 1, .cr = 0},
+        .fidelity = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_3);  // Move to the next inner dimension, resets everything
 
@@ -67,6 +69,7 @@ inline void custom_mm_configure_addrmod() {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 1},
+        .fidelity = {.incr = 1, .clr = 0},
     }
         .set(ADDR_MOD_4);  // Last MVMUL if finalization enabled, resets SrcA and SrcB,
                            // moves Dest to the beginning of the just multiplied tile
@@ -75,6 +78,7 @@ inline void custom_mm_configure_addrmod() {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 32, .clr = 0, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
+        .fidelity = {.incr = 0, .clr = 1},
     }
         .set(ADDR_MOD_5);  // Move SrcB to 32 in preparation for finalization ELWADD
 
@@ -94,7 +98,7 @@ inline void custom_mm_configure_addrmod() {
                            // for fusing matmul and activation
 }
 
-template <bool split_acc>
+template <MathFidelity math_fidelity, bool split_acc>
 inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim) {
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
 
@@ -138,6 +142,8 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
     // Top 3 MVMUL instructions from the replay buffer
     const std::uint32_t mvmul_base = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 3);
     // F1 @ F3 => 16 (24 if split_acc) (clear only SrcA as SrcB is reused)
+    const std::uint32_t mvmul_end_phase = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+    // F1 @ F3 => 16 (24 if split_acc) (clear only SrcA as SrcB is reused)
     const std::uint32_t mvmul_end_tile = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
     // F1 @ F3 => 16 (24 if split_acc) (clear both SrcA and SrcB as this is the end if the block)
     const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
@@ -148,28 +154,30 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
     // For the last ct_dim iteration we run 4 MVMULs from mvmul_base and mvmul_end_block
     // (clearing both SrcA and SrcB and moving back to the beginning of Dest for next inner dim)
 
-    ckernel_template tmp = ckernel_template(1, ct_dim, mvmul_base, mvmul_end_tile);
-    tmp.set_last_inner_loop_instr(mvmul_end_block);
+    const std::uint32_t inner_loops = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
+    ckernel_template tmp = ckernel_template(ct_dim, inner_loops, mvmul_base, mvmul_end_phase);
+    tmp.set_last_inner_loop_instr(mvmul_end_tile);
     tmp.set_last_outer_loop_instr(mvmul_end_block);
 
     tmp.program();
 }
 
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false>
+template <MathFidelity math_fidelity, bool transpose = false, bool split_acc = false, bool dense_packing = false>
 inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, const std::uint32_t ct_dim = 1) {
     custom_mm_configure_addrmod<transpose, split_acc, dense_packing>();
-    custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
+    custom_mm_configure_mop<math_fidelity, split_acc>(operandB_face_r_dim, ct_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <bool finalize = true>
+template <MathFidelity math_fidelity, bool finalize = true>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
     const std::uint32_t replay_buf_len = operandB_face_r_dim == 8 ? 11 : 9;
+    const std::uint32_t inner_loops = is_high_fidelity(math_fidelity) ? to_underlying(math_fidelity) : 1;
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
     // Run mop kt_dim - 1 times, the last inner dim is handled separately to choose whether to run finalization or not
@@ -180,9 +188,15 @@ inline void _llk_math_custom_mm_(
     if constexpr (finalize) {
         // Run the full replay ct_dim - 1 times as it has the full finalization sequence for cases where SrcB is reused
         for (std::uint32_t i = 0; i < ct_dim - 1; i++) {
+            for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+                lltt::replay(ckernel::math::replay_buf_offset, 4);
+            }
             lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
         }
         // Run the full replay - the last ELWADD as it differs on the last ct_dim iteration and is issued directly after
+        for (std::uint32_t j = 0; j < inner_loops - 1; j++) {
+            lltt::replay(ckernel::math::replay_buf_offset, 4);
+        }
         lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len - 1);
         TTI_ELWADD(3, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
     } else {
