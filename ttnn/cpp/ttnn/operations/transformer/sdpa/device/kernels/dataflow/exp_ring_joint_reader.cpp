@@ -65,6 +65,8 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
+    const uint32_t is_mux_writer = get_arg_val<uint32_t>(argidx++);
+
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         // true, /* wait_for_op_signal */
         is_injector,
@@ -118,6 +120,8 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
+    constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -242,6 +246,9 @@ void kernel_main() {
 
                 // K: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
+                if (is_mux_writer) {
+                    cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
+                }
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
                 if (should_receive) {
                     // Receive forwarded K chunk from previous core
@@ -249,6 +256,9 @@ void kernel_main() {
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_k_in, k_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_push_back(cb_k_writer_in, k_chunk_tiles);
+                    }
                 } else {
                     read_block(
                         kv_chunk_is_joint ? joint_k_generator
@@ -259,6 +269,9 @@ void kernel_main() {
                         k_tile_bytes,
                         true /*transpose*/
                     );
+                    if (is_mux_writer) {
+                        cb_push_back(cb_k_writer_in, k_chunk_tiles);
+                    }
                 }
 
                 // Forward K chunk to next core(s): initiate async write (NOC write channel)
@@ -313,6 +326,9 @@ void kernel_main() {
 
                 // V: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
+                if (is_mux_writer) {
+                    cb_reserve_back(cb_v_writer_in, v_chunk_tiles);
+                }
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                 if (should_receive) {
                     // Receive forwarded V chunk from previous core
@@ -320,6 +336,9 @@ void kernel_main() {
                     noc_semaphore_inc(sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_v_in, v_chunk_tiles);
+                    if (is_mux_writer) {
+                        cb_push_back(cb_v_writer_in, v_chunk_tiles);
+                    }
                 } else {
                     read_block(
                         kv_chunk_is_joint ? joint_v_generator
@@ -330,6 +349,9 @@ void kernel_main() {
                         v_tile_bytes,
                         false /*transpose*/
                     );
+                    if (is_mux_writer) {
+                        cb_push_back(cb_v_writer_in, v_chunk_tiles);
+                    }
                 }
 
                 // Forward V chunk to next core(s) if applicable
@@ -355,6 +377,7 @@ void kernel_main() {
                 }
             }
         }
+
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, k_chunk_tiles);
