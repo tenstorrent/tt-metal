@@ -30,7 +30,6 @@ string logfile_name = "cq_dump.txt";
 
 void dump_data(
     MetalEnv& env,
-    WatcherServer& watcher_server,
     vector<ChipId>& device_ids,
     bool dump_watcher,
     bool dump_cqs,
@@ -71,8 +70,10 @@ void dump_data(
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
     if (dump_watcher) {
-        cout << "Dumping Watcher Log into: " << watcher_server.log_file_name() << endl;
-        watcher_server.isolated_dump(device_ids);
+        WatcherServer* watcher_server = MetalContext::instance().watcher_server().get();
+        TT_FATAL(watcher_server != nullptr, "Watcher server is null after device initialization");
+        cout << "Dumping Watcher Log into: " << watcher_server->log_file_name() << endl;
+        watcher_server->isolated_dump(device_ids);
     }
 
     // Dump noc data if requested
@@ -105,8 +106,6 @@ int main(int argc, char* argv[]) {
     // Default devices is all of them.
     vector<ChipId> device_ids;
     MetalEnv& env = MetalContext::instance().get_env();
-    WatcherServer* watcher_server = MetalContext::instance().watcher_server().get();
-    TT_FATAL(watcher_server != nullptr, "Watcher server is null");
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     device_ids.reserve(num_devices);
     for (ChipId id = 0; id < num_devices; id++) {
@@ -167,15 +166,6 @@ int main(int argc, char* argv[]) {
     }
 
     // Call dump function with user config.
-    dump_data(
-        env,
-        *watcher_server,
-        device_ids,
-        dump_watcher,
-        dump_cqs,
-        dump_cqs_raw_data,
-        dump_noc_xfers,
-        eth_dispatch,
-        num_hw_cqs);
+    dump_data(env, device_ids, dump_watcher, dump_cqs, dump_cqs_raw_data, dump_noc_xfers, eth_dispatch, num_hw_cqs);
     std::cout << "Watcher dump tool finished." << std::endl;
 }
