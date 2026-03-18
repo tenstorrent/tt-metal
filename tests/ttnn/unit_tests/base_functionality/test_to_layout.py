@@ -772,6 +772,53 @@ def test_to_layout_pad_value_on_device(device, shape, pad_value):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize(
+    "ttnn_dtype, pad_value",
+    [
+        (ttnn.bfloat16, 0),
+        (ttnn.bfloat16, 1.5),
+        (ttnn.bfloat16, -2),
+        (ttnn.float32, 0),
+        (ttnn.float32, 1.5),
+        (ttnn.float32, -2),
+        (ttnn.int32, 0),
+        (ttnn.int32, 5),
+        (ttnn.int32, -2),
+        (ttnn.uint32, 0),
+        (ttnn.uint32, 5),
+        (ttnn.uint16, 0),
+        (ttnn.uint16, 5),
+    ],
+)
+@pytest.mark.parametrize("shape", [(30, 62)])
+def test_to_layout_pad_value_dtype(device, shape, ttnn_dtype, pad_value):
+    torch.manual_seed(0)
+
+    if ttnn_dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(-100, 100, shape, dtype=torch.int32)
+    elif ttnn_dtype in (ttnn.uint32, ttnn.uint16):
+        torch_input_tensor = torch.randint(0, 100, shape, dtype=torch.int32)
+    else:
+        torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    h, w = shape[-2], shape[-1]
+    pad_h = (ttnn.TILE_SIZE - h % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+    pad_w = (ttnn.TILE_SIZE - w % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+
+    torch_output_tensor = torch.nn.functional.pad(
+        torch_input_tensor, (0, pad_w, 0, pad_h), mode="constant", value=pad_value
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn_dtype)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, pad_value=pad_value)
+    padded_end = [s - 1 for s in tiled.padded_shape]
+    output_tensor = ttnn.untilize_with_unpadding(tiled, padded_end)
+    output_tensor = ttnn.to_torch(output_tensor).to(torch_output_tensor.dtype)
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor)
+
+
 @pytest.mark.parametrize("shape", [(1, 1, 30, 62)])
 def test_to_layout_pad_value_default_is_zero(device, shape):
     torch.manual_seed(0)
