@@ -7,7 +7,7 @@
 This module contains Qwen-specific subclasses that inherit from the GLM base classes
 in moe.py. Key differences:
 - TTNNQwenMoERouterDecode: Uses softmax activation instead of sigmoid
-- TTNNQwenExperts: Uses batched matmul instead of sparse_matmul, with 4D weight reshaping
+- TTNNQwenExperts: Uses sparse_matmul with fused w1/w3 (gate/up) projections
 - TTNNQwen3MoE: Handles Qwen's shared_expert (singular) and optional shared_expert_gate
 
 Environment Variables:
@@ -30,6 +30,8 @@ from models.experimental.tt_symbiote.modules.moe import (
     TTNNGlm4MoeMLP,
     Glm4MoeRouteTokenToExperts,
     even_int_div,
+    _make_sparse_matmul_program_config,
+    SPARSITY_BLOCK_SIZE,
 )
 
 
@@ -189,50 +191,52 @@ class TTNNQwenMoERouterDecode(TTNNMoERouterDecode):
 
 
 class TTNNQwenExperts(TTNNExperts):
-    """Qwen-specific experts using batched matmul instead of sparse_matmul.
+    """Qwen-specific experts using sparse_matmul with fused w1/w3 projections.
 
     This subclass overrides preprocess_weights_impl() to pre-reshape weights to 4D
-    and forward() to use batched matmul. This approach works better for Qwen's
-    large number of experts (256) with top-8 routing.
+    and forward() to use sparse_matmul with fused gate/up projections. This approach
+    eliminates duplicate memory bandwidth by reading the input tensor once instead
+    of twice.
 
     Inheritance:
         - __init__(): Inherited (unchanged)
         - _get_num_experts_per_device(): Inherited (unchanged)
         - from_torch(): Inherited (unchanged)
-        - preprocess_weights_impl(): OVERRIDDEN - reshapes to 4D, shards on dim=1
+        - preprocess_weights_impl(): OVERRIDDEN - creates fused w1_w3 weights, shards on dim=1
         - move_weights_to_device_impl(): OVERRIDDEN - simplified (no reshape needed)
-        - forward(): OVERRIDDEN - uses batched matmul instead of sparse_matmul
+        - forward(): OVERRIDDEN - uses fused sparse_matmul
     """
 
     def preprocess_weights_impl(self):
         """Preprocess expert weights: reshape to 4D on host, convert to bfloat16, TILE_LAYOUT.
 
-        KEY DIFFERENCE: Reshapes weights from 3D to 4D and shards on dim=1 instead of dim=0.
-        Shape: (num_experts, H, I) -> (1, num_experts, H, I)
+        Creates fused w1_w3 weights for single sparse_matmul, eliminating duplicate memory
+        bandwidth by reading the input tensor once instead of twice.
+        Shape: (num_experts, H, I) -> (1, num_experts, H, 2*I) for fused w1_w3
         """
         # Reshape to 4D on host (torch) before converting to ttnn
         torch_w1_4d = self.torch_w1_proj.unsqueeze(0).to(torch.bfloat16)
         torch_w3_4d = self.torch_w3_proj.unsqueeze(0).to(torch.bfloat16)
         torch_w2_4d = self.torch_w2_proj.unsqueeze(0).to(torch.bfloat16)
 
-        self.tt_w1_proj = ttnn.from_torch(
-            torch_w1_4d,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=1),  # Shard on dim=1 (experts dim)
-        )
-        self.tt_w3_proj = ttnn.from_torch(
-            torch_w3_4d,
+        # Create fused w1_w3 weights for single sparse_matmul
+        torch_w1_w3_fused = torch.cat([torch_w1_4d, torch_w3_4d], dim=-1)
+        self.tt_w1_w3_proj = ttnn.from_torch(
+            torch_w1_w3_fused,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=1),
         )
+        del torch_w1_w3_fused
+
+        # w2 for down projection
         self.tt_w2_proj = ttnn.from_torch(
             torch_w2_4d,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=1),
         )
+
         del self.torch_w1_proj
         del self.torch_w3_proj
         del self.torch_w2_proj
@@ -240,16 +244,17 @@ class TTNNQwenExperts(TTNNExperts):
     def move_weights_to_device_impl(self):
         """Move preprocessed weights to device - simplified since weights are already 4D.
 
-        KEY DIFFERENCE: No reshape needed during move, weights are already 4D from preprocess.
-        Also uses device.get_num_devices() for num_dispatch_devices instead of device.shape[1].
+        Moves fused w1_w3 weights and w2 weights to device, and creates program configs
+        for sparse_matmul operations.
         """
         self.num_experts_per_device = self._get_num_experts_per_device(self.config, self.device)
         self.num_devices = self.device.get_num_devices()
         self.num_dispatch_devices = self.device.get_num_devices()
 
-        # Just move to device - weights are already 4D from preprocess_weights_impl
-        self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
-        self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
+        # Move fused w1_w3 weights to device
+        self.tt_w1_w3_proj = ttnn.to_device(self.tt_w1_w3_proj, self.device)
+
+        # Move w2 weights to device
         self.tt_w2_proj = ttnn.to_device(self.tt_w2_proj, self.device)
 
         # Create expert mapping tensors for all-to-all ops
@@ -275,15 +280,40 @@ class TTNNQwenExperts(TTNNExperts):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        # Program configs for sparse_matmul operations
+        hidden_tiles = self.hidden_size // ttnn.TILE_SIZE
+        intermediate_tiles = self.intermediate_size // ttnn.TILE_SIZE
+
+        # Fused gate/up program config (output is 2*intermediate_size)
+        self._fused_gate_up_program_config = _make_sparse_matmul_program_config(
+            device=self.device,
+            out_features=int(self.intermediate_size * 2),  # 2*I for fused output
+            in0_block_w=min(4, hidden_tiles),
+            per_core_M=1,
+        )
+
+        # Down projection program config
+        self._down_program_config = _make_sparse_matmul_program_config(
+            device=self.device,
+            out_features=int(self.hidden_size),
+            in0_block_w=min(4, intermediate_tiles),
+            per_core_M=1,
+        )
+        self._expert_compute_cfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     @run_on_devices(DeviceArch.T3K)
     def forward(
         self, x: ttnn.Tensor, topk_experts_indices: ttnn.Tensor, topk_experts_weights: ttnn.Tensor
     ) -> ttnn.Tensor:
-        """Execute expert pipeline using batched matmul (GPT-OSS approach).
+        """Execute expert pipeline using fused sparse_matmul.
 
-        KEY DIFFERENCE: Uses regular batched matmul instead of sparse_matmul.
-        All dispatched tokens are processed by all local experts, and all_to_all_combine
-        routes the correct expert outputs back to their original token positions.
+        Uses sparse_matmul with fused W1/W3 weights to compute only activated experts.
+        This eliminates duplicate memory bandwidth by reading the input tensor once.
 
         Args:
             x: Input tensor of shape (batch_size_per_device, 1, seq_len, hidden_size)
@@ -297,6 +327,10 @@ class TTNNQwenExperts(TTNNExperts):
         batch_size_per_device = x.shape[0]
         seq_len = x.shape[2]
         batch_size = batch_size_per_device * self.num_dispatch_devices
+
+        # Decode mode detection for L1 memory optimization
+        is_decode_mode = seq_len == 1
+        decode_memory_config = ttnn.L1_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
         tokens_per_device = batch_size_per_device * seq_len
 
         # Store original num_tokens for unpadding later
@@ -311,13 +345,15 @@ class TTNNQwenExperts(TTNNExperts):
                 )
             topk_experts_indices = ttnn.typecast(topk_experts_indices, ttnn.uint16)
 
-        # TILE PADDING FIX: Pad tokens to multiple of 32 for TILE_LAYOUT compatibility
-        TILE_SIZE = 32
-        total_tokens = tokens_per_device * self.num_dispatch_devices
+        # Padding: Use SPARSITY_BLOCK_SIZE for sparse matmul
+        pad_block_size = SPARSITY_BLOCK_SIZE
 
-        if total_tokens % TILE_SIZE != 0:
+        total_tokens = tokens_per_device * self.num_dispatch_devices
+        pad_amount = 0
+
+        if total_tokens % pad_block_size != 0:
             padded_tokens_per_device = (
-                ((total_tokens + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE // self.num_dispatch_devices
+                ((total_tokens + pad_block_size - 1) // pad_block_size) * pad_block_size // self.num_dispatch_devices
             )
             if padded_tokens_per_device * self.num_dispatch_devices < total_tokens:
                 padded_tokens_per_device += 1
@@ -355,6 +391,7 @@ class TTNNQwenExperts(TTNNExperts):
             topk_experts_indices_rm,
             self.expert_mapping_tensors,
             cluster_axis=1,
+            memory_config=decode_memory_config,
         )
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
@@ -363,39 +400,108 @@ class TTNNQwenExperts(TTNNExperts):
         post_dispatch = ttnn.reshape(all_to_all_dispatch_output, shape=(1, 1, total_tokens, self.hidden_size))
         post_dispatch = ttnn.to_layout(post_dispatch, ttnn.TILE_LAYOUT)
 
-        # KEY DIFFERENCE: Repeat input across expert dimension for batched matmul
-        # [1, 1, total_tokens, H] -> [1, num_experts_per_device, total_tokens, H]
-        post_dispatch_tiled = post_dispatch
-        post_dispatch = ttnn.repeat(post_dispatch_tiled, ttnn.Shape((1, self.num_experts_per_device, 1, 1)))
+        # STEP 4: EXPERT COMPUTATION using fused sparse_matmul
+        # NO ttnn.repeat - this is the key optimization!
+        # Generate sparsity tensor to only compute activated experts
 
-        # STEP 4: EXPERT COMPUTATION - Gate/Up/Down projections with batched matmul
-        # KEY DIFFERENCE: Uses ttnn.matmul instead of ttnn.sparse_matmul
-        # Weights are pre-reshaped in preprocess_weights_impl() to [1, E, H, I]
+        num_tokens = total_tokens
 
-        # Gate projection (w1): [1, E, total_tokens, H] x [1, E, H, I] -> [1, E, total_tokens, I]
-        w1_out = ttnn.matmul(post_dispatch, self.tt_w1_proj)
+        # Generate sparsity tensor
+        remap_topk_mask_expanded = ttnn.repeat(self.remap_topk_mask, ttnn.Shape((1, batch_size_per_device, 1, 1)))
+        _, sparsity_t = ttnn.moe_expert_token_remap(
+            remap_topk_mask_expanded,
+            self.expert_mapping_tensors,
+            all_to_all_dispatch_metadata,
+            reduction_size=SPARSITY_BLOCK_SIZE,
+        )
 
-        # Up projection (w3): [1, E, total_tokens, H] x [1, E, H, I] -> [1, E, total_tokens, I]
-        w3_out = ttnn.matmul(post_dispatch, self.tt_w3_proj)
-        ttnn.deallocate(post_dispatch)
+        num_sparse_blocks = num_tokens // SPARSITY_BLOCK_SIZE
+        x_sparse = ttnn.reshape(post_dispatch, shape=(1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, self.hidden_size))
+
+        # Fused gate/up projection - single sparse_matmul for both w1 (gate) and w3 (up)
+        # Output shape: [1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, 2*intermediate_size]
+        w1_w3_out = ttnn.sparse_matmul(
+            x_sparse,
+            self.tt_w1_w3_proj,  # Fused weights: [1, E, H, 2*I]
+            sparsity=sparsity_t,
+            output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
+            program_config=self._fused_gate_up_program_config,
+            compute_kernel_config=self._expert_compute_cfg,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=decode_memory_config,
+        )
+        ttnn.deallocate(x_sparse)
+
+        # Split fused output into w1 (gate) and w3 (up) components
+        # Shape: [1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, 2*I] -> two [1, num_sparse_blocks, SPARSITY_BLOCK_SIZE, I]
+        intermediate_size = self.intermediate_size
+
+        # Get actual tensor shape to build correct slice indices
+        actual_shape = list(w1_w3_out.shape)
+        rank = len(actual_shape)
+
+        # Build slice indices dynamically - only slice the last dimension
+        # First half: w1 (gate projection)
+        slice_start_w1 = [0] * rank
+        slice_end_w1 = list(actual_shape)
+        slice_end_w1[-1] = intermediate_size
+
+        w1_out = ttnn.slice(
+            w1_w3_out,
+            slice_start=slice_start_w1,
+            slice_end=slice_end_w1,
+        )
+
+        # Second half: w3 (up projection)
+        slice_start_w3 = [0] * rank
+        slice_start_w3[-1] = intermediate_size
+        slice_end_w3 = list(actual_shape)
+
+        w3_out = ttnn.slice(
+            w1_w3_out,
+            slice_start=slice_start_w3,
+            slice_end=slice_end_w3,
+        )
+        ttnn.deallocate(w1_w3_out)
 
         # SwiGLU activation: silu(gate) * up
-        w1_activated = ttnn.silu(w1_out)
+        w1_activated = ttnn.silu(w1_out, memory_config=decode_memory_config)
         ttnn.deallocate(w1_out)
-        intermediate = ttnn.mul(w1_activated, w3_out)
+        intermediate = ttnn.mul(w1_activated, w3_out, memory_config=decode_memory_config)
         ttnn.deallocate(w1_activated)
         ttnn.deallocate(w3_out)
 
-        # Down projection (w2): [1, E, total_tokens, I] x [1, E, I, H] -> [1, E, total_tokens, H]
-        expert_output = ttnn.matmul(intermediate, self.tt_w2_proj)
+        intermediate = ttnn.squeeze(intermediate, 0)
+        intermediate = ttnn.squeeze(intermediate, 1)
+
+        # Down projection (w2) with sparse_matmul
+        expert_output = ttnn.sparse_matmul(
+            intermediate,
+            self.tt_w2_proj,
+            sparsity=sparsity_t,
+            output_tile=ttnn.Tile([SPARSITY_BLOCK_SIZE, ttnn.TILE_SIZE]),
+            program_config=self._down_program_config,
+            compute_kernel_config=self._expert_compute_cfg,
+            is_input_a_sparse=True,
+            is_input_b_sparse=False,
+            memory_config=decode_memory_config,
+        )
         ttnn.deallocate(intermediate)
+
+        # Reshape to expected format
+        expert_output = ttnn.permute(expert_output, (1, 0, 2, 3))
+        expert_output = ttnn.reshape(
+            expert_output, shape=(1, self.num_experts_per_device, num_tokens, self.hidden_size)
+        )
+
+        ttnn.deallocate(post_dispatch)
 
         # STEP 5: PREPARE EXPERT OUTPUT FOR ALL_TO_ALL_COMBINE
         expert_output = ttnn.reshape(
             expert_output,
             shape=(self.num_experts_per_device, 1, total_tokens, self.hidden_size),
         )
-        expert_output_tiled = expert_output
         expert_output = ttnn.to_layout(expert_output, ttnn.ROW_MAJOR_LAYOUT)
 
         # Reshape to match combine expected format
@@ -409,6 +515,7 @@ class TTNNQwenExperts(TTNNExperts):
             all_to_all_dispatch_metadata,
             self.expert_mapping_tensors,
             cluster_axis=1,
+            memory_config=decode_memory_config,
         )
         ttnn.deallocate(expert_output)
         ttnn.deallocate(all_to_all_dispatch_metadata)
@@ -425,13 +532,15 @@ class TTNNQwenExperts(TTNNExperts):
 
         # Prepare routing weights for broadcasting
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
-        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
+        # topk_experts_weights shape: [tokens, K] -> transpose to [K, tokens]
+        topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (1, 0))
+        # Now [K, tokens] -> [K, 1, tokens, 1] for broadcasting
+        topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 1)
+        topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 3)
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
         ttnn.deallocate(topk_experts_weights_rm)
 
+        # Broadcast multiply: [K, 1, tokens, 1] * [K, 1, tokens, hidden] -> [K, 1, tokens, hidden]
         weighted_output = ttnn.mul(
             combined_output,
             topk_experts_weights_tile,
