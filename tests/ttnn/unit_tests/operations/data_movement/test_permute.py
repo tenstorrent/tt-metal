@@ -41,6 +41,16 @@ def test_permute(device, h, w, dtype):
     assert_equal(torch_output_tensor, output_tensor)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.uint32])
+def test_transpose_uint32(device, dtype):
+    shape = (32, 32)
+    torch_input_tensor = torch.randint(0, 2**31, shape, dtype=torch.int32)
+    torch_output_tensor = torch_input_tensor.transpose(0, 1)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    output_tensor = ttnn.transpose(input_tensor, 0, 1)
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
