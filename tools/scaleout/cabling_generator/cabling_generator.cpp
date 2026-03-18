@@ -857,7 +857,12 @@ CablingGenerator::CablingGenerator(
         for (const auto& host : deployment_hosts_) {
             all_hosts[host.hostname] = host;
         }
+        const auto saved_hosts = deployment_hosts_;
         rebuild_deployment_hosts_in_dfs_order(all_hosts);
+        // Fall back to original order when node names don't match hostnames (e.g. test fixtures).
+        if (deployment_hosts_.size() != saved_hosts.size()) {
+            deployment_hosts_ = saved_hosts;
+        }
     }
 }
 
@@ -1121,14 +1126,33 @@ void CablingGenerator::merge(
     validate_and_merge_node_templates(node_templates_, other.node_templates_, existing_sources, new_file_path);
 
     // Assign temp host_ids to nodes in other, then remap their internal_connections to match.
+    // Shared nodes (same hostname in both) collapse to the existing host_id; new nodes get a fresh one.
     std::unordered_map<HostId, HostId> temp_remap;
     {
+        std::unordered_map<std::string, HostId> target_name_to_id;
+        auto collect_target_ids = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
+            for (const auto& [name, node] : graph.nodes) {
+                target_name_to_id[name] = node.host_id;
+            }
+            for (const auto& [name, subgraph] : graph.subgraphs) {
+                self(self, *subgraph);
+            }
+        };
+        collect_target_ids(collect_target_ids, *root_instance_);
+
         HostId next_id = HostId(host_id_to_node_.size());
         auto collect_temp_ids = [&](auto& self, ResolvedGraphInstance& graph) -> void {
             for (auto& [name, node] : graph.nodes) {
-                temp_remap[node.host_id] = next_id;
-                node.host_id = next_id;
-                next_id = HostId(*next_id + 1);
+                HostId mapped;
+                auto it = target_name_to_id.find(name);
+                if (it != target_name_to_id.end()) {
+                    mapped = it->second;  // shared node: collapse to existing host_id
+                } else {
+                    mapped = next_id;
+                    next_id = HostId(*next_id + 1);
+                }
+                temp_remap[node.host_id] = mapped;
+                node.host_id = mapped;
             }
             for (auto& [name, subgraph] : graph.subgraphs) {
                 self(self, *subgraph);
