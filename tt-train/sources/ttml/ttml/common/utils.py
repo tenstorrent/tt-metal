@@ -66,9 +66,7 @@ def initialize_device(yaml_config: dict):
     device_config = DeviceConfig(yaml_config)
     if device_config.total_devices() > 1:
         ttml.core.distributed.enable_fabric(device_config.total_devices())
-    ttml.autograd.AutoContext.get_instance().open_device(
-        device_config.mesh_shape, device_config.device_ids
-    )
+    ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
 def create_optimizer(model, yaml_config: dict):
@@ -106,9 +104,7 @@ def get_loss_over_devices(loss):
 def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.Tensor:
     logits_mask = np.zeros((1, 1, 1, padded_vocab_size), dtype=np.float32)
     logits_mask[:, :, :, vocab_size:] = 1e4
-    return ttml.autograd.Tensor.from_numpy(
-        logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )  # [1,1,1,T], bfloat16
+    return ttml.autograd.Tensor.from_numpy(logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)  # [1,1,1,T], bfloat16
 
 
 class PerformanceMeter:
@@ -127,9 +123,7 @@ class PerformanceMeter:
         if time_window == 0:
             return 0, 0
 
-        samples = (
-            len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
-        )
+        samples = len(self.steps) * self.cfg.batch_size * self.cfg.gradient_accumulation_steps
         samples_per_second = samples / time_window
         tokens_per_second = samples * self.cfg.seq_len / time_window
         return samples_per_second, tokens_per_second
@@ -162,19 +156,9 @@ def summary(model) -> None:
     col_nparams = "# Params"
     col_train = "Trainable"
 
-    name_w = (
-        max(len(col_name), *(len(e[0]) for e in entries)) if entries else len(col_name)
-    )
-    shape_w = (
-        max(len(col_shape), *(len(str(e[1])) for e in entries))
-        if entries
-        else len(col_shape)
-    )
-    nparams_w = (
-        max(len(col_nparams), *(len(f"{e[2]:,}") for e in entries))
-        if entries
-        else len(col_nparams)
-    )
+    name_w = max(len(col_name), *(len(e[0]) for e in entries)) if entries else len(col_name)
+    shape_w = max(len(col_shape), *(len(str(e[1])) for e in entries)) if entries else len(col_shape)
+    nparams_w = max(len(col_nparams), *(len(f"{e[2]:,}") for e in entries)) if entries else len(col_nparams)
     train_w = len(col_train)
 
     total_w = name_w + shape_w + nparams_w + train_w + 9  # 3 separators + padding
@@ -182,10 +166,7 @@ def summary(model) -> None:
     sep = "=" * total_w
     thin_sep = "-" * total_w
 
-    header = (
-        f" {col_name:<{name_w}} | {col_shape:<{shape_w}} "
-        f"| {col_nparams:>{nparams_w}} | {col_train}"
-    )
+    header = f" {col_name:<{name_w}} | {col_shape:<{shape_w}} " f"| {col_nparams:>{nparams_w}} | {col_train}"
 
     lines = [sep, header, sep]
 
@@ -195,10 +176,7 @@ def summary(model) -> None:
             lines.append(thin_sep)
         prev_trainable = is_train
         mark = "Yes" if is_train else "No"
-        lines.append(
-            f" {name:<{name_w}} | {str(shape):<{shape_w}} "
-            f"| {n:>{nparams_w},} | {mark}"
-        )
+        lines.append(f" {name:<{name_w}} | {str(shape):<{shape_w}} " f"| {n:>{nparams_w},} | {mark}")
 
     total = sum(e[2] for e in entries)
     total_train = sum(e[2] for e in trainable)
@@ -232,11 +210,7 @@ class no_grad:
 
     def __enter__(self):
         self._ctx = ttml.autograd.AutoContext.get_instance()
-        self._prev = (
-            self._ctx.get_gradient_mode()
-            if hasattr(self._ctx, "get_gradient_mode")
-            else None
-        )
+        self._prev = self._ctx.get_gradient_mode() if hasattr(self._ctx, "get_gradient_mode") else None
         self._ctx.set_gradient_mode(ttml.autograd.GradMode.DISABLED)
         return self
 

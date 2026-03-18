@@ -224,9 +224,7 @@ def get_training_config(
 ) -> TrainingConfig:
     """Load training configuration given its filename."""
     if configs_root is None:
-        configs_root = (
-            f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs"
-        )
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs"
 
     training_config = load_config(training_config_src, configs_root)
     training_config = TrainingConfig(training_config)
@@ -240,9 +238,7 @@ def get_device_config(
 ) -> DeviceConfig:
     """Load device configuration given its filename."""
     if configs_root is None:
-        configs_root = (
-            f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs/"
-        )
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs/"
 
     device_config = load_config(device_config_src, configs_root)
     device_config = DeviceConfig(device_config)
@@ -270,9 +266,7 @@ def get_multihost_config(
 ) -> MultiHostConfig:
     """Load multihost configuration given its filename."""
     if configs_root is None:
-        configs_root = (
-            f"{get_tt_metal_runtime_root()}/tt-train/configs/multihost_configs/"
-        )
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/multihost_configs/"
 
     multihost_config = load_config(multihost_config_src, configs_root)
     multihost_config = MultiHostConfig(multihost_config)

@@ -866,9 +866,7 @@ def main():
         tt_metal_root = get_tt_metal_runtime_root()
         if tt_metal_root and os.path.exists(tt_metal_root):
             os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_root
-            print(
-                f"Set TT_METAL_RUNTIME_ROOT={tt_metal_root} (from get_tt_metal_runtime_root)"
-            )
+            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_root} (from get_tt_metal_runtime_root)")
         else:
             current_dir = os.getcwd()
             if os.path.exists(os.path.join(current_dir, "tt_metal")):
