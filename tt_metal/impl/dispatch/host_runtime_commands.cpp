@@ -29,9 +29,7 @@
 
 using namespace tt::tt_metal;
 
-namespace tt::tt_metal {
-
-namespace detail {
+namespace tt::tt_metal::detail {
 
 bool DispatchStateCheck(bool isFastDispatch) {
     static bool fd = isFastDispatch;
@@ -58,6 +56,4 @@ void ValidateBufferRegion(
         region.offset,
         region.size);
 }
-}  // namespace detail
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::detail
