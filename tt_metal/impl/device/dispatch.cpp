@@ -32,8 +32,8 @@ struct CoreWriteDispatchParams : public CoreDispatchParams {
 void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
-    const auto& hal = tt::tt_metal::MetalContext::instance(extract_context_id(device)).hal();
     if (mem_type == HalMemType::L1) {
+        const auto& hal = tt::tt_metal::MetalContext::instance(extract_context_id(device)).hal();
         HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
         const DeviceAddr l1_base_address = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::BASE);
         const DeviceAddr l1_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::BASE);
