@@ -590,6 +590,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     CoreRange non_fabric_core_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
     CoreRange fabric_core_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
     {
+        // DANGEROUS
         // K input: non-fabric cores (single handle)
         auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
                                 .set_page_size(tt::CBIndex::c_1, k_tile_size);
@@ -1667,10 +1668,10 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
                 if (shared_vars.writer_fabric_ag_rt_offset > 0 &&
                     writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = out_ready_sem_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 13] = k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 14] = v_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 15] = gathered_k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 16] = gathered_v_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 15] = k_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 16] = v_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 17] = gathered_k_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 18] = gathered_v_addr;
                 }
             } else {
                 auto& writer_args = writer_args_by_core[core.x][core.y];
