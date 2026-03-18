@@ -78,6 +78,26 @@
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
 
+- name: Llama 3.2-90B-Vision unit tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.2-90B-Vision-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.2-90B-Vision-Instruct MESH_DEVICE=T3K
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_mlp.py
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_attention.py
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_image_block.py
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_cross_attention.py -k "batch_1"
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_cross_block.py -k "batch_1"
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_class_embedding.py
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py
+    pytest --timeout 900 models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py
+  model: llama90b-vl
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+      tier: 2
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+
 - name: Llama 3.3-70B unit tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
@@ -92,6 +112,115 @@
   skus:
     wh_llmbox_perf:
       timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen3-32B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 900 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 900 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
+  model: qwen3-32b
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen2.5-32B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-32B-Instruct
+    pytest --timeout 900 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 900 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
+  model: qwen2.5-32b
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Qwen2.5-Coder-32B unit tests
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
+    pytest --timeout 900 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 900 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 900 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 900 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 900 models/tt_transformers/tests/test_decoder_prefill.py
+  model: qwen2.5-coder-32b
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Mistral-7B unit tests
+  cmd: |
+    export HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mistral-7B-Instruct-v0.3
+    pytest --timeout 600 models/tt_transformers/tests/test_embedding.py
+    pytest --timeout 600 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 600 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 600 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 600 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 600 models/tt_transformers/tests/test_decoder_prefill.py
+  model: mistral-7b
+  skus:
+    wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Gemma-3-27B unit tests
+  cmd: |
+    pytest --timeout 600 models/demos/multimodal/gemma3/tests/test_ci_dispatch.py -k "27b"
+  model: gemma-3-27b
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Shallow UNet unit tests
+  cmd: |
+    pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py
+  model: shallow-unet
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Mixtral-8x7B unit tests
+  cmd: |
+    export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy"
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
+  model: mixtral-8x7b
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -163,6 +292,19 @@
       timeout: 5
       tier: 3
   owner_id: U03HY7MK4BT # Mark O'Connor
+  team: models
+
+- name: Qwen2.5-VL-72B unit tests
+  cmd: |
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+  model: qwen2.5-72b-vl
+  skus:
+    wh_llmbox_perf:
+      timeout: 30
+      tier: 2
+  owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
 - name: Qwen2.5-VL-32B unit tests
