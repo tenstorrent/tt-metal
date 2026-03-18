@@ -20,24 +20,22 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-// TODO: Update with all_gather_matmul docs
 void bind_rs_matmul(nb::module_& mod) {
     ttnn::bind_function<"llama_rs_matmul", "ttnn.experimental.">(
         mod,
         R"doc(
-        Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
+        Performs a fused reduce-scatter followed by matmul on multi-device :attr:`input_tensor` across all devices.
 
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): multi-device tensor
             * :attr:`weight_tensor` (ttnn.Tensor): multi-device tensor
             * :attr:`dim` (int)
-            * :attr:`all_gather_core_grid_offset` (ttnn.CoreCoord): Core grid offset for the all-gather operation.
 
         Keyword Args:
             * :attr:`num_links` (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
             * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter stage. Defaults to `ttnn.Topology.Linear`.
-            * :attr:`memory_config_ag` (Optional[ttnn.MemoryConfig]): Memory configuration for the All Gather operation.
-            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
+            * :attr:`memory_config_rs` (Optional[ttnn.MemoryConfig]): Memory configuration for the reduce-scatter operation.
+            * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the matmul operation.
             * :attr:`transpose_a` (bool)
             * :attr:`transpose_b` (bool)
             * :attr:`dtype` (Optional[DataType])
@@ -45,12 +43,6 @@ void bind_rs_matmul(nb::module_& mod) {
             * :attr:`activation` (Optional[str])
             * :attr:`compute_kernel_config` (Optional[DeviceComputeKernelConfig])
             * :attr:`core_grid` (Optional[ttnn.CoreGrid])
-
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> weight_tensor = ttnn.from_torch(torch.tensor((2, 1), dtype=torch.bfloat16), device=device)
-            >>> all_gathered_mm_in, mm_out = ttnn.all_gather_matmul(tensor, weight_tensor, dim=0, (0, 0))
 
         )doc",
         &ttnn::experimental::llama_rs_matmul,
