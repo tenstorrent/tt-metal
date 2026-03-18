@@ -13,15 +13,27 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
-from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextAttention, Qwen3NextSparseMoeBlock
+from transformers.models.qwen3_next.modeling_qwen3_next import (
+    Qwen3NextAttention,
+    Qwen3NextGatedDeltaNet,
+    Qwen3NextSparseMoeBlock,
+)
 
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3NextGatedAttention
+from models.experimental.tt_symbiote.modules.gated_deltanet import TTNNGatedDeltaNet
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3MoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next-FP8"
+
+# Run only on T3K; set default so MESH_DEVICE is defined for MeshShapeToDeviceArch lookup
+_MESH_DEVICE_ENV = "MESH_DEVICE"
+if _MESH_DEVICE_ENV not in os.environ:
+    os.environ[_MESH_DEVICE_ENV] = "T3K"
+MESH_DEVICE = (os.environ.get(_MESH_DEVICE_ENV) or "T3K").upper()
+MESH_SHAPE_T3K = (1, 8)
 
 
 def _get_cached_model_path():
@@ -78,29 +90,19 @@ def _load_qwen3_model():
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-            "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [MESH_SHAPE_T3K],
     indirect=True,
 )
 def test_qwen3_coder_next(mesh_device):
-    """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention)."""
+    """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention). Runs only on T3K."""
+    if MESH_DEVICE != "T3K":
+        pytest.skip(f"test_qwen3_coder_next runs only on T3K (MESH_DEVICE={os.environ.get(_MESH_DEVICE_ENV)})")
     tokenizer, model = _load_qwen3_model()
 
     nn_to_ttnn = {
         Qwen3NextSparseMoeBlock: TTNNQwen3MoE,
         Qwen3NextAttention: TTNNQwen3NextGatedAttention,
+        Qwen3NextGatedDeltaNet: TTNNGatedDeltaNet,
     }
     nn_to_ttnn2 = {
         # nn.Linear: TTNNLinearIColShardedWRowSharded,
@@ -144,7 +146,7 @@ def test_qwen3_coder_next(mesh_device):
     set_device(model, mesh_device)
     all_modules = {**modules1, **modules2}
 
-    print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
+    # print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
