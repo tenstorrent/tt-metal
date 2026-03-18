@@ -12,6 +12,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <umd/device/chip_helpers/tlb_manager.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
@@ -179,7 +180,10 @@ D2HSocket::~D2HSocket() noexcept {
         if (!exported_) {
             barrier(1000);
         }
+    } catch (const std::exception& e) {
+        log_warning(LogMetal, "D2HSocket destructor: barrier failed with exception: {}", e.what());
     } catch (...) {
+        log_warning(LogMetal, "D2HSocket destructor: barrier failed with unknown exception");
     }
     if (is_owner_) {
         pinned_memory_.reset();
