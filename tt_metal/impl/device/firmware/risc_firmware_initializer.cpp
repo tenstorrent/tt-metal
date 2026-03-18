@@ -1187,6 +1187,8 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
             dram_core_info.view().absolute_logical_y() = virtual_dram_core.y;
             uint64_t core_info_addr = hal_.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO);
             if (rtoptions_.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramCoreInfo)) {
+
+                fmt::println(stderr, "Writing DRAM core info to {} on core {}", core_info_addr, virtual_dram_core);
                 cluster_.write_core(
                     dram_core_info.data(),
                     dram_core_info.size(),

@@ -21,9 +21,9 @@ CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_
 
 std::vector<CoreCoord> metal_SocDescriptor::get_preferred_worker_cores_for_dram_views(uint8_t noc) const {
     std::vector<CoreCoord> preferred_cores;
-    preferred_cores.reserve(this->get_num_dram_views());
-    for (size_t dram_view = 0; dram_view < this->get_num_dram_views(); ++dram_view) {
-        preferred_cores.push_back(this->get_preferred_worker_core_for_dram_view(dram_view, noc));
+    preferred_cores.reserve(1);
+    if (this->get_num_dram_views() > 0) {
+        preferred_cores.push_back(this->get_preferred_worker_core_for_dram_view(0, noc));
     }
     return preferred_cores;
 }
