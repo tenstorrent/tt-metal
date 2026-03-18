@@ -25,7 +25,7 @@ std::map<std::string, std::string> get_defines(
         case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
         case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
         case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
-        default: TT_THROW("Invalid reduce_op!");
+        default: TT_THROW("Invalid reduce_dim!");
     }
     defines["REDUCE_OP"] = (do_max ? "PoolType::MAX" : "PoolType::SUM");
     defines["REDUCE_DIM"] = reduce_dim_str;
