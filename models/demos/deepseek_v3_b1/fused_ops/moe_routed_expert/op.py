@@ -839,7 +839,7 @@ class MoeRoutedExpert:
         fused_add_tensor,
         final_output_tensor,
         # ReduceToOne parameters
-        reduce_intermediate_tensors: Optional[list] = None,  # 3 intermediate tensors for reduce rounds
+        reduce_intermediate_tensors=None,  # Single intermediate tensor with 3x shard width
         reduce_output_tensor: Optional[ttnn.Tensor] = None,  # Final reduced output
         reduce_semaphores: Optional[list] = None,  # 4 semaphores for reduce synchronization
         reduce_root_coord: Optional[ttnn.MeshCoordinate] = None,  # Root device coordinate (row 1 or 2)
@@ -874,7 +874,7 @@ class MoeRoutedExpert:
             down_proj_output_tensor: down_proj output [1, K] width-sharded on DRAM matmul cores
             fused_add_tensor: fused_add tensor [1, K] height-sharded (replicated on all gate_proj cores)
             final_output_tensor: final output [1, K] width-sharded on gate_proj cores (padded to 32x32 tile)
-            reduce_intermediate_tensors: (Optional) List of 3 intermediate tensors for reduce rounds
+            reduce_intermediate_tensors: (Optional) Single intermediate tensor with 3x shard width for reduce rounds
             reduce_output_tensor: (Optional) Final reduced output tensor on ROOT1 device
             reduce_semaphores: (Optional) List of 4 global semaphores for reduce synchronization
             reduce_root_coord: (Optional) MeshCoordinate of ROOT1 device (must be row 1 or 2)
@@ -965,13 +965,10 @@ class MoeRoutedExpert:
         add_cb_out = 25  # final output (tensor-backed)
         # ReduceToOne CBs (for multi-device reduce)
         reduce_local_cb = add_cb_out  # Local data CB (same as add_cb_out for fusion)
-        reduce_received_cb_r1 = 26  # Round 1: receives LEAF data
-        reduce_received_cb_r2 = 27  # Round 2: receives ROOT3 data
-        reduce_received_cb_r3 = 28  # Round 3: receives ROOT2 data
-        reduce_output_cb = 29  # Final reduced output
-        reduce_scratch_cb = 30  # Scratch for compute
-        reduce_packet_cb = 31  # Scratch for sending packets
-        reduce_packet_header_cb = 32  # Packet header (persistent)
+        reduce_received_cb = 26  # 3-page CB for all reduction rounds
+        reduce_output_cb = 27  # Final reduced output
+        reduce_scratch_cb = 28  # Scratch for compute
+        reduce_packet_cb = 29  # Scratch for sending packets
 
         # Determine if reduce_to_one is enabled (4x2 mesh mode)
         enable_reduce_to_one = (
@@ -1221,18 +1218,18 @@ class MoeRoutedExpert:
             reduce_sem_round3_addr = ttnn.get_global_semaphore_address(reduce_semaphores[2])
             reduce_sem_exit_addr = ttnn.get_global_semaphore_address(reduce_semaphores[3])
 
-            # Get per-device tensors for reduce
-            reduce_intermediate_r1_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors[0])
-            reduce_intermediate_r2_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors[1])
-            reduce_intermediate_r3_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors[2])
+            # Get per-device tensors for reduce (single tensor with 3x shard width)
+            reduce_intermediate_per_device = ttnn.get_device_tensors(reduce_intermediate_tensors)
             reduce_output_per_device = ttnn.get_device_tensors(reduce_output_tensor)
 
             # Calculate reduce tensor properties
-            reduce_sample = reduce_intermediate_r1_per_device[0]
+            reduce_sample = reduce_intermediate_per_device[0]
             reduce_element_size = 2  # bfloat16
 
             reduce_shard_spec = reduce_sample.memory_config().shard_spec
-            reduce_shard_shape = reduce_shard_spec.shape
+            reduce_full_shard_shape = reduce_shard_spec.shape
+            # Per-round shard shape is 1/3 of the full shard (3 rounds packed contiguously)
+            reduce_shard_shape = [reduce_full_shard_shape[0], reduce_full_shard_shape[1] // 3]
 
             # Compute tiles use 32x32 format
             reduce_compute_tile_h = 32
@@ -1300,9 +1297,7 @@ class MoeRoutedExpert:
                 "sem_round2_addr": reduce_sem_round2_addr,
                 "sem_round3_addr": reduce_sem_round3_addr,
                 "sem_exit_addr": reduce_sem_exit_addr,
-                "intermediate_r1_per_device": reduce_intermediate_r1_per_device,
-                "intermediate_r2_per_device": reduce_intermediate_r2_per_device,
-                "intermediate_r3_per_device": reduce_intermediate_r3_per_device,
+                "intermediate_per_device": reduce_intermediate_per_device,
                 "output_per_device": reduce_output_per_device,
                 "final_output_per_device": final_output_per_device,
                 "num_tiles": reduce_num_tiles,
@@ -1440,9 +1435,7 @@ class MoeRoutedExpert:
                 ("use_hardcoded_expert_index", 1 if use_hardcoded_expert_index else 0),
                 # ReduceToOne reader args (CB indices - actual values set per-device)
                 ("reduce_local_cb", reduce_local_cb),
-                ("reduce_received_cb_r1", reduce_received_cb_r1),
-                ("reduce_received_cb_r2", reduce_received_cb_r2),
-                ("reduce_received_cb_r3", reduce_received_cb_r3),
+                ("reduce_received_cb", reduce_received_cb),
             ]
 
         # Helper to create BRISC compile-time args with chip-specific mesh_chip_id
@@ -1580,9 +1573,7 @@ class MoeRoutedExpert:
             ("add_slice_size_bytes", add_params["slice_size_bytes"]),
             # ReduceToOne compute args
             ("reduce_local_cb", reduce_local_cb),
-            ("reduce_received_cb_r1", reduce_received_cb_r1),
-            ("reduce_received_cb_r2", reduce_received_cb_r2),
-            ("reduce_received_cb_r3", reduce_received_cb_r3),
+            ("reduce_received_cb", reduce_received_cb),
             ("reduce_output_cb", reduce_output_cb),
             ("reduce_scratch_cb", reduce_scratch_cb),
         ]
@@ -1856,9 +1847,7 @@ class MoeRoutedExpert:
                     dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
 
                     # Get per-device tensors for this device
-                    r1_tensor = reduce_params["intermediate_r1_per_device"][chip_id]
-                    r2_tensor = reduce_params["intermediate_r2_per_device"][chip_id]
-                    r3_tensor = reduce_params["intermediate_r3_per_device"][chip_id]
+                    intermediate_tensor_dev = reduce_params["intermediate_per_device"][chip_id]
                     out_tensor = reduce_params["output_per_device"][chip_id]
 
                     # Create CB descriptors for reduce operation
@@ -1874,49 +1863,23 @@ class MoeRoutedExpert:
                     # The eltwise_add already set up CB 25 (add_cb_out) with the correct buffer.
                     # The reduce kernel will read from the same CB that eltwise_add pushed to.
 
-                    # reduce_received_cb_r1: backed by intermediate r1 tensor
-                    reduce_cb_r1_desc = ttnn.cb_descriptor_from_sharded_tensor(reduce_received_cb_r1, r1_tensor)
-                    reduce_cb_r1_desc.core_ranges = reduce_all_cores_set
-                    reduce_cb_r1_desc.total_size = reduce_payload
-                    reduce_cb_r1_desc.format_descriptors = [
+                    # reduce_received_cb: single 3-page CB backed by intermediate tensor
+                    reduce_cb_recv_desc = ttnn.cb_descriptor_from_sharded_tensor(
+                        reduce_received_cb, intermediate_tensor_dev
+                    )
+                    reduce_cb_recv_desc.core_ranges = reduce_all_cores_set
+                    reduce_cb_recv_desc.total_size = 3 * reduce_payload
+                    reduce_cb_recv_desc.format_descriptors = [
                         ttnn.CBFormatDescriptor(
-                            buffer_index=reduce_received_cb_r1,
+                            buffer_index=reduce_received_cb,
                             data_format=reduce_dtype,
                             page_size=reduce_payload,
                             tile=reduce_tile_desc,
                         )
                     ]
-                    device_cb_descriptors.append(reduce_cb_r1_desc)
+                    device_cb_descriptors.append(reduce_cb_recv_desc)
 
-                    # reduce_received_cb_r2 (28): backed by intermediate r2 tensor
-                    reduce_cb_r2_desc = ttnn.cb_descriptor_from_sharded_tensor(reduce_received_cb_r2, r2_tensor)
-                    reduce_cb_r2_desc.core_ranges = reduce_all_cores_set
-                    reduce_cb_r2_desc.total_size = reduce_payload
-                    reduce_cb_r2_desc.format_descriptors = [
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=reduce_received_cb_r2,
-                            data_format=reduce_dtype,
-                            page_size=reduce_payload,
-                            tile=reduce_tile_desc,
-                        )
-                    ]
-                    device_cb_descriptors.append(reduce_cb_r2_desc)
-
-                    # reduce_received_cb_r3 (29): backed by intermediate r3 tensor
-                    reduce_cb_r3_desc = ttnn.cb_descriptor_from_sharded_tensor(reduce_received_cb_r3, r3_tensor)
-                    reduce_cb_r3_desc.core_ranges = reduce_all_cores_set
-                    reduce_cb_r3_desc.total_size = reduce_payload
-                    reduce_cb_r3_desc.format_descriptors = [
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=reduce_received_cb_r3,
-                            data_format=reduce_dtype,
-                            page_size=reduce_payload,
-                            tile=reduce_tile_desc,
-                        )
-                    ]
-                    device_cb_descriptors.append(reduce_cb_r3_desc)
-
-                    # reduce_output_cb (30): backed by reduce output tensor
+                    # reduce_output_cb: backed by reduce output tensor
                     reduce_cb_out_desc = ttnn.cb_descriptor_from_sharded_tensor(reduce_output_cb, out_tensor)
                     reduce_cb_out_desc.core_ranges = reduce_all_cores_set
                     reduce_cb_out_desc.total_size = reduce_payload
@@ -1961,30 +1924,16 @@ class MoeRoutedExpert:
                     )
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
-                    # reduce_packet_header_cb (32): persistent packet header storage
-                    reduce_packet_header_size = 96  # Standard packet header size
-                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
-                        total_size=reduce_packet_header_size,
-                        core_ranges=reduce_all_cores_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=reduce_packet_header_cb,
-                                data_format=ttnn.bfloat16,
-                                page_size=reduce_packet_header_size,
-                            )
-                        ],
-                    )
-                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
-
-                    # Destination L1 address depends on role
+                    # Destination L1 address: offset within the single intermediate tensor
+                    intermediate_base = intermediate_tensor_dev.buffer_address()
                     if device_role == MESH_LEAF:
-                        dst_l1_addr = r1_tensor.buffer_address()
+                        dst_l1_addr = intermediate_base  # page 0
                         dst_sem_addr = reduce_params["sem_round1_addr"]
                     elif device_role == MESH_ROOT3:
-                        dst_l1_addr = r2_tensor.buffer_address()
+                        dst_l1_addr = intermediate_base + reduce_payload  # page 1
                         dst_sem_addr = reduce_params["sem_round2_addr"]
                     elif device_role == MESH_ROOT2:
-                        dst_l1_addr = r3_tensor.buffer_address()
+                        dst_l1_addr = intermediate_base + 2 * reduce_payload  # page 2
                         dst_sem_addr = reduce_params["sem_round3_addr"]
                     else:  # MESH_ROOT1
                         dst_l1_addr = 0
@@ -2012,7 +1961,6 @@ class MoeRoutedExpert:
                         ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                         ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                         ("reduce_packet_cb", reduce_packet_cb),
-                        ("reduce_packet_header_cb", reduce_packet_header_cb),
                     ]
                     brisc_ct_args.extend(reduce_brisc_ct_args)
 
@@ -2134,9 +2082,7 @@ class MoeRoutedExpert:
         if enable_reduce_to_one:
             io_tensors.extend(
                 [
-                    reduce_intermediate_tensors[0],
-                    reduce_intermediate_tensors[1],
-                    reduce_intermediate_tensors[2],
+                    reduce_intermediate_tensors,
                     reduce_output_tensor,
                 ]
             )
