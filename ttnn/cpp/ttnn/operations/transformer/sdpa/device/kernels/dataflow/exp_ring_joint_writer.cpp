@@ -850,8 +850,9 @@ void kernel_main() {
                         // TODO: Read K chunk here
                         // TODO: Read V chunk here
                     }
-                    // DPRINT << "Sending injector semaphore increment packet to " << injector_noc_x << "," << injector_noc_y << ENDL();
-                    tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
+                    if (!is_last_ring_iter) {
+                        tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
+                    }
                 }
 #endif
 
