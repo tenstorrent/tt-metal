@@ -80,43 +80,40 @@ uint32_t per_core_rta_arg_idx = 0;
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_tensor0_page_size"),
-        get_named_compile_time_arg_val("bcast_num_targets_forward_direction"),
-        get_named_compile_time_arg_val("bcast_num_targets_backward_direction"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_core_noc_x"),
-        get_named_compile_time_arg_val("bcast_core_noc_y"),
-        get_named_compile_time_arg_val("bcast_is_secondary_sender"),
-        get_named_compile_time_arg_val("bcast_has_secondary_target"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_forward"),
-        get_named_compile_time_arg_val("bcast_range_hops_forward"),
-        get_named_compile_time_arg_val("bcast_start_distance_in_hops_backward"),
-        get_named_compile_time_arg_val("bcast_range_hops_backward")>;
+using BcastCTArgs = deepseek_b1_ops::Broadcast::WriterCTArgs<
+    get_named_compile_time_arg_val("bcast_data_cb_id"),
+    get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+    get_named_compile_time_arg_val("bcast_tensor0_page_size"),
+    get_named_compile_time_arg_val("bcast_num_neighbors"),
+    get_named_compile_time_arg_val("bcast_num_links"),
+    get_named_compile_time_arg_val("bcast_is_root"),
+    get_named_compile_time_arg_val("bcast_chunk_size_bytes"),
+    get_named_compile_time_arg_val("bcast_last_chunk_size_bytes"),
+    get_named_compile_time_arg_val("bcast_num_chunks")>;
 
-    // CCL Broadcast writer runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
+// CCL Broadcast writer runtime args (only populated when not skip_ccl)
+deepseek_b1_ops::Broadcast::WriterArgs bcast_args{};
 
-    if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
-            get_common_arg_val<uint32_t>(0),   // tensor_address0
-            get_common_arg_val<uint32_t>(1),   // out_ready_sem_bank_addr
-            get_common_arg_val<uint32_t>(2),   // wait_output_semaphore
-            get_common_arg_val<uint32_t>(3),   // reset_global_semaphore
-            get_common_arg_val<uint32_t>(4),   // out_ready_sem_noc0_x
-            get_common_arg_val<uint32_t>(5),   // out_ready_sem_noc0_y
-            get_common_arg_val<uint32_t>(6),   // out_ready_sem_wait_value
-            get_common_arg_val<uint32_t>(7),   // barrier_sem
-            get_common_arg_val<uint32_t>(8),   // barrier_sem_noc0_x
-            get_common_arg_val<uint32_t>(9),   // barrier_sem_noc0_y
-            get_common_arg_val<uint32_t>(10),  // ring_index
-            get_common_arg_val<uint32_t>(11),  // secondary_sync_sem
-            get_common_arg_val<uint32_t>(12),  // num_connections (computed from len(dst_nodes))
-            per_core_rta_arg_idx,
-        };
+if constexpr (!Core::skip_ccl) {
+    uint32_t bcast_rta_num_args = 0;
+    uint32_t bcast_rta_offset = 0;
+    if constexpr (Core::is_input_core) {
+        bcast_rta_num_args = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        bcast_rta_offset = per_core_rta_arg_idx;
+        per_core_rta_arg_idx += bcast_rta_num_args;
     }
+    bcast_args = deepseek_b1_ops::Broadcast::WriterArgs{
+        get_common_arg_val<uint32_t>(0),  // tensor_address0
+        get_common_arg_val<uint32_t>(1),  // my_noc_x
+        get_common_arg_val<uint32_t>(2),  // my_noc_y
+        {
+            get_common_arg_val<uint32_t>(3),  // sem_bank_addrs[0]
+            get_common_arg_val<uint32_t>(4),  // sem_bank_addrs[1] (dummy if num_links=1)
+        },
+        bcast_rta_offset,
+        bcast_rta_num_args,
+    };
+}
 
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -267,7 +264,7 @@ uint32_t per_core_rta_arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
         flash_mla_args = {
-            .k_addr = get_common_arg_val<uint32_t>(13),
+            .k_addr = get_common_arg_val<uint32_t>(5),
             .local_cur_pos = 0,  // set via flash_mla.set_local_cur_pos() below
             .cur_batch = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
             .core_num_in_reduce = get_arg_val<uint32_t>(per_core_rta_arg_idx++),
@@ -301,17 +298,17 @@ uint32_t per_core_rta_arg_idx = 0;
 #elif defined(COMPILE_FOR_BRISC)
 
     // CCL Broadcast CTArgs type alias
-    using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
-        get_named_compile_time_arg_val("bcast_cb0_id"),
-        get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender")>;
+using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
+    get_named_compile_time_arg_val("bcast_data_cb_id"),
+    get_named_compile_time_arg_val("bcast_num_pages_to_read"),
+    get_named_compile_time_arg_val("bcast_is_root")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
-    deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
+// CCL Broadcast reader runtime args (only populated when not skip_ccl)
+deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
-    if constexpr (!Core::skip_ccl) {
-        bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
-    }
+if constexpr (!Core::skip_ccl) {
+    bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{};
+}
     // CTArgs type aliases (required for Op templates)
     using RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;  // BRISC is no-op
@@ -799,7 +796,7 @@ uint32_t per_core_rta_arg_idx = 0;
 #if defined(COMPILE_FOR_BRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
 #elif defined(COMPILE_FOR_NCRISC)
-    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(14);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(6);
 #elif defined(COMPILE_FOR_TRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(7);
 #endif

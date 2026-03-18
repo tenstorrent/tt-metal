@@ -44,8 +44,6 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -87,12 +85,11 @@ def test_attention_block(
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
+    device_params,
     noc_mode,
     num_internal_iterations,
 ):
@@ -888,8 +885,6 @@ def test_attention_block(
             ttnn_attention_block_output,
             # Shared semaphores, and some default values
             attention_block_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
             1.0,  # sdpa_scale_fp32
@@ -899,6 +894,7 @@ def test_attention_block(
             skip_ccl,
             noc_mode,
             num_iterations=num_internal_iterations,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 
