@@ -6,7 +6,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
-#include "fused_op_receiver.hpp"
+#include "ring_utils.hpp"
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -355,15 +355,13 @@ void kernel_main() {
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
 
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        false, /* wait_for_op_signal */
-        argidx);
+    const uint32_t ring_size_rt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ring_index_rt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t direction_rt = get_arg_val<uint32_t>(argidx++);
+    argidx++;  // skip semaphore_id appended by push_ring_sdpa_fused_op_rt_args (unused in writer)
+    RingIdSequencer seq(ring_index_rt, ring_size_rt, direction_rt);
 
 #ifdef USE_MUX
-    // push_ring_sdpa_fused_op_rt_args appends 4 values (ring_size, ring_index, direction, semaphore_id).
-    // The writer's RingSDPAOpReceiver reads only the 3 ring params (wait_for_op_signal=false),
-    // so skip the 1 trailing semaphore ID before reading MUX args.
-    argidx += 1;
 
     // Parse fabric MUX client connection RT args (17 values).
     // mux_connection_valid, is_termination_master, mux_x, mux_y,
@@ -661,10 +659,10 @@ void kernel_main() {
     }
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        uint32_t ring_id = seq.get_next_ring_id([](uint32_t, uint32_t) {});
 
         // Compute ring iteration validity up front; needed by both the AG block and SDPA output loop.
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -717,12 +715,10 @@ void kernel_main() {
                 if (ring_iter > 0) {
                     // Fallback: reader skipped this ring_iter (all K/V is padding beyond logical_n).
                     // Read the received slice directly from gathered DRAM and forward.
+                    // No fabric_atomic_inc: downstream reader also skips this ring_iter (no valid k_chunks).
                     forward_slice(gathered_k_acc, ag_base_tile_id_start);
                     forward_slice(gathered_v_acc, ag_base_tile_id_start);
-                }
-                noc_async_write_barrier();
-                tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-                if (ring_iter > 0) {
+                    noc_async_write_barrier();
                     ag_slice_writes++;
                 }
             }
@@ -787,7 +783,9 @@ void kernel_main() {
                 constexpr uint32_t sum_offset = local_padded_Nt + Lt;
 
 #ifdef USE_MUX
-                if (do_ag_kv_forward) {
+                // Forward kv_chunks to next device once per kv_chunk (first q_chunk only).
+                // Signal per forwarded chunk so the downstream reader can unblock at kv_chunk granularity.
+                if (do_ag_kv_forward && global_q_chunk == global_q_start) {
                     const uint32_t gathered_bh_start = ag_base_tile_id_start + bh * ag_output_Wt * ag_output_Ht;
                     for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
                         const uint32_t kv_global_start = ring_id * local_padded_Nt + k_chunk * Sk_chunk_t;
@@ -796,6 +794,7 @@ void kernel_main() {
                         }
                         send_cb_chunk(cb_k_out, gathered_bh_start, k_chunk, gathered_k_acc);
                         send_cb_chunk(cb_v_out, gathered_bh_start, k_chunk, gathered_v_acc);
+                        tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
                     }
                 }
 #endif
@@ -858,7 +857,9 @@ void kernel_main() {
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
 #ifdef USE_MUX
-                if (do_ag_kv_forward) {
+                // Forward kv_chunks to next device once per kv_chunk (first q_chunk only).
+                // Signal per forwarded chunk so the downstream reader can unblock at kv_chunk granularity.
+                if (do_ag_kv_forward && global_q_chunk == global_q_start) {
                     const uint32_t gathered_bh_start = ag_base_tile_id_start + bh * ag_output_Wt * ag_output_Ht;
                     for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
                         const uint32_t kv_global_start = ring_id * local_padded_Nt + k_chunk * Sk_chunk_t;
@@ -867,6 +868,7 @@ void kernel_main() {
                         }
                         send_cb_chunk(cb_k_out, gathered_bh_start, k_chunk, gathered_k_acc);
                         send_cb_chunk(cb_v_out, gathered_bh_start, k_chunk, gathered_v_acc);
+                        tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
                     }
                 }
 #endif
@@ -909,14 +911,12 @@ void kernel_main() {
             }
         }
 
-        // Step 5: Single barrier (flushes both SDPA DRAM writes and AG fabric writes) + AG signals
+        // Step 5: Single barrier (flushes both SDPA DRAM writes and AG fabric writes).
+        // Per-kv-chunk fabric_atomic_inc is sent inside the forwarding loop above; no additional signal here.
         noc_async_write_barrier();
 #ifdef USE_MUX
-        if (do_ag_this_iter) {
-            tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-            if (ring_iter > 0) {
-                ag_slice_writes++;
-            }
+        if (do_ag_this_iter && ring_iter > 0) {
+            ag_slice_writes++;
         }
 #endif
     }

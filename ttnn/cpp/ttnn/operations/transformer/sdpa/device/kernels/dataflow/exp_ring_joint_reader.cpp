@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
-#include "fused_op_receiver.hpp"
+#include "ring_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -69,9 +69,18 @@ void kernel_main() {
     // Non-TM readers receive K/V via L1-to-L1 chain forwarding and do not need a semaphore wait.
     const uint32_t do_kv_out = get_arg_val<uint32_t>(argidx++);
 
-    RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        do_kv_out != 0, /* wait_for_op_signal: true for TM readers only */
-        argidx);
+    const uint32_t ring_size_rt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ring_index_rt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t direction_rt = get_arg_val<uint32_t>(argidx++);
+    RingIdSequencer seq(ring_index_rt, ring_size_rt, direction_rt);
+
+    // TM readers: parse out_ready_sem for per-kv-chunk synchronization with the upstream fabric writer.
+    // out_ready_sem is incremented once per forwarded kv_chunk by the remote writer's fabric_atomic_inc.
+    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = nullptr;
+    if (do_kv_out) {
+        const uint32_t out_ready_sem_id = get_arg_val<uint32_t>(argidx++);
+        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(out_ready_sem_id));
+    }
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
@@ -160,9 +169,12 @@ void kernel_main() {
      * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
+    // Counts kv_chunks read from gathered DRAM (ring_iter > 0); used for per-chunk semaphore waits.
+    uint32_t gathered_kv_chunks_received = 0;
+
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        uint32_t ring_id = seq.get_next_ring_id([](uint32_t, uint32_t) {});
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
@@ -238,7 +250,12 @@ void kernel_main() {
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
-                        // Gathered KV
+                        // Gathered KV: wait for this kv_chunk to be forwarded by the upstream writer.
+                        // Only wait on the first q_chunk — subsequent q_chunks reuse the same arrived data.
+                        if (do_kv_out && global_q_chunk == global_q_start) {
+                            ++gathered_kv_chunks_received;
+                            noc_semaphore_wait_min(out_ready_sem_ptr, gathered_kv_chunks_received);
+                        }
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
@@ -292,8 +309,9 @@ void kernel_main() {
                 // Push NON-TRANSPOSED K chunk to cb_k_out for the fabric writer to forward via MUX.
                 // cb_k_in holds K transposed (for SDPA QK^T). The AG needs the original non-transposed
                 // layout (as in input_tensor_k DRAM). Re-read from DRAM without transpose.
+                // Only on the first q_chunk: forwarding happens once per kv_chunk, not per q_chunk.
                 // Only for non-joint local K: joint K is device-local (not all-gathered).
-                if (do_kv_out && !kv_chunk_is_joint) {
+                if (do_kv_out && !kv_chunk_is_joint && global_q_chunk == global_q_start) {
                     const auto& k_out_gen = (ring_iter == 0) ? local_k_generator : gathered_k_generator;
                     read_block(k_out_gen, kv_slice, end_seq_tile, cb_k_out, k_tile_bytes, false /*no transpose*/);
                 }
@@ -369,8 +387,9 @@ void kernel_main() {
                 }
 
                 // Push V chunk to cb_v_out for the fabric writer to forward via MUX.
+                // Only on the first q_chunk: forwarding happens once per kv_chunk, not per q_chunk.
                 // Only for non-joint local V: joint V is device-local (not all-gathered).
-                if (do_kv_out && !kv_chunk_is_joint) {
+                if (do_kv_out && !kv_chunk_is_joint && global_q_chunk == global_q_start) {
                     cb_reserve_back(cb_v_out, v_chunk_tiles);
                     const uint32_t v_out_addr = get_write_ptr(cb_v_out);
                     noc_async_write(
