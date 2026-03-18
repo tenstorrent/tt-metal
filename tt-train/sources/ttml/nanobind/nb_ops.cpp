@@ -28,6 +28,7 @@
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -56,6 +57,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("reshape");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
+    m.def_submodule("swiglu");
     m.def_submodule("unary");
 }
 
@@ -372,6 +374,18 @@ void py_module(nb::module_& m) {
             nb::arg("temperature"),
             nb::arg("seed"),
             nb::arg("logits_padding_mask") = nb::none());
+    }
+
+    {
+        auto py_swiglu = static_cast<nb::module_>(m.attr("swiglu"));
+        py_swiglu.def(
+            "swiglu",
+            &ttml::ops::swiglu,
+            nb::arg("tensor"),
+            nb::arg("w1"),
+            nb::arg("w2"),
+            nb::arg("w3"),
+            nb::arg("dropout_prob") = 0.0F);
     }
 
     {
