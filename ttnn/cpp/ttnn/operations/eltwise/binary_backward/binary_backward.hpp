@@ -7,7 +7,6 @@
 
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 

@@ -13,8 +13,6 @@
 
 namespace ttnn::operations::complex_unary {
 
-using tt::tt_metal::MemoryConfig;
-
 enum class ComplexUnaryOpType {
     REAL,
     IMAG,

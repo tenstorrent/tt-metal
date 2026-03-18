@@ -12,8 +12,6 @@
 
 namespace ttnn::operations::complex_unary_backward {
 
-using tt::tt_metal::MemoryConfig;
-
 enum class ComplexUnaryBackwardOpType {
     POLAR_BW,
     IMAG_BW,
