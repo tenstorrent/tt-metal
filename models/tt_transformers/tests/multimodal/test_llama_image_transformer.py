@@ -137,9 +137,11 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
             0, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
 
-        feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask, output_hidden_states=True)
+        feats = callable_reference(
+            tens_input[:, :ntok, :], attention_mask=mask, output_hidden_states=(return_intermediate is not None)
+        )
         reference_output = feats.last_hidden_state
-        if return_intermediate != None:
+        if return_intermediate is not None:
             intermediates = feats.hidden_states
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
