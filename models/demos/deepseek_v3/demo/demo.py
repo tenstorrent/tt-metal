@@ -488,6 +488,7 @@ def run_demo(
                 logger.info(
                     "checkpoint-jsonl is enabled without stop-at-eos; records will be written after generation."
                 )
+
         def checkpoint_user(user_idx: int, token_ids: list[int]) -> None:
             if checkpoint_fh is None or user_idx in checkpoint_written:
                 return
@@ -557,11 +558,11 @@ def run_demo(
                         total_accepts = sum(int(x) for x in mtp_accepts)
                         total_verifies = sum(int(x) for x in mtp_verifies)
                         statistics["mtp_accepts"] = total_accepts
-                        statistics["mtp_accept_rate"] = (
-                            total_accepts / total_verifies if total_verifies > 0 else 0.0
-                        )
+                        statistics["mtp_accept_rate"] = total_accepts / total_verifies if total_verifies > 0 else 0.0
                     else:
-                        mtp_rates = [s.get("mtp_accept_rate") for s in all_stats if s.get("mtp_accept_rate") is not None]
+                        mtp_rates = [
+                            s.get("mtp_accept_rate") for s in all_stats if s.get("mtp_accept_rate") is not None
+                        ]
                         if mtp_rates:
                             statistics["mtp_accept_rate"] = sum(mtp_rates) / len(mtp_rates)
                     for key in (
