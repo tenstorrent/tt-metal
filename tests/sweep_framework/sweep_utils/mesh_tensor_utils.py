@@ -111,6 +111,7 @@ def create_mesh_device(mesh_shape: Tuple[int, int], device_ids: Optional[list] =
     # The API automatically selects available devices based on the mesh shape
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
+        l1_small_size=32768,
         dispatch_core_config=ttnn.DispatchCoreConfig(),
     )
 

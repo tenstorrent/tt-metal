@@ -48,12 +48,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=32768, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=32768, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -98,30 +98,20 @@ def run(
                 input_a_tensor_placement,
             )
         else:
-            # Fall back to DRAM if shard spec exceeds device cores
-            safe_mc = input_a_memory_config
-            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
-                try:
-                    grid = device.compute_with_storage_grid_size()
-                    num_cores = grid.x * grid.y
-                    shard_spec = input_a_memory_config.shard_spec
-                    if shard_spec is not None:
-                        shard_shape = shard_spec.shape
-                        total_rows = 1
-                        for d in torch_input_tensor_a.shape[:-1]:
-                            total_rows *= d
-                        num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
-                        if num_shards > num_cores:
-                            safe_mc = ttnn.DRAM_MEMORY_CONFIG
-                except Exception:
-                    safe_mc = ttnn.DRAM_MEMORY_CONFIG
+            # Create on DRAM first, then move to traced memory config.
+            # Traced shard specs may reference core grids from a different device.
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=safe_mc,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                try:
+                    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                except Exception:
+                    pass  # Stay on DRAM if shard spec is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 

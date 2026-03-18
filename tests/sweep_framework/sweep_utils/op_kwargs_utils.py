@@ -41,6 +41,9 @@ _INFRA_KEYS = frozenset(
         "sweep_name",
         "storage_type",
         "mesh_coords",
+        "input_hash",
+        "tag",
+        "timestamp",
     }
 )
 
