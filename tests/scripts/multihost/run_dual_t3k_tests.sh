@@ -14,9 +14,8 @@ run_dual_t3k_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
-  # tcp flags are default for tt-run
-  local mpi_args="--hostfile /etc/mpirun/hostfile"
-  local mpirun_args="$mpi_args --mca btl_tcp_if_exclude docker0,lo"
+  local tcp_interface="cnx1"
+  local mpirun_args="--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo"
   local hosts
   hosts=$(paste -sd, /etc/mpirun/hostfile 2>/dev/null || cat /etc/mpirun/hostfile | tr '\n' ',' | sed 's/,$//')
   local mesh_graph="tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto"
@@ -26,11 +25,11 @@ run_dual_t3k_unit_tests() {
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   # Physical discovery with launcher NOT in hosts (OpenMPI #11830 - would hang without P2P workaround)
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
-  tt-run --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
-  tt-run --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
-  tt-run --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
-  tt-run --mesh-graph-descriptor "$strict_mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
-  tt-run --mesh-graph-descriptor "$bigmesh_mesh_graph" --hosts "$hosts" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$strict_mesh_graph" --hosts "$hosts" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
+  tt-run --tcp-interface $tcp_interface --mesh-graph-descriptor "$bigmesh_mesh_graph" --hosts "$hosts" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
