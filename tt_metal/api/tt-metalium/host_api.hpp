@@ -41,7 +41,6 @@ struct TraceDescriptor;
 class Program;
 class IDevice;
 class Trace;
-struct Event;
 class Buffer;
 class GlobalSemaphore;
 class CoreRange;
