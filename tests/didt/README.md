@@ -18,6 +18,9 @@ This directory contains DIDT tests for validating the behavior, performance, and
 - **`test_sdxl_conv_1280x1280_upsample.py`**: SDXL upsample convolution tests
 - **`test_sdxl_matmul.py`**: SDXL-specific matmul operations
 - **`test_sharded_ff1.py`**: Legacy sharded FF1 tests
+
+## Analysis Tools
+
 - **`process_profiler_output.py`**: Tool for processing profiler CSV output
 - **`sync_analysis.py`**: Synchronization analysis utilities
 
