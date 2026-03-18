@@ -84,7 +84,7 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const bool use_padded =
         memory_layout == TensorMemoryLayout::INTERLEAVED || memory_layout == TensorMemoryLayout::HEIGHT_SHARDED;
     // Page size for row-major interleaved and height-sharded tensors is the padded width of the tensor, so we must
-    // ensure that the outpus padded width is larger than this value in those cases.
+    // ensure that the output's padded width is larger than this value in those cases.
     const auto& input_shape = use_padded ? input_tensor.padded_shape() : input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
