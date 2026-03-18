@@ -299,7 +299,10 @@ def run_on_devices(*allowed_archs: DeviceArch):
         def wrapper(self, *args, **kwargs):
             if not hasattr(self, "device") or self.device is None:
                 raise RuntimeError(f"{self.__class__.__name__}: No device set. ")
-            mesh_device = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
+            mesh_env = (os.environ.get("MESH_DEVICE") or "").strip()
+            mesh_device = MeshShapeToDeviceArch.get(mesh_env)
+            if mesh_device is None and mesh_env.upper() != mesh_env:
+                mesh_device = MeshShapeToDeviceArch.get(mesh_env.upper())
             if mesh_device is None:
                 raise RuntimeError(
                     f"{self.__class__.__name__}: Unable to determine device architecture from MESH_DEVICE environment variable."
