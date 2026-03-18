@@ -49,13 +49,7 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
 
     bool has_cliff = !core_range_cliff.empty();
 
-    uint32_t unpadded_row_size_bytes =
-        ((!a.is_sharded() || a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED)
-             ? a.padded_shape()[-1]
-             : a.logical_shape()[-1]) *
-        a.element_size();  // For height-sharded and interleaved row-major tensors, the page_size = padded_shape width
-                           // of the tensor.
-    // Assuming bfloat16 dataformat above
+    uint32_t unpadded_row_size_bytes = a.logical_shape()[-1] * a.element_size();    // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
@@ -78,10 +72,11 @@ TilizeWithValPaddingMultiCoreDefaultFactory::cached_program_t TilizeWithValPaddi
                         // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
     uint32_t elem_size = a.element_size();
     uint32_t num_pages_in_row = 1;
-    uint32_t page_size = a.buffer()->page_size();
+    uint32_t page_size = a.logical_shape()[-1] * a.element_size();
     uint32_t aligned_page_size = a.buffer()->aligned_page_size();
-    uint32_t size_of_valid_data_in_last_page_in_row = a.buffer()->page_size();
-    if (a.is_sharded()) {
+    uint32_t size_of_valid_data_in_last_page_in_row = a.logical_shape()[-1] * a.element_size();
+    if (a.is_sharded() && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+        page_size = a.buffer()->page_size();
         uint32_t shard_width =
             a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
         num_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
