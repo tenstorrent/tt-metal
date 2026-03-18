@@ -287,26 +287,122 @@ class TextAttention(LightweightModule):
         seq_len = x.shape[-2]
 
         # Q, K, V projections (column parallel - output is sharded across devices)
-        q = ttnn.linear(
-            x,
-            self.wq,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Use DRAM-sharded matmul with L1 output only on single device (requires sharded input).
+        if self.is_mesh_device:
+            print("############ is mesh device \n")
+            device = self.mesh_device
+            tile_size = self.tile_size
+            hidden_dim = x.shape[-1]
+            # Program config: in0_block_w (tiles per core along K), per_core_M, per_core_N (tiles)
+            in0_block_w = 8
+            per_core_M = 16
+            per_core_N = 16
+            K_tiles = hidden_dim // tile_size  # 4096 // 32 = 128
+            num_cores_in = K_tiles // in0_block_w  # 16 cores for input sharding
+            shard_height = ((seq_len + tile_size - 1) // tile_size) * tile_size
+            # Shard x (input A) for DRAM-sharded matmul: WIDTH_SHARDED, shard shape [seq_len, hidden_dim/num_cores_in]
+            in0_shard_width = hidden_dim // num_cores_in  # 256
+            grid_size = (1, num_cores_in)
+            x_sharded = ttnn.interleaved_to_sharded(
+                x,
+                grid_size,
+                [int(shard_height), in0_shard_width],
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            # Output L1 memory config with explicit ShardSpec (required by DRAM-sharded factory)
+            M_tiles = (seq_len + tile_size - 1) // tile_size
+            N_tiles = (self.num_heads_per_device * self.head_dim + tile_size - 1) // tile_size
+            num_blocks_y = (M_tiles + per_core_M - 1) // per_core_M
+            num_blocks_x = (N_tiles + per_core_N - 1) // per_core_N
+            num_cores_out = num_blocks_y * num_blocks_x
+            core_grid = device.compute_with_storage_grid_size()
+            all_cores = ttnn.num_cores_to_corerangeset(num_cores_out, core_grid, True)
+            out_shard_shape = (per_core_M * tile_size, per_core_N * tile_size)
+            out_shard_spec = ttnn.ShardSpec(all_cores, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            q_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                out_shard_spec,
+            )
+            q = ttnn.linear(
+                x_sharded,
+                self.wq,
+                program_config=ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                    in0_block_w=in0_block_w,
+                    per_core_M=per_core_M,
+                    per_core_N=per_core_N,
+                    fused_activation=None,
+                ),
+                memory_config=q_memory_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+        else:
+            q = ttnn.linear(
+                x,
+                self.wq,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        k = ttnn.linear(
-            x,
-            self.wk,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        v = ttnn.linear(
-            x,
-            self.wv,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Place input in L1 for K/V projections (faster than reading from DRAM)
+        x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        # Program config with out_subblock_h * out_subblock_w >= 2 (avoids "Output subblock 1x1 is small" warning)
+        if self.is_mesh_device:
+            print("############ 2 attension is mesh device \n")
+            core_grid = self.mesh_device.compute_with_storage_grid_size()
+            grid_size = (core_grid.x, core_grid.y)
+            tile_size = self.tile_size
+            M_tiles = (seq_len + tile_size - 1) // tile_size
+            K_tiles = self.hidden_dim // tile_size
+            N_tiles = (self.num_kv_heads_per_device * self.head_dim + tile_size - 1) // tile_size
+            per_core_M = (M_tiles + grid_size[1] - 1) // grid_size[1]
+            per_core_N = (N_tiles + grid_size[0] - 1) // grid_size[0]
+            if per_core_M >= 2:
+                out_subblock_h, out_subblock_w = 2, 1
+            else:
+                out_subblock_h, out_subblock_w = 1, min(2, per_core_N) if per_core_N >= 2 else 1
+            in0_block_w = 8 if K_tiles >= 8 else max(1, K_tiles)
+            kv_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=core_grid,
+                in0_block_w=in0_block_w,
+                out_subblock_h=out_subblock_h,
+                out_subblock_w=out_subblock_w,
+                per_core_M=per_core_M,
+                per_core_N=per_core_N,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=False,
+            )
+            k = ttnn.linear(
+                x_l1,
+                self.wk,
+                program_config=kv_program_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v = ttnn.linear(
+                x_l1,
+                self.wv,
+                program_config=kv_program_config,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            print("############ 2 not attension is mesh device \n")
+            k = ttnn.linear(
+                x_l1,
+                self.wk,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v = ttnn.linear(
+                x_l1,
+                self.wv,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        ttnn.deallocate(x_l1)
 
         # Reshape for multi-head attention (using per-device head counts)
         # Q: [1, 1, seq_len, num_heads_per_device * head_dim] -> [1, num_heads_per_device, seq_len, head_dim]

@@ -256,13 +256,15 @@ class TextModel(LightweightModule):
         if output_hidden_states:
             all_hidden_states.append(x)
 
-        # Language model head
+        # Language model head: place input in L1 for faster matmul read
+        x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         logits = ttnn.linear(
-            x,
+            x_l1,
             self.lm_head,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(x_l1)
 
         return logits, new_kv_caches
 
@@ -328,13 +330,15 @@ class TextModel(LightweightModule):
         # Final normalization
         x = self.ln_f(x)
 
-        # Language model head
+        # Language model head: place input in L1 for faster matmul read
+        x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         logits = ttnn.linear(
-            x,
+            x_l1,
             self.lm_head,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        ttnn.deallocate(x_l1)
 
         return logits
 
