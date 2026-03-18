@@ -23,13 +23,15 @@ OffsetCumsumDeviceOperation::spec_return_value_t OffsetCumsumDeviceOperation::co
     const auto& logical_shape = input_tensor.logical_shape();
     uint32_t H = logical_shape[-2];
     uint32_t W = logical_shape[-1];
-    ttnn::Shape output_shape({H + 1, W});
-    return TensorSpec(
-        output_shape,
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+
+    auto layout = tt::tt_metal::TensorLayout(
+        tt::tt_metal::DataType::UINT32,
+        tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
+
+    auto offsets_spec = TensorSpec(ttnn::Shape({H, W}), layout);
+    auto totals_spec = TensorSpec(ttnn::Shape({1, W}), layout);
+    return {offsets_spec, totals_spec};
 }
 
 tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
@@ -42,14 +44,17 @@ tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
 
 OffsetCumsumDeviceOperation::tensor_return_value_t OffsetCumsumDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& input_tensor) {
-    return create_device_tensor(compute_output_specs(args, input_tensor), input_tensor.device());
+    auto output_specs = compute_output_specs(args, input_tensor);
+    auto offsets_tensor = create_device_tensor(output_specs[0], input_tensor.device());
+    auto totals_tensor = create_device_tensor(output_specs[1], input_tensor.device());
+    return {offsets_tensor, totals_tensor};
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-Tensor offset_cumsum(const Tensor& input_tensor) {
+std::array<Tensor, 2> offset_cumsum(const Tensor& input_tensor) {
     using OperationType = ttnn::experimental::prim::OffsetCumsumDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);

@@ -11,7 +11,7 @@
 
 namespace ttnn::operations::experimental {
 
-ttnn::Tensor OffsetCumsumOperation::invoke(
+std::array<ttnn::Tensor, 2> OffsetCumsumOperation::invoke(
     const Tensor& input_tensor, uint32_t cluster_axis, uint32_t num_links, const ttnn::MemoryConfig& memory_config) {
     const auto& shape = input_tensor.logical_shape();
     uint32_t n_routed_experts = shape[-1];

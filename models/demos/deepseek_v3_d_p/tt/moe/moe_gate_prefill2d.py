@@ -117,7 +117,7 @@ class MoEGatePrefill(LightweightModule):
             use_height_and_width_as_shard_shape=True,
         )
 
-    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         signpost(header="moe_gate_linear_allreduce")
         logits = ttnn.matmul(
             x,
@@ -160,7 +160,7 @@ class MoEGatePrefill(LightweightModule):
             ttnn_top_k_experts_indices, self.experts_in_dispatch_row, self.n_routed_experts
         )
 
-        dispatch_offsets = ttnn.offset_cumsum(
+        dispatch_offsets, total_counts_per_expert = ttnn.offset_cumsum(
             expert_histograms,
             cluster_axis=self.ccl_config["DISPATCH_AXIS"],
             num_links=self.ccl_config["NUM_LINKS"],
@@ -168,4 +168,4 @@ class MoEGatePrefill(LightweightModule):
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
-        return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
+        return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets, total_counts_per_expert)

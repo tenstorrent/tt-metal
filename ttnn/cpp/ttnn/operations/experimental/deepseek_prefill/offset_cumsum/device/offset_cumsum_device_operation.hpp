@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "offset_cumsum_program_factory.hpp"
 
@@ -17,8 +19,8 @@ namespace ttnn::experimental::prim {
 struct OffsetCumsumDeviceOperation {
     using operation_attributes_t = OffsetCumsumParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    using spec_return_value_t = std::array<TensorSpec, 2>;
+    using tensor_return_value_t = std::array<Tensor, 2>;
     using program_factory_t = std::variant<OffsetCumsumProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -31,5 +33,5 @@ struct OffsetCumsumDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-Tensor offset_cumsum(const Tensor& input_tensor);
+std::array<Tensor, 2> offset_cumsum(const Tensor& input_tensor);
 }  // namespace ttnn::prim
