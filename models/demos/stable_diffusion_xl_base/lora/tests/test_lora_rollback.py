@@ -9,6 +9,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 import ttnn
 from conftest import is_galaxy
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,
@@ -52,6 +53,9 @@ def _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size):
 )
 @torch.no_grad()
 def test_lora_rollback(mesh_device, is_ci_env, lora_path, prompt, negative_prompt, lora_prompt):
+    if is_blackhole():
+        pytest.skip("Not supported on Blackhole")
+
     prepare_device(mesh_device, use_cfg_parallel=False)
     batch_size = determinate_min_batch_size(mesh_device, use_cfg_parallel=False)
 

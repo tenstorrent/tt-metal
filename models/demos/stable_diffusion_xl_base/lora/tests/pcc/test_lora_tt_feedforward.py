@@ -39,8 +39,8 @@ def _get_diffusers_pipeline(is_ci_env):
 def test_feedforward(
     device, image_resolution, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds, lora_path
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
+    if is_blackhole():
+        pytest.skip("Not supported on Blackhole")
 
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()

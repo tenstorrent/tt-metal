@@ -224,8 +224,8 @@ def test_unet(
     reset_seeds,
     lora_path,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
+    if is_blackhole():
+        pytest.skip("Not supported on Blackhole")
 
     run_unet_model(
         device,
