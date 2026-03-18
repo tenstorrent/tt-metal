@@ -2,17 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/umd_device_access.hpp"
+#include "tt_metal/distributed/pcie_core_writer.hpp"
 
 #include <umd/device/cluster.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal::distributed {
 
-std::mutex UmdDeviceAccess::cluster_cache_mutex_;
-std::unordered_map<uint32_t, std::unique_ptr<tt::umd::Cluster>> UmdDeviceAccess::cluster_cache_;
+std::mutex PCIeCoreWriter::cluster_cache_mutex_;
+std::unordered_map<uint32_t, std::unique_ptr<tt::umd::Cluster>> PCIeCoreWriter::cluster_cache_;
 
-tt::umd::Cluster* UmdDeviceAccess::get_or_create_cluster(uint32_t device_id) {
+tt::umd::Cluster* PCIeCoreWriter::get_or_create_cluster(uint32_t device_id) {
     std::lock_guard lock(cluster_cache_mutex_);
     auto it = cluster_cache_.find(device_id);
     if (it != cluster_cache_.end()) {
@@ -26,12 +26,12 @@ tt::umd::Cluster* UmdDeviceAccess::get_or_create_cluster(uint32_t device_id) {
     return ptr;
 }
 
-UmdDeviceAccess::UmdDeviceAccess(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y) :
+PCIeCoreWriter::PCIeCoreWriter(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y) :
     device_id_(device_id), virtual_core_x_(virtual_core_x), virtual_core_y_(virtual_core_y) {
     get_or_create_cluster(device_id);
 }
 
-std::function<void(void*, uint32_t, uint64_t)> UmdDeviceAccess::get_pcie_writer() const {
+std::function<void(void*, uint32_t, uint64_t)> PCIeCoreWriter::get_pcie_writer() const {
     auto* cluster = get_or_create_cluster(device_id_);
     auto chip_id = static_cast<int>(device_id_);
     auto vx = virtual_core_x_;

@@ -32,6 +32,7 @@ void kernel_main() {
     //  - In this case, an additional CB would be needed to synchronize the receiver and
     //    compute kernels (socket_notify_sender cannot be called until compute is done with
     //    pages in the local CB)
+
     for (uint32_t i = 0; i < num_iterations; i++) {
         uint32_t outstanding_data_size = data_size;
         uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);

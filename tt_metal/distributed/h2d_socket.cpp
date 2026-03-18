@@ -6,7 +6,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/socket_descriptor.hpp"
-#include "tt_metal/distributed/umd_device_access.hpp"
+#include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -176,8 +176,6 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
                                  ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
     } else {
         recv_device_id = device_id.value();
-        std::cout << "Recv Logical Core: " << recv_core_.core_coord.str() << " Device ID: " << recv_device_id
-                  << std::endl;
         recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
             recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
     }
@@ -379,7 +377,6 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     desc.pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
 
     descriptor_path_ = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
-    std::cout << "Exported to: " << descriptor_path_ << std::endl;
     desc.write_to_file(descriptor_path_);
     exported_ = true;
     return descriptor_path_;
@@ -420,8 +417,9 @@ std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std:
         socket->bytes_acked_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr());
     }
 
-    socket->umd_access_ = std::make_unique<UmdDeviceAccess>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
-    socket->pcie_writer = socket->umd_access_->get_pcie_writer();
+    socket->pcie_writer_instance_ =
+        std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
+    socket->pcie_writer = socket->pcie_writer_instance_->get_pcie_writer();
 
     return socket;
 }

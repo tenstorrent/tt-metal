@@ -6,7 +6,7 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/socket_descriptor.hpp"
-#include "tt_metal/distributed/umd_device_access.hpp"
+#include "tt_metal/distributed/pcie_core_writer.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -346,8 +346,9 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
     socket->host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(socket->shm_->ptr()), [](uint32_t*) {});
     socket->bytes_sent_ptr_ = static_cast<uint32_t*>(socket->shm_->ptr()) + (desc.bytes_sent_offset / sizeof(uint32_t));
 
-    socket->umd_access_ = std::make_unique<UmdDeviceAccess>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
-    socket->pcie_writer_ = socket->umd_access_->get_pcie_writer();
+    socket->pcie_writer_instance_ =
+        std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
+    socket->pcie_writer_ = socket->pcie_writer_instance_->get_pcie_writer();
 
     return socket;
 }

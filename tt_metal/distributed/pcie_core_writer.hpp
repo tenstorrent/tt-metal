@@ -23,14 +23,14 @@ namespace tt::tt_metal::distributed {
  * or tt-metal's Cluster (no ethernet firmware init, no RISC reset).
  * Caches the UMD Cluster per device_id so topology discovery runs only once.
  */
-class UmdDeviceAccess {
+class PCIeCoreWriter {
 public:
-    UmdDeviceAccess(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y);
+    PCIeCoreWriter(uint32_t device_id, uint32_t virtual_core_x, uint32_t virtual_core_y);
 
-    UmdDeviceAccess(const UmdDeviceAccess&) = delete;
-    UmdDeviceAccess& operator=(const UmdDeviceAccess&) = delete;
-    UmdDeviceAccess(UmdDeviceAccess&&) noexcept = default;
-    UmdDeviceAccess& operator=(UmdDeviceAccess&&) noexcept = default;
+    PCIeCoreWriter(const PCIeCoreWriter&) = delete;
+    PCIeCoreWriter& operator=(const PCIeCoreWriter&) = delete;
+    PCIeCoreWriter(PCIeCoreWriter&&) noexcept = default;
+    PCIeCoreWriter& operator=(PCIeCoreWriter&&) noexcept = default;
 
     std::function<void(void*, uint32_t, uint64_t)> get_pcie_writer() const;
 

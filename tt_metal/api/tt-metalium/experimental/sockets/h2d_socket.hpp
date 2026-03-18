@@ -16,7 +16,7 @@ class TlbWindow;
 namespace tt::tt_metal::distributed {
 
 class NamedShm;
-class UmdDeviceAccess;
+class PCIeCoreWriter;
 
 /**
  * @brief Specifies the data transfer mode for Host-to-Device communication.
@@ -184,7 +184,7 @@ private:
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer = nullptr;
     H2DMode h2d_mode_ = H2DMode::HOST_PUSH;
     std::unique_ptr<NamedShm> shm_;
-    std::unique_ptr<UmdDeviceAccess> umd_access_;
+    std::unique_ptr<PCIeCoreWriter> pcie_writer_instance_;
     MeshDevice* mesh_device_ = nullptr;
     bool is_owner_ = true;
     std::string descriptor_path_;
