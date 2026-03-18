@@ -1017,6 +1017,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto actual_sender_channels_vc1 = actual_sender_channels_per_vc_.has_value()
                                           ? actual_sender_channels_per_vc_.value()[1]
                                           : config.num_used_sender_channels_per_vc[1];
+    auto actual_sender_channels_vc2 = actual_sender_channels_per_vc_.has_value()
+                                          ? actual_sender_channels_per_vc_.value()[2]
+                                          : config.num_used_sender_channels_per_vc[2];
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1068,6 +1071,12 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         StreamRegAssignments::IncrementOnWrite::sender_channel_6_free_slots_stream_id;
     named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::sender_channel_7_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+    named_args["VC2_RECEIVER_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id;
     named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::tensix_relay_local_free_slots_stream_id;
     // --- Stream IDs (scratch registers) ---
@@ -1075,9 +1084,13 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id;
     named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id;
 
-    // --- Max channel counts ---
-    named_args["MAX_NUM_SENDER_CHANNELS"] = builder_config::num_max_sender_channels;
-    named_args["MAX_NUM_RECEIVER_CHANNELS"] = builder_config::num_max_receiver_channels;
+    // --- Max channel counts (conditional on VC2 enablement) ---
+    bool vc2_enabled = actual_sender_channels_vc2 > 0;
+    named_args["MAX_NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(
+        vc2_enabled ? builder_config::num_max_sender_channels : builder_config::num_max_sender_channels_without_vc2);
+    named_args["MAX_NUM_RECEIVER_CHANNELS"] = static_cast<uint32_t>(
+        vc2_enabled ? builder_config::num_max_receiver_channels
+                    : builder_config::num_max_receiver_channels_without_vc2);
     named_args["MAX_NUM_VCS"] = static_cast<uint32_t>(builder_config::MAX_NUM_VCS);
 
     // --- Downstream tensix connections ---
@@ -1106,6 +1119,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
     named_args["ACTUAL_VC0_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc0);
     named_args["ACTUAL_VC1_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc1);
+    named_args["ACTUAL_VC2_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc2);
 
     // --- Remote channel info (always emitted; 0 when inactive) ---
     named_args["SKIP_SRC_CH_ID_UPDATE"] = skip_src_ch_id_update ? 1 : 0;
@@ -1245,9 +1259,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
         named_args["DISABLE_RX_CH1_FORWARDING"] =
             channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
+        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
     } else {
         named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
         named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
+        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
     }
 
     // Credit amortization named compile-time args
@@ -1322,6 +1338,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[6]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[7]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[8]),  // 9th channel for Z routers
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[9]),  // 10th channel for VC2
 
         static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0]),
         static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1]),
@@ -1333,6 +1350,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[7]),
         static_cast<uint32_t>(
             this->downstream_vcs_sender_channel_buffer_index_semaphore_id[8]),  // 9th channel for Z routers
+        static_cast<uint32_t>(
+            this->downstream_vcs_sender_channel_buffer_index_semaphore_id[9]),  // 10th channel for VC2
     };
 
     // Pack VC0 runtime args
