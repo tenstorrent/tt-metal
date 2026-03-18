@@ -280,6 +280,16 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
     // Set router type based on detection
     config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
 
+    // VC2 requires: VC1 active + Blackhole architecture + no UDM/mux extension
+    if (config.requires_vc1) {
+        auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+        auto tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
+        bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
+        bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
+        config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
+    }
+
     return config;
 }
 
