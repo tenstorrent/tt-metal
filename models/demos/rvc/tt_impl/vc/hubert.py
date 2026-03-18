@@ -120,11 +120,8 @@ class TransformerSentenceEncoderLayer:
             activation=activation_fn,
         )
         self.fc2 = Linear(device=device, in_features=ffn_embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
-
-        self.self_attn_layer_norm_weight: ttnn.Tensor | None = None
-        self.self_attn_layer_norm_bias: ttnn.Tensor | None = None
-        self.final_layer_norm_weight: ttnn.Tensor | None = None
-        self.final_layer_norm_bias: ttnn.Tensor | None = None
+        self.self_attn_layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5, dtype=ttnn.bfloat16)
+        self.final_layer_norm = LayerNorm(device=device, normalized_shape=embed_dim, eps=1e-5, dtype=ttnn.bfloat16)
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -132,47 +129,23 @@ class TransformerSentenceEncoderLayer:
         self.self_attn.load_state_dict(state_dict, module_prefix=f"{module_prefix}self_attn.")
         self.fc1.load_state_dict(state_dict=state_dict, key="fc1", module_prefix=module_prefix)
         self.fc2.load_state_dict(state_dict=state_dict, key="fc2", module_prefix=module_prefix)
-
-        for key_name, attr_w, attr_b in [
-            ("self_attn_layer_norm", "self_attn_layer_norm_weight", "self_attn_layer_norm_bias"),
-            ("final_layer_norm", "final_layer_norm_weight", "final_layer_norm_bias"),
-        ]:
-            w_key = f"{module_prefix}{key_name}.weight" if module_prefix else f"{key_name}.weight"
-            b_key = f"{module_prefix}{key_name}.bias" if module_prefix else f"{key_name}.bias"
-            if w_key not in state_dict:
-                raise KeyError(f"Missing required parameter: {w_key}")
-            if b_key not in state_dict:
-                raise KeyError(f"Missing required parameter: {b_key}")
-            w = ttnn.from_torch(
-                state_dict[w_key].reshape(1, 1, -1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-            b = ttnn.from_torch(
-                state_dict[b_key].reshape(1, 1, -1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-            setattr(self, attr_w, w)
-            setattr(self, attr_b, b)
-
-    def _layer_norm(self, x: ttnn.Tensor, weight: ttnn.Tensor | None, bias: ttnn.Tensor | None) -> ttnn.Tensor:
-        if weight is None or bias is None:
-            raise ValueError("Layer norm state_dict are not loaded.")
-        return ttnn.layer_norm(x, weight=weight, bias=bias, epsilon=1e-5)
+        self.self_attn_layer_norm.load_state_dict(
+            state_dict=state_dict, key="self_attn_layer_norm", module_prefix=module_prefix
+        )
+        self.final_layer_norm.load_state_dict(
+            state_dict=state_dict, key="final_layer_norm", module_prefix=module_prefix
+        )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         residual = x
 
         if self.layer_norm_first:
-            x = self._layer_norm(x, self.self_attn_layer_norm_weight, self.self_attn_layer_norm_bias)
+            x = self.self_attn_layer_norm(x)
             attn_out = self.self_attn(query=x)
             x = ttnn.add(residual, attn_out, output_tensor=x)
 
             residual = x
-            x = self._layer_norm(x, self.final_layer_norm_weight, self.final_layer_norm_bias)
+            x = self.final_layer_norm(x)
             x = self.fc1(x)
             x = self.fc2(x)
             x = ttnn.add(residual, x, output_tensor=x)
@@ -181,14 +154,14 @@ class TransformerSentenceEncoderLayer:
 
             x = ttnn.add(residual, x, output_tensor=x)
 
-            x = self._layer_norm(x, self.self_attn_layer_norm_weight, self.self_attn_layer_norm_bias)
+            x = self.self_attn_layer_norm(x)
 
             residual = x
             x = self.fc1(x)
 
             x = self.fc2(x)
             x = ttnn.add(residual, x, output_tensor=x)
-            x = self._layer_norm(x, self.final_layer_norm_weight, self.final_layer_norm_bias)
+            x = self.final_layer_norm(x)
 
         return x
 
@@ -196,10 +169,8 @@ class TransformerSentenceEncoderLayer:
         self.self_attn.deallocate()
         self.fc1.deallocate()
         self.fc2.deallocate()
-        ttnn.deallocate(self.self_attn_layer_norm_weight)
-        ttnn.deallocate(self.self_attn_layer_norm_bias)
-        ttnn.deallocate(self.final_layer_norm_weight)
-        ttnn.deallocate(self.final_layer_norm_bias)
+        self.self_attn_layer_norm.deallocate()
+        self.final_layer_norm.deallocate()
 
 
 class ConvFeatureExtractionModel:
@@ -235,12 +206,14 @@ class ConvFeatureExtractionModel:
             )
             in_d = dim
 
-        self.ln_weights: list[ttnn.Tensor | None] = [None for _ in conv_layers]
-        self.ln_biases: list[ttnn.Tensor | None] = [None for _ in conv_layers]
-        self.group_norms: list[GroupNorm1D | None] = [None for _ in conv_layers]
+        self.layer_norms: list[LayerNorm] = []
+        self.group_norms: list[GroupNorm1D] = []
+        if self.mode == "layer_norm":
+            for dim, _, _ in conv_layers:
+                self.layer_norms.append(LayerNorm(device=device, normalized_shape=dim, eps=1e-5, dtype=ttnn.bfloat16))
         if self.mode == "default" and conv_layers:
-            self.group_norms[0] = GroupNorm1D(
-                device=device, num_channels=conv_layers[0][0], num_groups=conv_layers[0][0]
+            self.group_norms.append(
+                GroupNorm1D(device=device, num_channels=conv_layers[0][0], num_groups=conv_layers[0][0])
             )
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
@@ -249,26 +222,9 @@ class ConvFeatureExtractionModel:
         for i, conv in enumerate(self.conv_layers):
             conv.load_state_dict(state_dict=state_dict, key=f"conv_layers.{i}.0", module_prefix=module_prefix)
             if self.mode == "layer_norm":
-                w_key = f"{module_prefix}conv_layers.{i}.1.1.weight"
-                b_key = f"{module_prefix}conv_layers.{i}.1.1.bias"
-                if w_key not in state_dict:
-                    raise KeyError(f"Missing required parameter: {w_key}")
-                if b_key not in state_dict:
-                    raise KeyError(f"Missing required parameter: {b_key}")
-                ln_w = ttnn.from_torch(
-                    state_dict[w_key].reshape(1, 1, -1),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                self.layer_norms[i].load_state_dict(
+                    state_dict=state_dict, key=f"conv_layers.{i}.1.1", module_prefix=module_prefix
                 )
-                ln_b = ttnn.from_torch(
-                    state_dict[b_key].reshape(1, 1, -1),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
-                )
-                self.ln_weights[i] = ln_w
-                self.ln_biases[i] = ln_b
             elif self.mode == "default" and i == 0:
                 group_norm = self.group_norms[i]
                 if group_norm is None:
@@ -276,32 +232,13 @@ class ConvFeatureExtractionModel:
                 group_norm.load_state_dict(state_dict=state_dict, key=f"conv_layers.{i}.1", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Torch path takes BxT and does unsqueeze(1). TT conv expects BxLxC.
-        batch_size = x.shape[0]
-        current_length = x.shape[1]
-
         for i, conv in enumerate(self.conv_layers):
             x = conv(x)
-            out_channels, kernel_size, stride = self.conv_layers_cfg[i]
-            current_length = ((current_length - kernel_size) // stride) + 1
-
             if self.mode == "layer_norm":
-                ln_w = self.ln_weights[i]
-                ln_b = self.ln_biases[i]
-                if ln_w is None or ln_b is None:
-                    raise ValueError("LayerNorm state_dict are not loaded.")
-                x = ttnn.layer_norm(
-                    x,
-                    weight=ln_w,
-                    bias=ln_b,
-                    epsilon=1e-5,
-                )
+                x = self.layer_norms[i](x)
 
             elif self.mode == "default" and i == 0:
-                group_norm = self.group_norms[i]
-                if group_norm is None:
-                    raise ValueError("GroupNorm state_dict are not loaded.")
-                x = group_norm.gp_slice(x)
+                x = self.group_norms[i].gp_slice(x)
             x = ttnn.gelu(x, output_tensor=x)
 
         return x
@@ -309,6 +246,8 @@ class ConvFeatureExtractionModel:
     def deallocate(self) -> None:
         for conv in self.conv_layers:
             conv.deallocate()
+        for layer_norm in self.layer_norms:
+            layer_norm.deallocate()
         for group_norm in self.group_norms:
             if group_norm is not None:
                 group_norm.deallocate()
@@ -336,7 +275,6 @@ class PositionalConvEmbedding:
         self.conv.load_state_dict(state_dict=state_dict, key="0", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        batch_size = x.shape[0]
         input_length = x.shape[1]
         output_length = input_length + 2 * (self.kernel_size // 2) - self.kernel_size + 1
         out = self.conv(x)
