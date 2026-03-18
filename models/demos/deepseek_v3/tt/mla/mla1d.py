@@ -12,7 +12,6 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
-import models.experimental.ops.descriptors.composite as composite
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -48,6 +47,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -1062,7 +1062,7 @@ class MLA1D(AbstractModule):
 
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
         # Q and KV nope use non-overlapping core grids so they can run parallel norms
-        # via composite.launch (which requires non-overlapping core ranges).
+        # via Parallel (which requires non-overlapping core ranges).
         num_q_cores = 16
         num_kv_nope_cores = 16
         shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
@@ -1868,9 +1868,9 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        results = composite.launch([q_norm_desc, kv_norm_desc])
-        tt_q = results[0][0]
-        tt_kv_nope = results[1][0]
+        Parallel(q_norm_desc, kv_norm_desc).build(tt_q.device()).launch()
+        tt_q = q_norm_desc.output_tensors[0]
+        tt_kv_nope = kv_norm_desc.output_tensors[0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
