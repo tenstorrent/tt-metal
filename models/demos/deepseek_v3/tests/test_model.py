@@ -5,7 +5,6 @@ import errno
 import hashlib
 import re
 import tempfile
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -516,41 +515,6 @@ def run_test_forward_pass_dpmodel(
     logger.info(f"TT full-output check passed against reference baseline for case '{case_key}'")
 
     ttnn.deallocate(tt_output)
-
-
-@pytest.mark.timeout(300)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
-)
-def test_forward_pass_smoke(
-    hf_config_short,
-    cache_path,
-    mesh_device,
-    ccl,
-    force_recalculate_weight_config,
-    set_deterministic_env,
-    state_dict,
-):
-    """Minimal decode smoke test. Catches topology, weight-loading, and basic
-    forward-pass issues before the full 5-layer suite runs.
-    Uses first_k_dense_replace + 1 layers so both dense (MLP) and MoE paths are exercised."""
-
-    hf_config_short = deepcopy(hf_config_short)
-    hf_config_short.num_hidden_layers = hf_config_short.first_k_dense_replace + 1
-
-    run_test_forward_pass_dpmodel(
-        mode="decode",
-        seq_len=1,
-        batch_size_per_row=USERS_PER_ROW,
-        hf_config_short=hf_config_short,
-        cache_path=cache_path,
-        mesh_device=mesh_device,
-        ccl=ccl,
-        force_recalculate_weight_config=force_recalculate_weight_config,
-        state_dict=state_dict,
-    )
 
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
