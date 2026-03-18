@@ -22,6 +22,8 @@
 #include "internal/dataflow_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
+#include "api/kernel_thread_globals.h"
+
 // clang-format on
 
 #if defined(PROFILE_KERNEL)

@@ -19,9 +19,14 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
+#include "api/kernel_thread_globals.h"
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
 #endif
+
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
 
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {

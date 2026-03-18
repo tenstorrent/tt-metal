@@ -19,6 +19,7 @@
 #include "api/remote_circular_buffer_api.h"
 #endif
 #include "internal/debug/stack_usage.h"
+#include "api/kernel_thread_globals.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -26,6 +27,10 @@ uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
+
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
 
 // namespace ckernel {
 // volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
@@ -55,9 +60,20 @@ uint32_t _start() {
     // if (hartid == /* leading core */ 0) {
     extern uint32_t __ldm_tdata_start[];
     extern uint32_t __ldm_tdata_end[];
+
+    // Obtain launch message from mailbox.
+    uint32_t launch_idx = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    launch_msg_t tt_l1_ptr* launch_msg = &(*GET_MAILBOX_ADDRESS_DEV(launch))[launch_idx];
+
     do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
     // }
     do_thread_crt1(__tdata_lma);
+
+    // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
+    uint32_t neo_id = csr_read<CSR::NEO_ID>();
+    uint32_t config_index = MaxDMProcessorsPerCoreType + neo_id;
+    num_sw_threads = launch_msg->kernel_config.num_sw_threads[config_index];
+    my_thread_id = launch_msg->kernel_config.kernel_thread_id[config_index];
 
 // #if defined(UCK_CHLKC_UNPACK)
 //     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
@@ -68,6 +84,7 @@ uint32_t _start() {
 #endif
     wait_for_go_message();
     RecordPerfCounters();
+
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");

@@ -43,6 +43,9 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     if (env_var == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "This test is for Quasar compute kernels only.";
+    }
 
     constexpr CoreCoord core = {0, 0};
     const uint32_t dram_channel = mesh_device->dram_channel_from_virtual_core(core);
@@ -272,6 +275,80 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
         thread_local_addrs.insert(slot_thread_local_addr(dm));
     }
     EXPECT_EQ(thread_local_addrs.size(), NUM_DM_CORES) << "All thread local addresses should be unique";
+}
+
+// Quasar compute: 4 Tensix engines per cluster, 4 TRISCs per engine = 16 slots.
+// Verification mirrors GlobalsAndTLS (DM test) for the same information.
+static constexpr uint32_t QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER = 4;
+static constexpr uint32_t QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE = 4;
+static constexpr uint32_t NUM_COMPUTE_SLOTS =
+    QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
+
+TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
+    auto mesh_device = devices_[0];
+    IDevice* device = mesh_device->get_devices()[0];
+
+    char* env_var = std::getenv("TT_METAL_SIMULATOR");
+    if (env_var == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    }
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "This test is for Quasar compute kernels only.";
+    }
+
+    constexpr CoreCoord core = {0, 0};
+    constexpr uint32_t l1_result_addr = 200 * 1024;
+    constexpr uint32_t total_result_bytes = NUM_COMPUTE_SLOTS * TLS_CHECK_RESULT_SLOT_BYTES;
+
+    std::vector<uint32_t> init_data(total_result_bytes / sizeof(uint32_t), 0);
+    tt_metal::detail::WriteToDeviceL1(
+        device,
+        core,
+        l1_result_addr,
+        std::span(reinterpret_cast<const uint8_t*>(init_data.data()), total_result_bytes),
+        CoreType::WORKER);
+
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    Program program = CreateProgram();
+
+    const std::string kernel_path =
+        OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp";
+    KernelHandle compute_kernel = experimental::quasar::CreateKernel(
+        program,
+        kernel_path,
+        core,
+        experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER});
+
+    SetRuntimeArgs(program, compute_kernel, core, {l1_result_addr});
+
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
+    distributed::Finish(mesh_device->mesh_command_queue());
+
+    std::vector<uint32_t> l1_data;
+    tt_metal::detail::ReadFromDeviceL1(device, core, l1_result_addr, total_result_bytes, l1_data, CoreType::WORKER);
+
+    for (uint32_t slot = 0; slot < NUM_COMPUTE_SLOTS; slot++) {
+        const uint32_t offset = slot * TLS_CHECK_RESULT_SLOT_WORDS;
+        uint32_t kernel_id = l1_data[offset + TLS_CHECK_KERNEL_ID];
+        uint32_t num_sw_threads = l1_data[offset + TLS_CHECK_NUM_THREADS];
+        uint32_t my_thread_id = l1_data[offset + TLS_CHECK_MY_THREAD_ID];
+        uint32_t hartid = l1_data[offset + TLS_CHECK_HART_ID];
+
+        // 1. Single kernel: all slots run kernel_id 1
+        EXPECT_EQ(kernel_id, 1u) << "slot=" << slot;
+
+        // 2. num_sw_threads & my_thread_id (engine id 0-3, config indices 8-11)
+        uint32_t expected_engine_id = slot / QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+        EXPECT_EQ(num_sw_threads, QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER) << "slot=" << slot;
+        EXPECT_EQ(my_thread_id, expected_engine_id) << "slot=" << slot;
+
+        // 3. hartid: slot 0 -> 8, slot 1 -> 9, ..., slot 15 -> 23
+        EXPECT_EQ(hartid, QUASAR_FIRST_COMPUTE_HARTID + slot) << "slot=" << slot;
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
