@@ -29,7 +29,7 @@ _REF_K = 7168
 
 def _scaled_randn(*shape, generator, dtype=torch.bfloat16):
     """Generate random weights scaled by 1/sqrt(inner_dim), matching generate_mm_weights convention."""
-    return (torch.randn(*shape, generator=generator, dtype=torch.float32) / (shape[-2] ** 0.5)).to(dtype)
+    return (torch.randn(*shape, generator=generator, dtype=torch.float32) / (shape[-1] ** 0.5)).to(dtype)
 
 
 def _reference_layer_state_dict(
