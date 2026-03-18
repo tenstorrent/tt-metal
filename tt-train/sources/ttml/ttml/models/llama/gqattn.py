@@ -22,6 +22,8 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
+        weight_init=None,
+        bias_init=None,
     ) -> None:
         super().__init__()
 
@@ -40,13 +42,25 @@ class GroupedQueryAttention(AbstractModuleBase):
         concat_kv_dim = 2 * num_groups * (embedding_size // num_heads)
 
         self.q_linear = LinearLayer(
-            embedding_size, embedding_size, bias_linears, zero_init=True
+            embedding_size,
+            embedding_size,
+            bias_linears,
+            weight_init=weight_init,
+            bias_init=bias_init,
         )
         self.kv_linear = LinearLayer(
-            embedding_size, concat_kv_dim, bias_linears, zero_init=True
+            embedding_size,
+            concat_kv_dim,
+            bias_linears,
+            weight_init=weight_init,
+            bias_init=bias_init,
         )
         self.out_linear = LinearLayer(
-            embedding_size, embedding_size, bias_linears, zero_init=True
+            embedding_size,
+            embedding_size,
+            bias_linears,
+            weight_init=weight_init,
+            bias_init=bias_init,
         )
 
     def forward_no_kv(

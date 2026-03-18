@@ -13,37 +13,6 @@ from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
 
-def _create_weight(in_features: int, out_features: int, zero_init: bool = False):
-    # Shape matches C++ convention: (1, 1, out_features, in_features)
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    shape = (1, 1, out_features, in_features)
-    if zero_init:
-        weight_ttnn = ttnn.zeros(
-            shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE
-        )
-    else:
-        init_k = math.sqrt(1.0 / in_features)
-        weight_ttnn = ttnn.rand(
-            shape, device=device, dtype=ttnn.DataType.BFLOAT16, low=-init_k, high=init_k
-        )
-    return ttml.autograd.create_tensor(weight_ttnn)
-
-
-def _create_bias(in_features: int, out_features: int, zero_init: bool = False):
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    shape = (1, 1, 1, out_features)
-    if zero_init:
-        bias_ttnn = ttnn.zeros(
-            shape, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.Layout.TILE
-        )
-    else:
-        init_k = math.sqrt(1.0 / in_features)
-        bias_ttnn = ttnn.rand(
-            shape, device=device, dtype=ttnn.DataType.BFLOAT16, low=-init_k, high=init_k
-        )
-    return ttml.autograd.create_tensor(bias_ttnn)
-
-
 class LinearLayer(AbstractModuleBase):
     """Fully-connected linear layer: y = x @ W^T + b."""
 
@@ -52,18 +21,29 @@ class LinearLayer(AbstractModuleBase):
         in_features: int,
         out_features: int,
         has_bias: bool = True,
-        zero_init: bool = False,
+        weight_init=None,
+        bias_init=None,
     ) -> None:
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = Parameter(_create_weight(in_features, out_features, zero_init))
-        self.bias = (
-            Parameter(_create_bias(in_features, out_features, zero_init))
-            if has_bias
-            else None
-        )
+
+        if weight_init is None:
+            k = math.sqrt(1.0 / in_features)
+            weight_init = ttml.init.uniform(-k, k)
+
+        weight_shape = (1, 1, out_features, in_features)
+        self.weight = Parameter(weight_init(weight_shape))
+
+        if has_bias:
+            if bias_init is None:
+                k = math.sqrt(1.0 / in_features)
+                bias_init = ttml.init.uniform(-k, k)
+            bias_shape = (1, 1, 1, out_features)
+            self.bias = Parameter(bias_init(bias_shape))
+        else:
+            self.bias = None
 
     def __reduce__(self):
         return (

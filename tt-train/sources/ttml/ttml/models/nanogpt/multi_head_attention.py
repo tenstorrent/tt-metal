@@ -22,15 +22,13 @@ class MultiHeadAttention(AbstractModuleBase):
     """
 
     def __init__(
-        self, embedding_dim: int, num_heads: int, dropout: float = 0.0
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        dropout: float = 0.0,
+        weight_init=None,
+        bias_init=None,
     ) -> None:
-        """Initialize multi-head attention layer.
-
-        Args:
-            embedding_dim: Dimension of embeddings
-            num_heads: Number of attention heads
-            dropout: Dropout probability
-        """
         super().__init__()
 
         assert (
@@ -41,30 +39,25 @@ class MultiHeadAttention(AbstractModuleBase):
         self.num_heads = num_heads
         self.head_dim = embedding_dim // num_heads
         self.dropout_prob = dropout
-        # Note: RunMode is managed by AbstractModuleBase (defaults to TRAIN)
-        # Note: scaling by 1/sqrt(head_dim) is handled inside scaled_dot_product_attention
 
         self.qkv_linear = LinearLayer(
-            embedding_dim, embedding_dim * 3, True, zero_init=True
+            embedding_dim,
+            embedding_dim * 3,
+            True,
+            weight_init=weight_init,
+            bias_init=bias_init,
         )
         self.out_linear = LinearLayer(
-            embedding_dim, embedding_dim, True, zero_init=True
+            embedding_dim,
+            embedding_dim,
+            True,
+            weight_init=weight_init,
+            bias_init=bias_init,
         )
-
-    # train() and eval() are inherited from AbstractModuleBase
 
     def forward(
         self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
     ) -> ttml.autograd.Tensor:
-        """Forward pass of multi-head attention.
-
-        Args:
-            x: Input tensor
-            mask: Optional attention mask
-
-        Returns:
-            Output tensor after attention
-        """
         # QKV projection (matching C++ qkv = (*m_qkv_linear)(x))
         qkv = self.qkv_linear(x)
 

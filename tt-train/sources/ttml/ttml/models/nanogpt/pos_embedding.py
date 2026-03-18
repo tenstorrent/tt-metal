@@ -103,7 +103,7 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
         sequence_length: int,
         embedding_dim: int,
         dropout_prob: float = 0.0,
-        zero_init: bool = False,
+        weight_init=None,
     ) -> None:
         """Initialize trainable positional embedding.
 
@@ -111,29 +111,18 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
             sequence_length: Maximum sequence length
             embedding_dim: Dimension of embeddings
             dropout_prob: Dropout probability
-            zero_init: If True, initialize weights to zero
+            weight_init: Initializer for weight tensor. Defaults to normal(0, 0.02).
         """
         super().__init__()
 
         self.sequence_length = sequence_length
         self.dropout_prob = dropout_prob
 
+        if weight_init is None:
+            weight_init = ttml.init.normal(0.0, 0.02)
+
         weight_shape = (1, 1, sequence_length, embedding_dim)
-        if zero_init:
-            device = ttml.autograd.AutoContext.get_instance().get_device()
-            weight_ttnn = ttnn.zeros(
-                weight_shape,
-                device=device,
-                dtype=ttnn.DataType.BFLOAT16,
-                layout=ttnn.Layout.TILE,
-            )
-            self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
-        else:
-            self.weight = Parameter(
-                ttml.ops.randn(
-                    weight_shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
-                )
-            )
+        self.weight = Parameter(weight_init(weight_shape))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass: add positional embeddings and apply dropout.

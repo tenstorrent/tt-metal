@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict
+from typing import Optional
 
 import ttnn
 import ttml
@@ -73,41 +73,27 @@ class LlamaConfig:
             )
 
 
-def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    for name, tensor in parameters.items():
-        shape = tensor.shape()
-
-        if "weight" in name:
-            # Initialize weights with normal(0, 0.02)
-            new_tensor = ttml.ops.randn(
-                shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
-            )
-            tensor.assign(new_tensor)
-        elif "bias" in name:
-            # Initialize biases with 0
-            bias_ttnn = ttnn.zeros(
-                shape,
-                device=device,
-                dtype=ttnn.DataType.BFLOAT16,
-                layout=ttnn.Layout.TILE,
-            )
-            tensor.set_value(bias_ttnn)
-
-
 class Llama(AbstractModuleBase):
     def __init__(self, config: LlamaConfig) -> None:
         super().__init__()
 
         self.config = config
 
+        weight_init = ttml.init.normal(0.0, 0.02)
+        bias_init = ttml.init.zeros()
+
         self.fc = LinearLayer(
-            config.hidden_size, config.vocab_size, False, zero_init=True
+            config.hidden_size,
+            config.vocab_size,
+            False,
+            weight_init=weight_init,
         )
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(
-            vocab_size_divisible_by_32, config.hidden_size, zero_init=True
+            vocab_size_divisible_by_32,
+            config.hidden_size,
+            weight_init=weight_init,
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
@@ -146,13 +132,14 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    weight_init=weight_init,
+                    bias_init=bias_init,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
         )
 
         self.ln_fc = RMSNormLayer(config.hidden_size)
-        initialize_parameters(self.parameters())
 
     def forward(
         self,

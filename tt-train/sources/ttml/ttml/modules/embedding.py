@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import ttnn
 import ttml
 
 from .module_base import AbstractModuleBase
@@ -17,35 +16,22 @@ class Embedding(AbstractModuleBase):
     """Embedding layer implemented in Python using ttml operations."""
 
     def __init__(
-        self, num_embeddings: int, embedding_dim: int, zero_init: bool = False
+        self, num_embeddings: int, embedding_dim: int, weight_init=None
     ) -> None:
         """Initialize embedding layer.
 
         Args:
             num_embeddings: Size of vocabulary
             embedding_dim: Dimension of embeddings
-            zero_init: If True, initialize weights to zero
+            weight_init: Initializer for weight tensor. Defaults to normal(0, 0.02).
         """
         super().__init__()
 
-        # Initialize weight tensor: shape [1, 1, num_embeddings, embedding_dim]
-        # Weight must be in TILE layout because embedding calls untilize on it
+        if weight_init is None:
+            weight_init = ttml.init.normal(0.0, 0.02)
+
         weight_shape = (1, 1, num_embeddings, embedding_dim)
-        if zero_init:
-            device = ttml.autograd.AutoContext.get_instance().get_device()
-            weight_ttnn = ttnn.zeros(
-                weight_shape,
-                device=device,
-                dtype=ttnn.DataType.BFLOAT16,
-                layout=ttnn.Layout.TILE,
-            )
-            self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
-        else:
-            self.weight = Parameter(
-                ttml.ops.randn(
-                    weight_shape, dtype=ttnn.DataType.BFLOAT16, mean=0.0, std=0.02
-                )
-            )
+        self.weight = Parameter(weight_init(weight_shape))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of embedding layer.

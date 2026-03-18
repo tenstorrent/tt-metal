@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer
 
@@ -28,15 +27,7 @@ class RMSNormLayer(AbstractModuleBase):
         self.use_composite = use_composite
 
         gamma_shape = (1, 1, 1, features)
-        device = ttml.autograd.AutoContext.get_instance().get_device()
-        gamma_ttnn = ttnn.ones(
-            gamma_shape,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        gamma_tensor = ttml.autograd.create_tensor(gamma_ttnn)
-        self.gamma = Parameter(gamma_tensor)
+        self.gamma = Parameter(ttml.init.ones()(gamma_shape))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of RMSNorm.
@@ -64,14 +55,9 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
+        weight_init=None,
+        bias_init=None,
     ) -> None:
-        """Initialize Llama MLP layer.
-
-        Args:
-            embedding_size: Dimension of embeddings
-            intermediate_size: Intermediate dimension
-            dropout: Dropout probability
-        """
         super().__init__()
 
         self.embedding_size = embedding_size
@@ -85,9 +71,27 @@ class LlamaMLP(AbstractModuleBase):
                 (unrounded_size + multiple_of - 1) // multiple_of
             ) * multiple_of
 
-        self.w1 = LinearLayer(embedding_size, intermediate_size, False, zero_init=True)
-        self.w3 = LinearLayer(embedding_size, intermediate_size, False, zero_init=True)
-        self.w2 = LinearLayer(intermediate_size, embedding_size, False, zero_init=True)
+        self.w1 = LinearLayer(
+            embedding_size,
+            intermediate_size,
+            False,
+            weight_init=weight_init,
+            bias_init=bias_init,
+        )
+        self.w3 = LinearLayer(
+            embedding_size,
+            intermediate_size,
+            False,
+            weight_init=weight_init,
+            bias_init=bias_init,
+        )
+        self.w2 = LinearLayer(
+            intermediate_size,
+            embedding_size,
+            False,
+            weight_init=weight_init,
+            bias_init=bias_init,
+        )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of MLP.
@@ -120,10 +124,18 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
+        weight_init=None,
+        bias_init=None,
     ) -> None:
         super().__init__()
 
-        self.mlp = LlamaMLP(hidden_size, intermediate_size, mlp_dropout)
+        self.mlp = LlamaMLP(
+            hidden_size,
+            intermediate_size,
+            mlp_dropout,
+            weight_init=weight_init,
+            bias_init=bias_init,
+        )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
         self.attention = GroupedQueryAttention(
@@ -133,6 +145,8 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
+            weight_init=weight_init,
+            bias_init=bias_init,
         )
 
     def forward(
