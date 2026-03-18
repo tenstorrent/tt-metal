@@ -122,7 +122,7 @@ private:
         remote_receiver_channels_base_address_ = {};
     std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
         remote_receiver_channels_num_buffers_ = {};
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc_ = {0, 0};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc_ = {};
 };
 
 inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
