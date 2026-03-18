@@ -822,9 +822,10 @@ void kernel_main() {
                 }
 
 #ifdef USE_MUX
+                uint32_t KV_chunks_processed_in_iter = 0;
+                constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+                constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
                 if (mux_connection_valid && !is_last_ring_iter) {
-                    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-                    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
                     const uint32_t rows_per_mux = (Sk_chunk_t + num_muxes_in_direction - 1) / num_muxes_in_direction;
                     const uint32_t my_row_start = my_mux_index * rows_per_mux;
                     const uint32_t my_row_end = std::min(my_row_start + rows_per_mux, (uint32_t)Sk_chunk_t);
@@ -838,6 +839,7 @@ void kernel_main() {
                         if (kv_chunk_is_beyond_logical_n) {
                             continue;
                         }
+                        KV_chunks_processed_in_iter++;
 
                         Slice kv_slice;
                         uint32_t end_seq_tile;
@@ -929,6 +931,13 @@ void kernel_main() {
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
                     }
                     tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
+                }
+                if (KV_chunks_processed_in_iter % 2 == 0) {
+                    DPRINT << " HELP, I'm doing the THING!!!!" << ENDL();
+                    cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
+                    cb_reserve_back(cb_v_writer_in, k_chunk_tiles);
+                    cb_push_back(cb_k_writer_in, k_chunk_tiles);
+                    cb_push_back(cb_v_writer_in, k_chunk_tiles);
                 }
 #endif
 
