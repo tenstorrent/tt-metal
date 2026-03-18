@@ -5,8 +5,8 @@
 """
 TTNN-native Rotary Position Embeddings for Molmo2 Text Model.
 
-Implements RoPE using ttnn.experimental.rotary_embedding_llama for efficient
-device-side computation without CPU roundtrips.
+Implements half-span RoPE using ttnn.experimental.rotary_embedding for
+device-side computation (no transformation matrix).
 
 Based on tt_transformers/tt/rope.py patterns.
 """
@@ -17,27 +17,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-
-def get_rot_transformation_mat(dhead: int = 32) -> torch.Tensor:
-    """
-    Generate the transformation matrix for RoPE.
-
-    The transformation matrix is used by rotary_embedding_llama to apply
-    the rotation operation efficiently.
-
-    Args:
-        dhead: Head dimension (typically 32 for tile-based ops)
-
-    Returns:
-        Transformation matrix of shape [1, 1, dhead, dhead]
-    """
-    # ROPE op uses a single tile
-    dhead = 32
-    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
-    return rot_emb_matrix
 
 
 def compute_cos_sin_cache(
@@ -91,8 +70,8 @@ class TextRotarySetup(LightweightModule):
     """
     TTNN-native rotary position embeddings setup for Molmo2.
 
-    Pre-computes cos/sin matrices and transformation matrices on device
-    for efficient RoPE computation using ttnn.experimental.rotary_embedding_llama.
+    Pre-computes cos/sin matrices on device for half-span RoPE
+    using ttnn.experimental.rotary_embedding (no transformation matrix).
     """
 
     def __init__(
@@ -172,50 +151,18 @@ class TextRotarySetup(LightweightModule):
             mesh_mapper=self.mesh_mapper,
         )
 
-        # Create transformation matrices
-        trans_mat_decode = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(1, 1, batch_size, 1)
-
-        # Decode transformation matrix with sharding
-        core_grid = ttnn.CoreCoord(8, 8)  # Standard grid for Wormhole
-        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, core_grid, row_wise=True)
-        trans_mat_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
-        self.transformation_mat_decode = ttnn.from_torch(
-            trans_mat_decode,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            memory_config=trans_mat_mem_config,
-            mesh_mapper=self.mesh_mapper,
-        )
-
-        # Prefill transformation matrix (DRAM, full head_dim)
-        trans_mat_prefill = get_rot_transformation_mat(dhead=head_dim)
-        self.transformation_mat_prefill = ttnn.from_torch(
-            trans_mat_prefill,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=datatype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_mapper,
-        )
+        # Half-span RoPE uses ttnn.experimental.rotary_embedding (no transformation matrix).
+        # Return None for backward-compat callers that still pass transformation_mats.
+        self._transformation_mat_decode = None
+        self._transformation_mat_prefill = None
 
     def get_transformation_mats(self) -> dict:
         """
-        Get both decode and prefill transformation matrices.
-
-        Returns:
-            Dict with 'decode' and 'prefill' transformation matrices
+        Return placeholder dict for API compatibility. Half-span RoPE does not use transformation matrices.
         """
         return {
-            "decode": self.transformation_mat_decode,
-            "prefill": self.transformation_mat_prefill,
+            "decode": self._transformation_mat_decode,
+            "prefill": self._transformation_mat_prefill,
         }
 
     def get_rot_mats_prefill(
@@ -411,23 +358,10 @@ class TextRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1, head_dim]
         sin = ttnn.transpose(sin, 1, 2)
 
-        # Shard to cores
-        core_grid = ttnn.CoreCoord(8, 8)
-        batch_grid = ttnn.num_cores_to_corerangeset(self.batch_size, core_grid, row_wise=True)
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
+        # Return interleaved (no sharding) for ttnn.experimental.rotary_embedding half-span op
         if self.batch_size % ttnn.TILE_SIZE != 0:
             cos = cos[:, : self.batch_size, :, :]
             sin = sin[:, : self.batch_size, :, :]
-
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)
 
         return [cos, sin]
 
@@ -444,7 +378,7 @@ class TextRotarySetup(LightweightModule):
             rot_idxs: Pre-allocated position index tensor on device [1, padded_batch]
 
         Returns:
-            List of [cos, sin] tensors for decode (HEIGHT_SHARDED)
+            List of [cos, sin] tensors for decode (interleaved, for half-span RoPE)
         """
         # Embedding lookup for cos/sin
         cos = ttnn.embedding(
@@ -468,23 +402,10 @@ class TextRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1, head_dim]
         sin = ttnn.transpose(sin, 1, 2)
 
-        # Shard to cores
-        core_grid = ttnn.CoreCoord(8, 8)
-        batch_grid = ttnn.num_cores_to_corerangeset(self.batch_size, core_grid, row_wise=True)
-        mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-
+        # Return interleaved for ttnn.experimental.rotary_embedding half-span op
         if self.batch_size % ttnn.TILE_SIZE != 0:
             cos = cos[:, : self.batch_size, :, :]
             sin = sin[:, : self.batch_size, :, :]
-
-        cos = ttnn.interleaved_to_sharded(cos, mem_config)
-        sin = ttnn.interleaved_to_sharded(sin, mem_config)
 
         return [cos, sin]
 
