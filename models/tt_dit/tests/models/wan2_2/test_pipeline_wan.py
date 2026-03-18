@@ -6,13 +6,14 @@ import numpy as np
 import pytest
 import torch
 from diffusers.utils import export_to_video
+from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 
 from ....utils.test import line_params, ring_params
 
-DEVICE_PARAMS = {"trace_region_size": 90000000}
+DEVICE_PARAMS = {"trace_region_size": 200000000}
 
 
 @pytest.mark.parametrize(
@@ -23,7 +24,7 @@ DEVICE_PARAMS = {"trace_region_size": 90000000}
         # WH (ring) on 4x8
         ((4, 8), (4, 8), 1, 0, 4, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, True),
         # BH (linear) on 4x8
-        ((4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False),
+        ((4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False),
     ],
     ids=[
         "2x2sp0tp1",
@@ -90,19 +91,21 @@ def test_pipeline_inference(
     seed = 42
     # Run inference
     with torch.no_grad():
-        result = pipeline(
-            prompt=prompt,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_inference_steps=num_inference_steps,
-            seed=seed,
-            traced=traced,
-            vae_traced=traced,
-            encoder_traced=traced,
-            guidance_scale=4.0,
-            guidance_scale_2=3.0,
-        )
+        for i in range(1):
+            logger.info(f"Running inference {i + 1} of 2...")
+            result = pipeline(
+                prompt=prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                traced=traced,
+                # vae_traced=traced,
+                # encoder_traced=traced,
+                guidance_scale=4.0,
+                guidance_scale_2=3.0,
+            )
 
     # Check output
     if hasattr(result, "frames"):

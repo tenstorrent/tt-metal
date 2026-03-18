@@ -627,6 +627,45 @@ class WanTransformer3DModel(Module):
 
         return spatial_1BNI
 
+    def combined_step(
+        self,
+        do_classifier_free_guidance: bool,
+        spatial_1BNI: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        negative_prompt_1BLP: ttnn.Tensor,
+        N: int,
+        temb_11BD: ttnn.Tensor,
+        timestep_proj_1BTD: ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        cond = self.inner_step(
+            spatial_1BNI,
+            prompt_1BLP,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            N,
+            temb_11BD,
+            timestep_proj_1BTD,
+        )
+        if not do_classifier_free_guidance:
+            return cond, None
+
+        uncond = self.inner_step(
+            spatial_1BNI,
+            negative_prompt_1BLP,
+            rope_cos_1HND,
+            rope_sin_1HND,
+            trans_mat,
+            N,
+            temb_11BD,
+            timestep_proj_1BTD,
+        )
+
+        return cond, uncond
+
     @staticmethod
     def device_to_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
         """Move a ttnn device tensor to a torch host tensor."""

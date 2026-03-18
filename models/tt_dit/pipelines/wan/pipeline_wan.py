@@ -272,8 +272,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self._transformer_tracer = None
         self._transformer_2_tracer = None
-        self._vae_tracer = None
-        self._encoder_tracer = None
+        # self._vae_tracer = None
+        # self._encoder_tracer = None
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -284,9 +284,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
-        self._allocate_persistent_buffers()
+        self._warmup()
 
-    def _allocate_persistent_buffers(self) -> None:
+    def _warmup(self) -> None:
         """Allocate persistent buffers by running a pipeline pass without tracing.
 
         This is important so they do not get allocated after trace capture, which would lead to
@@ -294,7 +294,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         used for traced inference.
         """
         logger.info("Pipeline allocation run...")
-        self.run_single_prompt(prompt="", num_inference_steps=2, seed=0, traced=False, num_frames=1)
+        self.run_single_prompt(prompt="", num_inference_steps=2, seed=0, traced=False, num_frames=81)
 
     @staticmethod
     def create_pipeline(
@@ -395,9 +395,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
     def _prepare_text_encoder(self):
-        if self._encoder_tracer is not None:
-            self._encoder_tracer.release_trace()
-            self._encoder_tracer = None
+        # if self._encoder_tracer is not None:
+        #     self._encoder_tracer.release_trace()
+        #     self._encoder_tracer = None
         cache.load_model(
             self.tt_umt5_encoder,
             model_name=os.path.basename(self.checkpoint_name),
@@ -406,15 +406,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.text_encoder.state_dict(),
         )
-        if self._encoder_tracer is None:
-            self._encoder_tracer = Tracer(
-                self.tt_umt5_encoder.forward, device=self.mesh_device, clone_prep_inputs=False
-            )
+        # if self._encoder_tracer is None:
+        #     self._encoder_tracer = Tracer(
+        #         self.tt_umt5_encoder.forward, device=self.mesh_device, clone_prep_inputs=False
+        #     )
 
     def _prepare_transformer1(self):
-        if self._transformer_tracer is not None:
-            self._transformer_tracer.release_trace()
-            self._transformer_tracer = None
+        # if self._transformer_tracer is not None and not self.transformer.is_loaded():
+        #     self._transformer_tracer.release_trace()
+        #     self._transformer_tracer = None
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -425,12 +425,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
         if self._transformer_tracer is None:
-            self._transformer_tracer = Tracer(self._transformer_step, device=self.mesh_device, clone_prep_inputs=False)
+            self._transformer_tracer = Tracer(
+                self.transformer.combined_step, device=self.mesh_device, clone_prep_inputs=False
+            )
 
     def _prepare_transformer2(self):
-        if self._transformer_2_tracer is not None:
-            self._transformer_2_tracer.release_trace()
-            self._transformer_2_tracer = None
+        # if self._transformer_2_tracer is not None and not self.transformer_2.is_loaded():
+        #     self._transformer_2_tracer.release_trace()
+        #     self._transformer_2_tracer = None
         cache.load_model(
             self.transformer_2,
             model_name=os.path.basename(self.checkpoint_name),
@@ -442,13 +444,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
         if self._transformer_2_tracer is None:
             self._transformer_2_tracer = Tracer(
-                self._transformer_2_step, device=self.mesh_device, clone_prep_inputs=False
+                self.transformer_2.combined_step, device=self.mesh_device, clone_prep_inputs=False
             )
 
     def _prepare_vae(self):
-        if self._vae_tracer is not None:
-            self._vae_tracer.release_trace()
-            self._vae_tracer = None
+        # if self._vae_tracer is not None:
+        #     self._vae_tracer.release_trace()
+        #     self._vae_tracer = None
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
@@ -457,8 +459,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
         )
-        if self._vae_tracer is None:
-            self._vae_tracer = Tracer(self.tt_vae.forward, device=self.mesh_device, clone_prep_inputs=False)
+        # if self._vae_tracer is None:
+        #     self._vae_tracer = Tracer(self.tt_vae.forward, device=self.mesh_device, clone_prep_inputs=False)
 
     def _get_t5_prompt_embeds(
         self,
@@ -744,8 +746,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         max_sequence_length: int = 512,
         traced: bool = False,
-        vae_traced: bool | None = None,
-        encoder_traced: bool | None = None,
+        vae_traced: bool | None = False,
+        encoder_traced: bool | None = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
     ):
@@ -934,7 +936,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         self._transformer_2_tracer = None
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
-                    forward = self._transformer_tracer if traced else self._transformer_step
+                    forward = self._transformer_tracer if traced else self.transformer.combined_step
                     current_model_name = "transformer"
                     current_guidance_scale = guidance_scale
                 else:
@@ -944,7 +946,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         self._transformer_tracer.release_trace()
                         self._transformer_tracer = None
                     current_model = self.transformer_2
-                    forward = self._transformer_2_tracer if traced else self._transformer_2_step
+                    forward = self._transformer_2_tracer if traced else self.transformer_2.combined_step
                     current_model_name = "transformer_2"
                     current_guidance_scale = guidance_scale_2
 
@@ -1101,79 +1103,3 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
     def synchronize_devices(self):
         ttnn.synchronize_device(self.mesh_device)
-
-    def _transformer_step(
-        self,
-        do_classifier_free_guidance: bool,
-        spatial_1BNI: ttnn.Tensor,
-        prompt_1BLP: ttnn.Tensor,
-        negative_prompt_1BLP: ttnn.Tensor,
-        N: int,
-        temb_11BD: ttnn.Tensor,
-        timestep_proj_1BTD: ttnn.Tensor,
-        rope_cos_1HND: ttnn.Tensor,
-        rope_sin_1HND: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        cond = self.transformer.inner_step(
-            spatial_1BNI,
-            prompt_1BLP,
-            rope_cos_1HND,
-            rope_sin_1HND,
-            trans_mat,
-            N,
-            temb_11BD,
-            timestep_proj_1BTD,
-        )
-        if not do_classifier_free_guidance:
-            return cond, None
-
-        uncond = self.transformer.inner_step(
-            spatial_1BNI,
-            negative_prompt_1BLP,
-            rope_cos_1HND,
-            rope_sin_1HND,
-            trans_mat,
-            N,
-            temb_11BD,
-            timestep_proj_1BTD,
-        )
-        return cond, uncond
-
-    def _transformer_2_step(
-        self,
-        do_classifier_free_guidance: bool,
-        spatial_1BNI: ttnn.Tensor,
-        prompt_1BLP: ttnn.Tensor,
-        negative_prompt_1BLP: ttnn.Tensor,
-        N: int,
-        temb_11BD: ttnn.Tensor,
-        timestep_proj_1BTD: ttnn.Tensor,
-        rope_cos_1HND: ttnn.Tensor,
-        rope_sin_1HND: ttnn.Tensor,
-        trans_mat: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        cond = self.transformer_2.inner_step(
-            spatial_1BNI,
-            prompt_1BLP,
-            rope_cos_1HND,
-            rope_sin_1HND,
-            trans_mat,
-            N,
-            temb_11BD,
-            timestep_proj_1BTD,
-        )
-        if not do_classifier_free_guidance:
-            return cond, None
-
-        uncond = self.transformer_2.inner_step(
-            spatial_1BNI,
-            negative_prompt_1BLP,
-            rope_cos_1HND,
-            rope_sin_1HND,
-            trans_mat,
-            N,
-            temb_11BD,
-            timestep_proj_1BTD,
-        )
-        return cond, uncond
