@@ -128,14 +128,16 @@ inline void calculate_lgamma_stirling_fp32(
             const float p2 = -0.40068563f;
             const float p3 = 0.27058081f;
             const float p4 = -0.20738555f;
-            res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
+            // res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
+            res = d * PolynomialEvaluator::eval(d, p0, p1, p2, p3, p4);
         }
         v_else {
             // Stirling base + Bernoulli correction
             res = ((z - 0.5f) * log_z - z + LOG_SQRT_2PI);
             sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
             sfpi::vFloat inv_z2 = (inv_z * inv_z);
-            sfpi::vFloat correction = r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
+            // Bernoulli correction: r0 + inv_z2 * (inv_z2 * (r2 + inv_z2 * r3) + r1);
+            sfpi::vFloat correction = PolynomialEvaluator::eval(inv_z2, r0, r1, r2, r3);
             res = res + inv_z * correction;
         }
         v_endif;

@@ -988,9 +988,8 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
 
             if (input_dtype.value() == DataType::BFLOAT16) {
                 return "lgamma_fast_kernel.cpp";
-            } else {
-                return "lgamma_kernel.cpp";
             }
+            return "lgamma_kernel.cpp";
         case UnaryOpType::MISH: return "mish_kernel.cpp";
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
