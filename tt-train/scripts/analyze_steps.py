@@ -47,9 +47,7 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
 
     step_summary = []
     for step, loss, step_time in zip(step_matches, loss_matches, step_time_matches):
-        step_summary.append(
-            {"step": int(step), "loss": float(loss), "step_time": float(step_time)}
-        )
+        step_summary.append({"step": int(step), "loss": float(loss), "step_time": float(step_time)})
 
     return step_summary
 
@@ -76,9 +74,7 @@ def analyze_step_summary(summary: List[Dict[str, int | float]]) -> Dict[str, flo
     print("\n--- Step Information ---")
     print(f"  Total steps:   {len(summary)}")
     print(f"  Last loss:   {last_loss:,.2f}")
-    print(
-        f"  Average iteration time excluding first two steps:   {average_step_time:,.2f} ms"
-    )
+    print(f"  Average iteration time excluding first two steps:   {average_step_time:,.2f} ms")
 
     breakdown = {"last_loss": last_loss, "average_iteration_time_ms": average_step_time}
 
