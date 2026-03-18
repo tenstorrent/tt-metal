@@ -10,7 +10,10 @@
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_context.hpp"
 
+#include <cerrno>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <thread>
@@ -65,24 +68,33 @@ void HDSocketDescriptor::write_to_file(const std::string& path) const {
         bytes_acked_device_offset);
     builder.Finish(fb_desc);
 
-    std::ofstream ofs(path, std::ios::binary);
-    TT_FATAL(ofs.is_open(), "Failed to open descriptor file for writing: {}", path);
+    std::string tmp_path = path + ".tmp";
+    std::ofstream ofs(tmp_path, std::ios::binary);
+    TT_FATAL(ofs.is_open(), "Failed to open descriptor file for writing: {}", tmp_path);
     ofs.write(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
     ofs.close();
-    TT_FATAL(!ofs.fail(), "Failed to write descriptor file: {}", path);
+    TT_FATAL(!ofs.fail(), "Failed to write descriptor file: {}", tmp_path);
+    TT_FATAL(
+        std::rename(tmp_path.c_str(), path.c_str()) == 0,
+        "Failed to rename descriptor file from {} to {}: {}",
+        tmp_path,
+        path,
+        std::strerror(errno));
 }
 
 HDSocketDescriptor HDSocketDescriptor::read_from_file(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     TT_FATAL(ifs.is_open(), "Failed to open descriptor file for reading: {}", path);
 
-    auto size = ifs.tellg();
+    auto pos = ifs.tellg();
+    TT_FATAL(pos > 0, "Descriptor file is empty or unreadable: {}", path);
+    auto size = static_cast<std::size_t>(pos);
     ifs.seekg(0, std::ios::beg);
     std::vector<uint8_t> buf(size);
     ifs.read(reinterpret_cast<char*>(buf.data()), size);
     TT_FATAL(!ifs.fail(), "Failed to read descriptor file: {}", path);
 
-    auto* fb = flatbuffer::GetHDSocketDescriptor(buf.data());
+    const auto* fb = flatbuffer::GetHDSocketDescriptor(buf.data());
     TT_FATAL(fb, "Failed to parse flatbuffer descriptor from: {}", path);
 
     HDSocketDescriptor desc;

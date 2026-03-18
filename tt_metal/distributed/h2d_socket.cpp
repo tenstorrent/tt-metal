@@ -201,14 +201,13 @@ H2DSocket::H2DSocket(
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     h2d_mode_(h2d_mode),
-    mesh_device_(mesh_device.get()),
-    is_owner_(true) {
+    mesh_device_(mesh_device.get()) {
     MeshCoordinateRangeSet recv_device_range_set;
     recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
 
-    pcie_alignment_ = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIE-aligned.");
     TT_FATAL(buffer_type_ == BufferType::L1, "H2D sockets currently only support data buffers in SRAM.");
