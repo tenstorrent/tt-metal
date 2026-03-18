@@ -1207,6 +1207,23 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         tt::tt_metal::CircularBufferConfig(8 * ag_pkt_hdr_size, {{ag_pkt_hdr_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(ag_pkt_hdr_cb_id, ag_pkt_hdr_size));
 
+    // cb_k_out (c_14) and cb_v_out (c_15): reader→writer pipe for CB-based K/V all-gather forwarding.
+    // Reader pushes each local K/V chunk here; writer pops and sends via fabric to next device.
+    // Sized for 1 KV chunk; allocated only on fabric writer cores (reader conditionally pushes).
+    const uint32_t cb_k_out_id = tt::CBIndex::c_14;
+    const uint32_t cb_v_out_id = tt::CBIndex::c_15;
+    const uint32_t kv_out_chunk_tiles = Sk_chunk_t * DHt;
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        fabric_writer_range,
+        tt::tt_metal::CircularBufferConfig(kv_out_chunk_tiles * k_tile_size, {{cb_k_out_id, k_df}})
+            .set_page_size(cb_k_out_id, k_tile_size));
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        fabric_writer_range,
+        tt::tt_metal::CircularBufferConfig(kv_out_chunk_tiles * v_tile_size, {{cb_v_out_id, v_df}})
+            .set_page_size(cb_v_out_id, v_tile_size));
+
     auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
@@ -1336,8 +1353,32 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
 
-        // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, direction);
+        // Determine TM status for this core.
+        // TM readers (do_kv_out=1) wait on out_ready_sem incremented by remote fabric_atomic_inc.
+        // Non-TM readers (do_kv_out=0) receive K/V via L1-to-L1 chain and do not wait on a semaphore.
+        const bool r_is_mux_cl = (core.x >= grid_size.x - 2);
+        const uint32_t r_lnk = r_is_mux_cl ? (core.x == grid_size.x - 1 ? 1 : 0) : 0;
+        const bool r_is_tm = r_is_mux_cl && (core.y % args.num_workers_per_link == 0);
+        const bool r_is_bwd = r_is_mux_cl && (core.y / args.num_workers_per_link == 0);
+        const bool r_lnk_ok = r_is_mux_cl && (r_lnk < args.num_links) && (r_lnk < mux_backward_logical_cores.size()) &&
+                              (r_lnk < mux_forward_logical_cores.size());
+        const bool r_ag_valid = r_lnk_ok && (r_is_bwd ? backward_coord.has_value() : forward_coord.has_value());
+        const bool is_active_tm = r_is_tm && r_ag_valid;
+
+        // Create out_ready_sem for TM cores now (used by both reader and writer sections below).
+        // Non-TM cores get 0 (unused sentinel).
+        const uint32_t out_ready_sem_id = is_active_tm ? CreateSemaphore(program, {core}, 0) : 0;
+
+        // Push ring sequencer args for fused-op receiver.
+        // do_kv_out comes first so the reader kernel can decide wait_for_op_signal before consuming seq args.
+        reader_args.push_back(static_cast<uint32_t>(is_active_tm));  // do_kv_out
+        reader_args.push_back(sdpa_fused_op_signaler->ring_size);
+        reader_args.push_back(sdpa_fused_op_signaler->ring_index);
+        reader_args.push_back(direction);
+        if (is_active_tm) {
+            // TM reader waits on out_ready_sem (incremented by remote fabric_atomic_inc)
+            reader_args.push_back(out_ready_sem_id);
+        }
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1416,8 +1457,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 const uint32_t ag_tile_id_start = link * base_tiles + std::min(link, remainder);
                 const uint32_t ag_tile_id_end = (link + 1) * base_tiles + std::min(link + 1, remainder);
 
-                // Semaphore on this core that remote writers increment when K/V arrives
-                const uint32_t out_ready_sem_id = CreateSemaphore(program, {core}, 0);
+                // out_ready_sem_id was already created in the reader section above.
+                // Remote devices atomically increment it via fabric_atomic_inc when K/V arrives.
+                // The TM reader (not the writer) waits on it via fused_op_receiver.get_next_ring_id_and_sync().
 
                 writer_args.push_back(ag_direction);
                 writer_args.push_back(ag_input_Wt);
@@ -1434,12 +1476,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(v_addr);
                 writer_args.push_back(gathered_k_addr);
                 writer_args.push_back(gathered_v_addr);
-
-                if (ag_direction == 1) {
-                    fused_op_signaler_forward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 1);
-                } else {
-                    fused_op_signaler_backward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 0);
-                }
             }
             SetRuntimeArgs(program, writer_fabric_kernels_id, core, writer_args);
         } else {

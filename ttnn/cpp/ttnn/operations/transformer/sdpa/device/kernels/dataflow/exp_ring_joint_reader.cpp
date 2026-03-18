@@ -64,8 +64,13 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
+    // do_kv_out: 1 only for TM reader cores (paired with fabric-writer TM that pops cb_k_out/cb_v_out).
+    // TM readers wait on out_ready_sem (incremented by remote fabric_atomic_inc via pkt_hdr_sem).
+    // Non-TM readers receive K/V via L1-to-L1 chain forwarding and do not need a semaphore wait.
+    const uint32_t do_kv_out = get_arg_val<uint32_t>(argidx++);
+
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
-        true, /* wait_for_op_signal */
+        do_kv_out != 0, /* wait_for_op_signal: true for TM readers only */
         argidx);
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
@@ -116,6 +121,8 @@ void kernel_main() {
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t cb_k_out = tt::CBIndex::c_14;
+    constexpr uint32_t cb_v_out = tt::CBIndex::c_15;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -282,6 +289,15 @@ void kernel_main() {
                     }
                 }
 
+                // Push NON-TRANSPOSED K chunk to cb_k_out for the fabric writer to forward via MUX.
+                // cb_k_in holds K transposed (for SDPA QK^T). The AG needs the original non-transposed
+                // layout (as in input_tensor_k DRAM). Re-read from DRAM without transpose.
+                // Only for non-joint local K: joint K is device-local (not all-gathered).
+                if (do_kv_out && !kv_chunk_is_joint) {
+                    const auto& k_out_gen = (ring_iter == 0) ? local_k_generator : gathered_k_generator;
+                    read_block(k_out_gen, kv_slice, end_seq_tile, cb_k_out, k_tile_bytes, false /*no transpose*/);
+                }
+
                 // Download Q on the first K iteration — after K is downloaded and forwarded.
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
@@ -350,6 +366,17 @@ void kernel_main() {
                         noc_async_writes_flushed();
                         noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
                     }
+                }
+
+                // Push V chunk to cb_v_out for the fabric writer to forward via MUX.
+                // Only for non-joint local V: joint V is device-local (not all-gathered).
+                if (do_kv_out && !kv_chunk_is_joint) {
+                    cb_reserve_back(cb_v_out, v_chunk_tiles);
+                    const uint32_t v_out_addr = get_write_ptr(cb_v_out);
+                    noc_async_write(
+                        cb_v_start_address, get_noc_addr(my_x[0], my_y[0], v_out_addr), v_chunk_tiles * v_tile_bytes);
+                    noc_async_write_barrier();
+                    cb_push_back(cb_v_out, v_chunk_tiles);
                 }
             }
         }

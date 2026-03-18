@@ -13,7 +13,6 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #endif
 
@@ -341,6 +340,12 @@ void kernel_main() {
     constexpr auto ag_input_v_args = TensorAccessorArgs<ag_input_k_args.next_compile_time_args_offset()>();
     constexpr auto ag_gathered_k_args = TensorAccessorArgs<ag_input_v_args.next_compile_time_args_offset()>();
     constexpr auto ag_gathered_v_args = TensorAccessorArgs<ag_gathered_k_args.next_compile_time_args_offset()>();
+
+    // CB IDs for the reader→writer K/V pipe (populated by exp_ring_joint_reader.cpp)
+    constexpr uint32_t cb_k_out = tt::CBIndex::c_14;
+    constexpr uint32_t cb_v_out = tt::CBIndex::c_15;
+    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
 #endif
 
     uint32_t argidx = 0;
@@ -418,8 +423,6 @@ void kernel_main() {
     uint32_t kv_scratch_addr = 0;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem = nullptr;
-    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = nullptr;
-    OpSignaler op_signaler;
     uint32_t ag_local_gathered_tile_id_start = 0;
     // DRAM base addresses for K/V input and gathered output; updated inside the if-block.
     // TensorAccessors are constructed as temporaries at the call sites to avoid the
@@ -445,8 +448,6 @@ void kernel_main() {
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
 
-        op_signaler = OpSignaler(argidx);
-
         // Allocate L1 scratch for one packet of K or V tiles
         cb_reserve_back(ag_kv_scratch_cb_id, ag_packet_size_in_pages);
         kv_scratch_addr = get_write_ptr(ag_kv_scratch_cb_id);
@@ -466,9 +467,6 @@ void kernel_main() {
         // Set routing: always 1 hop in direction (store-and-forward handles multi-hop)
         fabric_set_unicast_route<false>(pkt_hdr_write, 1);
         fabric_set_unicast_route<false>(pkt_hdr_sem, 1);
-
-        // Semaphore on this core that remote senders will atomically increment via fabric
-        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(out_ready_sem_id));
 
         // Destination for sem_inc packets: same physical NOC coordinates on all chips
         const uint64_t remote_out_ready_sem_noc_addr =
@@ -495,65 +493,72 @@ void kernel_main() {
         do_ag = true;
     }
 
-    // Lambda: send all tiles for one local K or V tensor to the next device.
-    // Reads from local input DRAM, writes to the gathered output tensor on the next device.
-    auto send_local_slice = [&](const auto& input_acc, const auto& gathered_acc) {
-        uint32_t gathered_bh_start = ag_local_gathered_tile_id_start;
-        uint32_t input_bh_start = 0;
-        for (uint32_t bh = 0; bh < ag_batch_head_count; ++bh) {
-            uint32_t tiles_read = ag_tile_id_start;
-            uint32_t pages_in_row = ag_tile_id_start % ag_input_Wt;
-            uint32_t input_row_off = (ag_tile_id_start / ag_input_Wt) * ag_input_Wt;
-            uint32_t output_row_off = (ag_tile_id_start / ag_input_Wt) * ag_output_Wt;
+    // Lambda: pop one K or V chunk from a CB and send the link's tile range to the gathered destination.
+    // Always pops k_chunk_tiles tiles from cb_id (the CB must have been pushed by the reader).
+    // k_chunk_idx: chunk index in [0, num_local_k_chunks) used to compute the tile overlap with
+    //   [ag_tile_id_start, ag_tile_id_end). If no overlap, the chunk is popped and discarded.
+    // gathered_bh_start: base tile offset for this BH in the gathered output tensor.
+    auto send_cb_chunk = [&](uint32_t cb_id,
+                             uint32_t gathered_bh_start,
+                             uint32_t k_chunk_idx,
+                             const auto& gathered_acc) {
+        cb_wait_front(cb_id, k_chunk_tiles);
+        const uint32_t cb_ptr = get_read_ptr(cb_id);
 
-            while (tiles_read < ag_tile_id_end) {
-                const uint32_t num_pages = std::min(ag_tile_id_end - tiles_read, ag_packet_size_in_pages);
+        const uint32_t chunk_start = k_chunk_idx * k_chunk_tiles;
+        const uint32_t chunk_end = chunk_start + k_chunk_tiles;
 
-                const uint32_t input_id0 = input_bh_start + input_row_off + pages_in_row;
+        // Determine which tiles in this chunk fall within the link's tile range
+        if (ag_tile_id_start < chunk_end && ag_tile_id_end > chunk_start) {
+            const uint32_t send_start = (ag_tile_id_start > chunk_start) ? ag_tile_id_start - chunk_start : 0;
+            const uint32_t send_end = (ag_tile_id_end < chunk_end) ? ag_tile_id_end - chunk_start : k_chunk_tiles;
+
+            // Map send_start to its BH-global tile position for destination address computation
+            const uint32_t bh_tile_start = chunk_start + send_start;
+            uint32_t pages_in_row = bh_tile_start % ag_input_Wt;
+            uint32_t output_row_off = (bh_tile_start / ag_input_Wt) * ag_output_Wt;
+            uint32_t cb_local_idx = send_start;
+            uint32_t tiles_sent = send_start;
+
+            while (tiles_sent < send_end) {
+                const uint32_t num_pages = std::min(send_end - tiles_sent, ag_packet_size_in_pages);
                 const uint32_t gathered_id0 = gathered_bh_start + output_row_off + pages_in_row;
+                const uint32_t src0 = cb_ptr + cb_local_idx * ag_page_size;
                 pages_in_row++;
+                cb_local_idx++;
                 if (pages_in_row >= ag_input_Wt) {
-                    input_row_off += ag_input_Wt;
                     output_row_off += ag_output_Wt;
                     pages_in_row = 0;
                 }
 
                 if constexpr (ag_packet_size_in_pages == 2) {
                     if (num_pages == 2) {
-                        const uint32_t input_id1 = input_bh_start + input_row_off + pages_in_row;
                         const uint32_t gathered_id1 = gathered_bh_start + output_row_off + pages_in_row;
                         pages_in_row++;
+                        cb_local_idx++;
                         if (pages_in_row >= ag_input_Wt) {
-                            input_row_off += ag_input_Wt;
                             output_row_off += ag_output_Wt;
                             pages_in_row = 0;
                         }
-                        noc_async_read_tile(input_id0, input_acc, kv_scratch_addr);
-                        noc_async_read_tile(input_id1, input_acc, kv_scratch_addr + ag_page_size);
-                        noc_async_read_barrier();
                         tt::tt_fabric::linear::to_noc_unicast_scatter_write(
                             ag_page_size, pkt_hdr_write, gathered_id0, gathered_id1, gathered_acc);
-                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size * 2);
+                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, src0, ag_page_size * 2);
                     } else {
-                        noc_async_read_tile(input_id0, input_acc, kv_scratch_addr);
-                        noc_async_read_barrier();
                         tt::tt_fabric::linear::to_noc_unicast_write(
                             ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
-                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size);
+                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, src0, ag_page_size);
                     }
                 } else {
-                    noc_async_read_tile(input_id0, input_acc, kv_scratch_addr);
-                    noc_async_read_barrier();
                     tt::tt_fabric::linear::to_noc_unicast_write(
                         ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
-                    tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size);
+                    tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, src0, ag_page_size);
                 }
 
-                tiles_read += num_pages;
+                tiles_sent += num_pages;
             }
-            gathered_bh_start += ag_output_Wt * ag_output_Ht;
-            input_bh_start += ag_input_Wt * ag_input_Ht;
         }
+
+        cb_pop_front(cb_id, k_chunk_tiles);
     };
 
     // Lambda: store-and-forward one received slice from gathered DRAM to the next device.
@@ -661,28 +666,26 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
 
+        // Compute ring iteration validity up front; needed by both the AG block and SDPA output loop.
+        const bool do_joint_kv = ring_id == ring_size - 1;
+        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
+        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+
 #ifdef USE_MUX
-        // Interleaved K/V all-gather step: one phase-1 (ring_iter==0) or phase-2 step per iter.
-        // This prevents deadlock by ensuring cb_out is drained between AG waits.
+        // Step 1: AG setup -- wait/signal/compute base tile offset. No data transfer yet.
+        uint32_t ag_base_tile_id_start = 0;
+        bool do_ag_kv_forward = false;
+        bool do_ag_this_iter = false;
         if (do_ag) {
             if (ring_iter == 0) {
-                // Phase 1: send our local K/V slice to the next device
-                send_local_slice(
-                    TensorAccessor(ag_input_k_args, k_addr_ag_rt, ag_page_size),
-                    TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size));
-                send_local_slice(
-                    TensorAccessor(ag_input_v_args, v_addr_ag_rt, ag_page_size),
-                    TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size));
-                noc_async_write_barrier();
-                tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-                // Signal SDPA reader that our local slice is available (direction==1 only)
-                if (ag_direction == 1) {
-                    op_signaler.synchronize_workers_and_signal_op(ag_device_index);
-                }
+                ag_base_tile_id_start = ag_local_gathered_tile_id_start;
+                do_ag_kv_forward = ring_iter_does_work;
+                do_ag_this_iter = true;
             } else if (ag_slice_writes < ag_writes_expected) {
-                // Phase 2 step: wait for next slice to arrive, signal reader, then forward it
-                noc_semaphore_wait_min(out_ready_sem_ptr, ag_slice_writes + 1);
-
                 // Compute which chip's slice just arrived
                 int slice_chip_id;
                 uint32_t actual_slice_chip_id;
@@ -696,33 +699,34 @@ void kernel_main() {
                     actual_slice_chip_id = (slice_chip_id < 0) ? ag_ring_size + slice_chip_id : slice_chip_id;
                 }
 
-                // Signal SDPA reader that this chip's K/V is now in gathered DRAM
-                op_signaler.synchronize_workers_and_signal_op(actual_slice_chip_id);
-
-                const uint32_t slice_tile_id_start = (ag_gather_dim == 3)
-                                                         ? actual_slice_chip_id * ag_input_Wt
-                                                         : actual_slice_chip_id * ag_input_Ht * ag_input_Wt;
-
-                forward_slice(
-                    TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size), slice_tile_id_start);
-                forward_slice(
-                    TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size), slice_tile_id_start);
-                noc_async_write_barrier();
-                tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-                ag_slice_writes++;
+                ag_base_tile_id_start = (ag_gather_dim == 3) ? actual_slice_chip_id * ag_input_Wt
+                                                             : actual_slice_chip_id * ag_input_Ht * ag_input_Wt;
+                do_ag_kv_forward = ring_iter_does_work;
+                do_ag_this_iter = true;
             }
         }
+        // TensorAccessors constructed once per ring_iter (not per q_chunk)
+        const auto gathered_k_acc = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size);
+        const auto gathered_v_acc = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size);
 #endif
 
-        const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
-
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+        // Step 2: Handle !ring_iter_does_work -- AG fallback then continue
         if (!ring_iter_does_work) {
+#ifdef USE_MUX
+            if (do_ag_this_iter) {
+                if (ring_iter > 0) {
+                    // Fallback: reader skipped this ring_iter (all K/V is padding beyond logical_n).
+                    // Read the received slice directly from gathered DRAM and forward.
+                    forward_slice(gathered_k_acc, ag_base_tile_id_start);
+                    forward_slice(gathered_v_acc, ag_base_tile_id_start);
+                }
+                noc_async_write_barrier();
+                tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
+                if (ring_iter > 0) {
+                    ag_slice_writes++;
+                }
+            }
+#endif
             continue;
         }
 
@@ -761,6 +765,7 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
+        // Step 4: Unified q_chunk loop -- SDPA work + AG k_chunk forward interleaved per q_chunk.
         // Deferred normalization is always paired with streaming compute.
         constexpr bool use_deferred_norm = use_streaming_compute;
         if constexpr (use_deferred_norm) {
@@ -774,11 +779,26 @@ void kernel_main() {
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+                const uint32_t bh = nb * NH + nq;
 
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
                 constexpr uint32_t sum_offset = local_padded_Nt + Lt;
+
+#ifdef USE_MUX
+                if (do_ag_kv_forward) {
+                    const uint32_t gathered_bh_start = ag_base_tile_id_start + bh * ag_output_Wt * ag_output_Ht;
+                    for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
+                        const uint32_t kv_global_start = ring_id * local_padded_Nt + k_chunk * Sk_chunk_t;
+                        if (kv_global_start >= logical_nt) {
+                            continue;
+                        }
+                        send_cb_chunk(cb_k_out, gathered_bh_start, k_chunk, gathered_k_acc);
+                        send_cb_chunk(cb_v_out, gathered_bh_start, k_chunk, gathered_v_acc);
+                    }
+                }
+#endif
 
                 if (!single_q_chunk && ring_iter > 0) {
                     read_prev_accumulators(
@@ -827,16 +847,29 @@ void kernel_main() {
                         stats_tile_bytes);
                 }
             }
-            noc_async_write_barrier();
         } else {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-                // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+                const uint32_t bh = nb * NH + nq;
 
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
+
+#ifdef USE_MUX
+                if (do_ag_kv_forward) {
+                    const uint32_t gathered_bh_start = ag_base_tile_id_start + bh * ag_output_Wt * ag_output_Ht;
+                    for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
+                        const uint32_t kv_global_start = ring_id * local_padded_Nt + k_chunk * Sk_chunk_t;
+                        if (kv_global_start >= logical_nt) {
+                            continue;
+                        }
+                        send_cb_chunk(cb_k_out, gathered_bh_start, k_chunk, gathered_k_acc);
+                        send_cb_chunk(cb_v_out, gathered_bh_start, k_chunk, gathered_v_acc);
+                    }
+                }
+#endif
 
                 // If not on the first iteration, read LSE and previous output chunk.
                 // No race condition because writer kernel writes previous output before reading it again
@@ -874,8 +907,18 @@ void kernel_main() {
                     tile_bytes,
                     stats_tile_bytes);
             }
-            noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
+
+        // Step 5: Single barrier (flushes both SDPA DRAM writes and AG fabric writes) + AG signals
+        noc_async_write_barrier();
+#ifdef USE_MUX
+        if (do_ag_this_iter) {
+            tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
+            if (ring_iter > 0) {
+                ag_slice_writes++;
+            }
+        }
+#endif
     }
 
 #ifdef USE_MUX
