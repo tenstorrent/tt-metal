@@ -192,7 +192,7 @@ GQA_FULL_PROFILES = {
         max_position_embeddings=131072,
         rms_norm_eps=1e-5,
         rope_partial_factor=0.5,
-        use_qk_norm=False,
+        qk_norm=True,
     ),
     "gpt_oss_20b": dict(
         hidden_size=2880,
@@ -203,6 +203,7 @@ GQA_FULL_PROFILES = {
         rope_theta=150_000,
         max_position_embeddings=131072,
         rms_norm_eps=1e-5,
+        qk_norm=False,
     ),
     "gpt_oss_120b": dict(
         hidden_size=2880,
@@ -213,6 +214,7 @@ GQA_FULL_PROFILES = {
         rope_theta=150_000,
         max_position_embeddings=131072,
         rms_norm_eps=1e-5,
+        qk_norm=False,
     ),
     "grok_2_270b": dict(
         hidden_size=8192,
@@ -223,6 +225,7 @@ GQA_FULL_PROFILES = {
         rope_theta=208_533_496,
         max_position_embeddings=131072,
         rms_norm_eps=1e-5,
+        qk_norm=False,
     ),
     "llama_guard_4": dict(
         hidden_size=5120,
@@ -233,6 +236,7 @@ GQA_FULL_PROFILES = {
         rope_theta=500_000,
         max_position_embeddings=131072,
         rms_norm_eps=1e-5,
+        qk_norm=False,
     ),
     "qwen3_235b": dict(
         hidden_size=4096,
@@ -243,6 +247,7 @@ GQA_FULL_PROFILES = {
         rope_theta=1_000_000,
         max_position_embeddings=40960,
         rms_norm_eps=1e-6,
+        qk_norm=True,
     ),
 }
 
@@ -255,6 +260,7 @@ GQA_TINY_PROFILES = {
         attention_bias=True,
         rope_theta=1_000_000,
         rope_partial_factor=0.5,
+        qk_norm=True,
     ),
     "gpt_oss_20b": dict(
         hidden_size=128,
@@ -263,6 +269,7 @@ GQA_TINY_PROFILES = {
         head_dim=16,
         attention_bias=True,
         rope_theta=150_000,
+        qk_norm=False,
     ),
     "gpt_oss_120b": dict(
         hidden_size=128,
@@ -271,6 +278,7 @@ GQA_TINY_PROFILES = {
         head_dim=16,
         attention_bias=True,
         rope_theta=150_000,
+        qk_norm=False,
     ),
     "grok_2_270b": dict(
         hidden_size=256,
@@ -279,6 +287,7 @@ GQA_TINY_PROFILES = {
         head_dim=32,
         attention_bias=False,
         rope_theta=208_533_496,
+        qk_norm=False,
     ),
     "llama_guard_4": dict(
         hidden_size=256,
@@ -287,6 +296,7 @@ GQA_TINY_PROFILES = {
         head_dim=32,
         attention_bias=False,
         rope_theta=500_000,
+        qk_norm=False,
     ),
     "qwen3_235b": dict(
         hidden_size=256,
@@ -295,5 +305,6 @@ GQA_TINY_PROFILES = {
         head_dim=32,
         attention_bias=False,
         rope_theta=1_000_000,
+        qk_norm=True,
     ),
 }
