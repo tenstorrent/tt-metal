@@ -37,15 +37,6 @@ Tensor hypot_composite_wrapper(const Tensor& a, const Tensor& b, const std::opti
     return ttnn::hypot(a, b, m, std::nullopt);
 }
 
-template <typename Callable>
-Tensor with_unary_activations(
-    Callable&& callable,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations) {
-    return std::forward<Callable>(callable)(activations, input_tensor_a_activations, input_tensor_b_activations);
-}
-
 Tensor minimum_tensor_scalar_binding(
     const Tensor& input_tensor_a,
     unary::ScalarVariant scalar,
@@ -56,14 +47,16 @@ Tensor minimum_tensor_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::minimum(
-                input_tensor_a, scalar, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::minimum(
+        input_tensor_a,
+        scalar,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor minimum_tensor_tensor_binding(
@@ -76,14 +69,16 @@ Tensor minimum_tensor_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::minimum(
-                input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::minimum(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor maximum_tensor_scalar_binding(
@@ -96,14 +91,16 @@ Tensor maximum_tensor_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::maximum(
-                input_tensor_a, scalar, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::maximum(
+        input_tensor_a,
+        scalar,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor maximum_tensor_tensor_binding(
@@ -116,14 +113,16 @@ Tensor maximum_tensor_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::maximum(
-                input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::maximum(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor gcd_binding(
@@ -136,14 +135,16 @@ Tensor gcd_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::gcd(
-                input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::gcd(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor lcm_binding(
@@ -156,14 +157,16 @@ Tensor lcm_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::lcm(
-                input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::lcm(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor div_no_nan_tensor_tensor_binding(
@@ -199,25 +202,19 @@ Tensor div_tensor_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::div(
-                input_tensor_a,
-                input_tensor_b,
-                fast_and_approximate_mode,
-                rounding_mode,
-                dtype,
-                memory_config,
-                output_tensor,
-                act,
-                lhs_act,
-                rhs_act,
-                use_legacy,
-                sub_core_grids);
-        },
+    return ttnn::div(
+        input_tensor_a,
+        input_tensor_b,
+        fast_and_approximate_mode,
+        rounding_mode,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy,
+        sub_core_grids);
 }
 
 Tensor prelu_tensor_tensor_binding(
@@ -279,14 +276,16 @@ Tensor pow_tensor_exponent_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::pow(
-                input_tensor, exponent, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::pow(
+        input_tensor,
+        exponent,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor pow_tensor_int_exponent_binding(
@@ -315,13 +314,16 @@ Tensor pow_scalar_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::pow(input_a, exponent, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::pow(
+        input_a,
+        exponent,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor rsub_tensor_scalar_binding(
@@ -334,14 +336,16 @@ Tensor rsub_tensor_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::rsub(
-                input_tensor_a, input_b, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::rsub(
+        input_tensor_a,
+        input_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor rsub_tensor_tensor_binding(
@@ -354,14 +358,16 @@ Tensor rsub_tensor_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_a_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::rsub(
-                input_tensor_a, input_tensor_b, dtype, memory_config, output_tensor, act, lhs_act, rhs_act, use_legacy);
-        },
+    return ttnn::rsub(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy);
 }
 
 Tensor bitwise_and_scalar_binding(
@@ -373,13 +379,7 @@ Tensor bitwise_and_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_and(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_and(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_and_tensor_binding(
     const Tensor& a,
@@ -390,13 +390,7 @@ Tensor bitwise_and_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_and(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_and(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_or_scalar_binding(
     const Tensor& a,
@@ -407,13 +401,7 @@ Tensor bitwise_or_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_or(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_or(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_or_tensor_binding(
     const Tensor& a,
@@ -424,13 +412,7 @@ Tensor bitwise_or_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_or(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_or(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_xor_scalar_binding(
     const Tensor& a,
@@ -441,13 +423,7 @@ Tensor bitwise_xor_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_xor(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_xor(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_xor_tensor_binding(
     const Tensor& a,
@@ -458,13 +434,7 @@ Tensor bitwise_xor_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_xor(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_xor(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_left_shift_scalar_binding(
     const Tensor& a,
@@ -475,13 +445,7 @@ Tensor bitwise_left_shift_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_left_shift(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_left_shift(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_left_shift_tensor_binding(
     const Tensor& a,
@@ -492,13 +456,7 @@ Tensor bitwise_left_shift_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_left_shift(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_left_shift(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_right_shift_scalar_binding(
     const Tensor& a,
@@ -509,13 +467,7 @@ Tensor bitwise_right_shift_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_right_shift(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_right_shift(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor bitwise_right_shift_tensor_binding(
     const Tensor& a,
@@ -526,13 +478,7 @@ Tensor bitwise_right_shift_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::bitwise_right_shift(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::bitwise_right_shift(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor logical_left_shift_scalar_binding(
     const Tensor& a,
@@ -543,13 +489,7 @@ Tensor logical_left_shift_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::logical_left_shift(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::logical_left_shift(a, b, m, o, act, a_act, b_act, leg);
 }
 Tensor logical_left_shift_tensor_binding(
     const Tensor& a,
@@ -560,13 +500,7 @@ Tensor logical_left_shift_tensor_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> a_act,
     ttsl::Span<const unary::EltwiseUnaryWithParam> b_act,
     const std::optional<bool>& leg) {
-    return with_unary_activations(
-        [&](auto activations, auto lhs_act, auto rhs_act) {
-            return ttnn::logical_left_shift(a, b, m, o, activations, lhs_act, rhs_act, leg);
-        },
-        act,
-        a_act,
-        b_act);
+    return ttnn::logical_left_shift(a, b, m, o, act, a_act, b_act, leg);
 }
 
 Tensor div_tensor_scalar_binding(
@@ -582,25 +516,19 @@ Tensor div_tensor_scalar_binding(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::div(
-                input_tensor_a,
-                value,
-                fast_and_approximate_mode,
-                rounding_mode,
-                dtype,
-                memory_config,
-                output_tensor,
-                act,
-                lhs_act,
-                rhs_act,
-                use_legacy,
-                sub_core_grids);
-        },
+    return ttnn::div(
+        input_tensor_a,
+        value,
+        fast_and_approximate_mode,
+        rounding_mode,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy,
+        sub_core_grids);
 }
 
 // Common broadcasting and performance documentation for binary operations
@@ -629,23 +557,17 @@ Tensor binary_op_binding_tensor_scalar(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::binary_op<Op>(
-                input_tensor_a,
-                scalar,
-                dtype,
-                memory_config,
-                output_tensor,
-                act,
-                lhs_act,
-                rhs_act,
-                use_legacy,
-                sub_core_grids);
-        },
+    return ttnn::binary_op<Op>(
+        input_tensor_a,
+        scalar,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy,
+        sub_core_grids);
 }
 
 template <BinaryOpType Op>
@@ -660,23 +582,17 @@ Tensor binary_op_binding_tensor_tensor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return ttnn::binary_op<Op>(
-                input_tensor_a,
-                input_tensor_b,
-                dtype,
-                memory_config,
-                output_tensor,
-                act,
-                lhs_act,
-                rhs_act,
-                use_legacy,
-                sub_core_grids);
-        },
+    return ttnn::binary_op<Op>(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy,
+        sub_core_grids);
 }
 
 using InplaceScalarFn = Tensor (*)(
@@ -706,13 +622,14 @@ Tensor inplace_binding_tensor_scalar(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return Fn(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-        },
+    return Fn(
+        input_tensor_a,
+        scalar,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy,
+        sub_core_grids);
 }
 
 template <InplaceTensorFn Fn>
@@ -724,13 +641,14 @@ Tensor inplace_binding_tensor_tensor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return with_unary_activations(
-        [&](auto act, auto lhs_act, auto rhs_act) {
-            return Fn(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-        },
+    return Fn(
+        input_tensor_a,
+        input_tensor_b,
         activations,
         input_tensor_a_activations,
-        input_tensor_b_activations);
+        input_tensor_b_activations,
+        use_legacy,
+        sub_core_grids);
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
