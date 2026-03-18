@@ -17,6 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Channel Mapping & Allocation** - Add VC2 channel mappings for non-Z and Z routers, allocate L1 buffer space (completed 2026-03-17)
 - [ ] **Phase 4: Builder Wiring & Flow Control** - Wire VC2 channels through builder context, datamover builder, and stream register assignments
 - [ ] **Phase 5: Connection API & Testing** - Private VC2 connection API, VC2 adapter type alias, and end-to-end VC2 tests
+- [ ] **Phase 6: VC2 Sender Integration & End-to-End Verification** - Per-sender VC ID, firmware receiver step, templatized sender kernel, end-to-end test
 
 ## Phase Details
 
@@ -97,10 +98,26 @@ Plans:
 - [ ] 05-01-PLAN.md — Remove TT_FATAL guard, gate requires_vc2 on RT option, add VC2 adapter type alias, create private VC2 connection API
 - [ ] 05-02-PLAN.md — Add VC2 support to test infrastructure, create VC2 test YAML, run end-to-end VC2 tests and regression
 
+### Phase 6: VC2 Sender Integration & End-to-End Verification
+**Goal**: Per-sender VC ID selection wired through test infrastructure and sender kernel, firmware VC2 receiver step added, and end-to-end VC2 traffic verified with data correctness on 2x2 mesh
+**Depends on**: Phase 5
+**Requirements**: TEST-01, TEST-02, TEST-03
+**Success Criteria** (what must be TRUE):
+  1. Firmware main loop has VC2 receiver channel step (receives VC2 packets, writes locally, no forwarding)
+  2. Sender configs carry vc_id field parsed from YAML, VC2 senders dispatch through private VC2 connection API
+  3. Sender kernel uses compile-time VC_ID to select WorkerToFabricEdmSenderVC2 adapter (stream ID 30)
+  4. End-to-end VC2 test passes with data correctness on 2x2 mesh
+  5. All existing regression tests pass unchanged
+**Plans:** 2 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Firmware VC2 receiver step, vc_id sender config field, VC2 connection dispatch
+- [ ] 06-02-PLAN.md — Templatize sender FabricConnectionArray, VC_ID compile-time arg, YAML config, end-to-end test
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -109,3 +126,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 3. Channel Mapping & Allocation | 2/2 | Complete | 2026-03-17 |
 | 4. Builder Wiring & Flow Control | 1/2 | In progress | - |
 | 5. Connection API & Testing | 1/2 | In Progress|  |
+| 6. VC2 Sender Integration & End-to-End Verification | 0/2 | Planned | - |
