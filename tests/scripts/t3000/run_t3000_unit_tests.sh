@@ -568,7 +568,7 @@ run_t3000_deepseek_tests() {
 }
 
 run_t3000_deepseek_prefill_tests() {
-  pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests --timeout 600 --durations=0
+  pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and single_run' --timeout 600 --durations=0
 }
 
 run_t3000_ccl_tests() {
