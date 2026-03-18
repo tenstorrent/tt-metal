@@ -104,6 +104,13 @@ enum class ReduceDataFormatReconfigMode {
  * - WaitUpfrontNoPop: Wait for all tiles upfront, don't pop (persistent, for tile reuse)
  *
  * - NoWaitNoPop: Caller manages wait/pop externally (preloaded, tiles already in CB)
+ *
+ * WARNING - NoWaitNoPop:
+ * This policy can cause data hazards if used incorrectly. ONLY use when:
+ *   1. Paired with explicit cb_wait_front() before the operation, OR
+ *   2. As the FIRST operation in a chain, OR
+ *   3. With sharded tensors where data is pre-loaded in CB
+ * When in doubt, use WaitAndPopPerTile or BulkWaitBulkPop.
  */
 enum class ReduceInputPolicy {
     WaitAndPopPerTile,  // Wait/process/pop one tile at a time (streaming)

@@ -26,6 +26,9 @@ enum class ReconfigureRegisterDatatypeMode : uint8_t {
 };
 
 // Controls whether tilize_init/tilize_uninit are called.
+// Tilize must be initialized before use — only tilize helper calls perform this
+// initialization (via InitAndUninit or InitOnly modes, or by a prior tilize
+// call that already initialized — see Example 6).
 // When calling tilize() multiple times back-to-back, you can skip redundant
 // init/uninit between calls: use InitOnly on the first call, Neither on
 // middle calls, and UninitOnly on the last call.
@@ -37,6 +40,13 @@ enum class InitUninitMode : uint8_t {
 };
 
 // Input synchronization strategy.
+//
+// WARNING - NoWait:
+// This mode can cause data hazards if used incorrectly. ONLY use when:
+//   1. Paired with explicit cb_wait_front() before the operation, OR
+//   2. As the FIRST operation in a chain, OR
+//   3. With sharded tensors where data is pre-loaded in CB
+// When in doubt, use WaitBlock or WaitUpfront.
 enum class WaitMode : uint8_t {
     WaitBlock,    // Default — wait for input per block
     WaitUpfront,  // Wait for all input upfront before processing
