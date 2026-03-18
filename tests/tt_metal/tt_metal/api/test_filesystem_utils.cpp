@@ -176,14 +176,20 @@ TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsValidTime) {
     // (1 hour ago - file should have been modified more recently than that)
     auto now = std::filesystem::file_time_type::clock::now();
     auto one_hour_ago = now - std::chrono::hours(1);
-    EXPECT_GT(result.value(), one_hour_ago);
+    // Cast to milliseconds-since-epoch for portable comparison (libc++ uses __int128 for durations)
+    auto result_ms = std::chrono::duration_cast<std::chrono::milliseconds>(result.value().time_since_epoch()).count();
+    auto one_hour_ago_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(one_hour_ago.time_since_epoch()).count();
+    EXPECT_GT(result_ms, one_hour_ago_ms);
 
     // Verify consistency - calling again returns the same time (within 1 second for filesystem precision)
     auto result2 = safe_last_write_time(file);
     EXPECT_TRUE(result2.has_value());
     auto diff =
         (result.value() > result2.value()) ? (result.value() - result2.value()) : (result2.value() - result.value());
-    EXPECT_LE(diff, std::chrono::seconds(1));
+    // Cast to milliseconds for portable comparison (libc++ uses __int128 for durations)
+    auto diff_ms = std::chrono::duration_cast<std::chrono::milliseconds>(diff).count();
+    EXPECT_LE(diff_ms, 1000);  // 1000ms = 1 second
 }
 
 TEST_F(FilesystemUtilsTest, SafeLastWriteTime_ReturnsNulloptForNonExistentFile) {
