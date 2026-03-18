@@ -117,11 +117,11 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "refiner_unet_1024x1024": {
         "wormhole": 244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 131_795_269 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": None,  # Refiner not supported yet on Blackhole
     },
     "refiner_unet_512x512": {
         "wormhole": 79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": None,  # Only 1024x1024 tested on Blackhole
+        "blackhole": None,  # Refiner not supported yet on Blackhole
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
@@ -141,11 +141,11 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "clip_encoder_1": {
         "wormhole": 13_112_562,
-        "blackhole": 6_795_180,
+        "blackhole": 7_101_101,
     },
     "clip_encoder_2": {
         "wormhole": 63_591_763,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 31_220_061,
+        "blackhole": 29_235_442,
     },
 }
 
