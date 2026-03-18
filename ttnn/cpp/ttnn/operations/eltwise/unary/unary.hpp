@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
 
 namespace ttnn {
 namespace operations::unary {
@@ -235,13 +236,6 @@ Tensor identity(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-Tensor abs(
-    const Tensor& input_tensor,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-Tensor abs(const ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 Tensor eqz(
     const Tensor& input_tensor,
