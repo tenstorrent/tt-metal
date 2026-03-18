@@ -158,6 +158,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`chunk_width_in_mm_blocks` (Optional[int]): MM output blocks per RS chunk.
             * :attr:`optional_rs_intermediate_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS intermediate.
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
+            * :attr:`fused_ternary_scalar` (Optional[float]): Scalar value for fused addcmul operation.
+            * :attr:`addcmul_input_tensor1` (Optional[ttnn.Tensor]): First additional input tensor for fused addcmul (residual/base).
+            * :attr:`addcmul_input_tensor2` (Optional[ttnn.Tensor]): Second additional input tensor for fused addcmul (gate/multiplier).
 
         )doc");
 }
