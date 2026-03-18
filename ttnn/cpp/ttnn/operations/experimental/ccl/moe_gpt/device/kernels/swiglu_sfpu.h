@@ -51,9 +51,9 @@ template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _swiglu_sigmoid_(sfpi::vFloat x) {
     sfpi::vFloat exp_neg_x;
     if constexpr (is_fp32_dest_acc_en) {
-        exp_neg_x = _sfpu_exp_improved_<true>(-x);
+        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
     } else {
-        exp_neg_x = _sfpu_exp_21f_<true>(-x);
+        exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
     sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
     if constexpr (is_fp32_dest_acc_en) {
