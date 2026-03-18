@@ -4,6 +4,7 @@
 
 #include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_device_setup.hpp"
+#include "tt_metal/fabric/fabric_vc2_connection.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -12,8 +13,8 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type) {
-    ConnectionKey key = {direction, link_idx};
+    const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type, bool use_vc2) {
+    ConnectionKey key = {direction, link_idx, use_vc2};
     auto& conn = connections_[key];
 
     // Store worker type for this core (for channel assignment later)
@@ -274,8 +275,13 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
         } else {
             // Generate fabric connection args directly using passed parameters
             const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
-            append_fabric_connection_rt_args(
-                fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            if (key.use_vc2) {
+                append_fabric_vc2_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            } else {
+                append_fabric_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            }
         }
     }
 
@@ -405,7 +411,8 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
         TestWorkerType::SENDER,
         this->test_device_ptr_->connection_manager_,
         outgoing_direction,
-        config.link_id);
+        config.link_id,
+        config.use_vc2);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
 }
@@ -607,7 +614,8 @@ ConnectionKey TestDevice::register_fabric_connection(
     TestWorkerType worker_type,
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
-    uint32_t link_idx) {
+    uint32_t link_idx,
+    bool use_vc2) {
     // Get available link indices for this direction (to validate link_idx)
     std::vector<uint32_t> available_link_indices = get_forwarding_link_indices_in_direction(outgoing_direction);
 
@@ -626,7 +634,7 @@ ConnectionKey TestDevice::register_fabric_connection(
         static_cast<int>(outgoing_direction));
 
     // Check if this core already registered this connection
-    ConnectionKey connection_key{outgoing_direction, link_idx};
+    ConnectionKey connection_key{outgoing_direction, link_idx, use_vc2};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
@@ -635,7 +643,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     }
 
     // Register the new connection with the connection manager
-    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type);
+    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, use_vc2);
 
     log_debug(
         tt::LogTest,
