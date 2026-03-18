@@ -124,7 +124,14 @@ def test_vision_block_inference(
         # Prepare input tensor for the TT model
         tt_input = pt_input.clone()
         tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, seq_len - ref_seq_len))
-        tt_input = model_args.prepare_residual_tensor_prefill(tt_input.squeeze(0))
+        tt_input = ttnn.from_torch(
+            tt_input,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        )
 
         # Run our model
         tt_out = tt_model(
