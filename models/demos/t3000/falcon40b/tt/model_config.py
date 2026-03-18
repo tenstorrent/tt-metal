@@ -391,14 +391,14 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             ),
         )
         model_config["LN_ATTN_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             subblock_w=8,
             block_h=1,
             block_w=8,
             inplace=False,
         )
         model_config["LN_MLP_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             subblock_w=8,
             block_h=1,
             block_w=8,
@@ -431,7 +431,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             ),
         )
         model_config["QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 1),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
             in0_block_w=32,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=1,
@@ -506,7 +506,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
         model_config["SOFTMAX_PROGCFG"] = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(8, 2),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
             subblock_w=1,
             block_h=row_height // 32,
             block_w=1,  # Dynamic
@@ -541,7 +541,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         )
         model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
         model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             in0_block_w=8,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=1,
@@ -553,7 +553,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         )
         # MLP
         model_config["DENSE_H_TO_4H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             in0_block_w=8,  # TODO: Can this be larger
             out_subblock_h=1,  # TODO: Can this be larger
             out_subblock_w=4,
@@ -564,7 +564,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             mcast_in0=True,
         )
         model_config["DENSE_4H_TO_H_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -600,7 +600,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             ),
         )
         model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             subblock_w=8,
             block_h=1,
             block_w=8,
@@ -610,7 +610,7 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
         # LM Head
         model_config["LM_HEAD_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
         model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 4),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             in0_block_w=8,
             out_subblock_h=1,
             out_subblock_w=4,
@@ -866,7 +866,7 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
     k_chunk_size = min(seq_len, 256)
 
     model_config["SDPA_PROGCFG"] = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=[8, 7],
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
     )
@@ -911,14 +911,18 @@ def get_sharded_layernorm_specs_for_seqlen(
     )
 
     layernorm_block_sharded_prg_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(layernorm_num_cores_x - 1, layernorm_num_cores_y - 1))}
+        ),
         subblock_w=8,
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
         inplace=False,
     )
     layernorm_block_sharded_prg_config_inplace = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[layernorm_num_cores_x, layernorm_num_cores_y],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(layernorm_num_cores_x - 1, layernorm_num_cores_y - 1))}
+        ),
         subblock_w=8,
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,

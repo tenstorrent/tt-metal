@@ -20,7 +20,6 @@ struct SparseMatmulParams {
     tt::tt_metal::MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt;
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
-    std::optional<const CoreCoord> user_core_coord = std::nullopt;
     std::optional<const tt::tt_metal::Tile> output_tile;
     std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;

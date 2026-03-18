@@ -206,7 +206,6 @@ class MLP1D(LightweightModule):
             x,
             self.w1,
             dtype=cfg.linear_dtype,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -215,7 +214,6 @@ class MLP1D(LightweightModule):
             x,
             self.w3,
             dtype=cfg.linear_dtype,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -249,7 +247,6 @@ class MLP1D(LightweightModule):
             dtype=cfg.linear_dtype,
             program_config=cfg.decode_w2_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            core_grid=None,
         )
         ttnn.deallocate(w2_in)
 
@@ -294,7 +291,6 @@ class MLP1D(LightweightModule):
             x,
             self.w1,
             dtype=cfg.linear_dtype,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=pc_w1_w3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -303,7 +299,6 @@ class MLP1D(LightweightModule):
             x,
             self.w3,
             dtype=cfg.linear_dtype,
-            core_grid=None,
             compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
             program_config=pc_w1_w3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -336,7 +331,6 @@ class MLP1D(LightweightModule):
             dtype=cfg.linear_dtype,
             program_config=pc_w2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=None,
         )
         ttnn.deallocate(w2_in)
 
@@ -706,7 +700,9 @@ def _matmul_config(
         in0_block_w = _find_largest_divisor(k // (tile_size * grid_size[1]))
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

@@ -54,7 +54,9 @@ def update_model_config(config, batch_size):
     # sharding configs
     program_configs = {
         "layernorm_before_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
             subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             block_h=seqL_t,  # 7,
@@ -63,7 +65,9 @@ def update_model_config(config, batch_size):
         ),
         # shard_spec = [224, 96]
         "query_key_value_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
             in0_block_w=dim_t__x_full_grid,  # 3
             out_subblock_h=1,
@@ -74,7 +78,9 @@ def update_model_config(config, batch_size):
             fused_activation=None,
         ),
         "query_by_key_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=head_size_t,  # 2,
             out_subblock_h=1,
             out_subblock_w=seqL_t,  # 7,
@@ -82,13 +88,17 @@ def update_model_config(config, batch_size):
             per_core_N=seqL_t,  # 7,
         ),
         "softmax_program_config": ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             subblock_w=seqL_t,  # 7,
             block_h=head_seqL_t__x,  # 14,
             block_w=seqL_t,  # 7,
         ),
         "attention_probabilities_by_value_matmul_program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=seqL_t,  # 7,
             out_subblock_h=1,
             out_subblock_w=head_size_t,  # 2,
@@ -96,7 +106,9 @@ def update_model_config(config, batch_size):
             per_core_N=head_size_t,  # 2,
         ),
         "self_output_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
             in0_block_w=dim_t__x_full_grid,  # 3
             out_subblock_h=1,
@@ -107,7 +119,9 @@ def update_model_config(config, batch_size):
             fused_activation=None,
         ),
         "layernorm_after_output_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
             subblock_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             block_h=seqL_t,  # 7,
@@ -115,7 +129,9 @@ def update_model_config(config, batch_size):
             inplace=False,
         ),
         "ff1_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             # shard_shape_is = [seqL_t, dim_t__x_full_grid], in tiles
             in0_block_w=dim_t__x_full_grid,  # 96 == 3 tiles,
             out_subblock_h=1,
@@ -126,7 +142,9 @@ def update_model_config(config, batch_size):
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             # shard shape is [seqL_t, dim_t__x_full_grid * 4], in tiles
             in0_block_w=dim_t__x_full_grid * 4,  # 12
             out_subblock_h=1,
@@ -137,7 +155,9 @@ def update_model_config(config, batch_size):
             fused_activation=None,
         ),
         "classifer_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+            ),
             in0_block_w=dim_t__x // 2,  # 1,
             out_subblock_h=1,
             out_subblock_w=class_subb_w,
@@ -197,7 +217,6 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         bias=parameters.projection.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=config.core_grid,
     )
 
     patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.ROW_MAJOR_LAYOUT)

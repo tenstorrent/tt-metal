@@ -24,7 +24,9 @@ class TtnnBGEIntermediate:
 
         # Create dynamic program config
         dynamic_ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             in0_block_w=dim_t__x,  # Keep 4 (Kt=32, per_core=4, max is 4)
             out_subblock_h=1,
             out_subblock_w=dim_t__x * 2,  # Keep 8 (no FP32 accumulation, max for BF16 is 8)

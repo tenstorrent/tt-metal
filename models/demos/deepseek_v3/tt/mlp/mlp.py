@@ -416,8 +416,10 @@ class MLP(AbstractModule):
         max_in0_block_w = max(1, available_for_in_cbs // (2 * bf16_tile_bytes * (per_core_M_tiles + per_core_N_tiles)))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=core_grid_size,
-            in0_block_w=find_largest_divisor(K_tiles, min(8, max_in0_block_w)),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))}
+            ),
+            in0_block_w=find_largest_divisor(K_tiles),
             out_subblock_h=1,
             out_subblock_w=find_largest_divisor(
                 per_core_N_tiles,

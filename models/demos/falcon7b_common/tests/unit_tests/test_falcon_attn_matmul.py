@@ -75,7 +75,9 @@ def run_falcon_attn_matmul_test(
         out = falcon_op(
             a_t,
             b_t,
-            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            ),
             memory_config=out_mem_config,
             dtype=out_dtype,
         )
@@ -86,7 +88,9 @@ def run_falcon_attn_matmul_test(
             b_t,
             num_tokens=seq_len,
             transpose_hw=transpose_hw,
-            compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            ),
             memory_config=out_mem_config,
             dtype=out_dtype,
         )

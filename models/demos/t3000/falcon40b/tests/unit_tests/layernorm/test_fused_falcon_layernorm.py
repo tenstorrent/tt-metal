@@ -148,7 +148,7 @@ class TtFusedFalconLayernorm:
         # )
 
         self.prg_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 8],
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             subblock_w=min(8, H // 8),
             block_h=self.model_config["SEQ_LEN"] // 32 // 8,
             block_w=H // 32 // 8,

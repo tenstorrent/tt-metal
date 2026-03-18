@@ -93,7 +93,6 @@ class TtFalconAttention:
             input_tensor_b=self.query_key_value_weights,
             memory_config=self.model_config["FUSED_QKV_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["FUSED_QKV_MM_OUTPUT_DTYPE"],
-            core_grid=self.core_grid,
         )
         batch_size, _, sequence_size, fused_query_key_value_width = fused_query_key_value.shape
         fused_query_key_value = ttnn.reshape(
@@ -150,7 +149,6 @@ class TtFalconAttention:
                 input_tensor_a=query_layer,
                 input_tensor_b=key_layer_transposed,
                 memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
-                core_grid=self.core_grid,
             )
 
         elif llm_mode == "decode":
@@ -159,7 +157,13 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1)
+                            )
+                        }
+                    ),
                     memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -167,7 +171,13 @@ class TtFalconAttention:
                 attn_weights = ttnn.experimental.group_attn_matmul(
                     query_layer,
                     key_layer_transposed,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1)
+                            )
+                        }
+                    ),
                     memory_config=self.model_config["PRE_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["PRE_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -222,7 +232,13 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1)
+                            )
+                        }
+                    ),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -230,7 +246,13 @@ class TtFalconAttention:
                 attn_output = ttnn.experimental.group_attn_matmul(
                     attn_weights,
                     value_layer,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid.x, self.core_grid.y),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1)
+                            )
+                        }
+                    ),
                     memory_config=self.model_config["POST_SOFTMAX_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["POST_SOFTMAX_MM_OUTPUT_DTYPE"],  # Must be BFLOAT16
                 )
@@ -246,10 +268,7 @@ class TtFalconAttention:
         )
 
         attn_output = ttnn.linear(
-            attn_output,
-            self.dense_weights,
-            memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"],
-            core_grid=self.core_grid,
+            attn_output, self.dense_weights, memory_config=self.model_config["SELFOUT_MM_OUTPUT_MEMCFG"]
         )
 
         return attn_output, layer_present

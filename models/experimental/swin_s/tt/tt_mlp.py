@@ -7,7 +7,7 @@ import ttnn
 
 program_configs = {
     "linear_1_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=6,
@@ -18,7 +18,7 @@ program_configs = {
         mcast_in0=False,
     ),
     "linear_1_config_2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=6,
@@ -29,7 +29,7 @@ program_configs = {
         mcast_in0=False,
     ),
     "linear_1_config_4": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=96,
@@ -39,7 +39,7 @@ program_configs = {
         fused_activation=None,
     ),
     "linear_2_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=3,
@@ -50,7 +50,7 @@ program_configs = {
         mcast_in0=False,
     ),
     "linear_2_config_2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=3,
@@ -61,7 +61,7 @@ program_configs = {
         mcast_in0=False,
     ),
     "linear_2_config_3": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=3,
@@ -71,7 +71,7 @@ program_configs = {
         fused_activation=None,
     ),
     "linear_2_config_4": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=24,
@@ -158,7 +158,6 @@ class TtMLP:
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
                 )
             elif input_tensor.shape[-1] == 768:
                 output_tensor = ttnn.linear(
@@ -169,7 +168,6 @@ class TtMLP:
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
-                    core_grid=ttnn.CoreGrid(y=8, x=8),
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
 
@@ -250,7 +248,6 @@ class TtMLP:
                 bias=self.parameters[3].bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
-                core_grid=ttnn.CoreGrid(y=8, x=8),
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),

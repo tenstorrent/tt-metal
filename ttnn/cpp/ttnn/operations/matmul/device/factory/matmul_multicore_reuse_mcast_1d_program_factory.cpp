@@ -5156,6 +5156,69 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         sub_device_start_core);
 }
 
+MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast1DProgramFactory::create(
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    auto program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+        operation_attributes.program_config.value());
+    DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config.value();
+
+    tt_metal::Program program{};
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
+
+    auto b_tensors = std::vector<Tensor>{tensor_args.input_tensors.begin() + 1, tensor_args.input_tensors.end()};
+    CoreCoord resolved_grid_size = program_config.allowed_worker_cores.has_value()
+                                       ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                                       : tensor_args.input_tensors.at(0).device()->compute_with_storage_grid_size();
+    auto shared_vars = matmul_multi_core_reuse_mcast_1d_optimized_(
+        program,
+        tensor_args.input_tensors.at(0),
+        b_tensors,
+        tensor_args.optional_input_tensors.at(0),
+        tensor_return_value,
+        operation_attributes.bcast_batch.value_or(false),
+        operation_attributes.transpose_a,
+        operation_attributes.transpose_b,
+        resolved_grid_size,
+        compute_kernel_config,
+        ttnn::get_throttle_level(compute_kernel_config),
+        program_config.in0_block_w,
+        program_config.out_subblock_h,
+        program_config.out_subblock_w,
+        program_config.out_block_h,
+        program_config.out_block_w,
+        program_config.per_core_M,
+        program_config.per_core_N,
+        program_config.fuse_batch,
+        program_config.fused_activation,
+        program_config.mcast_in0,
+        program_config.gather_in0,
+        program_config.hop_cores,
+        operation_attributes.untilize_out,
+        empty_fused_op_signaler,
+        operation_attributes.global_cb,
+        program_config.num_global_cb_receivers,
+        operation_attributes.sub_device_id,
+        tt::CBIndex::c_0,
+        std::nullopt);
+
+    return {std::move(program), std::move(shared_vars)};
+}
+
+void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
+    reuse_mcast_1d_optimized_helpers::override_program_parameters(
+        cached_program.shared_variables,
+        operation_attributes.global_cb,
+        cached_program.program,
+        tensor_args,
+        tensor_return_value);
+}
+
 void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const shared_variables_t& shared_variables,
@@ -5380,6 +5443,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
+    CoreCoord resolved_grid = config.allowed_worker_cores.has_value()
+                                  ? config.allowed_worker_cores.value().bounding_box().grid_size()
+                                  : a.device()->compute_with_storage_grid_size();
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
         a,
@@ -5389,7 +5455,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         broadcast_batch,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
-        config.compute_with_storage_grid_size,
+        resolved_grid,
         compute_kernel_config,
         ttnn::get_throttle_level(compute_kernel_config),
         config.in0_block_w,

@@ -13,16 +13,15 @@ namespace ttnn::operations::matmul {
 // TODO: Uplift this to support bcast batch for in1; currently, only allows B=1
 // for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
     std::size_t per_core_M{};
     std::size_t per_core_N{};
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -33,6 +32,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 // 1D mcast matmul program config.
@@ -48,7 +48,6 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
 // When `gather_in0 == true`, `compute_with_storage_grid_size` is ignored and the gather path
 // can run on any sub-device worker layout, including non-rectangular ones.
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
-    CoreCoord compute_with_storage_grid_size;
     std::size_t in0_block_w{};
     std::size_t out_subblock_h{};
     std::size_t out_subblock_w{};
@@ -63,6 +62,7 @@ struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreRangeSet hop_cores;
     std::size_t num_global_cb_receivers{};
     bool untilize_out{};
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
@@ -70,6 +70,7 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
@@ -77,9 +78,12 @@ struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
 };
 
-struct MatmulMultiCoreProgramConfig {};
+struct MatmulMultiCoreProgramConfig {
+    std::optional<CoreRangeSet> allowed_worker_cores = std::nullopt;
+};
 
 using MatmulProgramConfig = std::variant<
     MatmulMultiCoreProgramConfig,

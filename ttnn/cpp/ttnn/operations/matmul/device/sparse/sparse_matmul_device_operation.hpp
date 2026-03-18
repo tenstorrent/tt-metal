@@ -33,6 +33,22 @@ struct SparseMatmulDeviceOperation {
 
     // static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
     //     const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor_a,
+        const Tensor& input_tensor_b,
+        const Tensor& sparsity,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        std::optional<uint32_t> nnz = std::nullopt,
+        bool is_input_a_sparse = false,
+        bool is_input_b_sparse = true,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
+        const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
 SparseMatmulParams create_sparse_matmul_attributes(

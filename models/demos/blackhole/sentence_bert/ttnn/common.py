@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     subblock_w=4,
     block_h=12,
     block_w=4,
@@ -17,7 +17,7 @@ layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
 )
 
 ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=8,
@@ -28,7 +28,7 @@ ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=6,
@@ -39,7 +39,7 @@ ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=6,
@@ -50,7 +50,7 @@ query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgra
 )
 
 self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     in0_block_w=4,
     out_subblock_h=2,
     out_subblock_w=4,
@@ -60,7 +60,7 @@ self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     fused_activation=None,
 )
 pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     in0_block_w=2,
     out_subblock_h=1,
     out_subblock_w=6,
@@ -68,7 +68,7 @@ pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
     per_core_N=12,
 )
 softmax_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(6, 8),
+    allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 7))}),
     subblock_w=6,
     block_h=24,
     block_w=12,

@@ -31,7 +31,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         operation_attributes.output_dtype,
         operation_attributes.compute_kernel_config,
         /*untilize_out=*/false,
-        operation_attributes.user_core_coord,
         /*user_fused_activation=*/std::nullopt,
         /*user_run_batched=*/false,
         /*transpose_a=*/false,
@@ -54,7 +53,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& output_tensor = tensor_return_value.at(0);
     auto program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto compute_with_storage_grid_size = program_config.allowed_worker_cores.has_value()
+                                              ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                                              : a.device()->compute_with_storage_grid_size();
     auto in0_block_w = program_config.in0_block_w;
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;

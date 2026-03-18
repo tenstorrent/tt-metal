@@ -116,7 +116,7 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const GlobalCircularBuffer>& global_cb,
-    std::optional<const ttnn::CoreGrid> core_grid,
+    std::optional<const ttnn::CoreGrid> /*core_grid*/,
     bool transpose_a,
     bool transpose_b,
     std::optional<const DataType> dtype,
@@ -133,11 +133,6 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
         rs_tensor.has_value() ^ second_weight_tensor.has_value(),
         "Exactly one of rs_tensor or second_weight_tensor must have a value");
     ttnn::operations::experimental::ccl::LlamaReduceScatterDeviceOperation rs_struct{};
-    std::optional<CoreCoord> user_core_coord;
-    if (core_grid.has_value()) {
-        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
-
     bool user_run_batched = ttnn::operations::matmul::utilities::is_input_batched(weight_tensor.logical_shape());
     auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
@@ -149,7 +144,6 @@ ttnn::operations::experimental::ccl::Matmul_RS::tensor_return_value_t llama_rs_m
          dtype.value_or(input_tensor.dtype()),
          compute_kernel_config,
          /*untilize_out=*/false,
-         user_core_coord,
          ttnn::operations::matmul::utilities::get_fused_activation(activation),
          user_run_batched,
          transpose_a,

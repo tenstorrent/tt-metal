@@ -181,7 +181,6 @@ class TtLlamaMLP_optimized:
             x,
             self.w1,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc1 else None,
             dtype=ttnn.bfloat16,
             activation="silu" if not pc1 else None,
             program_config=pc1,
@@ -191,7 +190,6 @@ class TtLlamaMLP_optimized:
             x,
             self.w3,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG_LOFI"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc3,
         )
@@ -206,7 +204,6 @@ class TtLlamaMLP_optimized:
             hidden_states,
             self.w2,
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc2 else None,
             dtype=ttnn.bfloat8_b,
             program_config=pc2,
         )

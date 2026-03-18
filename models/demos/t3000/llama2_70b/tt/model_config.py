@@ -186,14 +186,14 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
         ),
     )
     model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 4],
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         subblock_w=8,
         block_h=shard_height // 32,
         block_w=8,
         inplace=True,
     )
     model_config["LN_16_CORES_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[8, 2],
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
         subblock_w=8,
         block_h=shard_height // 32,
         block_w=16,
@@ -201,7 +201,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
     # LM Head
     model_config["LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=4,
@@ -212,7 +212,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
         mcast_in0=True,
     )
     model_config["LLAMA3_LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=4,
@@ -225,7 +225,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
 
     max_mm_seq_tiles = model_config["MAX_MM_SEQ_LEN"] // 32
     model_config["PREFILL_LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -237,7 +237,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["PREFILL_LM_HEAD_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=1,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -250,7 +250,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
 
     max_mm_seq_tiles = model_config["MAX_MM_SEQ_LEN"] // 32
     model_config["PREFILL_LLAMA3_LM_HEAD_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -262,7 +262,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["PREFILL_LLAMA3_LM_HEAD_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=1,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -318,7 +318,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     max_mm_seq_tiles = model_config["MAX_MM_SEQ_LEN"] // 32
     in0_block_w = 8  # smaller in0_block_w for larger seq_len to fit in L1)
     model_config["PREFILL_FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=in0_block_w,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -331,7 +331,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
 
     in0_block_w = 32
     model_config["PREFILL_FUSED_QKV_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=in0_block_w,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -343,7 +343,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["FUSED_QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 5),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}),
         in0_block_w=16,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -355,7 +355,9 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["ROT_MAT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=batch_grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(batch_grid_size.x - 1, batch_grid_size.y - 1))}
+        ),
         in0_block_w=4,  # 128 // TILE_SIZE (dynamic)
         out_subblock_h=1,
         out_subblock_w=4,
@@ -376,7 +378,9 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["SDPA_DECODE_PROGRAM_CONFIG"] = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=[8, 4],  # Can be increased, but could result in di/dt?
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}
+        ),  # Can be increased, but could result in di/dt?
         q_chunk_size=0,  # unused
         k_chunk_size=256,  # unused
         exp_approx_mode=False,
@@ -389,7 +393,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 2),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
         in0_block_w=32,  # (32 x 8k) x (8k x 1k) = (32 x 1k)
         out_subblock_h=1,
         out_subblock_w=2,  # TODO: Maximize
@@ -403,7 +407,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     max_mm_seq_tiles = model_config["MAX_MM_SEQ_LEN"] // 32
     in0_block_w = 8  # smaller in0_block_w for larger seq_len to fit in L1)
     model_config["PREFILL_SELFOUT_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=8,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -416,7 +420,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
 
     in0_block_w = 32  # smaller in0_block_w for larger seq_len to fit in L1)
     model_config["PREFILL_SELFOUT_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=8,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -445,7 +449,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     # Llama MLP Module Prefill
     max_mm_seq_tiles = model_config["MAX_MM_SEQ_LEN"] // 32
     model_config["PREFILL_PADDED_FF1_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -457,7 +461,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["PREFILL_PADDED_FF1_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -469,7 +473,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["PREFILL_PADDED_FF3_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -481,7 +485,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["PREFILL_PADDED_FF3_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -495,7 +499,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     # input0: [1,32,128,32k]
     # input1: [1,1,32k,1k]
     model_config["PREFILL_PADDED_FF2_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -507,7 +511,7 @@ def get_model_config(llama_version="llama3", max_batch_size=32, max_context_len=
     )
 
     model_config["PREFILL_PADDED_FF2_MM_PROGCFG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=4,  # how much inner dim you take each time
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4

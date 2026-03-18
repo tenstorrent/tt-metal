@@ -34,7 +34,9 @@ head_seqL_t__x = (head_num * seqL_t) // core_grid_8x8.x  # 24
 head_size_t = dim_t // head_num  # 2
 
 layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     subblock_w=dim_t__x,  # Revert to 4
     block_h=seqL_t,  # Keep same as sentence_bert for seq_len handling
     block_w=dim_t__x,  # 1024 / 32 / 8 = 4
@@ -44,7 +46,9 @@ layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
 )
 
 ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     in0_block_w=dim_t__x,  # Keep 4 (Kt=32, per_core=4, max is 4)
     out_subblock_h=1,
     out_subblock_w=dim_t__x * 2,  # Keep 8 (no FP32 accumulation, max for BF16 is 8)
@@ -55,7 +59,9 @@ ff1_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     in0_block_w=(dim_t__x * 4) // seqL_factor,  # Increase from 8 to 16 for better reuse (4096 / 32 / 8 = 16)
     out_subblock_h=1,  # Keep 1 (per_core_M=12, so 1 divides evenly)
     out_subblock_w=dim_t__x // seqL_factor,  # Try 4 (max for FP32: 1*4=4, divides per_core_N=4)
@@ -66,7 +72,9 @@ ff2_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     in0_block_w=dim_t__x // seqL_factor,  # Revert to 4 (must divide K evenly: 1024/32=32, 32/8=4)
     out_subblock_h=1,
     out_subblock_w=dim_t__x // seqL_factor,  # Keep 4 for FP32 accumulation (1*4=4 <= 4, max for FP32)
@@ -77,7 +85,9 @@ query_key_value_matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgra
 )
 
 self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     in0_block_w=dim_t__x,
     out_subblock_h=1,  # Restore to 2 (no FP32 accumulation on self-output)
     out_subblock_w=dim_t__x,  # Restore to 4
@@ -88,7 +98,9 @@ self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     in0_block_w=head_size_t,
     out_subblock_h=1,
     out_subblock_w=seqL_t // 2,  # Keep 6 (best balance between performance and PCC)
@@ -97,7 +109,9 @@ pre_softmax_config = ttnn.MatmulMultiCoreReuseProgramConfig(
 )
 
 softmax_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-    compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+    ),
     subblock_w=seqL_t,  # Revert to 6 (best for accuracy)
     block_h=head_seqL_t__x,  # Keep same for seq_len handling
     block_w=seqL_t,  # Keep same for seq_len handling (384 / 32 / 8 = 1.5, but using 12 for compatibility)
