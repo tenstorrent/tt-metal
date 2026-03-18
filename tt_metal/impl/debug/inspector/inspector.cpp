@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
+#include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
@@ -19,10 +20,23 @@
 namespace tt::tt_metal {
 
 namespace {
-inspector::Data* get_inspector_data() { return tt::tt_metal::MetalContext::instance().get_inspector_data(); }
+inspector::Data* get_inspector_data() {
+    // TODO: we assume inspector only works on the silicon context
+    // https://github.com/tenstorrent/tt-metal/issues/39745
+    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).get_inspector_data();
+    }
+    return nullptr;
+}
 }  // namespace
 
-bool Inspector::is_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled(); }
+// Inspector is not used on mock devices
+bool Inspector::is_enabled() {
+    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).rtoptions().get_inspector_enabled();
+    }
+    return false;
+}
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
     if (!is_enabled()) {
@@ -541,9 +555,7 @@ std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel
 
 namespace experimental::inspector {
 
-bool IsEnabled() {
-    return Inspector::is_enabled();
-}
+bool IsEnabled() { return Inspector::is_enabled(); }
 
 void EmitMeshWorkloadAnnotation(
     tt::tt_metal::distributed::MeshWorkload& workload,

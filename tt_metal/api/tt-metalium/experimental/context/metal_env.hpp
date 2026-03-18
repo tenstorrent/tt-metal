@@ -8,6 +8,9 @@
 #include <optional>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -91,6 +94,9 @@ public:
     /// @return Total number of PCIe devices in this environment.
     uint32_t get_num_pcie_devices() const;
 
+    /// @return Number of available devices in this environment.
+    uint32_t get_num_available_devices() const;
+
     /// @return Size in bytes of each Tensix core's L1 SRAM of this environment.
     uint32_t get_l1_size() const;
 
@@ -124,6 +130,39 @@ public:
     /// The system mesh provides a virtualized coordinate system over the physical devices, allowing
     /// MeshDevice instances to map logical coordinates to physical device IDs.
     distributed::SystemMesh& get_system_mesh();
+
+    // Create a MeshDevice which will use this MetalEnv
+    std::shared_ptr<distributed::MeshDevice> create_mesh_device(
+        const distributed::MeshDeviceConfig& config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a unit mesh for the physical device ID which will use this MetalEnv
+    std::shared_ptr<distributed::MeshDevice> create_unit_mesh_device(
+        int device_id,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a unit mesh for each physical device ID in the list which will use this MetalEnv
+    std::map<int, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
+        const std::vector<int>& device_ids,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a SubDevice that uses this MetalEnv
+    SubDevice create_sub_device(tt::stl::Span<const CoreRangeSet> cores);
 
 private:
     friend class MetalEnvAccessor;

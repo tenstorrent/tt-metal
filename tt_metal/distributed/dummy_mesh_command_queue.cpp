@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dummy_mesh_command_queue.hpp"
+#include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/common/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
@@ -12,7 +13,11 @@ namespace tt::tt_metal::distributed {
 
 DummyMeshCommandQueue::DummyMeshCommandQueue(
     MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)) {}
+    MeshCommandQueueBase(
+        mesh_device,
+        id,
+        create_passthrough_thread_pool(mesh_device->impl().get_context_id()),
+        std::move(lock_api_function)) {}
 
 std::optional<MeshTraceId> DummyMeshCommandQueue::trace_id() const { return std::nullopt; }
 

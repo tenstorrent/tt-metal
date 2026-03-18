@@ -66,11 +66,14 @@ public:
         bool operator!=(const AllocatorDependencies& other) const noexcept { return !(*this == other); }
     };
 
+    // The DRAM alignment bytes is used to initialize the allocator. The alignment_bytes needs to be compatible with the
+    // DRAM alignment.
     BankManager(
         const BufferType& buffer_type,
         const std::vector<int64_t>& bank_offsets,
         DeviceAddr size_bytes,
         uint32_t alignment_bytes,
+        uint32_t dram_alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
         const AllocatorDependencies& dependencies = AllocatorDependencies());
@@ -80,6 +83,7 @@ public:
         DeviceAddr size_bytes,
         DeviceAddr interleaved_address_limit,
         uint32_t alignment_bytes,
+        uint32_t dram_alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
         const AllocatorDependencies& dependencies = AllocatorDependencies());
