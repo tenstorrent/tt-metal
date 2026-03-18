@@ -426,11 +426,14 @@ void kernel_main() {
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
     
     uint32_t injector_noc_x = 0, injector_noc_y = 0;
+    uint32_t num_muxes_in_direction = 1, my_mux_index = 0;
 
     if (mux_connection_valid) {
         const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
         injector_noc_x = get_arg_val<uint32_t>(argidx++);
         injector_noc_y = get_arg_val<uint32_t>(argidx++);
+        num_muxes_in_direction = get_arg_val<uint32_t>(argidx++);
+        my_mux_index = get_arg_val<uint32_t>(argidx++);
         ag_direction = get_arg_val<uint32_t>(argidx++);
         ag_input_Wt = get_arg_val<uint32_t>(argidx++);
         ag_input_Ht = get_arg_val<uint32_t>(argidx++);
@@ -819,8 +822,13 @@ void kernel_main() {
                 }
 
 #ifdef USE_MUX
-                if (mux_connection_valid) {
-                    uint32_t KV_chunks_processed_in_iter = 0;
+                if (mux_connection_valid && !is_last_ring_iter) {
+                    constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+                    constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
+                    const uint32_t rows_per_mux = (Sk_chunk_t + num_muxes_in_direction - 1) / num_muxes_in_direction;
+                    const uint32_t my_row_start = my_mux_index * rows_per_mux;
+                    const uint32_t my_row_end = std::min(my_row_start + rows_per_mux, (uint32_t)Sk_chunk_t);
+
                     for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                         const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
                         const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
@@ -830,7 +838,7 @@ void kernel_main() {
                         if (kv_chunk_is_beyond_logical_n) {
                             continue;
                         }
-                        KV_chunks_processed_in_iter++;
+
                         Slice kv_slice;
                         uint32_t end_seq_tile;
 
@@ -855,54 +863,72 @@ void kernel_main() {
                             }
                         }
 
-                        constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
-                        constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
-
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
-                        // Wait for reader to fill K, forward over MUX, then release
+                        // Wait for reader to fill K, forward this writer's row slice over fabric
                         cb_wait_front(cb_k_writer_in, k_chunk_tiles);
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
-                            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                                if (kv_slice.d2_start + row >= end_seq_tile) break;
-                                for (uint32_t col = 0; col < DHt; ++col) {
+                            for (uint32_t col = 0; col < DHt; ++col) {
+                                for (uint32_t row = my_row_start; row < my_row_end; row += 2) {
+                                    if (kv_slice.d2_start + row >= end_seq_tile) break;
                                     const uint32_t src_l1_addr = base_k_read_ptr
                                         + (row + col * Sk_chunk_t) * ag_page_size;
-                                    const uint32_t dest_tile_id = bh_offset
+                                    const uint32_t dest_id0 = bh_offset
                                         + (kv_global_start_tile + row) * ag_output_Wt + col;
-                                    tt::tt_fabric::linear::to_noc_unicast_write(
-                                        ag_page_size, pkt_hdr_write, dest_tile_id, gathered_k_writer);
-                                    tt::tt_fabric::fabric_async_write(
-                                        mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                    const bool have_second =
+                                        (row + 1 < my_row_end) && (kv_slice.d2_start + row + 1 < end_seq_tile);
+                                    if (have_second) {
+                                        const uint32_t dest_id1 = bh_offset
+                                            + (kv_global_start_tile + row + 1) * ag_output_Wt + col;
+                                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+                                            ag_page_size, pkt_hdr_write, dest_id0, dest_id1, gathered_k_writer);
+                                        tt::tt_fabric::fabric_async_write(
+                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size * 2);
+                                    } else {
+                                        tt::tt_fabric::linear::to_noc_unicast_write(
+                                            ag_page_size, pkt_hdr_write, dest_id0, gathered_k_writer);
+                                        tt::tt_fabric::fabric_async_write(
+                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                    }
                                 }
                             }
+                            noc_async_writes_flushed();
                         }
                         cb_pop_front(cb_k_writer_in, k_chunk_tiles);
 
-                        // Wait for reader to fill V, forward over MUX, then release
+                        // Wait for reader to fill V, forward this writer's row slice over fabric
                         cb_wait_front(cb_v_writer_in, v_chunk_tiles);
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_v_read_ptr = get_read_ptr(cb_v_writer_in);
-                            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                            for (uint32_t row = my_row_start; row < my_row_end; ++row) {
                                 if (kv_slice.d2_start + row >= end_seq_tile) break;
-                                for (uint32_t col = 0; col < DHt; ++col) {
+                                for (uint32_t col = 0; col < DHt; col += 2) {
                                     const uint32_t src_l1_addr = base_v_read_ptr
                                         + (row * DHt + col) * ag_page_size;
-                                    const uint32_t dest_tile_id = bh_offset
+                                    const uint32_t dest_id0 = bh_offset
                                         + (kv_global_start_tile + row) * ag_output_Wt + col;
-                                    tt::tt_fabric::linear::to_noc_unicast_write(
-                                        ag_page_size, pkt_hdr_write, dest_tile_id, gathered_v_writer);
-                                    tt::tt_fabric::fabric_async_write(
-                                        mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                    const bool have_second = (col + 1 < DHt);
+                                    if (have_second) {
+                                        const uint32_t dest_id1 = bh_offset
+                                            + (kv_global_start_tile + row) * ag_output_Wt + col + 1;
+                                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+                                            ag_page_size, pkt_hdr_write, dest_id0, dest_id1, gathered_v_writer);
+                                        tt::tt_fabric::fabric_async_write(
+                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size * 2);
+                                    } else {
+                                        tt::tt_fabric::linear::to_noc_unicast_write(
+                                            ag_page_size, pkt_hdr_write, dest_id0, gathered_v_writer);
+                                        tt::tt_fabric::fabric_async_write(
+                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                    }
                                 }
                             }
+                            noc_async_writes_flushed();
                         }
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
                     }
-                    if (!is_last_ring_iter) {
-                        tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
-                    }
+                    tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
                 }
 #endif
 
