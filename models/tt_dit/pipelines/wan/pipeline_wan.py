@@ -272,8 +272,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self._transformer_tracer = None
         self._transformer_2_tracer = None
-        # self._vae_tracer = None
-        # self._encoder_tracer = None
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -395,9 +393,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
     def _prepare_text_encoder(self):
-        # if self._encoder_tracer is not None:
-        #     self._encoder_tracer.release_trace()
-        #     self._encoder_tracer = None
         cache.load_model(
             self.tt_umt5_encoder,
             model_name=os.path.basename(self.checkpoint_name),
@@ -406,15 +401,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.text_encoder.state_dict(),
         )
-        # if self._encoder_tracer is None:
-        #     self._encoder_tracer = Tracer(
-        #         self.tt_umt5_encoder.forward, device=self.mesh_device, clone_prep_inputs=False
-        #     )
 
     def _prepare_transformer1(self):
-        # if self._transformer_tracer is not None and not self.transformer.is_loaded():
-        #     self._transformer_tracer.release_trace()
-        #     self._transformer_tracer = None
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -430,9 +418,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
 
     def _prepare_transformer2(self):
-        # if self._transformer_2_tracer is not None and not self.transformer_2.is_loaded():
-        #     self._transformer_2_tracer.release_trace()
-        #     self._transformer_2_tracer = None
         cache.load_model(
             self.transformer_2,
             model_name=os.path.basename(self.checkpoint_name),
@@ -448,9 +433,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             )
 
     def _prepare_vae(self):
-        # if self._vae_tracer is not None:
-        #     self._vae_tracer.release_trace()
-        #     self._vae_tracer = None
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
@@ -459,8 +441,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
         )
-        # if self._vae_tracer is None:
-        #     self._vae_tracer = Tracer(self.tt_vae.forward, device=self.mesh_device, clone_prep_inputs=False)
 
     def _get_t5_prompt_embeds(
         self,
