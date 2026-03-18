@@ -24,7 +24,7 @@ training_config:
     kahan_summation: false
 
 grpo_config:
-  max_tokens_to_complete: 10
+  max_tokens_to_complete: 512
   group_size: 1
 
 scheduler_config:
