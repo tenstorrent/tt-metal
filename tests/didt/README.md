@@ -62,14 +62,14 @@ Most tests support both Wormhole and Blackhole architectures. Some tests are Bla
 ## Configuration Options
 
 ```bash
-# Custom iteration count (default: 1000)
+# Custom iteration count (default: 100000)
 pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --didt-workload-iterations 5000000
 
 # Determinism checking (check every N iterations)
 pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 2chips" --didt-workload-iterations 5000 --determinism-check-interval 50
 
 # Target specific device by ID
-pytest tests/didt/test_ff1_matmul.py::test_specific_chip_ff1_matmul -k "8chips and logical_chip_3_"
+pytest tests/didt/test_ff1_matmul.py::test_specific_chip_ff1_matmul -k "8chips and 8chips_chip_3"
 
 # Target specific board (T3000)
 pytest tests/didt/test_ff1_matmul.py::test_specific_board_ff1_matmul -k "8chips and board_id_2"
