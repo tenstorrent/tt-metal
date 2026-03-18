@@ -215,7 +215,7 @@ public:
 
     ~MeshFabric1DFixture() override {
         if (device_open) {
-            TearDown();
+            MeshFabric1DFixture::TearDown();
         }
     }
 };
