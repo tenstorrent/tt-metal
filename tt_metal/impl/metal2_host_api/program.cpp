@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <functional>
 
 #include <tt-metalium/hal.hpp>
@@ -12,8 +13,11 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // TODO: These constants should be queriable from the public API (currently HAL, for consistency)
+// They are currently hardcoded in the temporary Quasar host_api.hpp too.
 static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
 static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
+
+// TODO: See if these NodeRangeSet helpers are needed. They may already exist (for CoreRangeSet).
 
 // Helper to convert Nodes variant to NodeRangeSet
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes) {
@@ -50,18 +54,192 @@ bool nodes_contains(
     return superset_node_range_set.contains(subset_node_range_set);
 }
 
+template <uint8_t NUM_CORES>
+struct ProcessorMask {
+    static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
+
+    // Mask of valid bit positions (e.g., 0xFF for 8 processors, 0x0F for 4)
+    static constexpr uint8_t VALID_BITS_MASK = (NUM_CORES == 8) ? 0xFF : ((1 << NUM_CORES) - 1);
+
+    // One-hot encoding of processors in use (0 = available, 1 = in use)
+    uint8_t bits = 0x00;
+
+    // Boolean operators
+    ProcessorMask operator|(ProcessorMask other) const { return {uint8_t(bits | other.bits)}; }
+    ProcessorMask operator&(ProcessorMask other) const { return {uint8_t(bits & other.bits)}; }
+    ProcessorMask operator~() const { return {uint8_t(~bits & VALID_BITS_MASK)}; }
+    ProcessorMask& operator|=(ProcessorMask other) {
+        bits |= other.bits;
+        return *this;
+    }
+    ProcessorMask& operator&=(ProcessorMask other) {
+        bits &= other.bits;
+        return *this;
+    }
+
+    // Handy helpers
+    uint8_t num_in_use() const { return std::popcount(bits); }
+    uint8_t num_available() const { return NUM_CORES - num_in_use(); }
+    bool is_idx_available(uint8_t idx) const { return (bits & (1 << idx)) == 0; }
+    bool is_idx_in_use(uint8_t idx) const { return (bits & (1 << idx)) != 0; }
+    bool conflicts_with(ProcessorMask other) const { return (bits & other.bits) != 0; }
+
+    // Factory method: create a ProcessorMask from a mask
+    static ProcessorMask create(uint8_t mask) {
+        TT_FATAL(mask <= VALID_BITS_MASK, "Mask specifies too many cores for ProcessorMask<{}>: {}", NUM_CORES, mask);
+        return {mask};
+    }
+
+    // Factory method: allocate N available processors from those not already in use
+    // Returns a mask of the newly reserved processors, or std::nullopt if not enough are available
+    static std::optional<ProcessorMask> reserve_n(uint8_t n, const ProcessorMask& already_in_use) {
+        // Enough left?
+        if (already_in_use.num_available() < n) {
+            return std::nullopt;
+        }
+
+        ProcessorMask newly_reserved;
+        for (uint8_t i = 0; i < NUM_CORES && n > 0; i++) {
+            if (already_in_use.is_idx_available(i)) {
+                newly_reserved.bits |= (1 << i);
+                n--;
+            }
+        }
+        return newly_reserved;
+    }
+};
+
+// Type alias for DM processors on Quasar
+using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
+using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
+
+// Helper: Assign or verify DM processor mask for a kernel on a worker.
+// Returns the kernel's mask (existing or newly reserved).
+// Updates cumulative_mask in place. Throws TT_FATAL on conflict or allocation failure.
+DMProcessorMask AssignDMProcessors(
+    const KernelSpec* kernel_spec,
+    const KernelSpecName& kernel_name,
+    const WorkerSpecName& worker_id,
+    std::unordered_map<const KernelSpec*, DMProcessorMask>& kernel_masks,
+    DMProcessorMask& cumulative_mask) {
+    // Already assigned from a previous worker?
+    if (kernel_masks.contains(kernel_spec)) {
+        DMProcessorMask existing = kernel_masks.at(kernel_spec);
+
+        // Check for conflict with what's already allocated
+        TT_FATAL(
+            !existing.conflicts_with(cumulative_mask),
+            "Kernel '{}' requires processors already in use on WorkerSpec '{}'. "
+            "The \"common DM cores\" assumption has been violated!",
+            kernel_name,
+            worker_id);
+
+        // Otherwise, update the cumulative mask
+        cumulative_mask |= existing;
+        return existing;
+    }
+
+    // First time seeing this kernel - reserve new processors
+    auto reserved = DMProcessorMask::reserve_n(kernel_spec->num_threads, cumulative_mask);
+    TT_FATAL(
+        reserved.has_value(),
+        "Failed to reserve processors for DM kernel '{}' on WorkerSpec '{}'. "
+        "The \"common DM cores\" assumption has been violated!",
+        kernel_name,
+        worker_id);
+
+    // Update the kernel mask and cumulative mask
+    DMProcessorMask mask = reserved.value();
+    kernel_masks[kernel_spec] = mask;
+    cumulative_mask |= mask;
+    return mask;
+}
+
+// Helper: Assign compute processor mask for a kernel.
+ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, const KernelSpecName& kernel_name) {
+    auto reserved = ComputeProcessorMask::reserve_n(kernel_spec->num_threads, ComputeProcessorMask::create(0x00));
+    TT_FATAL(
+        reserved.has_value(),
+        "Compute kernel '{}' reservation failed; should be unreachable after validation.",
+        kernel_name);
+    return reserved.value();
+}
+
 // Forward declaration
 void ValidateProgramSpec(const ProgramSpec& spec);
 
 Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false) {
     auto impl = std::make_shared<detail::ProgramImpl>();
 
+    //////////////////////////////
     // Legality checks
-    if (!skip_validation) {
-        ValidateProgramSpec(spec);
+    //////////////////////////////
+
+    // May want to make an option to skip legality checks in production to reduce runtime overhead.
+    // If you skip legality checks, you will get undefined behavior if the ProgramSpec is invalid.
+    if (skip_validation) {
+        TT_FATAL(false, "For now, bypassing legality checks on Quasar isn't allowed.");
+    }
+    ValidateProgramSpec(spec);
+
+    //////////////////////////////////////
+    // Kernel->core assignments
+    /////////////////////////////////////
+
+    // Mapping from kernel names to KernelSpecs (inefficiency -- also created in legality checks)
+    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
+    for (const auto& kernel : spec.kernels) {
+        kernel_by_name[kernel.unique_id] = &kernel;
     }
 
-    // Solve for kernel cores
+    // Processor masks for each kernel in the ProgramSpec
+    std::unordered_map<const KernelSpec*, DMProcessorMask> kernel_dm_processor_mask;
+    std::unordered_map<const KernelSpec*, ComputeProcessorMask> kernel_compute_processor_mask;
+
+    // NOTE:
+    // The current implementation makes a simplifying assumption:
+    // A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
+    // This assumption is overly restrictive! it is easy to create a counterexample where it doesn't hold.
+    // If we encounter a case that violates the simplifying assumption, ValidateProgramSpec will succeed,
+    // but kernel->core assignment will fail. The error message will make it clear what happened.
+    //
+    // While the initial Quasar implementation uses this simplifying assumption, this is probably temporary.
+    // When the time comes to relax this assumption, several aspects of the implementation will need to change:
+    //   - The simple solver logic here will need to be re-written.
+    //   - DFBs will need to be created per-KernelGroup/WorkerSpec, not per-kernel.
+    //   - One DFBSpec may map to multiple DFBHandles.
+    //   - DFB bindings will no longer have the character of CTAs! They'll act like implicit RTAs.
+    //   - Possibly other knock-on effects, TBD.
+
+    for (const auto& worker : spec.workers.value()) {
+        // Cumulative DM processor mask for this WorkerSpec
+        // (If we decide to reserve DM cores for interal use, just update the initial mask.)
+        DMProcessorMask cumulative_dm_mask = DMProcessorMask::create(0x00);
+
+        for (const auto& kernel_name : worker.kernels) {
+            const auto& kernel_spec = kernel_by_name.at(kernel_name);
+
+            if (std::holds_alternative<DataMovementConfiguration>(kernel_spec->config_spec)) {
+                AssignDMProcessors(
+                    kernel_spec, kernel_name, worker.unique_id, kernel_dm_processor_mask, cumulative_dm_mask);
+            } else {
+                kernel_compute_processor_mask[kernel_spec] = AssignComputeProcessors(kernel_spec, kernel_name);
+            }
+        }
+    }
+
+    //////////////////////////////
+    // DataflowBuffer creation
+    //////////////////////////////
+
+    // Mapping from DFB names to DataflowBufferSpecs (also created in legality checks)
+    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
+    for (const auto& dfb : spec.dataflow_buffers) {
+        dfb_by_name[dfb.unique_id] = &dfb;
+    }
+
+    // Add DFBs to the Program
+    //
 
     // Generate DFBs
 
@@ -94,7 +272,7 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
         TT_FATAL(inserted, "Duplicate name '{}' found in data_movement_kernels", kernel.unique_id);
     }
 
-    // Check thread counts
+    // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
         if (std::holds_alternative<ComputeConfiguration>(kernel.config_spec)) {
@@ -122,6 +300,19 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
                 kernel.unique_id);
         }
     }
+
+    //////////////////////////////////
+    // DataflowBufferSpec validation
+    //////////////////////////////////
+
+    // All DataflowBufferSpecs must have unique names
+    for (const auto& dfb : spec.dataflow_buffers) {
+        dfbs[dfb.unique_id] = &dfb;
+        auto [it, inserted] = dfbs.try_emplace(dfb.unique_id, &dfb);
+        TT_FATAL(inserted, "Duplicate name '{}' found in dataflow_buffers", dfb.unique_id);
+    }
+
+    // A DFB must have exactly one producer and one consumer
 
     //////////////////////////////
     // SemaphoreSpec validation
