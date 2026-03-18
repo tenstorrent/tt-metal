@@ -56,7 +56,7 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        if is_quad_mesh(mesh_device) and is_ring_fabric(get_fabric_config()):
+        if is_quad_mesh() and is_ring_fabric(get_fabric_config()):
             return cls._convert_weights_quad_ring(hf_config, state_dicts, output_path, mesh_device)
         return cls._convert_weights_default(hf_config, state_dicts, output_path, mesh_device)
 
