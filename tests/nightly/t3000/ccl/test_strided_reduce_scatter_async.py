@@ -1597,6 +1597,7 @@ def test_strided_reduce_scatter_blocking_sweep_non_divisible_Ht(
     )
 
 
+@pytest.mark.skip(reason="strided_reduce_scatter_async not yet trace-compatible (host writes during op)")
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(

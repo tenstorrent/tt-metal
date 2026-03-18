@@ -150,7 +150,7 @@ void kernel_main() {
     const uint32_t effective_advance_by_tiles = 2 * num_workers;
 
     // Snapshot the semaphore's value at startup
-    uint32_t out_ready_sem_target = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem);
+    uint32_t out_ready_sem_target = 0;
 
     for (uint32_t b = 0; b < batch_size; b++) {
         const uint32_t batch_offset = input_batch_num_pages * b;
