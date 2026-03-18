@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
+#include "api/debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -360,5 +361,11 @@ void kernel_main() {
             cb_push_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_v_in, k_chunk_tiles);
         }
+    }
+
+    // Reset the out-ready semaphore so it is clean for the next invocation
+    if (is_injector) {
+        DPRINT << "Resetting out-ready semaphore" << ENDL();
+        noc_semaphore_set(fused_op_receiver.signal_op_semaphore_addr_ptr, 0);
     }
 }

@@ -1284,6 +1284,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     uint32_t writer_fabric_ag_rt_offset = 0;
     bool ag_rt_offset_set = false;
 
+    // Track the RT arg offset for the fused-op global semaphore address in reader args
+    uint32_t reader_fused_op_sem_rt_offset = 0;
+
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -1352,6 +1355,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(chain.mcast_sender_wait);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
+        // The semaphore address is the 4th value pushed (index = current size + 3)
+        reader_fused_op_sem_rt_offset = reader_args.size() + 3;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, direction);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
@@ -1549,6 +1554,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          .writer_fabric_kernels_id = writer_fabric_kernels_id,
          .compute_kernels_id = compute_kernels_id,
          .writer_fabric_ag_rt_offset = writer_fabric_ag_rt_offset,
+         .reader_fused_op_sem_rt_offset = reader_fused_op_sem_rt_offset,
          .ccl_mux_kernel_id = ccl_mux_kernel_id,
          .ccl_mux_backward_cores = mux_backward_logical_cores,
          .ccl_mux_forward_cores = mux_forward_logical_cores}};
@@ -1589,6 +1595,8 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
         uint32_t joint_out_addr = joint_out_buffer->address();
         uint32_t stats_addr = stats_buffer->address();
 
+        const uint32_t out_ready_sem_addr = args.semaphore[0].address();
+
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
         auto& writer_fabric_args_by_core = GetRuntimeArgs(program, shared_vars.writer_fabric_kernels_id);
@@ -1608,6 +1616,11 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
             reader_args[6] = joint_k_addr;
             reader_args[7] = joint_v_addr;
 
+            // Update fused-op global semaphore address (used by injector readers)
+            if (shared_vars.reader_fused_op_sem_rt_offset > 0) {
+                reader_args[shared_vars.reader_fused_op_sem_rt_offset] = out_ready_sem_addr;
+            }
+
             // Update writer args — fabric clients (last 2 columns) use writer_fabric_kernels_id
             const bool is_fabric_client = (core.x >= shared_vars.grid_size.x - 2);
             if (is_fabric_client) {
@@ -1615,9 +1628,10 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
                 writer_args[0] = out_addr;
                 writer_args[1] = joint_out_addr;
                 writer_args[2] = stats_addr;
-                // Update AG buffer addresses for termination master cores
-                const bool is_term_master = (core.y % args.num_workers_per_link == 0);
-                if (is_term_master && shared_vars.writer_fabric_ag_rt_offset > 0) {
+                // Update addresses for MUX writers with link_in_range
+                if (shared_vars.writer_fabric_ag_rt_offset > 0 &&
+                    writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = out_ready_sem_addr;
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 11] = k_addr;
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 12] = v_addr;
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 13] = gathered_k_addr;
