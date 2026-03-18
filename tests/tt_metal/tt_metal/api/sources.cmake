@@ -24,6 +24,7 @@ set(UNIT_TESTS_API_SOURCES
     tensor/test_tensor_sharding.cpp
     test_banked.cpp
     test_bit_utils.cpp
+    test_filesystem_utils.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp

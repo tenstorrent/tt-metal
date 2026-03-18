@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <tt_stl/span.hpp>
 #include <cstring>
@@ -84,39 +85,229 @@ std::unique_ptr<ControlPlane> make_control_plane(
         cluster, rtoptions, hal, distributed_context, graph_desc.string(), fabric_config, fabric_reliability_mode);
 }
 
+// Helper: Creates control plane or returns nullopt if topology doesn't match.
+// Returns std::nullopt when the MGD topology doesn't fit the physical hardware.
+// The caller should check has_value() and call GTEST_SKIP() if nullopt.
+std::optional<std::unique_ptr<ControlPlane>> try_make_control_plane(
+    const std::filesystem::path& graph_desc,
+    FabricConfig fabric_config,
+    FabricReliabilityMode fabric_reliability_mode,
+    const std::string& test_name) {
+    try {
+        auto control_plane = make_control_plane(graph_desc, fabric_config, fabric_reliability_mode);
+        log_info(tt::LogTest, "{}: MGD {} matches physical topology", test_name, graph_desc.filename().string());
+        return control_plane;
+    } catch (const std::exception& e) {
+        std::string error_msg = e.what();
+        if (error_msg.find("could not fit in the discovered physical topology") != std::string::npos) {
+            log_info(
+                tt::LogTest,
+                "{}: MGD {} doesn't match physical hardware topology. "
+                "Use TestDualGalaxyControlPlaneDiscovery for auto-discovery or "
+                "TestDualGalaxyControlPlaneInitRankEnv with appropriate rank_bindings.",
+                test_name,
+                graph_desc.filename().string());
+            return std::nullopt;
+        }
+        throw;
+    }
+}
+
+// Macro to simplify the try-or-skip pattern
+#define TRY_MAKE_CONTROL_PLANE_OR_SKIP(var, mgd_path, fabric_config, reliability_mode, test_name)  \
+    auto var##_opt = try_make_control_plane(mgd_path, fabric_config, reliability_mode, test_name); \
+    if (!var##_opt.has_value()) {                                                                  \
+        GTEST_SKIP() << "Skipping: MGD topology doesn't match physical hardware";                  \
+    }                                                                                              \
+    auto(var) = std::move(var##_opt.value())
+
+// 8x8 Grid topology (LINE, LINE) - skips if physical topology doesn't match
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
-    const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
+    const std::filesystem::path mgd_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(
-        dual_galaxy_mesh_graph_desc_path.string(),
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInit");
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
-
     check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit");
 }
 
+// 8x8 Grid topology (LINE, LINE) flipped host order - skips if physical topology doesn't match
 TEST(MultiHost, TestDualGalaxyControlPlaneInitFlipped) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
-    const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
+    const std::filesystem::path mgd_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto";
-    auto control_plane = make_control_plane(
-        dual_galaxy_mesh_graph_desc_path.string(),
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
         tt::tt_fabric::FabricConfig::FABRIC_2D,
-        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInitFlipped");
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInitFlipped");
+}
+
+// 8x8 Torus topology (RING, RING) - skips if physical topology doesn't match
+TEST(MultiHost, TestDualGalaxyControlPlaneInit8x8Torus) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/torus_dual_galaxy_graph_descriptor.textproto";
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInit8x8Torus");
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit8x8Torus");
+}
+
+// 8x8 Torus topology (RING, RING) flipped host order - skips if physical topology doesn't match
+TEST(MultiHost, TestDualGalaxyControlPlaneInit8x8TorusFlipped) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/torus_dual_galaxy_graph_descriptor.textproto";
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInit8x8TorusFlipped");
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit8x8TorusFlipped");
+}
+
+// 4x16 LINE,RING topology - skips if physical topology doesn't match
+TEST(MultiHost, TestDualGalaxyControlPlaneInit4x16LineRing) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_4x16_mesh_graph_descriptor.textproto";
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInit4x16LineRing");
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit4x16LineRing");
+}
+
+// 4x16 LINE,RING topology flipped host order - skips if physical topology doesn't match
+TEST(MultiHost, TestDualGalaxyControlPlaneInit4x16LineRingFlipped) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_4x16_mesh_graph_descriptor.textproto";
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInit4x16LineRingFlipped");
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInit4x16LineRingFlipped");
+}
+
+// Uses MGD path from TT_MESH_GRAPH_DESC_PATH (set via --rank-binding or environment)
+// Skips if no MGD path specified or if topology doesn't match
+TEST(MultiHost, TestDualGalaxyControlPlaneInitRankEnv) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (!rtoptions.is_custom_fabric_mesh_graph_desc_path_specified()) {
+        log_info(
+            tt::LogTest,
+            "TestDualGalaxyControlPlaneInitRankEnv: Skipping - TT_MESH_GRAPH_DESC_PATH not specified. "
+            "Set via --rank-binding file or TT_MESH_GRAPH_DESC_PATH environment variable.");
+        GTEST_SKIP();
+    }
+
+    std::filesystem::path mgd_path = rtoptions.get_custom_fabric_mesh_graph_desc_path();
+    log_info(tt::LogTest, "TestDualGalaxyControlPlaneInitRankEnv: Using MGD from rank_bindings: {}", mgd_path.string());
+
+    TRY_MAKE_CONTROL_PLANE_OR_SKIP(
+        control_plane,
+        mgd_path,
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE,
+        "TestDualGalaxyControlPlaneInitRankEnv");
+
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
-    check_asic_mapping_against_golden("TestDualGalaxyControlPlaneInitFlipped");
+    // Basic validation - don't check golden since MGD is dynamic
+    const auto& intramesh_connections = get_all_intramesh_connections(*control_plane);
+    log_info(
+        tt::LogTest,
+        "TestDualGalaxyControlPlaneInitRankEnv: Found {} intra-mesh connections",
+        intramesh_connections.size());
+    EXPECT_GT(intramesh_connections.size(), 0u);
+}
+
+// Always runs - uses topology auto-discovery instead of explicit MGD
+TEST(MultiHost, TestDualGalaxyControlPlaneDiscovery) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+
+    log_info(tt::LogTest, "TestDualGalaxyControlPlaneDiscovery: Running auto-discovery based initialization");
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    control_plane.configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Basic validation - verify control plane APIs work
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    log_info(
+        tt::LogTest,
+        "TestDualGalaxyControlPlaneDiscovery: Found {} intra-mesh connections",
+        intramesh_connections.size());
+    EXPECT_GT(intramesh_connections.size(), 0u);
 }
 
 TEST(MultiHost, Test6uSplit8x2ControlPlaneInit) {

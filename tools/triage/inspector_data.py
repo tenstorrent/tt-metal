@@ -27,7 +27,9 @@ from parse_inspector_logs import get_data as get_logs_data, get_log_directory
 import asyncio
 import capnp
 import os
+from pathlib import Path
 import threading
+import time
 import inspector_capnp
 
 script_config = ScriptConfig(
@@ -62,6 +64,7 @@ class InspectorRpcController(InspectorData):
                 exception = self.task.exception()
                 assert exception is not None
                 raise exception
+            time.sleep(0.01)  # Small sleep to avoid busy-waiting
 
     def __del__(self):
         if self.running:
@@ -109,7 +112,10 @@ class InspectorRpcController(InspectorData):
             except capnp.lib.capnp.KjException as e:
                 if e.description.startswith(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START):
                     message = e.description[len(InspectorRpcController.REMOTE_EXCEPTION_TEXT_START) :]
-                    raise InspectorRpcRemoteException(message)
+                    raise InspectorRpcRemoteException(message) from e
+                raise InspectorException(f"Inspector RPC call '{name}' failed: {e.description}") from e
+            except Exception as e:
+                raise InspectorException(f"Inspector RPC call '{name}' failed: {e}") from e
 
         return method
 
@@ -128,15 +134,15 @@ class InspectorUnserializedMethod(InspectorException):
 
 class InspectorRpcSerialized(InspectorData):
     def __init__(self, directory: str):
-        self.__directory = directory
+        self.__directory = Path(directory)
         self.__methods = inspector_capnp.capnp_scheme.Inspector.schema.methods
-        if not os.path.exists(directory) or not os.path.exists(os.path.join(directory, "getPrograms.capnp.bin")):
+        if not self.__directory.exists() or not (self.__directory / "getPrograms.capnp.bin").exists():
             raise ValueError(f"Serialized RPC data not found in directory {directory}")
 
     def __getattr__(self, method_name: str):
         if method_name in self.__methods:
-            serialized_path = os.path.join(self.__directory, f"{method_name}.capnp.bin")
-            if not os.path.exists(serialized_path):
+            serialized_path = self.__directory / f"{method_name}.capnp.bin"
+            if not serialized_path.exists():
                 raise InspectorUnserializedMethod(
                     f"Serialized file for method {method_name} not found at {serialized_path}"
                 )
@@ -159,22 +165,60 @@ class InspectorRpcSerialized(InspectorData):
 
 # TODO: parse_inspector_logs types should have different field names and different return types (not dictionary, but named tuple with array of elements)
 
+# Default port from docopt; when this is used and rank env is set, effective port = base + rank (match C++ rtoptions).
+_DEFAULT_INSPECTOR_RPC_PORT = 50051
+
+
+def _get_rank_from_env() -> int:
+    """Return MPI/mesh rank from process env for rank-aware Inspector port, or -1 if not set.
+    Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so each process gets a distinct port; fallback to TT_MESH_HOST_RANK."""
+    for var in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "TT_MESH_HOST_RANK"):
+        val = os.environ.get(var)
+        if val is not None:
+            try:
+                return int(val)
+            except ValueError:
+                pass
+    return -1
+
 
 @triage_singleton
 def run(args, context) -> InspectorData:
     log_directory = args["--inspector-log-path"]
     rpc_port = args["--inspector-rpc-port"]
     rpc_host = args["--inspector-rpc-host"]
+    try:
+        rpc_port_int = int(rpc_port)
+        if rpc_port_int <= 0 or rpc_port_int > 65535:
+            raise ValueError(f"port out of range: {rpc_port_int}")
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid --inspector-rpc-port value '{rpc_port}'. Expected integer in range 1-65535."
+        ) from exc
+
+    # When default port was used (not explicitly overridden), use rank-aware port so timeout-invoked
+    # triage on a non-zero rank connects to that rank's Inspector (C++ uses base + rank).
+    if rpc_port == str(_DEFAULT_INSPECTOR_RPC_PORT):
+        rank = _get_rank_from_env()
+        if rank >= 0:
+            effective_port = _DEFAULT_INSPECTOR_RPC_PORT + rank
+            if effective_port > 65535:
+                raise ValueError(
+                    f"Inspector RPC port overflow: base_port={_DEFAULT_INSPECTOR_RPC_PORT} + rank={rank} exceeds 65535. "
+                    "Set --inspector-rpc-port to a lower base port or reduce rank count."
+                )
+            rpc_port_int = effective_port
 
     # First try to connect to Inspector RPC
+    rpc_error: Exception | None = None
     try:
-        return InspectorRpcController(rpc_host, rpc_port)
-    except:
-        pass
+        return InspectorRpcController(rpc_host, rpc_port_int)
+    except Exception as exc:
+        rpc_error = exc
 
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
-    if not os.path.exists(log_directory):
+    if not Path(log_directory).exists():
         raise ValueError(
             f"\n\tLog directory {log_directory} does not exist."
             f"\n\tMetal runtime is not running. Do not kill host process, but open triage in parallel."
@@ -185,12 +229,16 @@ def run(args, context) -> InspectorData:
     # Try to load serialized RPC data
     try:
         return InspectorRpcSerialized(log_directory)
-    except:
+    except Exception as serialized_exc:
+        rpc_error_text = f"{type(rpc_error).__name__}: {rpc_error}" if rpc_error is not None else "unknown RPC failure"
+        serialized_error_text = f"{type(serialized_exc).__name__}: {serialized_exc}"
         raise InspectorException(
             "There is no Inspector RPC data, cannot continue. "
             "Use --inspector-log-path to load saved Inspector data, or --inspector-rpc-host/--inspector-rpc-port "
             "to connect to a live Inspector. Ensure Inspector was enabled in Metal with TT_METAL_INSPECTOR=1 and "
-            "TT_METAL_INSPECTOR_RPC=1."
+            "TT_METAL_INSPECTOR_RPC=1.\n"
+            f"RPC connection failure: {rpc_error_text}\n"
+            f"Serialized data failure: {serialized_error_text}"
         )
 
 

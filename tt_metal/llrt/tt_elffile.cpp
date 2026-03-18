@@ -17,6 +17,8 @@
 #include <map>
 #include <type_traits>
 
+#include "common/filesystem_utils.hpp"
+
 #ifdef ELF_STANDALONE
 // For development of this functionality
 #if __has_include(<format>)
@@ -149,19 +151,42 @@ private:
     [[nodiscard]] auto GetShdr(unsigned ix) const -> const Shdr& { return shdrs_[ix]; }
     using Impl::GetContents;
     [[nodiscard]] auto GetContents(const Phdr& phdr) const -> std::span<std::byte> {
-        return GetContents().subspan(phdr.p_offset, phdr.p_filesz);
+        auto contents = GetContents();
+        if (phdr.p_offset >= contents.size() || phdr.p_filesz > contents.size() - phdr.p_offset) {
+            TT_THROW(
+                "ELF program header out of bounds: offset={}, filesz={}, file size={}",
+                phdr.p_offset,
+                phdr.p_filesz,
+                contents.size());
+        }
+        return contents.subspan(phdr.p_offset, phdr.p_filesz);
     }
     [[nodiscard]] auto GetContents(const Shdr& shdr) const -> std::span<std::byte> {
-        return GetContents().subspan(shdr.sh_offset, shdr.sh_size);
+        auto contents = GetContents();
+        if (shdr.sh_offset >= contents.size() || shdr.sh_size > contents.size() - shdr.sh_offset) {
+            TT_THROW(
+                "ELF section header out of bounds: offset={}, size={}, file size={}",
+                shdr.sh_offset,
+                shdr.sh_size,
+                contents.size());
+        }
+        return contents.subspan(shdr.sh_offset, shdr.sh_size);
     }
     [[nodiscard]] auto GetString(size_t offset, const Shdr& shdr) const -> const char* {
-        return ByteOffset<char const>(GetContents(shdr).data(), offset);
+        auto section = GetContents(shdr);
+        if (offset >= section.size()) {
+            TT_THROW("ELF string offset {} out of bounds (section size {})", offset, section.size());
+        }
+        return ByteOffset<const char>(section.data(), offset);
     }
     [[nodiscard]] auto GetName(const Shdr& shdr) const -> const char* {
         return GetString(shdr.sh_name, GetShdr(GetHeader().e_shstrndx));
     }
     [[nodiscard]] auto GetSymbols(const Shdr& shdr) const -> std::span<Sym> {
         auto section = GetContents(shdr);
+        if (shdr.sh_entsize == 0) {
+            TT_THROW("ELF symbol table has zero entry size");
+        }
         return std::span(ByteOffset<Sym>(section.data()), section.size() / shdr.sh_entsize);
     }
     [[nodiscard]] auto GetName(const Sym& sym, unsigned link) const -> const char* {
@@ -169,6 +194,9 @@ private:
     }
     [[nodiscard]] auto GetRelocations(const Shdr& shdr) const -> std::span<Rela> {
         auto section = GetContents(shdr);
+        if (shdr.sh_entsize == 0) {
+            TT_THROW("ELF relocation table has zero entry size");
+        }
         return std::span(ByteOffset<Rela>(section.data()), section.size() / shdr.sh_entsize);
     }
 
@@ -207,10 +235,22 @@ private:
     }
 
     uint32_t Read32(const Shdr& shdr, address_t addr) {
-        return *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr);
+        auto section = GetContents(shdr);
+        size_t offset = addr - shdr.sh_addr;
+        // Validate there are at least 4 bytes available at the offset
+        if (offset + sizeof(uint32_t) > section.size()) {
+            TT_THROW("Read32 out of bounds: offset {} exceeds section size {}", offset, section.size());
+        }
+        return *ByteOffset<uint32_t>(section.data(), offset);
     }
     void Write32(const Shdr& shdr, address_t addr, uint32_t value) {
-        *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr) = value;
+        auto section = GetContents(shdr);
+        size_t offset = addr - shdr.sh_addr;
+        // Validate there are at least 4 bytes available at the offset
+        if (offset + sizeof(uint32_t) > section.size()) {
+            TT_THROW("Write32 out of bounds: offset {} exceeds section size {}", offset, section.size());
+        }
+        *ByteOffset<uint32_t>(section.data(), offset) = value;
     }
 
 private:
@@ -290,18 +330,25 @@ void ElfFile::ReadImage(const std::string& path) {
 }
 
 ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
-    int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     struct stat st{};
     void* buffer = MAP_FAILED;
-    if (fd >= 0 && fstat(fd, &st) >= 0) {
-        buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
-    }
-    if (fd >= 0) {
-        // It is acceptable to close a mapped file -- the mapping stays.
-        close(fd);
-    }
+    int saved_errno = 0;
+
+    tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
+        int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd >= 0 && ::fstat(fd, &st) >= 0) {
+            buffer = ::mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+        }
+        saved_errno = errno;
+        if (fd >= 0) {
+            ::close(fd);
+        }
+        return buffer != MAP_FAILED;
+    });
+
     if (buffer == MAP_FAILED) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+        TT_THROW("{}: cannot map elf file into memory: {}", path, ::strerror(saved_errno));
     }
 
     owner.contents_ = std::span(reinterpret_cast<std::byte*>(buffer), st.st_size);
@@ -329,18 +376,28 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
 }
 
 void ElfFile::WriteImage(std::string const& path) {
-    // open is an os-defined varadic function, it the API to use.
-    int file_descriptor = open(
-        path.c_str(),
-        O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
-        S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
-    bool failed = file_descriptor < 0;
-    if (!failed) {
-        failed = write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
-        close(file_descriptor);
-    }
+    bool failed = true;
+    int saved_errno = 0;
+
+    tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
+        int file_descriptor = ::open(
+            path.c_str(),
+            O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
+            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+        failed = file_descriptor < 0;
+        if (!failed) {
+            failed = ::write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
+            saved_errno = errno;
+            ::close(file_descriptor);
+        } else {
+            saved_errno = errno;
+        }
+        return !failed;
+    });
+
     if (failed) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(errno));
+        TT_THROW("{}: cannot write elf file: {}", path, ::strerror(saved_errno));
     }
 }
 

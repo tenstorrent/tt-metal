@@ -4,8 +4,11 @@
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
+import atexit
 import os
 import shlex
+import signal
+import socket
 import shutil
 import subprocess
 import sys
@@ -20,6 +23,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
+DEFAULT_JIT_SCRATCH = Path("/tmp/tt-jit-build")
+DEFAULT_CACHE_FALLBACK = Path("/tmp")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
@@ -176,7 +181,8 @@ def resolve_path(
     check_fn = Path.is_file if must_be_file else Path.exists
 
     # Track TT_METAL_HOME for fallback warning
-    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    tt_metal_home_str = os.environ.get("TT_METAL_HOME")
+    tt_metal_home_path = Path(tt_metal_home_str).expanduser() if tt_metal_home_str else None
     tt_metal_home_checked = False
 
     for base_path in search_paths:
@@ -185,16 +191,16 @@ def resolve_path(
         candidate = (base_path / expanded_path).resolve()
         if check_fn(candidate):
             # Warn if TT_METAL_HOME was set but we found the file elsewhere (fallback occurred)
-            if tt_metal_home and tt_metal_home_checked and str(base_path) != tt_metal_home:
+            if tt_metal_home_path and tt_metal_home_checked and base_path != tt_metal_home_path:
                 logger.debug(
-                    f"{TT_RUN_PREFIX} {description} not found in TT_METAL_HOME ({tt_metal_home}), "
+                    f"{TT_RUN_PREFIX} {description} not found in TT_METAL_HOME ({tt_metal_home_path}), "
                     f"using fallback location: {candidate}"
                 )
             else:
                 logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
             return candidate
         # Track if we checked TT_METAL_HOME
-        if tt_metal_home and str(base_path) == str(Path(tt_metal_home).expanduser()):
+        if tt_metal_home_path and base_path == tt_metal_home_path:
             tt_metal_home_checked = True
 
     # Path not found
@@ -222,8 +228,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     logger.debug(f"{TT_RUN_PREFIX} Loading configuration from: {resolved_yaml_path}")
     logger.debug(f"{TT_RUN_PREFIX} Original CWD: {ORIGINAL_CWD}")
 
-    with open(resolved_yaml_path, "r") as f:
-        data = yaml.safe_load(f)
+    data = yaml.safe_load(resolved_yaml_path.read_text())
 
     try:
         config = TTRunConfig(**data)
@@ -235,8 +240,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         resolved_mock_path = resolve_path(
             mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
         )
-        with open(resolved_mock_path, "r") as f:
-            mock_data = yaml.safe_load(f)
+        mock_data = yaml.safe_load(resolved_mock_path.read_text())
 
         # Validate and resolve mock cluster rank binding configuration paths
         resolved_mock_bindings: Dict[int, Path] = {}
@@ -251,20 +255,28 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     return config
 
 
-# Environment variable prefixes that should be automatically passed through to MPI processes
-ENV_PASSTHROUGH_PREFIXES = (
-    "TT_",  # TT-Metal/TTNN variables
-    "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
-    "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
-    "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
-    "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
-    "MESH_",  # Mesh config (e.g., MESH_DEVICE)
+# Environment variable prefixes that should be automatically passed through to per-rank
+# MPI process environments (the explicit `-x KEY=value` path).
+ENV_PASSTHROUGH_PREFIXES = frozenset(
+    {
+        "TT_",  # TT-Metal/TTNN variables
+        "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
+        "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
+        "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+        "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
+        "MESH_",  # Mesh config (e.g., MESH_DEVICE)
+        "LOGURU_",
+    }
 )
 
-# Environment variables that should NOT be passed through even if they match ENV_PASSTHROUGH_PREFIXES.
-# These are either:
-# 1. Explicitly managed by tt-run and derived from rank bindings (not parent environment)
-# 2. Should only be set via rank binding env_overrides (e.g., TT_VISIBLE_DEVICES)
+# Environment variables that should never be inherited from the parent environment.
+# This blocklist is enforced on BOTH env propagation paths:
+# 1) Auto rank pass-through (`-x KEY=value`) in get_rank_environment()
+# 2) mpirun launcher environment in get_launcher_environment()
+#
+# These keys are either:
+# - Explicitly managed by tt-run and derived from rank bindings (not parent environment), or
+# - Intended to be set only via rank binding env_overrides (e.g., TT_VISIBLE_DEVICES)
 #
 # TT_VISIBLE_DEVICES: Controls which PCIe devices are visible to a process. This must be set
 # per-rank via env_overrides in rank bindings to ensure each MPI process sees only its assigned
@@ -289,6 +301,229 @@ ENV_BLOCKLIST = frozenset(
     }
 )
 
+# Prefixes that should be stripped from inherited parent environment.
+# These are CI/runner metadata variables that are not required by rank processes.
+ENV_BLOCKLIST_PREFIXES = frozenset(
+    {
+        "GITHUB_",
+        "RUNNER_",
+    }
+)
+
+# Additional non-prefixed CI/container keys to exclude from inherited launcher env.
+ENV_LAUNCHER_ONLY_BLOCKLIST = frozenset(
+    {
+        "ACTIONS_ORCHESTRATION_ID",
+        "CCACHE_TEMPDIR",
+        "CI",
+        "DEBIAN_FRONTEND",
+        "HOSTNAME",
+    }
+)
+
+
+FORCE_NAME_ONLY_MPI_EXPORT_VARS = frozenset(
+    {
+        # This value often contains spaces/redirection. Export as `-x KEY` so OpenMPI
+        # reads the exact value from launcher env instead of tokenizing KEY=value.
+        "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE",
+    }
+)
+
+MPI_ENV_VALUE_SPECIAL_CHARS = frozenset({" ", "\t", "\n", "\r", '"', "'", "`", "$", "|", "&", ";", "<", ">", "(", ")"})
+
+# Environment variables that should be isolated per MPI rank by appending
+# `<hostname>_rank_<rank>`.
+# This reduces shared-path contention (for example, NFS stale handles in multi-host jobs).
+#
+# TT_METAL_CACHE is intentionally NOT rank-scoped.  Multiple ranks and hosts
+# share a single NFS cache directory.  This is safe and intentional:
+#   - All JIT compilation writes go to a local scratch directory first
+#     (TT_METAL_JIT_SCRATCH, which IS rank-scoped), then are atomically merged
+#     to the shared NFS cache via temp-file + rename.
+#   - .dephash files record NFS-canonical paths (scratch paths are rewritten
+#     during compilation), so cache-hit checks work regardless of which rank
+#     or host originally compiled the artifact.
+#   - Sharing avoids redundant N-way compilation: the first rank to compile a
+#     kernel populates the cache, and subsequent ranks get cache hits.
+# Logs and scratch dirs remain rank-scoped since they are per-process by nature.
+RANK_SCOPED_PATH_ENV_VARS = frozenset(
+    {
+        "TT_METAL_LOGS_PATH",
+        "TT_METAL_JIT_SCRATCH",
+    }
+)
+
+
+def has_auto_passthrough_prefix(key: str) -> bool:
+    """Return True when key starts with any configured pass-through prefix."""
+    return any(key.startswith(prefix) for prefix in ENV_PASSTHROUGH_PREFIXES)
+
+
+def has_blocked_prefix(key: str) -> bool:
+    """Return True when key starts with any configured blocklisted prefix."""
+    return any(key.startswith(prefix) for prefix in ENV_BLOCKLIST_PREFIXES)
+
+
+def is_blocklisted_env_var(key: str, include_launcher_only: bool = True) -> bool:
+    """Return True when key is blocked from parent-env inheritance.
+
+    include_launcher_only=False keeps launcher-only keys out of rank auto pass-through logic.
+    """
+    if key in ENV_BLOCKLIST:
+        return True
+    if has_blocked_prefix(key):
+        return True
+    return include_launcher_only and key in ENV_LAUNCHER_ONLY_BLOCKLIST
+
+
+def is_auto_passthrough_env_var(key: str) -> bool:
+    """Return True when a key should be auto-passed to rank env via `-x KEY=value`.
+
+    Rank auto-pass-through uses prefix allowlisting and excludes keys managed by ENV_BLOCKLIST.
+    """
+    return has_auto_passthrough_prefix(key) and not is_blocklisted_env_var(key, include_launcher_only=False)
+
+
+def strip_blocklisted_env_vars(source_env: Dict[str, str]) -> Dict[str, str]:
+    """Return a copy of source_env with exact-key and prefix blocklisted variables removed."""
+    return {key: value for key, value in source_env.items() if not is_blocklisted_env_var(key)}
+
+
+def get_auto_rank_passthrough_from_parent() -> tuple[Dict[str, str], List[str]]:
+    """Collect parent env vars eligible for automatic rank `-x KEY=value` pass-through.
+
+    Only variables matching ENV_PASSTHROUGH_PREFIXES and not present in ENV_BLOCKLIST
+    are auto-passed to rank environments.
+    """
+    auto_passthrough_env: Dict[str, str] = {}
+    blocked_prefixed_vars: List[str] = []
+    for key, value in os.environ.items():
+        if not has_auto_passthrough_prefix(key):
+            continue
+        if is_auto_passthrough_env_var(key):
+            auto_passthrough_env[key] = value
+        else:
+            blocked_prefixed_vars.append(key)
+    return auto_passthrough_env, blocked_prefixed_vars
+
+
+def should_use_name_only_mpi_export(key: str, value: str, launcher_env: Dict[str, str]) -> bool:
+    """Return True when key should be exported as `-x KEY` (not `-x KEY=value`)."""
+    if key in FORCE_NAME_ONLY_MPI_EXPORT_VARS:
+        return key in launcher_env
+
+    has_special_chars = any(char in value for char in MPI_ENV_VALUE_SPECIAL_CHARS)
+    if not has_special_chars:
+        return False
+
+    # Only switch to name-only when launcher env has an identical value.
+    # This preserves rank-specific KEY=value overrides that are not present in launcher env.
+    return launcher_env.get(key) == value
+
+
+def classify_mpi_env_exports(
+    rank_env: Dict[str, str], launcher_env: Dict[str, str]
+) -> tuple[Dict[str, str], List[str], List[str]]:
+    """Split rank env into KEY=value and KEY-only MPI export groups."""
+    direct_exports: Dict[str, str] = {}
+    name_only_exports: List[str] = []
+    missing_launcher_keys: List[str] = []
+
+    for key, value in rank_env.items():
+        if should_use_name_only_mpi_export(key, value, launcher_env):
+            name_only_exports.append(key)
+            if key not in launcher_env:
+                missing_launcher_keys.append(key)
+        else:
+            direct_exports[key] = value
+
+    return direct_exports, name_only_exports, missing_launcher_keys
+
+
+SENSITIVE_SYSTEM_PATHS = tuple(
+    Path(p)
+    for p in [
+        "/etc",
+        "/bin",
+        "/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/lib",
+        "/lib64",
+        "/usr/lib",
+        "/usr/lib64",
+        "/boot",
+        "/sys",
+        "/proc",
+        "/dev",
+    ]
+)
+
+
+def validate_path_safety(path_str: str, var_name: str) -> None:
+    """Validate that a filesystem path is safe for use.
+
+    Checks:
+    - Path does not contain parent directory traversal (..)
+    - Path is absolute (not relative)
+    - Path does not point to sensitive system directories
+
+    Args:
+        path_str: The path value to validate
+        var_name: Name of the environment variable (for error messages)
+
+    Raises:
+        ValueError: If the path fails validation
+    """
+    if not path_str:
+        return  # Empty paths are handled by defaults elsewhere
+
+    path = Path(path_str)
+
+    # Check for parent directory traversal using pathlib parts
+    if ".." in path.parts:
+        raise ValueError(
+            f"{var_name} contains parent directory traversal (..): {path_str}. "
+            "This is not allowed for security reasons."
+        )
+
+    # Require absolute paths for cache/log/scratch directories
+    if not path.is_absolute():
+        raise ValueError(f"{var_name} must be an absolute path, got: {path_str}")
+
+    # Check for sensitive system directories using pathlib
+    path_normalized = path.resolve()
+    for sensitive_path in SENSITIVE_SYSTEM_PATHS:
+        if path_normalized.is_relative_to(sensitive_path):
+            raise ValueError(
+                f"{var_name} points to a sensitive system directory: {path_str}. "
+                f"Please choose a different path under /tmp, /home, or a dedicated application directory."
+            )
+
+
+def apply_rank_scoped_paths(env: Dict[str, str], rank: int, explicit_keys: set[str] | None = None) -> None:
+    """Scope selected filesystem paths per rank (in-place).
+
+    For each key in RANK_SCOPED_PATH_ENV_VARS, append `<hostname>_rank_<rank>`
+    unless already present.
+    Keys listed in explicit_keys are left unchanged so user-specified YAML overrides
+    preserve exact path semantics.
+    """
+    explicit_keys = explicit_keys or set()
+    hostname = socket.gethostname()
+    rank_dirname = f"{hostname}_rank_{rank}"
+    for key in RANK_SCOPED_PATH_ENV_VARS:
+        if key in explicit_keys:
+            continue
+        value = env.get(key)
+        if not value:
+            continue
+        scoped_path = Path(value)
+        if scoped_path.name == rank_dirname:
+            continue
+        env[key] = str(scoped_path / rank_dirname)
+
 
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
@@ -303,21 +538,13 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Start with automatic pass-through of TT-related environment variables
     # This ensures variables like ARCH_NAME, WH_ARCH_YAML, TTNN_CONFIG_OVERRIDES are propagated
     # Variables in ENV_BLOCKLIST are excluded even if they match prefixes
-    env = {}
-    passthrough_vars = []
-    blocked_vars = []
-    for key, value in os.environ.items():
-        if key.startswith(ENV_PASSTHROUGH_PREFIXES):
-            if key in ENV_BLOCKLIST:
-                blocked_vars.append(key)
-            else:
-                env[key] = value
-                passthrough_vars.append(key)
+    env, blocked_vars = get_auto_rank_passthrough_from_parent()
+    passthrough_vars = sorted(env.keys())
 
     if passthrough_vars:
         logger.debug(
             f"{TT_RUN_PREFIX} Auto-propagating {len(passthrough_vars)} environment variables "
-            f"with prefixes {ENV_PASSTHROUGH_PREFIXES}: {', '.join(sorted(passthrough_vars))}"
+            f"with prefixes {ENV_PASSTHROUGH_PREFIXES}: {', '.join(passthrough_vars)}"
         )
 
     if blocked_vars:
@@ -376,11 +603,69 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     env.update({k: os.path.expandvars(v) for k, v in config.global_env.items()})
     # Rank-specific overrides last (higher precedence)
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
+    explicit_rank_scoped_keys = {
+        key for key in RANK_SCOPED_PATH_ENV_VARS if key in config.global_env or key in binding.env_overrides
+    }
+
+    # Ensure TT_METAL_CACHE has a value so the C++ side doesn't fall back to
+    # the HOME-based default.  TT_METAL_CACHE is shared (not rank-scoped)
+    # because all JIT build writes go through TT_METAL_JIT_SCRATCH (local disk)
+    # with atomic merge (temp+rename) to NFS.  .dephash files record
+    # NFS-canonical paths, so cache-hit checks work across ranks/hosts.
+    # See RANK_SCOPED_PATH_ENV_VARS and build.hpp for the full rationale.
+    if "TT_METAL_CACHE" not in env:
+        home = os.environ.get("HOME")
+        if home:
+            env["TT_METAL_CACHE"] = str(Path(home) / ".cache")
+        else:
+            env["TT_METAL_CACHE"] = str(DEFAULT_CACHE_FALLBACK)
+
+    # Provide a default TT_METAL_JIT_SCRATCH so SFPI compilation writes to
+    # local disk instead of NFS.  Rank scoping (below) appends a unique
+    # per-rank suffix, eliminating cross-rank contention entirely.
+    if "TT_METAL_JIT_SCRATCH" not in env and "TT_METAL_JIT_SCRATCH" not in explicit_rank_scoped_keys:
+        env["TT_METAL_JIT_SCRATCH"] = str(DEFAULT_JIT_SCRATCH)
+
+    # Disable XIP ELF dumps in multi-host mode by default.  XIP dumps write
+    # .xip.elf files next to cached ELFs on NFS, which causes ESTALE contention
+    # when multiple ranks load firmware simultaneously.  Users who need XIP dumps
+    # for triage can override by setting TT_METAL_DISABLE_XIP_DUMP=0.
+    if "TT_METAL_DISABLE_XIP_DUMP" not in env:
+        env["TT_METAL_DISABLE_XIP_DUMP"] = "1"
+
+    # Rank-scope only per-process paths (logs and JIT scratch).
+    # TT_METAL_CACHE remains shared by design.
+    apply_rank_scoped_paths(env, binding.rank, explicit_keys=explicit_rank_scoped_keys)
+
+    # Validate path safety for filesystem environment variables
+    for path_var in ["TT_METAL_CACHE", "TT_METAL_LOGS_PATH", "TT_METAL_JIT_SCRATCH"]:
+        if path_var in env:
+            try:
+                validate_path_safety(env[path_var], path_var)
+            except ValueError as e:
+                logger.error(f"{TT_RUN_PREFIX} {e}")
+                raise
 
     return env
 
 
-def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> List[str]:
+def get_launcher_environment() -> Dict[str, str]:
+    """Build launcher environment for mpirun.
+
+    MPI launchers may inherit caller environment in addition to rank-local `-x KEY=value`.
+    Keep the caller environment broad for launcher/runtime needs, but strip ENV_BLOCKLIST
+    so managed/rank-specific keys do not leak from the parent process.
+    """
+    launcher_env = strip_blocklisted_env_vars(os.environ)
+    stripped = sorted([key for key in os.environ if is_blocklisted_env_var(key)])
+
+    if stripped:
+        logger.debug(f"{TT_RUN_PREFIX} Stripped {len(stripped)} blocklisted launcher variables: {', '.join(stripped)}")
+
+    return launcher_env
+
+
+def build_rank_environment_args(binding: RankBinding, config: TTRunConfig, launcher_env: Dict[str, str]) -> List[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
@@ -392,15 +677,29 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
     """
     env_args = []
     env = get_rank_environment(binding, config)
+    direct_exports, name_only_exports, missing_launcher_keys = classify_mpi_env_exports(env, launcher_env)
 
-    for key, value in env.items():
+    for key, value in direct_exports.items():
         env_args.extend(["-x", f"{key}={value}"])
+
+    for key in name_only_exports:
+        env_args.extend(["-x", key])
+
+    if missing_launcher_keys:
+        logger.warning(
+            f"{TT_RUN_PREFIX} Requested name-only MPI export for keys missing from launcher env: "
+            f"{', '.join(sorted(missing_launcher_keys))}. Falling back may be incorrect."
+        )
 
     return env_args
 
 
 def build_mpi_command(
-    config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
+    config: TTRunConfig,
+    program: List[str],
+    launcher_env: Dict[str, str],
+    mpi_args: Optional[List[str]] = None,
+    debug_gdbserver: bool = False,
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     # Check if running in SLURM interactive session
@@ -440,7 +739,7 @@ def build_mpi_command(
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config))
+        cmd.extend(build_rank_environment_args(binding, config, launcher_env))
         program_to_run = program
         if debug_gdbserver:
             port = 20000 + binding.rank
@@ -611,9 +910,9 @@ def main(
 
     \b
     Environment Variables:
-        The following variables are automatically set for each rank:
+        The following variables are automatically set or passed through for each rank:
         - TT_MESH_ID: Mesh identifier
-        - TT_MESH_HOST_RANK: Host rank within the mesh
+        - TT_MESH_HOST_RANK: Host rank within the mesh (only when provided in rank bindings)
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - LD_LIBRARY_PATH: Library search path
@@ -634,19 +933,28 @@ def main(
         This assumes the launch directory is on a shared filesystem (e.g., NFS) visible to all
         cluster nodes, which is the common setup for SLURM environments.
 
-        Additionally, all environment variables with the following prefixes are automatically
-        passed through to MPI processes:
+        Additionally, environment variables with the following prefixes are automatically
+        passed through to rank processes via explicit mpirun `-x KEY=value` arguments:
         - TT_*: TT-Metal/TTNN variables
         - ARCH_*: Architecture variables (e.g., ARCH_NAME)
         - WH_*: Wormhole-specific variables (e.g., WH_ARCH_YAML)
         - TTNN_*: TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+        - DEEPSEEK_*: DeepSeek model variables
+        - MESH_*: Mesh configuration variables
 
-        Exception: The following TT_* variables are BLOCKED from automatic pass-through because
+        Exception: The following variables are BLOCKED from parent environment inheritance because
         they are managed by tt-run or should only be set via rank binding env_overrides:
         - TT_VISIBLE_DEVICES: Must be set per-rank via env_overrides in rank bindings to ensure
           correct device visibility. Cluster descriptors and rank bindings configure this per-rank.
         - TT_MESH_ID, TT_MESH_HOST_RANK, TT_MESH_GRAPH_DESC_PATH: Derived from rank bindings/config
         - TT_RUN_ORIGINAL_CWD, TT_METAL_MOCK_CLUSTER_DESC_PATH: Set by tt-run internally
+        - CI/container metadata keys: ACTIONS_ORCHESTRATION_ID, CCACHE_TEMPDIR, CI,
+          DEBIAN_FRONTEND, HOSTNAME
+        - CI/container metadata prefixes: GITHUB_*, RUNNER_*
+
+        This blocklist is applied to both:
+        - Rank auto-pass-through (`-x KEY=value`)
+        - mpirun launcher environment inherited from the parent process
 
         Note: TT_METAL_HOME, TT_METAL_RUNTIME_ROOT, and TT_METAL_CACHE ARE passed through from
         the parent environment to support NFS-based distributed workloads where all MPI ranks
@@ -772,6 +1080,36 @@ def main(
             logger.info(f"{TT_RUN_PREFIX}   SLURM_JOB_ID: {os.environ.get('SLURM_JOB_ID')}")
             logger.info(f"{TT_RUN_PREFIX}   SLURM_SUBMIT_DIR: {os.environ.get('SLURM_SUBMIT_DIR', '<not set>')}")
 
+        auto_rank_passthrough_vars = sorted([key for key in os.environ if is_auto_passthrough_env_var(key)])
+        blocked_prefixed_vars = sorted(
+            [
+                key
+                for key in os.environ
+                if has_auto_passthrough_prefix(key) and is_blocklisted_env_var(key, include_launcher_only=False)
+            ]
+        )
+        core_passthrough_vars = sorted(
+            [key for key in ("HOME", "USER", "PATH", "VIRTUAL_ENV", "PYTHONHOME") if os.environ.get(key)]
+        )
+        launcher_passthrough_vars = sorted(strip_blocklisted_env_vars(os.environ).keys())
+
+        logger.info(
+            f"{TT_RUN_PREFIX}   Rank auto-pass-through vars ({len(auto_rank_passthrough_vars)}): "
+            f"{', '.join(auto_rank_passthrough_vars) if auto_rank_passthrough_vars else '<none>'}"
+        )
+        logger.info(
+            f"{TT_RUN_PREFIX}   Rank blocked prefixed vars ({len(blocked_prefixed_vars)}): "
+            f"{', '.join(blocked_prefixed_vars) if blocked_prefixed_vars else '<none>'}"
+        )
+        logger.info(
+            f"{TT_RUN_PREFIX}   Rank core passthrough vars ({len(core_passthrough_vars)}): "
+            f"{', '.join(core_passthrough_vars) if core_passthrough_vars else '<none>'}"
+        )
+        logger.info(
+            f"{TT_RUN_PREFIX}   Launcher inherited vars after blocklist ({len(launcher_passthrough_vars)}): "
+            f"{', '.join(launcher_passthrough_vars)}"
+        )
+
     try:
         config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
     except (ValueError, ValidationError) as e:
@@ -830,10 +1168,34 @@ def main(
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
 
+    launcher_env = get_launcher_environment()
+
     # Build MPI command
     mpi_cmd = build_mpi_command(
-        config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
+        config,
+        program,
+        launcher_env,
+        effective_mpi_args if effective_mpi_args else None,
+        debug_gdbserver=debug_gdbserver,
     )
+
+    if verbose:
+        direct_export_vars = set()
+        name_only_export_vars = set()
+        for binding in config.rank_bindings:
+            rank_env = get_rank_environment(binding, config)
+            direct_exports, name_only_exports, _ = classify_mpi_env_exports(rank_env, launcher_env)
+            direct_export_vars.update(direct_exports.keys())
+            name_only_export_vars.update(name_only_exports)
+
+        logger.info(
+            f"{TT_RUN_PREFIX}   Rank MPI direct exports KEY=value ({len(direct_export_vars)}): "
+            f"{', '.join(sorted(direct_export_vars)) if direct_export_vars else '<none>'}"
+        )
+        logger.info(
+            f"{TT_RUN_PREFIX}   Rank MPI name-only exports KEY ({len(name_only_export_vars)}): "
+            f"{', '.join(sorted(name_only_export_vars)) if name_only_export_vars else '<none>'}"
+        )
 
     if verbose or dry_run:
         print_command(mpi_cmd)
@@ -850,14 +1212,47 @@ def main(
         logger.info(f"{TT_RUN_PREFIX} (gdb) break main")
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
+    # Handle launcher startup errors separately: if Popen itself fails, there is
+    # no child process tree to clean up yet, so we convert the raw OSError into
+    # a ClickException immediately. Once proc exists, keep the wait() path
+    # wrapped as well so any later OS-level wait/cleanup failure still goes
+    # through the established process-group teardown logic.
     try:
-        result = subprocess.run(mpi_cmd)
-        sys.exit(result.returncode)
-    except KeyboardInterrupt:
-        # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
-        logger.error(f"{TT_RUN_PREFIX} Interrupted")
-        sys.exit(INTERRUPTED_EXIT_CODE)
+        proc = subprocess.Popen(mpi_cmd, env=launcher_env, start_new_session=True)
     except OSError as e:
+        raise click.ClickException(f"Error launching mpirun: {e}")
+
+    def _kill_process_group():
+        """Best-effort cleanup of the entire MPI process tree."""
+        if proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except OSError as e:
+            logger.debug(f"{TT_RUN_PREFIX} Failed to SIGTERM process group {proc.pid}: {e}")
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError as e:
+                logger.debug(f"{TT_RUN_PREFIX} Failed to SIGKILL process group {proc.pid}: {e}")
+
+    atexit.register(_kill_process_group)
+
+    def _signal_handler(signum, _frame):
+        logger.error(f"{TT_RUN_PREFIX} Received signal {signum}, terminating MPI processes")
+        _kill_process_group()
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
+    try:
+        proc.wait()
+        sys.exit(proc.returncode)
+    except OSError as e:
+        _kill_process_group()
         raise click.ClickException(f"Error launching mpirun: {e}")
 
 

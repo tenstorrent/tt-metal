@@ -91,7 +91,7 @@ jobs:
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0
@@ -153,6 +153,53 @@ jobs:
           else
             echo "cache_override=" >> $GITHUB_OUTPUT
           fi
+
+      # ── Cluster connectivity validation ──────────────────────────────────
+      - name: Validate DUAL cluster connectivity
+        if: ${{ (inputs.setup == 'dual' || inputs.setup == 'both') || github.event_name == 'schedule' }}
+        continue-on-error: true
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 10
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh validate_dual_connectivity
+
+      - name: Validate QUAD cluster connectivity
+        if: ${{ (inputs.setup == 'quad' || inputs.setup == 'both') || github.event_name == 'schedule' }}
+        continue-on-error: true
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 10
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/run_quad_galaxy_tests.sh validate_quad_connectivity
 
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests

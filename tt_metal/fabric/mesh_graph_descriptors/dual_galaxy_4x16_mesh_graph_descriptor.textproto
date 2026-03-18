@@ -1,0 +1,15 @@
+# --- Meshes ---------------------------------------------------------------
+# Dual Galaxy 4x16 LINE,RING topology
+# Produces degree histogram {3:32, 4:32} matching physical hardware where
+# two 8x4 galaxies are connected side-by-side with wrap only along the long dimension.
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 16 ], dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 4 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

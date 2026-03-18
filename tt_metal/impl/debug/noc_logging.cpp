@@ -22,6 +22,7 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <llrt/tt_cluster.hpp>
+#include "common/filesystem_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -35,7 +36,9 @@ constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(MetalEnvImpl& env, noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = env.get_rtoptions();
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
-    std::filesystem::create_directories(output_dir);
+    if (!tt::filesystem::safe_create_directories(output_dir)) {
+        log_warning(tt::LogMetal, "NocLogging: failed to create output directory {}", output_dir.string());
+    }
     std::string filename = rtoptions.get_logs_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 

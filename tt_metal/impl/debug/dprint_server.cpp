@@ -43,6 +43,7 @@
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
 #include "dprint_parser.hpp"
+#include "common/filesystem_utils.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "hostdev/device_print_common.h"
@@ -349,7 +350,8 @@ void DPrintImpl::enable_print_buffers_for_core(
     uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
     for (int risc_index = 0; risc_index < num_processors; risc_index++) {
         if (RiscEnabled(rtoptions, core_type, risc_index)) {
-            WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), true);
+            WriteInitMagic(
+                cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), true);
         }
     }
 }
@@ -368,8 +370,7 @@ bool DPrintImpl::core_has_outstanding_prints(
             continue;
         }
         constexpr int eightbytes = 8;
-        auto from_dev =
-            cluster.read_core(device_id, virtual_core, base_addr, eightbytes);
+        auto from_dev = cluster.read_core(device_id, virtual_core, base_addr, eightbytes);
         uint32_t wpos = from_dev[0], rpos = from_dev[1];
         if (rpos < wpos) {
             return true;
@@ -690,7 +691,9 @@ DPrintServer::Impl::Impl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreCo
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
     std::filesystem::path output_dir(env_.get_rtoptions().get_logs_dir() + logfile_path);
-    std::filesystem::create_directories(output_dir);
+    if (!tt::filesystem::safe_create_directories(output_dir)) {
+        log_warning(tt::LogMetal, "DPrint: failed to create output directory {}", output_dir.string());
+    }
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }
@@ -759,8 +762,7 @@ void DPrintServer::Impl::init_device(ChipId device_id) {
     // flushed from the host.
     for (const auto& logical_core : all_cores) {
         CoreCoord virtual_core =
-            cluster.get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core.coord, logical_core.type);
+            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
         init_print_buffers_for_core(device_id, virtual_core, llrt::get_core_type(device_id, virtual_core));
     }
 }

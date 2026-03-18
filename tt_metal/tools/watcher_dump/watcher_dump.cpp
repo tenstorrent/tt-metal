@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <tt_metal/common/filesystem_utils.hpp>
 #include "impl/context/context_types.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
@@ -47,7 +48,9 @@ void dump_data(
 
     std::filesystem::path parent_dir(env_impl.get_rtoptions().get_root_dir() + output_dir_name);
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
-    std::filesystem::create_directories(cq_dir);
+    if (!tt::filesystem::safe_create_directories(cq_dir)) {
+        log_warning(tt::LogMetal, "WatcherDump: failed to create output directory {}", cq_dir.string());
+    }
 
     // Only look at user-specified devices
     vector<std::unique_ptr<IDevice>> devices;

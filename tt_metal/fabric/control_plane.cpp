@@ -30,6 +30,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "protobuf/mesh_graph_descriptor.pb.h"
 #include "core_coord.hpp"
 #include "compressed_direction_table.hpp"
 #include "compressed_routing_path.hpp"
@@ -43,6 +44,7 @@
 #include "hal_types.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "common/filesystem_utils.hpp"
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -85,6 +87,29 @@ namespace {
 std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
     const MeshGraph& mesh_graph, bool hard_pin_node_0 = false) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    // Check if mesh has any LINE dimensions - if so, skip corner pinning
+    // Corner pinning assumes logical mesh corners correspond to physical tray corners,
+    // which is only true for RING,RING torus topologies. For LINE dimensions, the
+    // logical corners have different degree than physical tray corners.
+    if (mesh_graph.get_mesh_graph_descriptor_path().has_value()) {
+        const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
+        for (const auto& mesh_global_id : mgd.all_meshes()) {
+            const auto& instance = mgd.get_instance(mesh_global_id);
+            const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            const auto& dim_types = mesh_desc->device_topology().dim_types();
+            bool has_line_dim = std::any_of(
+                dim_types.begin(), dim_types.end(), [](auto t) { return t == proto::TorusTopology_Type_LINE; });
+            if (has_line_dim) {
+                // Skip corner pinning for LINE topologies - corners don't align with tray positions
+                log_warning(
+                    tt::LogFabric,
+                    "Galaxy corner pinning disabled: mesh has LINE dimension(s). "
+                    "Logical mesh corners do not correspond to physical tray corners in LINE topologies.");
+                return fixed_asic_position_pinnings;
+            }
+        }
+    }
 
     // Get all 4 possible corners ASIC positions
     std::vector<AsicPosition> corner_asic_positions;
@@ -2502,63 +2527,77 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
     std::vector<uint8_t> serialized_remote_data;
     auto my_rank = *(distributed_context.rank());
 
-    for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
-        if (my_rank == bcast_root) {
-            // Issue the broadcast from the current process to all other processes in the world
-            int local_data_size_bytes = serialized_data.size();  // Send data size first
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
-                distributed_context.rank());
+    try {
+        for (std::size_t bcast_root = 0; bcast_root < *(distributed_context.size()); ++bcast_root) {
+            if (my_rank == bcast_root) {
+                // Issue the broadcast from the current process to all other processes in the world
+                int local_data_size_bytes = serialized_data.size();  // Send data size first
+                distributed_context.broadcast(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(&local_data_size_bytes), sizeof(local_data_size_bytes)),
+                    distributed_context.rank());
 
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
-                distributed_context.rank());
-        } else {
-            // Acknowledge the broadcast issued by the root
-            int remote_data_size_bytes = 0;  // Receive the size of the serialized data
-            distributed_context.broadcast(
-                tt::stl::Span<std::byte>(
-                    reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
-            serialized_remote_data.clear();
-            serialized_remote_data.resize(remote_data_size_bytes);
-            distributed_context.broadcast(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
-                tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
+                distributed_context.broadcast(
+                    tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_data.data(), serialized_data.size())),
+                    distributed_context.rank());
+            } else {
+                // Acknowledge the broadcast issued by the root
+                int remote_data_size_bytes = 0;  // Receive the size of the serialized data
+                distributed_context.broadcast(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(&remote_data_size_bytes), sizeof(remote_data_size_bytes)),
+                    tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
+                serialized_remote_data.clear();
+                serialized_remote_data.resize(remote_data_size_bytes);
+                distributed_context.broadcast(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_remote_data.data(), serialized_remote_data.size())),
+                    tt::tt_metal::distributed::multihost::Rank{static_cast<int>(bcast_root)});
 
-            RouterPortDirectionsData deserialized_remote_data =
-                tt::tt_fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
+                RouterPortDirectionsData deserialized_remote_data =
+                    tt::tt_fabric::deserialize_router_port_directions_from_bytes(serialized_remote_data);
 
-            // Merge remote data into local router_port_directions_to_physical_eth_chan_map_
-            for (const auto& [fabric_node_id, direction_map] : deserialized_remote_data.router_port_directions_map) {
-                // Only merge if this fabric node is not already in our local map
-                if (!router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
-                    router_port_directions_to_physical_eth_chan_map_[fabric_node_id] = direction_map;
-                } else {
-                    // If fabric node exists, merge direction maps
-                    for (const auto& [direction, channels] : direction_map) {
-                        auto& local_direction_map = router_port_directions_to_physical_eth_chan_map_[fabric_node_id];
-                        if (!local_direction_map.contains(direction)) {
-                            local_direction_map[direction] = channels;
-                        } else {
-                            // Merge channels, avoiding duplicates
-                            auto& local_channels = local_direction_map[direction];
-                            for (const auto& channel : channels) {
-                                if (std::find(local_channels.begin(), local_channels.end(), channel) ==
-                                    local_channels.end()) {
-                                    local_channels.push_back(channel);
+                // Merge remote data into local router_port_directions_to_physical_eth_chan_map_
+                for (const auto& [fabric_node_id, direction_map] :
+                     deserialized_remote_data.router_port_directions_map) {
+                    // Only merge if this fabric node is not already in our local map
+                    if (!router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
+                        router_port_directions_to_physical_eth_chan_map_[fabric_node_id] = direction_map;
+                    } else {
+                        // If fabric node exists, merge direction maps
+                        for (const auto& [direction, channels] : direction_map) {
+                            auto& local_direction_map =
+                                router_port_directions_to_physical_eth_chan_map_[fabric_node_id];
+                            if (!local_direction_map.contains(direction)) {
+                                local_direction_map[direction] = channels;
+                            } else {
+                                // Merge channels, avoiding duplicates
+                                auto& local_channels = local_direction_map[direction];
+                                for (const auto& channel : channels) {
+                                    if (std::find(local_channels.begin(), local_channels.end(), channel) ==
+                                        local_channels.end()) {
+                                        local_channels.push_back(channel);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+            // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
+            // root
+            distributed_context.barrier();
         }
-        // Barrier here for safety - Ensure that all ranks have completed the bcast op before proceeding to the next
-        // root
-        distributed_context.barrier();
+    } catch (const tt_metal::distributed::multihost::DistributedException& e) {
+        // Log context about which broadcast root failed, then re-throw with more context
+        log_error(
+            tt::LogFabric,
+            "MPI communication failed during router port direction collection from host ranks. "
+            "Rank {} failed to exchange routing data with other hosts. "
+            "Original error: {}",
+            my_rank,
+            e.what());
+        throw;
     }
 }
 
@@ -3181,7 +3220,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
     TT_ASSERT(
-        std::filesystem::exists(cabling_descriptor_path),
+        tt::filesystem::safe_exists(cabling_descriptor_path).value_or(false),
         "Cabling descriptor file not found: {}",
         cabling_descriptor_path);
 

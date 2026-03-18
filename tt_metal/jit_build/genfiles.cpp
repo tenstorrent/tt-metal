@@ -9,13 +9,13 @@
 #include <cstdint>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
-#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <iterator>
 #include <iostream>
 #include <ostream>
 #include <fstream>
+#include <sstream>
 #include <ranges>
 #include <stdexcept>
 #include <string>
@@ -30,23 +30,22 @@
 #include <tt_stl/unreachable.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
+#include "common/filesystem_utils.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel.hpp"
 
-enum class UnpackToDestMode : uint8_t;
-
 namespace fs = std::filesystem;
 
-using namespace std;
+enum class UnpackToDestMode : uint8_t;
 
 namespace tt::tt_metal {
 
 namespace {
 
-string get_kernel_source_to_include(const KernelSource& kernel_src) {
+std::string get_kernel_source_to_include(const KernelSource& kernel_src) {
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
             return "#include \"" + kernel_src.path_.string() + "\"\n";
@@ -57,23 +56,34 @@ string get_kernel_source_to_include(const KernelSource& kernel_src) {
 }
 
 // Generates TRISC prolog: #define + #include for defines_generated.h
-string build_trisc_prolog(const char* trisc_define) {
-    ostringstream prolog;
+std::string build_trisc_prolog(const char* trisc_define) {
+    std::ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
 
-// Writes content to a file, throwing on failure
-void write_file(const string& path, const string& content) {
+// Writes content to a file, throwing on failure.
+// Skips the write entirely when the file already exists with identical content,
+// which avoids invalidating NFS attribute/data caches on unchanged genfiles.
+void write_file(const std::filesystem::path& path, const std::string& content) {
+    {
+        std::ifstream existing(path, std::ios::binary);
+        if (existing.is_open()) {
+            std::string old_content((std::istreambuf_iterator<char>(existing)), std::istreambuf_iterator<char>());
+            if (old_content == content) {
+                return;
+            }
+        }
+    }
     jit_build::utils::FileRenamer tmp(path);
     std::ofstream f(tmp.path());
     if (!f) {
-        throw std::runtime_error("Cannot create file: " + path);
+        throw std::runtime_error("Cannot create file: " + path.string());
     }
     f << content;
     if (!f) {
-        throw std::runtime_error("Failed to write file: " + path);
+        throw std::runtime_error("Failed to write file: " + path.string());
     }
 }
 
@@ -84,10 +94,10 @@ void jit_build_genfiles_kernel_include(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
-    string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    string kernel_header = out_dir + "kernel_includes.hpp";
+    fs::path out_dir = fs::path(env.get_genfiles_kernel_root_path()) / settings.get_full_kernel_name();
+    fs::path kernel_header = out_dir / "kernel_includes.hpp";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
+    const std::string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
     write_file(kernel_header, kernel_src_to_include);
 }
 
@@ -96,20 +106,20 @@ void jit_build_genfiles_triscs_src(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    const string out_dir = env.get_out_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
-    const string math_cpp = out_dir + "chlkc_math.cpp";
-    const string pack_cpp = out_dir + "chlkc_pack.cpp";
-    const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
+    const fs::path out_dir = fs::path(env.get_genfiles_kernel_root_path()) / settings.get_full_kernel_name();
+    const fs::path unpack_cpp = out_dir / "chlkc_unpack.cpp";
+    const fs::path math_cpp = out_dir / "chlkc_math.cpp";
+    const fs::path pack_cpp = out_dir / "chlkc_pack.cpp";
+    const fs::path isolate_sfpu_cpp = out_dir / "chlkc_isolate_sfpu.cpp";
 
     // Build prologs for each TRISC
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
-    const string math_prolog = build_trisc_prolog("TRISC_MATH");
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
+    const std::string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
+    const std::string math_prolog = build_trisc_prolog("TRISC_MATH");
+    const std::string pack_prolog = build_trisc_prolog("TRISC_PACK");
+    const std::string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
 
     // All TRISCs get the same kernel source (differentiated by TRISC_* defines)
-    const string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
+    const std::string kernel_src_to_include = get_kernel_source_to_include(kernel_src);
 
     // Generate the four TRISC source files (fourth only used on Quasar)
     write_file(unpack_cpp, unpack_prolog + kernel_src_to_include);
@@ -119,17 +129,17 @@ void jit_build_genfiles_triscs_src(
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
-    const string generated_defines_fname = out_dir + "defines_generated.h";
+    const fs::path generated_defines_fname = out_dir / "defines_generated.h";
     jit_build::utils::FileRenamer tmp(generated_defines_fname);
     std::ofstream gen_defines_file(tmp.path());
     if (!gen_defines_file) {
-        throw std::runtime_error("Cannot create file: " + generated_defines_fname);
+        throw std::runtime_error("Cannot create file: " + generated_defines_fname.string());
     }
-    settings.process_defines([&gen_defines_file](const string& define, const string& value) {
-        gen_defines_file << "#define " << define << " " << value << endl;
+    settings.process_defines([&gen_defines_file](const std::string& define, const std::string& value) {
+        gen_defines_file << "#define " << define << " " << value << std::endl;
     });
     if (!gen_defines_file) {
-        throw std::runtime_error("Failed to write file: " + generated_defines_fname);
+        throw std::runtime_error("Failed to write file: " + generated_defines_fname.string());
     }
 }
 
@@ -163,9 +173,9 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
     uint32_t max_cbs) {
-    vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
+    std::vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
-    vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
+    std::vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
 
     TT_ASSERT(src_formats.size() == max_cbs);
@@ -191,16 +201,10 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     bool bfp8_pack_precise,
     const tt::ARCH arch,
     uint32_t max_cbs) {
-    vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch);
+    std::vector<DataFormat> src_formats = tt::get_pack_src_formats(
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.buf_dataformat_arr);
+    std::vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -376,39 +380,33 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     const uint32_t max_cbs = env.get_max_cbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
-    const string descriptors_path = options.path + "chlkc_descriptors.h";
-    jit_build::utils::FileRenamer tmp(descriptors_path);
-    ofstream out(tmp.path());
-    if (!out) {
-        throw std::runtime_error("Cannot create file: " + descriptors_path);
-    }
+    const fs::path descriptors_path = fs::path(options.path) / "chlkc_descriptors.h";
 
     auto fmts = compute_data_formats(options, env.get_arch(), max_cbs);
 
-    out << "#pragma once\n\n"
+    std::ostringstream buf;
+    buf << "#pragma once\n\n"
            "#if defined(UCK_CHLKC_MATH)\n"
            "#include \"llk_defs.h\"\n";
-    emit_math_scalar_descriptors(out, desc);
-    out << "#endif\n\n";
+    emit_math_scalar_descriptors(buf, desc);
+    buf << "#endif\n\n";
 
-    out << "#if !defined(UCK_CHLKC_PACK)\n";
-    emit_unpack_data_formats(out, fmts.unpack_src, fmts.unpack_dst, max_cbs);
-    emit_unpack_tile_dims(out, desc, max_cbs);
-    out << "#endif\n\n";
+    buf << "#if !defined(UCK_CHLKC_PACK)\n";
+    emit_unpack_data_formats(buf, fmts.unpack_src, fmts.unpack_dst, max_cbs);
+    emit_unpack_tile_dims(buf, desc, max_cbs);
+    buf << "#endif\n\n";
 
-    out << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
-    emit_pack_data_formats(out, fmts.pack_src, fmts.pack_dst, max_cbs);
-    emit_pack_tile_dims(out, desc, max_cbs);
-    out << "#endif\n\n";
+    buf << "#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)\n";
+    emit_pack_data_formats(buf, fmts.pack_src, fmts.pack_dst, max_cbs);
+    emit_pack_tile_dims(buf, desc, max_cbs);
+    buf << "#endif\n\n";
 
-    out << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
+    buf << "#if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK) || "
            "defined(UCK_CHLKC_ISOLATE_SFPU)\n";
-    emit_compute_scalar_descriptors(out, options);
-    out << "#endif\n";
+    emit_compute_scalar_descriptors(buf, options);
+    buf << "#endif\n";
 
-    if (!out) {
-        throw std::runtime_error("Failed to write file: " + descriptors_path);
-    }
+    write_file(descriptors_path, buf.str());
 }
 
 }  // namespace
@@ -418,7 +416,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
-    fs::create_directories(options.path);
+    tt::filesystem::safe_create_directories(options.path);
     generate_all_descriptors(env, options);
 }
 // clang-format on

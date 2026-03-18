@@ -3,14 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "depend.hpp"
+#include "build_cache_telemetry.hpp"
 #include "common/stable_hash.hpp"
+#include "jit_build_utils.hpp"
 
+#include <tt_stl/fmt.hpp>
+
+#include <cerrno>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <istream>
 #include <iterator>
 #include <tt-logger/tt-logger.hpp>
+
+#include "common/filesystem_utils.hpp"
 
 namespace tt::jit_build {
 
@@ -62,18 +70,93 @@ ParsedDependencies parse_dependency_file(std::istream& file) {
 namespace {
 
 uint64_t hash_file_content(std::istream& file) {
+    // Validate stream is in good state before hashing
+    if (!file) {
+        return 0;
+    }
     tt::FNV1a hasher;
     hasher.update(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     return hasher.digest();
+}
+
+using PathParts = std::vector<std::filesystem::path>;
+
+PathParts split_components(const std::filesystem::path& path) {
+    PathParts parts;
+    for (const auto& part : path.lexically_normal()) {
+        parts.push_back(part);
+    }
+    return parts;
+}
+
+std::filesystem::path build_from_parts(const PathParts& parts, size_t begin, size_t end) {
+    if (begin >= end) {
+        return {};
+    }
+    std::filesystem::path out = parts[begin];
+    for (size_t i = begin + 1; i < end; ++i) {
+        out /= parts[i];
+    }
+    return out;
+}
+
+bool starts_with_components(const PathParts& path_parts, const PathParts& prefix_parts) {
+    if (prefix_parts.size() > path_parts.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < prefix_parts.size(); ++i) {
+        if (path_parts[i] != prefix_parts[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+size_t common_suffix_len(const PathParts& a, const PathParts& b) {
+    size_t suffix_len = 0;
+    while (suffix_len < a.size() && suffix_len < b.size() &&
+           a[a.size() - 1 - suffix_len] == b[b.size() - 1 - suffix_len]) {
+        ++suffix_len;
+    }
+    return suffix_len;
+}
+
+bool map_path_prefix(
+    const std::filesystem::path& path,
+    const std::filesystem::path& source_prefix,
+    const std::filesystem::path& target_prefix,
+    std::filesystem::path& mapped_path) {
+    auto path_parts = split_components(path);
+    auto source_parts = split_components(source_prefix);
+    auto target_parts = split_components(target_prefix);
+    if (!starts_with_components(path_parts, source_parts)) {
+        return false;
+    }
+    PathParts mapped_parts = target_parts;
+    mapped_parts.insert(mapped_parts.end(), path_parts.begin() + source_parts.size(), path_parts.end());
+    mapped_path = build_from_parts(mapped_parts, 0, mapped_parts.size());
+    return true;
+}
+
+bool make_relative_if_under(
+    const std::filesystem::path& path, const std::filesystem::path& base, std::filesystem::path& relative_path) {
+    auto path_parts = split_components(path);
+    auto base_parts = split_components(base);
+    if (!starts_with_components(path_parts, base_parts)) {
+        return false;
+    }
+    relative_path = build_from_parts(path_parts, base_parts.size(), path_parts.size());
+    return !relative_path.empty();
 }
 
 }  // namespace
 
 void write_dependency_hashes(
     const ParsedDependencies& dependencies,
-    const std::string& out_dir,
-    const std::string& obj,
-    std::ostream& hash_file) {
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& obj,
+    std::ostream& hash_file,
+    const std::filesystem::path& canonical_dir) {
     auto iter = dependencies.find(obj);
     if (iter == dependencies.end()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
@@ -88,60 +171,200 @@ void write_dependency_hashes(
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
         }
-        std::ifstream dep_file(dep_path, std::ios::binary);
-        auto hash = hash_file_content(dep_file);
-        if (dep_file.fail() && !dep_file.eof()) {
+
+        uint64_t hash = 0;
+        std::error_code ec;
+        bool success = tt::filesystem::retry_on_estale_ec(
+            [&](std::error_code& ec) {
+                std::ifstream dep_file(dep_path, std::ios::binary);
+                hash = hash_file_content(dep_file);
+                if (dep_file.fail() && !dep_file.eof()) {
+                    ec.assign(errno, std::system_category());
+                    return false;
+                }
+                return true;
+            },
+            ec);
+
+        if (!success) {
             log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
             hash_file.setstate(std::ios::badbit);
             return;
         }
-        // Always write absolute path to the hash file, so when reading back we don't need to
-        // worry about relative paths
-        hash_file << dep_path << '\t' << hash << '\n';
+        // Compute the path to record in the hash file.
+        // We use paths relative to out_dir when possible to make the cache portable
+        // across different scratch directory configurations. For dependencies outside
+        // out_dir (e.g., source files), we use absolute paths.
+        //
+        // Scratch-mode path rewriting (canonical_dir)
+        // --------------------------------------------
+        // When scratch-mode is active, compilation happens in a local scratch directory
+        // that mirrors the NFS cache layout:
+        //   scratch out_dir:     /tmp/scratch/<key>/kernels/<kernel>/<target>/
+        //   NFS canonical_dir:   /nfs/cache/<key>/kernels/<kernel>/<target>/
+        //
+        // First, if canonical_dir is provided, rewrite scratch paths to cache paths.
+        // Then, if the (possibly rewritten) path is under out_dir/canonical_dir,
+        // store a relative path for portability.
+        std::filesystem::path record_path = dep_path;
+
+        // Step 1: Scratch-to-cache path rewriting
+        if (!canonical_dir.empty()) {
+            const auto out_norm = out_dir.lexically_normal();
+            const auto canon_norm = canonical_dir.lexically_normal();
+            const auto out_parts = split_components(out_norm);
+            const auto canon_parts = split_components(canon_norm);
+            const size_t suffix_len = common_suffix_len(out_parts, canon_parts);
+            if (suffix_len > 0 && suffix_len < out_parts.size() && suffix_len < canon_parts.size()) {
+                const auto scratch_root = build_from_parts(out_parts, 0, out_parts.size() - suffix_len);
+                const auto cache_root = build_from_parts(canon_parts, 0, canon_parts.size() - suffix_len);
+                std::filesystem::path mapped_path;
+                if (map_path_prefix(dep_path.lexically_normal(), scratch_root, cache_root, mapped_path)) {
+                    record_path = mapped_path;
+                }
+            }
+        }
+
+        // Step 2: Convert to relative path for portability
+        // Use canonical_dir as the base if available (it's the NFS cache path),
+        // otherwise use out_dir.
+        const std::filesystem::path& base_dir = canonical_dir.empty() ? out_dir : canonical_dir;
+        const auto base_path = base_dir.lexically_normal();
+        std::filesystem::path relative_path;
+        if (make_relative_if_under(record_path.lexically_normal(), base_path, relative_path)) {
+            record_path = relative_path;
+        }
+
+        hash_file << record_path << '\t' << hash << '\n';
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+void write_dependency_hashes(
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& obj,
+    const std::filesystem::path& hash_path,
+    const std::filesystem::path& canonical_dir) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
     }
     std::filesystem::path dep_path = obj_path;
     dep_path.replace_extension(".d");
-    std::ofstream hash_file(hash_path);
-    if (!hash_file.is_open()) {
+
+    std::ofstream hash_file;
+    std::error_code open_ec;
+    bool opened = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            hash_file.open(hash_path);
+            if (!hash_file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            return true;
+        },
+        open_ec);
+    if (!opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
         return;
     }
-    std::ifstream dep_file(dep_path);
-    if (!dep_file.is_open()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path.string());
+
+    std::ifstream dep_file;
+    opened = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            dep_file.open(dep_path);
+            if (!dep_file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            return true;
+        },
+        open_ec);
+    if (!opened) {
+        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path);
         hash_file.setstate(std::ios::badbit);
-    } else {
+    }
+
+    if (dep_file.is_open()) {
         auto dependencies = parse_dependency_file(dep_file);
-        write_dependency_hashes(dependencies, out_dir, obj, hash_file);
+        write_dependency_hashes(dependencies, out_dir, obj, hash_file, canonical_dir);
     }
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(hash_path);
+        tt::filesystem::safe_remove(hash_path);
     }
 }
 
-bool dependencies_up_to_date(std::istream& hash_file) {
+bool dependencies_up_to_date(
+    std::istream& hash_file, const std::filesystem::path& out_dir, std::filesystem::file_time_type hash_file_mtime) {
+    namespace fs = std::filesystem;
+    const bool use_mtime = (hash_file_mtime != fs::file_time_type{});
+
     size_t count = 0;
-    std::filesystem::path dep;
-    while (hash_file >> dep) {
+    size_t mtime_skipped = 0;
+    fs::path dep_recorded;
+    while (hash_file >> dep_recorded) {
         uint64_t recorded_hash{};
         hash_file >> recorded_hash;
         if (hash_file.fail()) {
             log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
             return false;
         }
-        std::ifstream dep_file(dep, std::ios::binary);
+
+        // Resolve the dependency path.
+        // For backward compatibility with existing cache entries:
+        // 1. First, try the path as-is (for absolute paths from old cache entries)
+        // 2. If that fails and the path is relative, resolve it against out_dir
+        fs::path dep_path = dep_recorded;
+        if (dep_path.is_relative() && !out_dir.empty()) {
+            dep_path = out_dir / dep_path;
+        }
+
+        // Fast path: if dep's mtime is older than the hash file, skip content hash.
+        if (use_mtime) {
+            std::error_code ec;
+            auto dep_mtime = fs::last_write_time(dep_path, ec);
+            if (!ec && dep_mtime <= hash_file_mtime) {
+                ++count;
+                ++mtime_skipped;
+                continue;
+            }
+            // Fall through to content hash if stat failed or dep is newer.
+        }
+
+        std::ifstream dep_file;
+        std::error_code open_ec;
+        tt::filesystem::retry_on_estale_ec(
+            [&](std::error_code& ec) {
+                dep_file.open(dep_path, std::ios::binary);
+                if (!dep_file.is_open()) {
+                    ec.assign(errno, std::system_category());
+                    return false;
+                }
+                return true;
+            },
+            open_ec);
+
+        // Legacy fallback: try path as-is from CWD if relative path didn't resolve above
+        if (!dep_file.is_open() && dep_recorded.is_relative() && dep_path != dep_recorded) {
+            fs::path cwd_path = dep_recorded;
+            tt::filesystem::retry_on_estale_ec(
+                [&](std::error_code& ec) {
+                    dep_file.open(cwd_path, std::ios::binary);
+                    if (!dep_file.is_open()) {
+                        ec.assign(errno, std::system_category());
+                        return false;
+                    }
+                    return true;
+                },
+                open_ec);
+            if (dep_file.is_open()) {
+                dep_path = cwd_path;
+            }
+        }
+
         if (!dep_file.is_open()) {
-            // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
-            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
+            log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep_recorded);
             return false;
         }
         auto dep_hash = hash_file_content(dep_file);
@@ -149,7 +372,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
             log_debug(
                 tt::LogBuildKernels,
                 "Need to JIT build because file {} has changed.  Old hash: {} new hash: {}",
-                dep.string(),
+                dep_path,
                 recorded_hash,
                 dep_hash);
             return false;
@@ -160,18 +383,55 @@ bool dependencies_up_to_date(std::istream& hash_file) {
         log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
         return false;
     }
-    // "No dependencies" means "always rebuild".  This shouldn't happen with a properly generated dependency file.
+    if (mtime_skipped > 0) {
+        log_debug(
+            tt::LogBuildKernels, "Dependency check: {}/{} deps skipped via mtime fast-path", mtime_skipped, count);
+    }
     return count > 0;
 }
 
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
-    std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
-    std::ifstream hash_file(hash_path);
+bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::filesystem::path& obj) {
+    namespace fs = std::filesystem;
+    auto t0 = std::chrono::steady_clock::now();
+
+    fs::path hash_path = out_dir / obj;
+    hash_path += ".dephash";
+
+    std::ifstream hash_file;
+    std::error_code open_ec;
+    tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            hash_file.open(hash_path);
+            if (!hash_file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            return true;
+        },
+        open_ec);
+
     if (!hash_file.is_open()) {
-        log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());
+        log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path);
         return false;
     }
-    return dependencies_up_to_date(hash_file);
+
+    // On local filesystems, use mtime to skip unchanged deps within a single pass.
+    fs::file_time_type hash_mtime{};
+    if (!tt::filesystem::nfs_safety_enabled()) {
+        std::error_code ec;
+        hash_mtime = fs::last_write_time(hash_path, ec);
+        if (ec) {
+            hash_mtime = fs::file_time_type{};
+        }
+    }
+
+    bool result = dependencies_up_to_date(hash_file, out_dir, hash_mtime);
+
+    auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
+    tok.record(elapsed_ms);
+
+    return result;
 }
 
 }  // namespace tt::jit_build

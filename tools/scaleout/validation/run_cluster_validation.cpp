@@ -22,6 +22,7 @@
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
+#include "common/filesystem_utils.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -65,11 +66,21 @@ std::filesystem::path generate_output_dir() {
     auto time_t = std::chrono::system_clock::to_time_t(now);
 
     std::stringstream ss;
+#ifdef __linux__
+    // Use thread-safe localtime_r on Linux/POSIX systems
+    std::tm tm_buf;
+    localtime_r(&time_t, &tm_buf);
+    ss << std::put_time(&tm_buf, "%Y%m%d_%H%M%S");
+#else
+    // On non-POSIX systems, guard std::localtime with a mutex for thread-safety
+    static std::mutex localtime_mutex;
+    std::lock_guard<std::mutex> lock(localtime_mutex);
     ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
+#endif
     std::string dir_name = ss.str();
     const auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir_path = rt_options.get_root_dir() + "cluster_validation_logs/" + dir_name;
-    std::filesystem::create_directories(output_dir_path);
+    tt::filesystem::safe_create_directories(output_dir_path);
     return output_dir_path;
 }
 
@@ -328,7 +339,9 @@ void set_config_vars() {
     // be running fabric routers
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "1", 1);
 
-    // Only set these if they are not already set
+    // Only set these if they are not already set. Keep TT_MESH_HOST_RANK=0 for all
+    // processes so control plane mesh graph validation succeeds; Inspector RPC
+    // port is made unique per process via OMPI_COMM_WORLD_RANK in rtoptions.
     if (getenv("TT_MESH_HOST_RANK") == nullptr) {
         setenv("TT_MESH_HOST_RANK", "0", 1);
     }

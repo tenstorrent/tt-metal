@@ -73,3 +73,55 @@ The library uses the following fallback order to locate runtime artifacts:
 
      export TT_METAL_RUNTIME_ROOT=/opt/tt-metalium-runtime
      /usr/local/bin/my_cpp_app
+
+TT_METAL_JIT_SCRATCH
+--------------------
+
+**Optional:** Recommended for multi-host MPI environments
+
+**Description:**
+
+``TT_METAL_JIT_SCRATCH`` specifies a local (non-NFS) directory where the JIT build system writes temporary compilation artifacts during the SFPI compilation phase. This avoids NFS contention and ESTALE (stale file handle) errors that can occur when multiple MPI ranks simultaneously write to a shared NFS cache directory.
+
+**How it works:**
+
+The JIT build system uses a hybrid map-reduce approach:
+
+1. **Compile Phase:** Kernel source files are compiled to the scratch directory on local disk
+2. **Merge Phase:** Successfully compiled artifacts are atomically copied/hardlinked to the shared NFS cache
+
+This separation ensures that the I/O-intensive compilation phase doesn't contend with other hosts for NFS bandwidth, while still maintaining a shared cache for reuse across runs.
+
+**Usage:**
+
+.. code-block:: bash
+
+   export TT_METAL_JIT_SCRATCH=/tmp/tt-jit-build
+
+**When to use it:**
+
+- **Multi-host MPI jobs:** Essential when running distributed workloads across multiple hosts that share an NFS filesystem
+- **High-concurrency scenarios:** Recommended when many processes (>10) may compile kernels simultaneously
+- **NFS stability issues:** Use if you encounter ESTALE errors or slow compilation due to NFS latency
+
+**Default behavior:**
+
+If not set, the scratch directory defaults to a rank-scoped subdirectory under ``/tmp/tt-jit-build`` (e.g., ``/tmp/tt-jit-build/<hostname>_rank_0/``) when using ``tt-run`` with MPI.
+
+**Integration with tt-run:**
+
+When using ``tt-run`` for distributed execution:
+
+- If ``TT_METAL_JIT_SCRATCH`` is inherited from the launcher environment (or unset), ``tt-run`` appends a rank-specific suffix (``<hostname>_rank_<N>``).
+- If ``TT_METAL_JIT_SCRATCH`` is explicitly set in rank-binding YAML (``global_env`` or ``env_overrides``), ``tt-run`` preserves that exact value and does not append a suffix.
+
+Related behavior:
+
+- ``TT_METAL_CACHE`` remains shared across ranks/hosts to maximize cache reuse.
+- ``TT_METAL_LOGS_PATH`` is rank-scoped by ``tt-run`` unless explicitly overridden in rank-binding YAML.
+
+**Cleanup behavior:**
+
+After each kernel build completes successfully and its artifacts are merged to the shared NFS cache (``TT_METAL_CACHE``), empty scratch directories are automatically removed. This cleanup removes the per-kernel directories (e.g., ``<hostname>_rank_0/kernels/<kernel_name>/brisc/``) starting from the deepest level and stopping at the first non-empty directory.
+
+**Note:** If a process terminates abnormally (e.g., crash or kill signal), scratch directories may not be fully cleaned up. On typical Linux systems, ``/tmp`` contents are cleared on system reboot. For long-running production systems without regular reboots where abnormal termination occurs frequently, you may want to set up periodic cleanup (e.g., via ``tmpwatch``, ``systemd-tmpfiles``, or cron jobs) as a safety net.

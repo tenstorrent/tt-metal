@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@
 #include <set>
 #include <vector>
 #include <unordered_set>
+#include <sys/wait.h>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -729,6 +730,9 @@ void MetalContext::on_dispatch_timeout_detected() {
         if (!command.empty()) {
             log_info(tt::LogMetal, "Executing command: {}", command);
 
+            // std::system() passes the command through /bin/sh, which is required
+            // because timeout commands may contain shell features (redirections,
+            // pipes, etc.).
             int result = std::system(command.c_str());
 
             if (result != 0) {

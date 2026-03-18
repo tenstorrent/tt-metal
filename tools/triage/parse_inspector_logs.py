@@ -10,7 +10,8 @@ Usage:
     parse_inspector_logs.py [<log-directory>]
 
 Arguments:
-    <log-directory>  Path to inspector log directory. Defaults to $TT_METAL_HOME/generated/inspector
+    <log-directory>  Path to inspector log directory. Defaults to inspector logs derived from
+                     TT_METAL_LOGS_PATH when set, otherwise $TT_METAL_HOME/generated/inspector.
 
 Description:
     This script parses inspector logs and transfers them into a structured format.
@@ -21,6 +22,8 @@ from collections import namedtuple
 from dataclasses import dataclass
 from functools import cached_property
 import os
+from pathlib import Path
+import re
 import sys
 from typing import Literal, TypeAlias
 import yaml
@@ -139,8 +142,8 @@ def fast_parse_yaml_log_file(log_file: str):
         yield yaml.safe_load(log_entry)
 
 
-def read_yaml(yaml_path: str):
-    if not os.path.exists(yaml_path):
+def read_yaml(yaml_path: str | Path):
+    if not Path(yaml_path).exists():
         utils.WARN(f"  {yaml_path} file does not exist.")
         return []
     try:
@@ -173,8 +176,8 @@ class StartupData:
         print(f"  {self.convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
 
 
-def get_kernels(log_directory: str) -> dict[int, KernelData]:
-    yaml_path = os.path.join(log_directory, "kernels.yaml")
+def get_kernels(log_directory: str | Path) -> dict[int, KernelData]:
+    yaml_path = Path(log_directory) / "kernels.yaml"
     data = read_yaml(yaml_path)
 
     kernels: dict[int, KernelData] = {}
@@ -191,9 +194,9 @@ def get_kernels(log_directory: str) -> dict[int, KernelData]:
     return kernels
 
 
-def get_startup_data(log_directory: str) -> StartupData:
-    startup_yaml_path = os.path.join(log_directory, "startup.yaml")
-    with open(startup_yaml_path, "r") as f:
+def get_startup_data(log_directory: str | Path) -> StartupData:
+    startup_yaml_path = Path(log_directory) / "startup.yaml"
+    with startup_yaml_path.open("r") as f:
         startup_data = yaml.safe_load(f)
         for entry, startup_time in startup_data.items():
             assert entry == "startup_time", "Expected 'startup_time' entry in startup.yaml"
@@ -210,8 +213,8 @@ def get_startup_data(log_directory: str) -> StartupData:
     raise ValueError("No startup time found in startup.yaml")
 
 
-def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
-    yaml_path = os.path.join(log_directory, "programs_log.yaml")
+def get_programs(log_directory: str | Path, verbose: bool = False) -> dict[int, ProgramData]:
+    yaml_path = Path(log_directory) / "programs_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Programs log:")
@@ -282,8 +285,8 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
     return programs
 
 
-def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, MeshDeviceData]:
-    yaml_path = os.path.join(log_directory, "mesh_devices_log.yaml")
+def get_mesh_devices(log_directory: str | Path, verbose: bool = False) -> dict[int, MeshDeviceData]:
+    yaml_path = Path(log_directory) / "mesh_devices_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Mesh devices log:")
@@ -325,8 +328,8 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
     return mesh_devices
 
 
-def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, MeshWorkloadData]:
-    yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
+def get_mesh_workloads(log_directory: str | Path, verbose: bool = False) -> dict[int, MeshWorkloadData]:
+    yaml_path = Path(log_directory) / "mesh_workloads_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Mesh workloads log:")
@@ -426,15 +429,91 @@ def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
     return used_devices
 
 
+def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
+    """Find inspector logs under rank-scoped TT_METAL_LOGS_PATH directories.
+
+    Expected layout:
+      <logs_root>/<hostname>_rank_<N>/generated/inspector
+    """
+    logs_root_path = Path(logs_root)
+    if not logs_root_path.is_dir():
+        return None
+
+    rank_dir_pattern = re.compile(r"^.+_rank_\d+$")
+    try:
+        rank_dirs = sorted(
+            entry.name for entry in logs_root_path.iterdir() if rank_dir_pattern.match(entry.name) and entry.is_dir()
+        )
+    except FileNotFoundError:
+        # Directory was removed between is_dir check and iterdir - treat as no rank dirs found
+        rank_dirs = []
+    candidates = [logs_root_path / rank_dir / "generated" / "inspector" for rank_dir in rank_dirs]
+    existing_candidates = [candidate for candidate in candidates if candidate.exists()]
+    if not existing_candidates:
+        return None
+
+    def _get_current_rank() -> int | None:
+        for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "TT_MESH_HOST_RANK"):
+            rank_value = os.environ.get(rank_env)
+            if rank_value is None:
+                continue
+            try:
+                rank = int(rank_value)
+                if rank >= 0:
+                    return rank
+            except ValueError:
+                continue
+        return None
+
+    def _extract_rank(path: Path) -> int | None:
+        rank_dir = path.parent.parent.name
+        match = re.search(r"_rank_(\d+)$", rank_dir)
+        if not match:
+            return None
+        return int(match.group(1))
+
+    current_rank = _get_current_rank()
+    if current_rank is not None:
+        rank_matches = [candidate for candidate in existing_candidates if _extract_rank(candidate) == current_rank]
+        if rank_matches:
+            return str(sorted(rank_matches)[0])
+
+    def _is_rank_zero_candidate(path: Path) -> bool:
+        rank_dir = path.parent.parent.name
+        return rank_dir.endswith("_rank_0")
+
+    rank_zero_candidates = [candidate for candidate in existing_candidates if _is_rank_zero_candidate(candidate)]
+    if rank_zero_candidates:
+        return str(sorted(rank_zero_candidates)[0])
+
+    if len(existing_candidates) > 1:
+        utils.WARN(
+            "Multiple rank-scoped inspector directories found under TT_METAL_LOGS_PATH. "
+            f"Using {existing_candidates[0]}. Use --inspector-log-path to choose explicitly."
+        )
+    return str(existing_candidates[0])
+
+
 def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory:
         return log_directory
     elif "TT_METAL_LOGS_PATH" in os.environ:
-        return os.path.join(os.environ.get("TT_METAL_LOGS_PATH"), "generated", "inspector")
+        logs_root = Path(os.environ.get("TT_METAL_LOGS_PATH"))
+        default_directory = logs_root / "generated" / "inspector"
+        rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root)
+        if rank_scoped_directory is not None:
+            return rank_scoped_directory
+
+        if default_directory.exists():
+            return str(default_directory)
+
+        return str(default_directory)
+    elif "TT_METAL_HOME" in os.environ:
+        return str(Path(os.environ.get("TT_METAL_HOME")) / "generated" / "inspector")
     else:
         import tempfile
 
-        return os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
+        return str(Path(tempfile.gettempdir()) / "tt-metal" / "inspector")
 
 
 class InspectorLogsData:
@@ -458,7 +537,7 @@ class InspectorLogsData:
 
     def _get_runtime_ids(self) -> list[MeshWorkloadRuntimeIdEntry]:
         """Parse runtime IDs from logs"""
-        yaml_path = os.path.join(self.log_directory, "mesh_workloads_log.yaml")
+        yaml_path = Path(self.log_directory) / "mesh_workloads_log.yaml"
         data = read_yaml(yaml_path)
         runtime_ids = []
         for entry in data:
@@ -505,7 +584,7 @@ class InspectorLogsData:
 
 def get_data(log_directory: str | None = None) -> InspectorLogsData:
     log_directory = get_log_directory(log_directory)
-    if os.path.exists(log_directory):
+    if Path(log_directory).exists():
         return InspectorLogsData(log_directory)
     else:
         raise ValueError(f"Log directory {log_directory} does not exist. Please provide a valid path.")
@@ -514,7 +593,7 @@ def get_data(log_directory: str | None = None) -> InspectorLogsData:
 def main():
     args = docopt(__doc__, argv=sys.argv[1:])
     log_directory = get_log_directory(args["<log-directory>"])
-    if not os.path.exists(log_directory):
+    if not Path(log_directory).exists():
         print(f"Directory {log_directory} does not exist")
         return
 

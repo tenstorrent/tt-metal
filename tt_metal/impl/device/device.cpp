@@ -408,7 +408,7 @@ void Device::configure_fabric() {
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
-    log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+    log_debug(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
 }
 
 bool Device::initialize(

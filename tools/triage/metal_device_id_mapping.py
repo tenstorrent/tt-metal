@@ -21,8 +21,14 @@ Owner:
 """
 
 from ttexalens.device import Device
-from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_singleton, ScriptConfig, run_script, log_check
+from inspector_data import (
+    run as get_inspector_data,
+    InspectorData,
+    InspectorException,
+    InspectorRpcRemoteException,
+    InspectorUnserializedMethod,
+)
+from triage import triage_singleton, ScriptConfig, run_script, log_check, TTTriageError
 from ttexalens.context import Context
 
 
@@ -34,7 +40,37 @@ script_config = ScriptConfig(
 
 class MetalDeviceIdMapping:
     def __init__(self, inspector_data: InspectorData, devices: list[Device]):
-        unique_ids_result = inspector_data.getMetalDeviceIdMappings()
+        try:
+            unique_ids_result = inspector_data.getMetalDeviceIdMappings()
+        except InspectorUnserializedMethod as exc:
+            raise TTTriageError(
+                "Inspector method getMetalDeviceIdMappings is unavailable in serialized data. "
+                "Provide complete inspector serialized artifacts via --inspector-log-path, or connect to "
+                "a live inspector RPC (--inspector-rpc-host/--inspector-rpc-port)."
+            ) from exc
+        except InspectorRpcRemoteException as exc:
+            raise TTTriageError(
+                f"Inspector RPC getMetalDeviceIdMappings failed remotely: {exc}. "
+                "Ensure the device-side inspector server is healthy and RPC is enabled "
+                "(TT_METAL_INSPECTOR=1, TT_METAL_INSPECTOR_RPC=1)."
+            ) from exc
+        except InspectorException as exc:
+            raise TTTriageError(f"Failed to fetch metal device ID mappings from inspector: {exc}") from exc
+        except Exception as exc:
+            raise TTTriageError(f"Unexpected error while fetching metal device ID mappings: {exc}") from exc
+
+        if unique_ids_result is None:
+            raise TTTriageError(
+                "Inspector returned no data for getMetalDeviceIdMappings (received None). "
+                "This usually indicates inspector RPC/log data is unavailable or incompatible."
+            )
+
+        if not hasattr(unique_ids_result, "mappings") or unique_ids_result.mappings is None:
+            result_type = type(unique_ids_result).__name__
+            raise TTTriageError(
+                f"Inspector getMetalDeviceIdMappings returned malformed result type '{result_type}' "
+                "(missing 'mappings')."
+            )
         self._metal_device_id_to_unique_id: dict[int, int] = {}
         self._unique_id_to_metal_device_id: dict[int, int] = {}
         self._metal_device_id_to_device_id: dict[int, int] = {}
