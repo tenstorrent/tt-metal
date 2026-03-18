@@ -17,6 +17,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -581,14 +582,31 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                             .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
     CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
-    // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
+    // K and V input CBs.
+    // Fabric writer columns get overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
+    // compute and writer can pop independently from the same address space.
+    // Non-fabric columns get single-handle CBs to avoid the unused second handle blocking
+    // space reclamation.
+    CoreRange non_fabric_core_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
+    CoreRange fabric_core_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    {
+        // K input: non-fabric cores (single handle)
+        auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+                                .set_page_size(tt::CBIndex::c_1, k_tile_size);
+        CreateCircularBuffer(program, non_fabric_core_range, c_in1_config);
+        // K input: fabric cores (overlapping handles for compute + writer)
+        uint32_t k_cbs[] = {tt::CBIndex::c_1, tt::CBIndex::c_14};
+        tt::tt_metal::create_cb(k_cbs, program, fabric_core_range, k_tile_size, k_tiles, k_df);
+    }
+    {
+        // V input: non-fabric cores (single handle)
+        auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+                                .set_page_size(tt::CBIndex::c_2, v_tile_size);
+        CreateCircularBuffer(program, non_fabric_core_range, c_in2_config);
+        // V input: fabric cores (overlapping handles for compute + writer)
+        uint32_t v_cbs[] = {tt::CBIndex::c_2, tt::CBIndex::c_15};
+        tt::tt_metal::create_cb(v_cbs, program, fabric_core_range, v_tile_size, v_tiles, v_df);
+    }
 
     // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
     if (needs_lightweight_mask) {
@@ -1354,6 +1372,22 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
 
+        // Determine if this core's writer has a valid MUX connection (for reader-side forwarding)
+        const bool is_mux_client = (core.x >= grid_size.x - 2);
+        bool is_mux_writer_valid = false;
+        if (is_mux_client) {
+            const uint32_t half_within_col = core.y / args.num_workers_per_link;
+            const bool is_backward = (half_within_col == 0);
+            const uint32_t link = (core.x == grid_size.x - 1) ? 1 : 0;
+            const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
+                                       (link < mux_forward_logical_cores.size());
+            if (link_in_range) {
+                const bool valid = is_backward ? backward_coord.has_value() : forward_coord.has_value();
+                is_mux_writer_valid = valid;
+            }
+        }
+        reader_args.push_back(static_cast<uint32_t>(is_mux_writer_valid));
+
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         // The semaphore address is the 4th value pushed (index = current size + 3)
         reader_fused_op_sem_rt_offset = reader_args.size() + 3;
@@ -1371,7 +1405,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args, direction);
 
-        const bool is_mux_client = (core.x >= grid_size.x - 2);
         if (is_mux_client) {
             // Direction is determined by row half: top half = backward, bottom half = forward.
             // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
