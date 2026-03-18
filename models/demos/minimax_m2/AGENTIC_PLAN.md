@@ -317,15 +317,122 @@ use them to construct your final answer — do not call the same tool twice for 
 
 ## Trace / Warmup Strategy
 
-| Model | When traced | Trace type | Reuse |
-|-------|------------|-----------|-------|
-| Llama 3B prefill | Startup warmup | Per supported seq length (128, 256, 512, 1024, 2048) | Every agent turn |
-| Llama 3B decode | Startup warmup | Single token forward | Every decode step |
-| Whisper decoder | First audio call | Persistent cross-attn trace | Every subsequent audio file |
-| OWL-ViT / ViT / BERT / SentenceBERT | No trace needed | Single-pass encoder | Each call |
-| SpeechT5 | No trace needed | Autoregressive TTNN forward | Each synthesis |
+### Overview
 
-Warmup cost: ~60-120 seconds at startup. Zero overhead between agentic turns.
+| Model | When traced | Trace type | Reuse across turns |
+|-------|------------|-----------|-------------------|
+| Llama 3B prefill | Startup `warmup_model_prefill()` | One trace per seq length bucket | Every re-prefill after tool result |
+| Llama 3B decode | Startup `warmup_model_prefill()` | Single 1-token forward | Every decode step, every turn |
+| Whisper decoder | Lazily on first audio call | Persistent cross-attn trace | Every subsequent audio file |
+| OWL-ViT / ViT / BERT / SentenceBERT | No trace — single-pass encoder | N/A | Each call runs normally |
+| SpeechT5 | No trace — chunked autoregressive | N/A | Each synthesis runs normally |
+
+Warmup cost: ~60–120 seconds at startup. After that, zero re-warmup cost between agentic turns.
+
+### LLM (Llama 3B via `tt_transformers` Generator)
+
+The `Generator` class in `models/tt_transformers/tt/generator.py` handles warmup
+and trace capture automatically via `warmup_model_prefill()`.
+
+```python
+from models.tt_transformers.tt.generator import Generator
+
+generator = Generator(model, model_args, mesh_device)
+
+# Called ONCE at startup — captures all prefill + decode traces
+kv_cache = generator.initialize_kv_cache()
+generator.warmup_model_prefill(
+    kv_cache=kv_cache,
+    enable_trace=True,           # capture Metal traces for decode
+    can_sample_on_device=True,
+    non_greedy_decoding_on_device=False,
+)
+```
+
+What `warmup_model_prefill()` does internally:
+1. Iterates over `model_args.get_warmup_prefill_supported_seq_lens()` — typically
+   `[128, 256, 512, 1024, 2048]` for Llama 3B
+2. For each length, runs a dummy prefill with mock tokens to JIT-compile ops
+3. Captures a Metal trace for the decode forward pass (`_capture_trace_decode`)
+4. Captures Metal traces for each prefill length (`_capture_trace_prefill`)
+
+**After warmup, each agentic turn does:**
+- `prefill(tokens)` → replays the trace for the padded sequence length bucket
+- `decode()` × N → replays the decode trace N times until stop token
+
+**Critical: context is NOT on-device between turns.** The KV cache holds the
+decoded state, but after a tool call the full `messages` list is re-tokenized
+and re-prefilled (KV cache reset). This is correct and expected — the prefill
+trace handles it.
+
+**Batch size must stay fixed at 1** for the agentic use case. Trace is captured
+at a specific batch size; changing batch size requires a new trace.
+
+### Whisper (WhisperGenerator)
+
+```python
+from models.demos.audio.whisper.tt.whisper_generator import WhisperGenerator, GenerationParams
+
+params = GenerationParams(language="en", task="transcribe", use_trace=True)
+whisper = WhisperGenerator(mesh_device, model_args, params)
+
+# No explicit warmup call — trace is captured lazily on the first real audio call:
+# _capture_decoder_trace() is called internally after the first non-traced
+# decoder iteration populates the cross-attention KV cache.
+# All subsequent calls reuse the same trace.
+```
+
+Key properties of the Whisper trace (from `whisper_generator.py` docstring):
+1. Encoder output and cross-attention KV cache are pre-allocated at fixed addresses
+2. First decoder iteration runs un-traced to populate the cross-attention cache
+3. From iteration 2 onward, the trace is captured and replayed
+4. The trace references the stable pre-allocated buffer addresses — it stays valid
+   across ALL audio files without re-capture
+
+**The Whisper trace is NOT invalidated between agentic turns**, as long as
+`global_batch_size` stays constant. Each new audio file reuses the same trace.
+
+### Single-Pass Models (OWL-ViT, ViT, BERT, SentenceBERT)
+
+These are encoder-only or single-forward-pass models. They do not use Metal
+traces because:
+- Each call may have a different input shape (different image size, text length)
+- The forward pass completes in a single dispatch — trace overhead not worthwhile
+- TTNN ops are already JIT-compiled after the first call (warm cache)
+
+The first call to each model will be slower (~2–5×) due to op compilation.
+Subsequent calls are fast. **To avoid slow first-call latency in production,
+run a dummy warmup call during startup:**
+
+```python
+# Dummy warmup to pre-compile TTNN ops (no trace captured)
+owlvit.run("/dev/null/dummy.jpg", "a person")   # will fail gracefully; ops compiled
+vit.classify("/dev/null/dummy.jpg")
+bert.qa("warmup", "warmup context")
+sbert.embed(["warmup"])
+```
+
+### SpeechT5
+
+SpeechT5 uses chunked autoregressive decoding in TTNN. There is no Metal trace.
+Long text is split into chunks (default 100 chars) and each chunk is synthesized
+independently. The TTNN encoder and decoder ops are compiled on first call.
+
+Run a dummy call at startup to pre-compile:
+```python
+speecht5.synthesize("warmup", output_path="/tmp/warmup.wav")
+```
+
+### What Breaks the Trace
+
+| Event | Effect | Recovery |
+|-------|--------|----------|
+| Batch size change | Decode trace invalid | Re-run `warmup_model_prefill()` |
+| Process restart | All traces lost | Re-run startup warmup |
+| Device reset | All traces lost | Re-run startup warmup |
+| Different audio duration (Whisper) | No effect | Trace handles variable length |
+| Different sequence length (LLM) | Uses different prefill trace bucket | No action needed |
+| Context grows beyond max seq len | Prefill fails | Truncate or evict KV cache pages |
 
 ---
 
