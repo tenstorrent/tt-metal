@@ -197,7 +197,7 @@ jobs:
             "unit_tests_dispatch_command_queue_single_card.xml" \
             env TT_METAL_ENABLE_REMOTE_CHIP=1 \
             ./build/test/tt_metal/unit_tests_dispatch \
-            --gtest_filter="CommandQueueSingleCard*Fixture.*"
+            --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
 
           run_gtest \
             "Galaxy/TG device tests slow dispatch" \
