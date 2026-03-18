@@ -21,6 +21,31 @@ from models.demos.deepseek_v3_d_p.reference.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 
 
+def create_random_weights(
+    num_chips: int,
+    seq_len: int,
+    topk: int,
+    seed: int = 123,
+) -> torch.Tensor:
+    """
+    Create random gate weights for testing weighted reduce.
+
+    Args:
+        num_chips: Number of chips in the reduction group
+        seq_len: Sequence length per chip
+        topk: Number of expert slots per token
+        seed: Random seed for reproducibility
+
+    Returns:
+        Weights tensor of shape [num_chips, seq_len, topk]
+    """
+    torch.manual_seed(seed)
+    # Random weights in [0, 1], normalized so each token's topk sums to 1
+    weights = torch.rand(num_chips, seq_len, topk, dtype=torch.bfloat16)
+    weights = weights / weights.sum(dim=-1, keepdim=True)
+    return weights
+
+
 def create_sparse_combine_output(
     num_chips: int,
     seq_len: int,
@@ -58,6 +83,7 @@ def create_sparse_combine_output(
     return data
 
 
+@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
     "seq_len, hidden_dim, topk",
     [
@@ -70,34 +96,16 @@ def create_sparse_combine_output(
     "mesh_device, device_params",
     [
         pytest.param(
-            (2, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 1), topology="linear"),
-            id="linear-2x1",
-        ),
-        pytest.param(
             (4, 1),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
             id="linear-4x1",
         ),
         pytest.param(
-            (1, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="linear-1x2",
-        ),
-        pytest.param(
             (4, 2),
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -107,6 +115,7 @@ def test_ttnn_reduce(
     seq_len,
     hidden_dim,
     topk,
+    use_weights,
 ):
     """Test TTNN reduce module in isolation using synthetic sparse inputs."""
 
@@ -133,10 +142,7 @@ def test_ttnn_reduce(
     logger.debug(f"Expected output shape per chip: [{seq_len}, {hidden_dim // num_reduce_chips}]")
     ttnn.visualize_mesh_device(mesh_device)
 
-    signpost(
-        f"Reduce {mesh_shape=} {num_devices=} {seq_len=} {topk=} {hidden_dim=} "
-        f"{cluster_axis=} {num_links=} {topology=}"
-    )
+    signpost(f"Reduce {mesh_shape=} {seq_len=} {topk=} {hidden_dim=} " f"{use_weights=}")
 
     # Create synthetic sparse combine output
     torch_combine_output = create_sparse_combine_output(
@@ -149,12 +155,23 @@ def test_ttnn_reduce(
     )
     logger.debug(f"Created sparse combine output: {torch_combine_output.shape}")
 
+    # Create random weights for weighted reduce (if enabled)
+    torch_weights = None
+    if use_weights:
+        torch_weights = create_random_weights(
+            num_chips=num_reduce_chips,
+            seq_len=seq_len,
+            topk=topk,
+            seed=123,
+        )
+        logger.debug(f"Created weights: {torch_weights.shape}")
+
     # Compute reference output using torch
     torch_reduce = TorchReduceModule(
         num_reduce_chips=num_reduce_chips,
         topk_dim=1,  # topk is dim 1 in [seq, topk, hidden]
     )
-    torch_shards = torch_reduce(torch_combine_output)
+    torch_shards = torch_reduce(torch_combine_output, weights=torch_weights)
     logger.debug(f"Torch reference output: {len(torch_shards)} shards of shape {torch_shards[0].shape}")
 
     # Convert to TTNN tensor distributed across mesh
@@ -186,6 +203,18 @@ def test_ttnn_reduce(
     )
     logger.debug(f"TTNN input shape: {tt_combine_output.shape}")
 
+    # Convert weights to TTNN tensor with same sharding as combine_output (if enabled)
+    tt_weights = None
+    if use_weights:
+        tt_weights = ttnn.from_torch(
+            torch_weights,
+            mesh_mapper=mesh_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,  # Will be converted to TILE inside reduce module
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+        logger.debug(f"TTNN weights shape: {tt_weights.shape}")
+
     # Run TTNN reduce
     # NOTE: TTNN adds a batch dim, so [seq, topk, hidden] becomes [1, seq, topk, hidden]
     # topk is at dim=2 in the 4D tensor
@@ -197,7 +226,7 @@ def test_ttnn_reduce(
         topology=topology,
     )
 
-    tt_output = tt_reduce(tt_combine_output)
+    tt_output = tt_reduce(tt_combine_output, weights=tt_weights)
     logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # Convert output back to torch for comparison

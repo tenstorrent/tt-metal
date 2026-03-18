@@ -326,21 +326,19 @@ class TtMinimalMoe(LightweightModule):
         logger.debug(f"[TtMinimalMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
-        # Step 5: Reduce (sum over topk + reduce-scatter for TP sharding)
+        # Step 5: Reduce (weighted sum over topk + reduce-scatter for TP sharding)
         # ========================================
         # combined_output: (1, dispatch_group_size, seq_len_per_chip, num_experts_per_tok, emb_dim)
         #                  (1, 1, 256, 4, 2048) per device - 5D tensor!
         #
-        # TODO: TTNN mul doesn't support broadcasting for weight multiplication
-        # For now, skip weight multiplication (test uses weights=1)
-        #
         # TtReduceModule does:
-        # 1. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
-        # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
+        # 1. Apply weights: weights * combined_output (broadcast multiply)
+        # 2. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
+        # 3. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
         logger.debug(f"[TtMinimalMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
 
-        routed_output = self.reduce_module(combined_output_tiled)
+        routed_output = self.reduce_module(combined_output_tiled, weights=weights)
         logger.debug(f"[TtMinimalMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape

@@ -197,11 +197,8 @@ class TorchSplitConnectionModule(nn.Module):
             Weighted sum of expert outputs
                 shape: (dispatch_group_size, seq_len_per_chip, hidden_dim)
         """
-        # weighted = combined_output * weights.unsqueeze(-1)  # Apply weights
-        # return weighted.sum(dim=2)  # Sum expert contributions
-        logger.warning(f"{combined_output.shape=}, {weights.shape=}")
-        logger.warning("DISABLED WEIGHTING IN SPLIT CONNECTION FOR TESTING - USING UNWEIGHTED SUM")
-        return combined_output.sum(dim=2)  # Unweighted sum for testing
+        weighted = combined_output * weights.unsqueeze(-1)  # Apply weights
+        return weighted.sum(dim=2)  # Sum expert contributions
 
 
 @dataclass

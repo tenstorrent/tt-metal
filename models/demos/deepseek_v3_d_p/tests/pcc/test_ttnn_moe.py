@@ -234,11 +234,6 @@ def test_ttnn_moe(
     )
     logger.debug(f"Input shapes: x={x.shape}, weights={weights.shape}, indices={indices.shape}")
 
-    # TODO: TTNN mul doesn't support broadcasting for split connection weight multiplication
-    # Set weights=1 to bypass this issue and test the rest of the pipeline
-    weights = torch.ones_like(weights)
-    logger.warning("Using weights=1 to bypass TTNN broadcast limitation in split connection")
-
     # Compute gate outputs (offsets and token counts)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
