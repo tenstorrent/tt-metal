@@ -3074,7 +3074,7 @@ class MoeOp:
         }
 
     @staticmethod
-    def golden(
+    def golden_single_device(
         input_tensor,
         shared_gate_weights,
         shared_up_weights,
@@ -3159,6 +3159,122 @@ class MoeOp:
             hardcoded_expert_index=hardcoded_expert_index,
             explicit_expert_scale=explicit_expert_scale,
         )
+
+    @staticmethod
+    def golden(
+        input_tensor,
+        shared_gate_weights,
+        shared_up_weights,
+        shared_down_weights,
+        gate_proj_weights_dict,
+        up_proj_weights_dict,
+        down_proj_weights_dict,
+        rmsnorm_gamma,
+        routing_weights_tensor,
+        bias_tensor,
+        rmsnorm_epsilon=1e-6,
+        routing_mode=True,
+        eps=1e-20,
+        scaling_factor=2.5,
+        include_residual=True,
+        top_k=8,
+        topk_groups=4,
+    ):
+        """
+        Clean PyTorch golden for post-attention MoE: y = h + MoE(h).
+
+        routing_mode controls all modes:
+          - True: normal routed MoE (grouped noaux gate + top-k weighted experts)
+          - False: dense MLP mode (single expert 0 with unit scale)
+          - list[int]: hardcoded expert indices; weights come from gate scores for those experts
+        """
+        print("MoEOp golden")
+        import torch
+
+        def _as_2d(t: torch.Tensor) -> torch.Tensor:
+            return t.reshape(1, -1).to(torch.bfloat16)
+
+        def _reshape_weight(w: torch.Tensor, in_dim: int):
+            # Supports [K, N] and [1,1,K,N] tensors.
+            w2 = w.to(torch.bfloat16)
+            if w2.ndim == 2:
+                return w2
+            return w2.reshape(in_dim, -1)
+
+        def _compute_grouped_topk(scores_flat: torch.Tensor, bias_flat: torch.Tensor):
+            n_routed = scores_flat.shape[-1]
+            n_groups = int(bias_tensor.shape[-2])
+            experts_per_group = n_routed // n_groups
+            scores_for_choice = scores_flat + bias_flat
+
+            grouped = scores_for_choice.reshape(1, n_groups, experts_per_group)
+            summed_experts_per_group = min(2, experts_per_group)
+            group_scores = torch.topk(grouped, k=summed_experts_per_group, dim=-1, sorted=True)[0].sum(dim=-1)
+            sel_topk_groups = min(topk_groups, n_groups)
+            group_idx = torch.topk(group_scores, k=sel_topk_groups, dim=-1, sorted=True)[1]
+
+            group_mask = torch.zeros_like(group_scores)
+            group_mask.scatter_(1, group_idx, 1)
+            score_mask = group_mask.unsqueeze(-1).expand(1, n_groups, experts_per_group).reshape(1, n_routed)
+            masked_scores = scores_for_choice.masked_fill(~score_mask.bool(), float("-inf"))
+
+            sel_top_k = min(top_k, n_routed)
+            topk_idx = torch.topk(masked_scores, k=sel_top_k, dim=-1, sorted=True)[1]
+            topk_weight = scores_flat.gather(1, topk_idx)
+            if sel_top_k > 1:
+                topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + eps)
+            topk_weight = topk_weight * scaling_factor
+            return topk_weight, topk_idx
+
+        # RMSNorm(h) for MoE input.
+        x = _as_2d(input_tensor)
+        variance = x.pow(2).mean(-1, keepdim=True)
+        norm_x = (x * torch.rsqrt(variance + rmsnorm_epsilon)) * _as_2d(rmsnorm_gamma)
+
+        # Shared expert branch: (SiLU(hWg) * (hWu))Wd + residual.
+        sh_gate = _reshape_weight(shared_gate_weights, norm_x.shape[-1])
+        sh_up = _reshape_weight(shared_up_weights, norm_x.shape[-1])
+        sh_down = _reshape_weight(shared_down_weights, sh_gate.shape[-1])
+        shared_hidden = torch.nn.functional.silu(norm_x @ sh_gate) * (norm_x @ sh_up)
+        shared_output = shared_hidden @ sh_down
+        if include_residual:
+            shared_output = shared_output + x
+
+        # Routed branch selection/weights.
+        topk_scores = None
+        topk_indices = None
+        if routing_mode is False:
+            selected_experts = [0]
+            selected_scales = [torch.tensor(1.0, dtype=torch.bfloat16)]
+        else:
+            logits = norm_x @ routing_weights_tensor.to(norm_x.dtype)
+            scores = torch.sigmoid(logits)
+            print("golden all scores", scores)
+            scores_flat = scores.reshape(1, -1)
+            bias_flat = bias_tensor.reshape(1, -1).to(scores_flat.dtype)
+            # Hardware gate produces top-k slots; both expert-index selection and
+            # expert-scale mcast are indexed by per-device slot offset.
+            # Keep this available for hardcoded mode parity.
+            gate_topk_scores, gate_topk_indices = _compute_grouped_topk(scores_flat, bias_flat)
+
+            topk_scores, topk_indices = gate_topk_scores, gate_topk_indices
+            selected_experts = [int(i) for i in topk_indices[0].tolist()]
+            selected_scales = [topk_scores[0, i] for i in range(len(selected_experts))]
+            print("golden selected experts", selected_experts)
+            print("golden selected scales", selected_scales)
+
+        routed_sum = torch.zeros_like(shared_output)
+        for expert_idx, expert_scale in zip(selected_experts, selected_scales, strict=True):
+            gate_w = _reshape_weight(gate_proj_weights_dict[expert_idx], norm_x.shape[-1])
+            up_w = _reshape_weight(up_proj_weights_dict[expert_idx], norm_x.shape[-1])
+            down_w = _reshape_weight(down_proj_weights_dict[expert_idx], gate_w.shape[-1])
+            gate_out = torch.nn.functional.silu(norm_x @ gate_w)
+            up_out = norm_x @ up_w
+            routed_hidden = gate_out * up_out * expert_scale
+            routed_sum = routed_sum + (routed_hidden @ down_w)
+
+        final_output = (shared_output + routed_sum).reshape(1, 1, 1, -1)
+        return topk_scores, topk_indices, final_output
 
     @staticmethod
     def _overlap_cbs_with_sdpa_buffer(

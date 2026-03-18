@@ -450,7 +450,7 @@ def test_bcast_moe_reduce_pipeline(
             shared_up_shard = s.torch_up_weights[:, dev_idx * K_down : (dev_idx + 1) * K_down]
             shared_down_shard = s.torch_down_weights[dev_idx * K_down : (dev_idx + 1) * K_down, :]
 
-            _, _, expected_final = MoeOp.golden(
+            _, _, expected_final = MoeOp.golden_single_device(
                 torch_input_row,
                 shared_gate_weights=shared_gate_shard,
                 shared_up_weights=shared_up_shard,
@@ -513,7 +513,7 @@ def test_bcast_moe_reduce_pipeline(
             shared_up_shard = s.torch_up_weights[:, dev_idx * K_down : (dev_idx + 1) * K_down]
             shared_down_shard = s.torch_down_weights[dev_idx * K_down : (dev_idx + 1) * K_down, :]
 
-            _, _, expected_final = MoeOp.golden(
+            _, _, expected_final = MoeOp.golden_single_device(
                 torch_input_row,
                 shared_gate_weights=shared_gate_shard,
                 shared_up_weights=shared_up_shard,

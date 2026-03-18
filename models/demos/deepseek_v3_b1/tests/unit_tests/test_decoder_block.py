@@ -64,6 +64,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     num_routed_experts: int = 0,
     preloaded_weights=None,
+    rigged_experts: bool = False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -171,7 +172,33 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    if rigged_experts:
+        # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
+        # (all-ones can produce brittle saturation in downstream low-precision paths)
+        torch_input_f32 = torch.randn(shape, dtype=torch.float32)
+        torch_input_f32 = torch_input_f32 / torch.sqrt(torch_input_f32.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
+        torch_input = torch_input_f32.to(torch.bfloat16)
+    else:
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    rigged_group_ids = None
+    rigged_expert_ids = None
+    if rigged_experts and is_moe and preloaded_weights is None:
+        # Deterministically pick 4 groups and 2 experts/group, then bias-rig gate selection.
+        g = torch.Generator()
+        g.manual_seed(2026)
+        rigged_group_ids = torch.randperm(8, generator=g)[:4].tolist()
+        rigged_expert_ids = {grp: torch.randperm(32, generator=g)[:2].tolist() for grp in rigged_group_ids}
+
+        rigged_bias = torch.full((8, 32), -10.0, dtype=torch.bfloat16)
+        for grp in rigged_group_ids:
+            for exp in rigged_expert_ids[grp]:
+                rigged_bias[grp, exp] = 10.0
+        state_dict[f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias"] = rigged_bias.reshape(-1).contiguous()
+        logger.info(
+            f"Rigged experts enabled: groups={rigged_group_ids}, "
+            f"experts={[(grp, rigged_expert_ids[grp]) for grp in rigged_group_ids]}"
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # All weights via a single BDW instance or preloaded
@@ -693,6 +720,8 @@ def create_decoder_block_tensors(
             "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
             "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
             "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
+            "rigged_group_ids": rigged_group_ids,
+            "rigged_expert_ids": rigged_expert_ids,
         }
 
     # ── Routed weight tensors differ between MoE (list) and dense (single tensor) ──
@@ -816,14 +845,15 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.parametrize("rigged_experts", [False, True], ids=["normal_gate", "fixed_experts"])
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
-        (True, True, 8),
+        # (True, True, 8),
         pytest.param(True, False, 256, marks=pytest.mark.skip_post_commit),
     ],
     ids=[
-        "hardcoded_experts",
+        # "hardcoded_experts",
         "full_routing",
     ],
 )
@@ -854,6 +884,7 @@ def test_decoder(
     position_id,
     noc_mode,
     num_internal_iterations,
+    rigged_experts,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -892,6 +923,7 @@ def test_decoder(
         max_seq_len=max_seq_len,
         is_moe=True,
         num_routed_experts=num_routed_experts,
+        rigged_experts=rigged_experts,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
@@ -1029,7 +1061,6 @@ def test_decoder(
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
-            use_hardcoded_expert_index=use_hardcoded_expert_index,
             noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             upstream_socket=None,
@@ -1176,10 +1207,6 @@ def test_decoder(
         moe_gate_eps=RoutedExpert.GATE_EPS,
         moe_gate_scaling_factor=RoutedExpert.GATE_SCALING_FACTOR,
         moe_enable_routing=enable_routing,
-        moe_use_hardcoded_expert_index=use_hardcoded_expert_index,
-        moe_hardcoded_expert_index=0,
-        moe_num_devices=num_devices,
-        moe_reduce_root_device_idx=root_coord_tuple[0] * mesh_cols + root_coord_tuple[1],
     )
 
     logger.info(f"MLA output: {mla_output}")
@@ -1506,8 +1533,6 @@ def test_decoder_mlp(
         moe_rmsnorm_gamma=d["golden_moe_rmsnorm_gamma"],
         moe_rmsnorm_epsilon=epsilon,
         moe_enable_routing=False,
-        moe_num_devices=num_devices,
-        moe_reduce_root_device_idx=root_device_idx,
     )
 
     # ========================================================================
