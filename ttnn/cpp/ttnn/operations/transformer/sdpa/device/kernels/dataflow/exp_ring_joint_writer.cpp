@@ -428,8 +428,8 @@ void kernel_main() {
     uint32_t k_addr_ag_rt = 0, v_addr_ag_rt = 0;
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
 
-    if (is_termination_master && mux_connection_valid) {
-        // Parse AG RT args
+    if (mux_connection_valid) {
+        // Parse AG RT args (present for every valid MUX client, not just termination master)
         ag_direction = get_arg_val<uint32_t>(argidx++);
         ag_input_Wt = get_arg_val<uint32_t>(argidx++);
         ag_input_Ht = get_arg_val<uint32_t>(argidx++);
@@ -440,7 +440,10 @@ void kernel_main() {
         ag_tile_id_start = get_arg_val<uint32_t>(argidx++);
         ag_tile_id_end = get_arg_val<uint32_t>(argidx++);
         ag_ring_size = get_arg_val<uint32_t>(argidx++);
-        const uint32_t out_ready_sem_id = get_arg_val<uint32_t>(argidx++);
+        const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
+        // NOC coordinates of the chain injector core — target of fabric_atomic_inc on each remote device.
+        const uint8_t out_ready_sem_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+        const uint8_t out_ready_sem_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
         k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
@@ -466,9 +469,9 @@ void kernel_main() {
         fabric_set_unicast_route<false>(pkt_hdr_write, 1);
         fabric_set_unicast_route<false>(pkt_hdr_sem, 1);
 
-        // Destination for sem_inc packets: same physical NOC coordinates on all chips
+        // Destination for sem_inc packets: injector core's out_ready_sem, same coords on all chips
         const uint64_t remote_out_ready_sem_noc_addr =
-            safe_get_noc_addr(my_x[0], my_y[0], get_semaphore(out_ready_sem_id), 0);
+            safe_get_noc_addr(out_ready_sem_noc_x, out_ready_sem_noc_y, out_ready_sem_addr, 0);
         pkt_hdr_sem->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_out_ready_sem_noc_addr, 1});
 

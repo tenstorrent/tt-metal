@@ -1286,6 +1286,18 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     uint32_t writer_fabric_ag_rt_offset = 0;
     bool ag_rt_offset_set = false;
 
+    // Pre-pass: record the physical NOC coordinates of the chain injector for each grid row.
+    // MUX client writers on that row target the injector's out_ready_sem via fabric_atomic_inc.
+    // out_ready_sem is a global semaphore passed in via args — no CreateSemaphore needed.
+    const uint32_t out_ready_sem_addr = static_cast<uint32_t>(args.semaphore[0].address());
+    std::map<uint32_t, CoreCoord> injector_noc_coords;  // core.y → physical NOC coord
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        if (core_chain_info.at(i).is_injector) {
+            const uint32_t row = i / grid_size.x;  // core.y
+            injector_noc_coords[row] = core_work.at(i).physical_core;
+        }
+    }
+
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -1353,32 +1365,24 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
 
-        // Determine TM status for this core.
-        // TM readers (do_kv_out=1) wait on out_ready_sem incremented by remote fabric_atomic_inc.
-        // Non-TM readers (do_kv_out=0) receive K/V via L1-to-L1 chain and do not wait on a semaphore.
+        // Determine MUX client status for this core.
         const bool r_is_mux_cl = (core.x >= grid_size.x - 2);
         const uint32_t r_lnk = r_is_mux_cl ? (core.x == grid_size.x - 1 ? 1 : 0) : 0;
-        const bool r_is_tm = r_is_mux_cl && (core.y % args.num_workers_per_link == 0);
-        const bool r_is_bwd = r_is_mux_cl && (core.y / args.num_workers_per_link == 0);
+        const uint32_t r_direction_half = core.y / args.num_workers_per_link;
+        const bool r_is_bwd = r_is_mux_cl && (r_direction_half == 0);
         const bool r_lnk_ok = r_is_mux_cl && (r_lnk < args.num_links) && (r_lnk < mux_backward_logical_cores.size()) &&
                               (r_lnk < mux_forward_logical_cores.size());
         const bool r_ag_valid = r_lnk_ok && (r_is_bwd ? backward_coord.has_value() : forward_coord.has_value());
-        const bool is_active_tm = r_is_tm && r_ag_valid;
+        // do_kv_out=1 for all valid MUX clients: each pushes K/V to cb_k_out/cb_v_out for AG forwarding.
+        const bool is_mux_cl_valid = r_is_mux_cl && r_ag_valid;
 
-        // Create out_ready_sem for TM cores now (used by both reader and writer sections below).
-        // Non-TM cores get 0 (unused sentinel).
-        const uint32_t out_ready_sem_id = is_active_tm ? CreateSemaphore(program, {core}, 0) : 0;
-
-        // Push ring sequencer args for fused-op receiver.
-        // do_kv_out comes first so the reader kernel can decide wait_for_op_signal before consuming seq args.
-        reader_args.push_back(static_cast<uint32_t>(is_active_tm));  // do_kv_out
+        // Push ring sequencer args. do_kv_out comes first.
+        // out_ready_sem_addr always pushed: kernel uses it only when is_injector is true.
+        reader_args.push_back(static_cast<uint32_t>(is_mux_cl_valid));  // do_kv_out
         reader_args.push_back(sdpa_fused_op_signaler->ring_size);
         reader_args.push_back(sdpa_fused_op_signaler->ring_index);
         reader_args.push_back(direction);
-        if (is_active_tm) {
-            // TM reader waits on out_ready_sem (incremented by remote fabric_atomic_inc)
-            reader_args.push_back(out_ready_sem_id);
-        }
+        reader_args.push_back(out_ready_sem_addr);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1441,8 +1445,10 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(0);                                    // termination_master_noc_x
                 writer_args.push_back(0);                                    // termination_master_noc_y
             }
-            // All-gather RT args: only for termination master cores
-            if (is_term_master && link_in_range) {
+            // All-gather RT args: for every valid MUX client (both links, all worker rows).
+            // Each worker forwards its B×H slice; together they cover the full K/V tensor.
+            const bool valid = is_backward ? backward_coord.has_value() : forward_coord.has_value();
+            if (link_in_range && valid) {
                 if (!ag_rt_offset_set) {
                     writer_fabric_ag_rt_offset = writer_args.size();
                     ag_rt_offset_set = true;
@@ -1451,15 +1457,15 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 // Direction: top half of rows = backward (0), bottom half = forward (1).
                 const uint32_t ag_direction = is_backward ? 0 : 1;
 
-                // Tile range for this link
+                // Tile range for this link (split evenly across the two links)
                 const uint32_t base_tiles = ag_single_bh_num_tiles / args.num_links;
                 const uint32_t remainder = ag_single_bh_num_tiles % args.num_links;
                 const uint32_t ag_tile_id_start = link * base_tiles + std::min(link, remainder);
                 const uint32_t ag_tile_id_end = (link + 1) * base_tiles + std::min(link + 1, remainder);
 
-                // out_ready_sem_id was already created in the reader section above.
-                // Remote devices atomically increment it via fabric_atomic_inc when K/V arrives.
-                // The TM reader (not the writer) waits on it via fused_op_receiver.get_next_ring_id_and_sync().
+                // Look up the chain injector NOC coords for this row.
+                // Both MUX clients on the same row target the injector's out_ready_sem.
+                const auto& inj = injector_noc_coords.at(core.y);
 
                 writer_args.push_back(ag_direction);
                 writer_args.push_back(ag_input_Wt);
@@ -1471,7 +1477,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(ag_tile_id_start);
                 writer_args.push_back(ag_tile_id_end);
                 writer_args.push_back(static_cast<uint32_t>(args.ring_size));
-                writer_args.push_back(out_ready_sem_id);
+                writer_args.push_back(out_ready_sem_addr);
+                writer_args.push_back(static_cast<uint32_t>(inj.x));  // injector NOC x
+                writer_args.push_back(static_cast<uint32_t>(inj.y));  // injector NOC y
                 writer_args.push_back(k_addr);
                 writer_args.push_back(v_addr);
                 writer_args.push_back(gathered_k_addr);

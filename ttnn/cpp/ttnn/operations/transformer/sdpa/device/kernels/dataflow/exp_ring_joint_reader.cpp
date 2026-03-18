@@ -64,9 +64,7 @@ void kernel_main() {
     const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
     const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
-    // do_kv_out: 1 only for TM reader cores (paired with fabric-writer TM that pops cb_k_out/cb_v_out).
-    // TM readers wait on out_ready_sem (incremented by remote fabric_atomic_inc via pkt_hdr_sem).
-    // Non-TM readers receive K/V via L1-to-L1 chain forwarding and do not need a semaphore wait.
+    // do_kv_out: 1 for all valid MUX client cores — they push K/V to cb_k_out/cb_v_out for AG forwarding.
     const uint32_t do_kv_out = get_arg_val<uint32_t>(argidx++);
 
     const uint32_t ring_size_rt = get_arg_val<uint32_t>(argidx++);
@@ -74,13 +72,12 @@ void kernel_main() {
     const uint32_t direction_rt = get_arg_val<uint32_t>(argidx++);
     RingIdSequencer seq(ring_index_rt, ring_size_rt, direction_rt);
 
-    // TM readers: parse out_ready_sem for per-kv-chunk synchronization with the upstream fabric writer.
-    // out_ready_sem is incremented once per forwarded kv_chunk by the remote writer's fabric_atomic_inc.
-    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = nullptr;
-    if (do_kv_out) {
-        const uint32_t out_ready_sem_id = get_arg_val<uint32_t>(argidx++);
-        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(out_ready_sem_id));
-    }
+    // Injector cores wait on out_ready_sem before reading each gathered kv_chunk.
+    // Both MUX client columns each send one fabric_atomic_inc per kv_chunk → sem advances by 2.
+    // out_ready_sem_addr is always pushed (kernel only uses it when is_injector is true).
+    const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
+    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr =
+        is_injector ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr) : nullptr;
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
@@ -250,10 +247,11 @@ void kernel_main() {
                         kv_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
-                        // Gathered KV: wait for this kv_chunk to be forwarded by the upstream writer.
-                        // Only wait on the first q_chunk — subsequent q_chunks reuse the same arrived data.
-                        if (do_kv_out && global_q_chunk == global_q_start) {
-                            ++gathered_kv_chunks_received;
+                        // Gathered KV: injector waits for this kv_chunk to arrive before reading.
+                        // Both MUX client columns each send one fabric_atomic_inc per kv_chunk,
+                        // so advance the expected count by 2. Only wait once (first q_chunk).
+                        if (is_injector && global_q_chunk == global_q_start) {
+                            gathered_kv_chunks_received += 2;
                             noc_semaphore_wait_min(out_ready_sem_ptr, gathered_kv_chunks_received);
                         }
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
