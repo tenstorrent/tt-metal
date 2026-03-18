@@ -80,6 +80,7 @@ def test_lora_fuse(
     ids=["test_lora_fuse"],
 )
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.timeout(7200)
 def test_lora_perf_device(
     command, expected_device_perf_ns_per_iteration, subdir, model_name, num_iterations, batch_size, margin, comments
 ):
