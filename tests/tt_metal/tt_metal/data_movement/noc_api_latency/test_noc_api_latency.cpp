@@ -116,12 +116,29 @@ bool run_noc_api_latency_test(
 
     std::string kernel_path = kernels_dir + kernel_filename + ".cpp";
 
-    // Create kernel on source core
-    experimental::quasar::CreateKernel(
-        program,
-        kernel_path,
-        test_config.source_core_coord,
-        experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = compile_args});
+    // Create kernel on source core - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program,
+            kernel_path,
+            test_config.source_core_coord,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = compile_args});
+    } else {
+        // WH/BH path: Use legacy API with processor selection
+        auto riscv = DataMovementProcessor::RISCV_0;
+
+        if (test_config.kernel_type == KernelType::UNICAST_READ ||
+            test_config.kernel_type == KernelType::STATEFUL_READ) {
+            riscv = DataMovementProcessor::RISCV_1;
+        }
+
+        CreateKernel(
+            program,
+            kernel_path,
+            test_config.source_core_coord,
+            DataMovementConfig{.processor = riscv, .noc = test_config.noc_id, .compile_args = compile_args});
+    }
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
