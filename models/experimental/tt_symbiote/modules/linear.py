@@ -105,19 +105,29 @@ class TTNNLinearInputShardedWeightSharded(TTNNLinear):
         self.tt_weight_host = self.weight
 
     def move_weights_to_device_impl(self):
+        # Only use mesh mapper if device is a multi-device mesh
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        use_mesh_mapper = num_devices > 1
+
         if isinstance(self.tt_weight_host, torch.Tensor):
+            weights_mesh_mapper = (
+                ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim) if use_mesh_mapper else None
+            )
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+                weights_mesh_mapper=weights_mesh_mapper,
             )
         if isinstance(self.tt_bias_host, torch.Tensor):
+            bias_mesh_mapper = (
+                ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim) if use_mesh_mapper else None
+            )
             self.tt_bias_host = preprocess_linear_bias(
                 self.tt_bias_host,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+                weights_mesh_mapper=bias_mesh_mapper,
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
@@ -198,19 +208,29 @@ class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
 
     def move_weights_to_device_impl(self):
+        # Only use mesh mapper if device is a multi-device mesh
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        use_mesh_mapper = num_devices > 1
+
         if isinstance(self.tt_weight_host, torch.Tensor):
+            weights_mesh_mapper = (
+                ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim) if use_mesh_mapper else None
+            )
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+                weights_mesh_mapper=weights_mesh_mapper,
             )
         if isinstance(self.tt_bias_host, torch.Tensor):
+            bias_mesh_mapper = (
+                ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim) if use_mesh_mapper else None
+            )
             self.tt_bias_host = preprocess_linear_bias(
                 self.tt_bias_host,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
+                weights_mesh_mapper=bias_mesh_mapper,
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
@@ -235,19 +255,29 @@ class TTNNLinearInputReplicatedWeightSharded(TTNNLinear):
         self.tt_weight_host = self.weight
 
     def move_weights_to_device_impl(self):
+        # Only use mesh mapper if device is a multi-device mesh
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        use_mesh_mapper = num_devices > 1
+
         if isinstance(self.tt_weight_host, torch.Tensor):
+            weights_mesh_mapper = (
+                ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim) if use_mesh_mapper else None
+            )
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+                weights_mesh_mapper=weights_mesh_mapper,
             )
         if isinstance(self.tt_bias_host, torch.Tensor):
+            bias_mesh_mapper = (
+                ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim) if use_mesh_mapper else None
+            )
             self.tt_bias_host = preprocess_linear_bias(
                 self.tt_bias_host,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
+                weights_mesh_mapper=bias_mesh_mapper,
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None

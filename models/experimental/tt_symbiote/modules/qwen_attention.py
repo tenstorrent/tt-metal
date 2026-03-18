@@ -1427,10 +1427,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
                 attention_mask=attention_mask_pt,
             )
 
-            # When using pure PyTorch fallback, return raw PyTorch tensor
-            # Don't wrap in TorchTTNNTensor to avoid distributed config issues
-            # The output is a regular CPU tensor that will flow through subsequent layers
-            return output
+            # Wrap output in TorchTTNNTensor to maintain consistent return type
+            return TorchTTNNTensor(output)
 
         # === HYBRID FORWARD: TTNN projections + PyTorch DeltaNet kernel ===
 
