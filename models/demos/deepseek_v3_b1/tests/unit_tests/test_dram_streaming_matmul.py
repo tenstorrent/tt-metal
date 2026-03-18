@@ -688,7 +688,9 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
 
 
 @pytest.mark.parametrize(
-    "k, n, fused_activation, seed", [(7168, 256, None, 520), (7168, 256, "silu", 2005), (2048, 7168, None, 1000)], ids=["up_proj", "gate_proj", "down_proj"]
+    "k, n, fused_activation, seed",
+    [(7168, 256, None, 520), (7168, 256, "silu", 2005), (256, 7168, None, 1000)],
+    ids=["up_proj", "gate_proj", "down_proj"],
 )
 @pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("num_experts", [256])
