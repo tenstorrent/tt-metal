@@ -15,6 +15,7 @@ import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tests.pcc.test_moe import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
     extract_mesh_config,
     get_routed_expert_buffer_mesh_mapper,
@@ -49,11 +50,18 @@ def run_torch_routed_experts(
 
     for dg in range(num_dispatch_groups):
         for ds in range(dispatch_group_size):
-            # Linearize position to get chip index: row * num_cols + col
-            # dg = col (mesh col), ds = row (mesh row)
-            chip = ds * num_dispatch_groups + dg
+            # dg = col (mesh col / dispatch group), ds = row (mesh row / chip within group)
             for local_expert in range(experts_per_chip):
-                global_expert = chip * experts_per_chip + local_expert
+                # Use column-major ordering to match TorchMinimalMoE and TtRoutedExpert
+                global_expert = ExpertMapping.get_global_expert_idx(
+                    group=dg,
+                    chip=ds,
+                    local_expert=local_expert,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
 
                 # Get input for this expert
                 expert_input = dispatched_buffer[dg, ds, local_expert, :, :]
@@ -288,12 +296,19 @@ def test_ttnn_routed_expert(
     pcc_values = []
     for dg in range(num_dispatch_groups):
         for ds in range(dispatch_group_size):
-            chip = ds * num_dispatch_groups + dg
             torch_chip = torch_outputs[dg, ds, :, :, :]  # (experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
             ttnn_chip = ttnn_outputs_torch[dg, ds, :, :, :]
 
             for expert_idx in range(experts_per_chip):
-                global_expert_idx = chip * experts_per_chip + expert_idx
+                global_expert_idx = ExpertMapping.get_global_expert_idx(
+                    group=dg,
+                    chip=ds,
+                    local_expert=expert_idx,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
                 _, pcc = comp_pcc(torch_chip[expert_idx], ttnn_chip[expert_idx])
                 pcc_values.append(pcc)
                 logger.debug(

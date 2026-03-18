@@ -158,6 +158,8 @@ class TtMinimalMoe(LightweightModule):
             cluster_axis=cluster_axis,
             num_links=num_links,
             topology=topology,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            init_zeros=True,
         )
 
         # Initialize routed expert
@@ -312,7 +314,9 @@ class TtMinimalMoe(LightweightModule):
         # ========================================
         # Combine expects ROW_MAJOR input
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
-        logger.debug(f"[TtMinimalMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape}")
+        logger.debug(
+            f"[TtMinimalMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}"
+        )
 
         combined_output = self.combine_module(
             expert_outputs_rm,

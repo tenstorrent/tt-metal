@@ -530,12 +530,22 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return True, 1.0
 
     if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
-        logger.error("One tensor is all nan, the other is not.")
+        if torch.all(torch.isnan(golden)):
+            logger.error("Golden tensor is all nan.")
+        if torch.all(torch.isnan(calculated)):
+            logger.error("Calculated tensor is all nan.")
         return False, 0.0
 
     # Test if either is completely zero
     if torch.any(golden.bool()) != torch.any(calculated.bool()):
         logger.error("One tensor is all zero")
+        if (not torch.any(golden.bool())) and (not torch.any(calculated.bool())):
+            return True, 1.0
+
+        if not torch.any(golden.bool()):
+            logger.error("Calculated tensor is all zero.")
+        if not torch.any(calculated.bool()):
+            logger.error("Golden tensor is all zero.")
         return False, 0.0
 
     # For now, mask all infs and nans so that we check the rest... TODO

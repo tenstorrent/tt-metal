@@ -16,8 +16,8 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     get_gate_outputs,
     initialize_test_inputs,
 )
@@ -61,7 +61,7 @@ def test_torch_dispatch_combine(
     weights = weights.squeeze(0)
 
     # Create expert dispatch table (single EP rank for this test)
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=1,
@@ -131,7 +131,7 @@ def test_visualize_expert_dispatch_table(dispatch_group_size, num_dispatch_group
     num_routed_experts = 256
     num_experts_per_tok = 8
 
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,

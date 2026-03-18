@@ -19,8 +19,8 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
     get_combine_counter_mesh_mapper,
@@ -302,7 +302,7 @@ def test_ttnn_dispatch_combine(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
@@ -339,10 +339,6 @@ def test_ttnn_dispatch_combine(
     )
 
     torch_dispatched_buffer, torch_dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
-
-    # Transform logical chip IDs to linearized coords (same as test_prefill_combine.py)
-    for r in range(num_dispatch_groups):
-        torch_dispatched_metadata[r, :, :, :, 0] = torch_dispatched_metadata[r, :, :, :, 0] * num_dispatch_groups + r
 
     torch_combine_module = TorchCombineModule(
         dispatch_group_size=dispatch_group_size,

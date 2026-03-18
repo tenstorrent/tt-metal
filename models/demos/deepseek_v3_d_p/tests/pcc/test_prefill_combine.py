@@ -19,8 +19,8 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
     get_combine_counter_mesh_mapper,
@@ -258,7 +258,7 @@ def test_ttnn_combine(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
@@ -286,12 +286,6 @@ def test_ttnn_combine(
 
     # Run dispatch for each EP rank with rank-specific weights
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
-
-    # Transform logical chip IDs to linearized coords
-    # metadata[..., 0] contains the destination logical chip ID
-    for r in range(num_dispatch_groups):
-        # dest_linearized = dest_logical * num_dispatch_groups + replica_index
-        dispatched_metadata[r, :, :, :, 0] = dispatched_metadata[r, :, :, :, 0] * num_dispatch_groups + r
 
     # Use different sharding: shard both dimensions
     mesh_mapper = get_combine_counter_mesh_mapper(mesh_device)

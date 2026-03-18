@@ -15,6 +15,7 @@ from tracy import signpost
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import GRID_SIZE, get_prefill_matmul_program_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
@@ -145,33 +146,24 @@ class TtRoutedExpert(LightweightModule):
             logger.debug(f"Creating weights from provided torch tensors ({total_experts} experts)")
             # Create per-device weights: for each local expert index, stack weights from all devices
             # then shard across devices so each device gets its own expert's weights
+            mesh_rows, mesh_cols = self.mesh_device.shape
             for local_expert_idx in range(experts_per_chip):
-                # Gather weights for this local expert slot from each device
-                # Device i holds global expert (i * experts_per_chip + local_expert_idx)
-                gate_weights_per_device = []
-                up_weights_per_device = []
-                down_weights_per_device = []
-
-                for device_idx in range(self.num_devices):
-                    global_expert_idx = device_idx * experts_per_chip + local_expert_idx
-                    gate_weights_per_device.append(torch_weights[global_expert_idx]["gate_proj"])
-                    up_weights_per_device.append(torch_weights[global_expert_idx]["up_proj"])
-                    down_weights_per_device.append(torch_weights[global_expert_idx]["down_proj"])
+                gate_weights, up_weights, down_weights = ExpertMapping.gather_weights_for_mesh_distribution(
+                    torch_weights,
+                    local_expert_idx,
+                    mesh_rows,
+                    mesh_cols,
+                    experts_per_chip,
+                )
 
                 self.gate_projs.append(
-                    self._create_weight_from_torch_per_device(
-                        gate_weights_per_device, name=f"expert_{local_expert_idx}_gate"
-                    )
+                    self._create_weight_from_torch_per_device(gate_weights, name=f"expert_{local_expert_idx}_gate")
                 )
                 self.up_projs.append(
-                    self._create_weight_from_torch_per_device(
-                        up_weights_per_device, name=f"expert_{local_expert_idx}_up"
-                    )
+                    self._create_weight_from_torch_per_device(up_weights, name=f"expert_{local_expert_idx}_up")
                 )
                 self.down_projs.append(
-                    self._create_weight_from_torch_per_device(
-                        down_weights_per_device, name=f"expert_{local_expert_idx}_down"
-                    )
+                    self._create_weight_from_torch_per_device(down_weights, name=f"expert_{local_expert_idx}_down")
                 )
         else:
             logger.debug("Creating random weights (replicated across devices)")
@@ -207,11 +199,7 @@ class TtRoutedExpert(LightweightModule):
             f"stacked shape {stacked.shape}"
         )
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device,
-            mesh_shape=self.mesh_device.shape,
-            dims=(0, 1),  # Shard dim 0 across mesh rows, dim 1 across mesh cols
-        )
+        mesh_mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
 
         tt_weight = ttnn.from_torch(
             stacked,

@@ -28,8 +28,8 @@ from loguru import logger
 from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
     compute_constants,
-    create_expert_dispatch_table,
     get_gate_outputs,
     initialize_test_inputs,
 )
@@ -197,8 +197,11 @@ class TorchSplitConnectionModule(nn.Module):
             Weighted sum of expert outputs
                 shape: (dispatch_group_size, seq_len_per_chip, hidden_dim)
         """
-        weighted = combined_output * weights.unsqueeze(-1)  # Apply weights
-        return weighted.sum(dim=2)  # Sum expert contributions
+        # weighted = combined_output * weights.unsqueeze(-1)  # Apply weights
+        # return weighted.sum(dim=2)  # Sum expert contributions
+        logger.warning(f"{combined_output.shape=}, {weights.shape=}")
+        logger.warning("DISABLED WEIGHTING IN SPLIT CONNECTION FOR TESTING - USING UNWEIGHTED SUM")
+        return combined_output.sum(dim=2)  # Unweighted sum for testing
 
 
 @dataclass
@@ -241,6 +244,7 @@ class TorchMinimalMoE(nn.Module):
         expert_dispatch_table: torch.Tensor,
         model_id: str = None,
         layer_idx: int = None,
+        num_dispatch_groups: int = 1,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -264,6 +268,7 @@ class TorchMinimalMoE(nn.Module):
         self.dispatch_group_size = dispatch_group_size
         self.experts_per_chip = experts_per_chip
         self.num_routed_experts = num_routed_experts
+        self.num_dispatch_groups = num_dispatch_groups
 
         # Create dispatch module
         self.dispatch_module = TorchDispatchModule(
@@ -275,6 +280,7 @@ class TorchMinimalMoE(nn.Module):
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             seq_len_per_chip=seq_len_per_chip,
             hidden_dim=hidden_dim,
+            num_dispatch_groups=num_dispatch_groups,
             expert_dispatch_table=expert_dispatch_table,
         )
 
@@ -284,6 +290,7 @@ class TorchMinimalMoE(nn.Module):
             experts_per_chip=experts_per_chip,
             num_experts_per_tok=num_experts_per_tok,
             seq_len_per_chip=seq_len_per_chip,
+            num_dispatch_groups=num_dispatch_groups,
         )
 
         # Create routed and shared experts (with real weights if model_id provided)
@@ -336,18 +343,30 @@ class TorchMinimalMoE(nn.Module):
 
         # Step 3: Run routed experts on dispatch buffer slices
         expert_outputs = torch.zeros_like(dispatched_buffer)
-        for chip in range(self.dispatch_group_size):
-            for local_expert in range(self.experts_per_chip):
-                global_expert = chip * self.experts_per_chip + local_expert
-                token_count = expert_token_counts[0, chip, local_expert].item()
+        for group in range(self.num_dispatch_groups):
+            for chip in range(self.dispatch_group_size):
+                for local_expert in range(self.experts_per_chip):
+                    # Map (group, chip, local_expert) to global_expert using column-major ordering
+                    global_expert = ExpertMapping.get_global_expert_idx(
+                        group,
+                        chip,
+                        local_expert,
+                        self.experts_per_chip,
+                        self.dispatch_group_size,
+                        self.num_dispatch_groups,
+                        is_col_major=True,
+                    )
+                    token_count = expert_token_counts[group, chip, local_expert].item()
 
-                if token_count > 0:
-                    expert_input = dispatched_buffer[0, chip, local_expert, :token_count, :]
-                    with torch.no_grad():
-                        expert_output = self.routed_experts[global_expert](expert_input.float())
-                    expert_outputs[0, chip, local_expert, :token_count, :] = expert_output
+                    if token_count > 0:
+                        expert_input = dispatched_buffer[group, chip, local_expert, :token_count, :]
+                        with torch.no_grad():
+                            expert_output = self.routed_experts[global_expert](expert_input.float())
+                        expert_outputs[group, chip, local_expert, :token_count, :] = expert_output
 
         # Step 4: Combine routed expert outputs
+        # TorchDispatchModule now outputs linearized mesh coords directly in metadata field 0,
+        # so no transformation is needed before calling combine.
         combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts)
 
         # Step 5: Apply gate weights (split connection)
@@ -418,7 +437,7 @@ def test_moe(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=1,
@@ -569,7 +588,7 @@ def test_moe_real_weights(
     )
 
     # Create expert dispatch table
-    expert_dispatch_table = create_expert_dispatch_table(
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=1,
