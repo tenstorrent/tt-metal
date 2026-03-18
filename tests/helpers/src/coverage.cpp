@@ -30,9 +30,10 @@ extern "C"
         LLK_ASSERT(false, "__gcov_merge_add: panic");
     }
 
-    void abort()
+    __attribute__((noinline)) void abort()
     {
         LLK_ASSERT(false, "abort: panic");
+        __builtin_unreachable();
     }
 
     std::uint32_t __umodsi3(std::uint32_t a, std::uint32_t b)
