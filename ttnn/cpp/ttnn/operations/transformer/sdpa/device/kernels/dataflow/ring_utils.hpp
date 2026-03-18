@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include "api/debug/dprint.h"
 
 /**
  * Sequential single-direction ring_id sequencer.
@@ -48,6 +49,7 @@ struct RingIdSequencer {
         uint32_t ring_id =
             ((int32_t)ring_index + (int32_t)transfer_idx * step + (int32_t)(ring_size * ring_size)) % ring_size;
 
+        // DPRINT << "get_next_ring_id: " << ring_id << " direction: " << direction << " transfer_idx: " << transfer_idx << ENDL();
         sync_fn(direction, transfer_idx);
 
         transfer_idx++;
