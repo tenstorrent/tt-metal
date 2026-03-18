@@ -156,7 +156,7 @@ If these tests fail, raise the issue in the `#exabox-infra` Slack channel and ta
 
 Stress tests for the TT-Fabric layer. Ensures TT-Fabric SW and FW is compatible with the cluster topology. Also stresses the physical ethernet interconnect, verifying cluster stability. Only run after physical validation passes.
 
-**Topology-Specific Scripts:**
+#### Single-Pod (Exabox, 4 hosts)
 
 The current BH Exabox has two different cluster topologies (both with 4 Galaxies, 128 chips):
 - **8x16** (16×8 mesh topology) - Located in Aisle C - Used for DeepSeek-R1 implementation, machines in cluster:
@@ -174,9 +174,33 @@ The mesh shape affects how workloads are distributed across chips. Choose the sc
 
 Logs are saved to `fabric_test_logs/` in your current directory.
 
+**Important: Host Ordering Matters for 4x32 Clusters**
+
+For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
+
+#### Multi-Pod (4 meshes x 4 hosts = 16 hosts)
+
+For multi-pod deployments pass `--num-meshes` and `--mesh-graph-desc-path` directly. This targets 4 meshes (each 32x4, 4 hosts per mesh), spawning 16 MPI ranks and using the 2D torus multi-mesh fabric test config.
+
+Provide all 16 hosts in mesh order: hosts 0-3 -> mesh 0, hosts 4-7 -> mesh 1, hosts 8-11 -> mesh 2, hosts 12-15 -> mesh 3.
+
+```bash
+./tools/scaleout/exabox/run_fabric_tests.sh \
+    --num-meshes 4 \
+    --mesh-graph-desc-path tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto \
+    --hosts <host0>,<host1>,...,<host15> \
+    --image <docker-image>
+```
+
+Logs are saved to `multi_mesh_fabric_test_logs/` in your current directory. A reference host-ordered list for the D3-D10 racks is in `tools/scaleout/exabox/sp4_d3_d10_rankfile.txt`.
+
+For more on mesh graph descriptors, rank bindings, and the full multi-mesh workflow, see the [Cluster Validation README](../validation/README.md#multi-mesh-fabric-testing).
+
+#### Analyzing Results
+
 Analyze results with:
 ```bash
-python3 tools/scaleout/exabox/analyze_fabric_results.py fabric_test_logs/<log-file>.log
+python3 tools/scaleout/exabox/analyze_fabric_results.py <output-dir>/<log-file>.log
 ```
 
 The script parses the test log and provides:
@@ -197,11 +221,6 @@ The script returns specific exit codes for automated workflows:
 - `6` - Ethernet core timeout
 - `50` - Inconclusive (manual review required)
 - `66` - Input error (log file not found)
-
-
-**Important: Host Ordering Matters for 4x32 Clusters**
-
-For 4x32 topology, you **must** specify hosts in physical connectivity order. The 4 Galaxies are connected in a ring (`1 <-> 2 <-> 3 <-> 4 <-> 1`). If you see `TT_FATAL: Graph specified in MGD could not fit in the discovered physical topology`, see [Fabric Test Fails with "Graph could not fit in physical topology"](./TROUBLESHOOTING.md#fabric-test-fails-with-graph-could-not-fit-in-physical-topology) for diagnosis and resolution.
 
 If these tests fail, raise the issue in the `#exabox-infra` Slack channel and tag the syseng and scaleout teams.
 
@@ -287,7 +306,7 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `recover_*.sh` | Quick reset + 5 traffic iterations |
 | `run_validation.sh` | Full 50-loop validation |
 | `run_dispatch_tests.sh` | Chip stability stress tests |
-| `run_fabric_tests.sh` | Fabric connectivity tests |
+| `run_fabric_tests.sh` | Fabric connectivity tests (`--config 4x32\|8x16` or `--num-meshes N`) |
 | `analyze_validation_results.py` | Parse validation logs |
 | `analyze_dispatch_results.py` | Parse dispatch test logs |
 | `analyze_fabric_results.py` | Parse fabric test logs |
