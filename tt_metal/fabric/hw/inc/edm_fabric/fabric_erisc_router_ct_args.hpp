@@ -216,6 +216,7 @@ constexpr size_t local_sender_channel_5_connection_info_addr = NAMED_CT_ARG("LOC
 constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_6_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
 
 // ============================================================================
 // Status pointers
@@ -245,10 +246,12 @@ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_6_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_7_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_8_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_9_SERVICED")),
 };
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_SERVICED")),
 };
 
 // ============================================================================
@@ -315,6 +318,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_LIVE_CHECK_SKIP")),
 };
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_live_check_skip_all_);
@@ -333,6 +337,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_INJECTION")),
 };
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
@@ -349,6 +354,7 @@ static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_6_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_9_ACK_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(sender_channel_ack_noc_ids_all_);
@@ -363,6 +369,7 @@ static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_6_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_9_ACK_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint8_t>(sender_channel_ack_cmd_buf_ids_all_);
@@ -373,6 +380,7 @@ constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_id
 static constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_0_FWD_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_1_FWD_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_2_FWD_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
@@ -381,6 +389,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_data_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_FWD_DATA_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_FWD_DATA_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_FWD_DATA_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_data_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
@@ -389,6 +398,7 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_sync_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_FWD_SYNC_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_FWD_SYNC_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_FWD_SYNC_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_sync_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
@@ -397,6 +407,7 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding
 static constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_local_write_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_0_LOCAL_WRITE_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_1_LOCAL_WRITE_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_2_LOCAL_WRITE_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_noc_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
@@ -405,6 +416,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_LOCAL_WRITE_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_LOCAL_WRITE_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_LOCAL_WRITE_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
@@ -523,22 +535,24 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id, 0});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
-            // VC0
-            to_sender_0_pkts_acked_id,
-            to_sender_1_pkts_acked_id,
-            to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id,
-            // VC1
-            0,  // Padding upto MAX_NUM_SENDER_CHANNELS. VC1 does not use first level acks.
-            0,
-            0,
-            0});
+        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{// VC0
+                                                      to_sender_0_pkts_acked_id,
+                                                      to_sender_1_pkts_acked_id,
+                                                      to_sender_2_pkts_acked_id,
+                                                      to_sender_3_pkts_acked_id,
+                                                      // VC1 (no first level acks)
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      // Z-router extra + VC2 (no first level acks)
+                                                      0,
+                                                      0});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
@@ -551,7 +565,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_4_pkts_completed_id,
             to_sender_5_pkts_completed_id,
             to_sender_6_pkts_completed_id,
-            to_sender_7_pkts_completed_id});
+            to_sender_7_pkts_completed_id,
+            0,  // Z-router extra / VC2 (worker-only, no router completion)
+            0});
 
 // Miscellaneous configuration
 
@@ -631,8 +647,9 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 // RX channel forwarding disable flags (from imported trimming profile)
 constexpr bool disable_rx_ch0_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH0_FORWARDING") != 0;
 constexpr bool disable_rx_ch1_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH1_FORWARDING") != 0;
+constexpr bool disable_rx_ch2_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH2_FORWARDING") != 0;
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_forwarding_disabled = {
-    disable_rx_ch0_forwarding, disable_rx_ch1_forwarding};
+    disable_rx_ch0_forwarding, disable_rx_ch1_forwarding, disable_rx_ch2_forwarding};
 
 constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE =
     get_named_compile_time_arg_val("ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE");
