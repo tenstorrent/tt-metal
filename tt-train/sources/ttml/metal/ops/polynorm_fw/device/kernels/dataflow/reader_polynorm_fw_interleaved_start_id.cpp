@@ -1,0 +1,61 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+
+void kernel_main() {
+    uint32_t arg_idx = 0U;
+    const uint32_t input_address = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t packed_scaler = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t packed_eps = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t packed_w0 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t packed_w1 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t packed_w2 = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t packed_bias = get_arg_val<uint32_t>(arg_idx++);
+
+    constexpr auto cb_input_pass_1 = tt::CBIndex::c_0;
+    constexpr auto cb_input_pass_2 = tt::CBIndex::c_1;
+    constexpr auto cb_input_pass_3 = tt::CBIndex::c_19;
+    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_eps = tt::CBIndex::c_3;
+    constexpr auto cb_w0 = tt::CBIndex::c_4;
+    constexpr auto cb_w1 = tt::CBIndex::c_5;
+    constexpr auto cb_w2 = tt::CBIndex::c_6;
+    constexpr auto cb_bias = tt::CBIndex::c_7;
+    constexpr auto cb_ones = tt::CBIndex::c_15;
+    constexpr auto cb_matmul_reduce = tt::CBIndex::c_16;
+    constexpr auto cb_zero = tt::CBIndex::c_17;
+
+    constexpr uint32_t block_size = get_compile_time_arg_val(0);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);
+
+    generate_tile_with_packed_bfloat16_value(cb_scaler, packed_scaler);
+    generate_tile_with_packed_bfloat16_value(cb_eps, packed_eps);
+    generate_tile_with_packed_bfloat16_value(cb_w0, packed_w0);
+    generate_tile_with_packed_bfloat16_value(cb_w1, packed_w1);
+    generate_tile_with_packed_bfloat16_value(cb_w2, packed_w2);
+    generate_tile_with_packed_bfloat16_value(cb_bias, packed_bias);
+    generate_tile_with_packed_bfloat16_value(cb_ones, BF16_ONE_PACKED);
+    generate_matmul_row_reduce_tile(cb_matmul_reduce);
+    generate_tile_with_packed_bfloat16_value(cb_zero, BF16_ZERO_BITS);
+
+    const uint32_t tile_bytes = get_tile_size(cb_input_pass_1);
+    constexpr auto input_args = TensorAccessorArgs<2>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+
+    for (uint32_t row = 0; row < num_rows_to_process; ++row) {
+        const uint32_t idx = (start_row + row) * Wt;
+        read_full_row_tiles(cb_input_pass_1, input_address_generator, Wt, block_size, tile_bytes, idx);
+        read_full_row_tiles(cb_input_pass_2, input_address_generator, Wt, block_size, tile_bytes, idx);
+#if POLYNORM_STAGE == 0 || POLYNORM_STAGE == 6 || POLYNORM_STAGE == 7 || POLYNORM_STAGE == 8 || POLYNORM_STAGE == 9 || \
+    POLYNORM_STAGE == 10
+        read_full_row_tiles(cb_input_pass_3, input_address_generator, Wt, block_size, tile_bytes, idx);
+#endif
+    }
+}
