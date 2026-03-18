@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 06-01-PLAN.md
+stopped_at: Completed 06-02-PLAN.md
 last_updated: "2026-03-18T21:18:32.034Z"
 last_activity: 2026-03-18 -- Plan 05-01 executed
 progress:
   total_phases: 6
   completed_phases: 4
   total_plans: 12
-  completed_plans: 10
-  percent: 90
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Third VC correctly wired into fabric infrastructure, invisible to existing VC0/VC1, only active under correct conditions
-**Current focus:** Phase 6 in progress. Plan 06-01 complete, ready for 06-02.
+**Current focus:** Phase 6 complete. All compilation infrastructure done. VC2 end-to-end test hangs at runtime -- needs firmware debugging.
 
 ## Current Position
 
 Phase: 6 of 6 (VC2 Sender Integration & End-to-End Verification)
-Plan: 1 of 2 in current phase
-Status: Plan 06-01 complete
-Last activity: 2026-03-18 -- Plan 06-01 executed
+Plan: 2 of 2 in current phase
+Status: Plan 06-02 complete (VC2 test hangs at runtime, compilation infrastructure done)
+Last activity: 2026-03-18 -- Plan 06-02 executed
 
-Progress: [#########-] 90%
+Progress: [##########] 100%
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [#########-] 90%
 | Phase 04 P02 | 5min | 2 tasks | 3 files |
 | Phase 05 P01 | 5min | 2 tasks | 5 files |
 | Phase 06 P01 | 5min | 2 tasks | 4 files |
+| Phase 06 P02 | 73min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Recent decisions affecting current work:
 - [Phase 06]: VC2 receiver uses VC0 downstream array as dummy (forwarding always disabled)
 - [Phase 06]: vc_id=2 implies use_vc2=true in resolve step (single source of truth)
 - [Phase 06]: VC2 trid tracker added to teardown() for proper transaction ack drain
+- [06-02] std::conditional_t for compile-time VC_ID-based adapter type selection (WorkerToFabricEdmSender vs VC2)
+- [06-02] NOC operation function pointers use default SenderKernelTrafficConfig<> (layout-identical across EdmSenderT instantiations)
+- [06-02] RISC-V GCC requires 'template' keyword for dependent template method calls (stricter than host clang)
 
 ### Roadmap Evolution
 
@@ -103,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-18T21:18:32.030Z
-Stopped at: Completed 06-01-PLAN.md
+Last session: 2026-03-18T22:33:00.000Z
+Stopped at: Completed 06-02-PLAN.md
 Resume file: None
