@@ -7,9 +7,9 @@
 
 #include <utility>
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode {
+namespace ttnn::experimental {
 
-ttnn::Tensor NLPConcatHeadsDecodeOperation::invoke(
+ttnn::Tensor nlp_concat_heads_decode(
     const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<MemoryConfig>& memory_config,
@@ -19,4 +19,4 @@ ttnn::Tensor NLPConcatHeadsDecodeOperation::invoke(
         input_tensor, num_heads, memory_config, optional_output_tensor, sub_core_grids);
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode
+}  // namespace ttnn::experimental
