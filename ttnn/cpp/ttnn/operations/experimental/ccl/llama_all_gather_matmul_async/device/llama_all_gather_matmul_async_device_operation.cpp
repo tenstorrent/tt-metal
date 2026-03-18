@@ -182,7 +182,6 @@ ttnn::experimental::prim::LlamaAllGatherMatmulAsyncDeviceOperation::tensor_retur
             dtype.value_or(input0.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
-            /*user_core_coord=*/std::nullopt,
             /*activation=*/std::nullopt,
             /*user_run_batched=*/false,
             /*transpose_a=*/false,

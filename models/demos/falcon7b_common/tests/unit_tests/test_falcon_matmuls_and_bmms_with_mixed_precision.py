@@ -103,13 +103,7 @@ def run_falcon_matmul_test(
 
     default_core_grid = get_falcon_default_core_grid(device)
     if falcon_op in (MatmulOpEnum.FALCON_FUSED_QKV_MATMUL, MatmulOpEnum.FALCON_SELFOUT_MATMUL):
-        out = ttnn.matmul(
-            a_t,
-            b_t,
-            memory_config=out_mem_config,
-            dtype=out_dtype,
-            core_grid=default_core_grid,
-        )
+        out = ttnn.matmul(a_t, b_t, memory_config=out_mem_config, dtype=out_dtype)
     elif falcon_op == MatmulOpEnum.FALCON_DENSE_4H_TO_H_MATMUL:
         out = falcon_dense_4h_to_h_matmul(
             a_t,
@@ -339,7 +333,9 @@ def test_falcon7b_attnention_sliced(
         if seq_len == 2048:
             subblock_w = 8  # best option
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=2,
             per_core_M=tiles_per_shard,
             per_core_N=seq_len // 32,
@@ -392,7 +388,9 @@ def test_falcon7b_attnention_sliced(
         if seq_len == 2048:
             subblock_w = 8
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             subblock_w=subblock_w,
             block_h=mm_output_height_shard_spec[0] // 32,
             block_w=mm_output_height_shard_spec[1] // 32,
@@ -405,7 +403,9 @@ def test_falcon7b_attnention_sliced(
         subblock_w = 2
         subblock_h = 1
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=seq_len // 32,
             per_core_M=tiles_per_shard,
             per_core_N=2,
@@ -620,7 +620,9 @@ def test_falcon7b_attention_softmax_sequence(
         if seq_len == 2048:
             subblock_w = 8  # best option
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=2,
             per_core_M=tiles_per_shard,
             per_core_N=seq_len // 32,
@@ -648,7 +650,9 @@ def test_falcon7b_attention_softmax_sequence(
         if seq_len == 2048:
             subblock_w = 8
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             subblock_w=subblock_w,
             block_h=mm_output_height_shard_spec[0] // 32,
             block_w=mm_output_height_shard_spec[1] // 32,
@@ -665,7 +669,9 @@ def test_falcon7b_attention_softmax_sequence(
         subblock_w = 2
         subblock_h = 1
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=seq_len // 32,
             per_core_M=tiles_per_shard,
             per_core_N=2,
@@ -852,7 +858,9 @@ def test_softmax(device, num_cores, seq_len):
         )
 
         softmax_program_config = ttnn.SoftmaxShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             subblock_w=1,
             block_h=height_shard_spec[0] // 32,
             block_w=height_shard_spec[1] // 32,

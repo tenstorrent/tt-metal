@@ -46,7 +46,6 @@ def attention(
         bias=parameters.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
     )
 
     (
@@ -62,13 +61,7 @@ def attention(
 
     query = query * (1 / (dim_per_head) ** 0.5)
 
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
     score_list = []
@@ -92,13 +85,7 @@ def attention(
 
     weights = ttnn.transformer.attention_softmax(scores, head_size=1)
     ttnn.deallocate(scores)
-    context_layer = ttnn.matmul(
-        weights,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
-    )
+    context_layer = ttnn.matmul(weights, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
 
     ttnn.deallocate(weights)
     ttnn.deallocate(value)
@@ -129,7 +116,6 @@ def ffn(configs, hidden_state, device, base_address, parameters, num_cores_x=12,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         activation="gelu_approx",
-        core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
     )
 
     output = ttnn.linear(
@@ -138,7 +124,6 @@ def ffn(configs, hidden_state, device, base_address, parameters, num_cores_x=12,
         bias=parameters.lin2.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
     )
     return output
 
@@ -362,7 +347,6 @@ def distilbert_for_question_answering(
         parameters.qa_outputs.weight,
         bias=parameters.qa_outputs.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        core_grid=ttnn.CoreGrid(y=device.core_grid.y, x=device.core_grid.x),
     )
 
     return qa_outputs

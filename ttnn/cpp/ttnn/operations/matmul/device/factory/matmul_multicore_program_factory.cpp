@@ -48,7 +48,18 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     tt::tt_metal::IDevice* device = a.device();
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size;
+    if (operation_attributes.program_config.has_value()) {
+        const auto& pc =
+            std::get<operations::matmul::MatmulMultiCoreProgramConfig>(operation_attributes.program_config.value());
+        if (pc.allowed_worker_cores.has_value()) {
+            compute_with_storage_grid_size = pc.allowed_worker_cores.value().bounding_box().grid_size();
+        } else {
+            compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        }
+    } else {
+        compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    }
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;

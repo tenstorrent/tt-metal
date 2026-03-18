@@ -292,7 +292,9 @@ class TtMobileNetV2:
         )
         grid_size = grid.bounding_box().grid_size()
         matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid_size.x, grid_size.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,

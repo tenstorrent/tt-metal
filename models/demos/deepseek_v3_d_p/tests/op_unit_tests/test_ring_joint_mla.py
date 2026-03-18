@@ -172,7 +172,9 @@ def run_ring_joint_sdpa(
     ]
 
     program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=sdpa_compute_grid,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(sdpa_compute_grid.x - 1, sdpa_compute_grid.y - 1))}
+        ),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,

@@ -209,7 +209,7 @@ def test_windowed_sdpa_basic(
                 packer_l1_acc=True,
             ),
             program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 exp_approx_mode=False,
                 q_chunk_size=qk_chunk_size,
                 k_chunk_size=qk_chunk_size,
@@ -239,7 +239,7 @@ def test_windowed_sdpa_basic(
                 packer_l1_acc=True,
             ),
             program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 exp_approx_mode=False,
                 q_chunk_size=qk_chunk_size,
                 k_chunk_size=qk_chunk_size,

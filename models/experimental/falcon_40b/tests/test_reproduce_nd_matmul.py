@@ -53,7 +53,7 @@ def test_reproduce_matmul_1d(
     b_t = torch2tt_tensor(B, device, ttnn.TILE_LAYOUT, in1_mem_config, in1_dtype)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=in_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -155,7 +155,7 @@ def test_reproduce_matmul_2d(
     b_t = torch2tt_tensor(B, device, ttnn.TILE_LAYOUT, in1_mem_config, in1_dtype)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=in_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

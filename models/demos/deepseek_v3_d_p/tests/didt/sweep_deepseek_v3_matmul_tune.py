@@ -147,7 +147,9 @@ def _make_program_config(
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Build MatmulMultiCoreReuseMultiCastProgramConfig from sweep params."""
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=params["grid_size"],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(params["grid_size"].x - 1, params["grid_size"].y - 1))}
+        ),
         in0_block_w=params["in0_block_w"],
         out_subblock_h=params["out_subblock_h"],
         out_subblock_w=params["out_subblock_w"],

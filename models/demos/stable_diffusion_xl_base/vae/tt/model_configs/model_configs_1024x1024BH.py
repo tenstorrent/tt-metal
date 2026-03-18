@@ -21,7 +21,7 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
 
         self.sdpa_configs["64_K"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=64,
             k_chunk_size=64,
             exp_approx_mode=False,

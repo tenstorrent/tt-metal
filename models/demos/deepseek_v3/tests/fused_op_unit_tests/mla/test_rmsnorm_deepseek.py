@@ -136,7 +136,14 @@ def test_deepseek_v3_mla_rms_norm_trace_mode(
     # Get program config based on sharded memory layout
     activation_grid_bounding_box_size = shard_grid_set.bounding_box().grid_size()
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=activation_grid_bounding_box_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(activation_grid_bounding_box_size.x - 1, activation_grid_bounding_box_size.y - 1),
+                )
+            }
+        ),
         subblock_w=1,
         block_h=ttnn.core.divup(shard_height, ttnn.TILE_SIZE),
         block_w=ttnn.core.divup(shard_width, ttnn.TILE_SIZE),

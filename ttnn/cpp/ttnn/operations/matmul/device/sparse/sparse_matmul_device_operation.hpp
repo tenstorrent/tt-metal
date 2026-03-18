@@ -45,7 +45,6 @@ struct SparseMatmulDeviceOperation {
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<const CoreCoord>& user_core_coord = std::nullopt,
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);

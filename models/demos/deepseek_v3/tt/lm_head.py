@@ -300,7 +300,9 @@ class LMHead(AbstractModule):
 
         out_subblock_h = 1
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=core_grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))}
+            ),
             in0_block_w=find_largest_divisor(K_tiles),
             out_subblock_h=out_subblock_h,
             out_subblock_w=find_largest_divisor(

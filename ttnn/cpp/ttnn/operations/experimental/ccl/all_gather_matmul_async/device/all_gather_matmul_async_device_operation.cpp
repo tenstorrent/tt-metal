@@ -163,7 +163,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid,
+    const std::optional<const ttnn::CoreGrid> /*core_grid*/,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
@@ -199,10 +199,6 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
-    std::optional<CoreCoord> user_core_coord;
-    if (core_grid.has_value()) {
-        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
 
     auto matmul_struct = ttnn::prim::create_matmul_attributes(
         all_gather_out_tensor,
@@ -215,7 +211,6 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
             dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
-            user_core_coord,
             ttnn::operations::matmul::get_fused_activation(activation),
             user_run_batched,
             transpose_a,

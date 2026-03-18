@@ -33,12 +33,7 @@ def vit_patch_embeddings_weight_vars(
     pixel_values = ttnn.to_layout(pixel_values, layout=ttnn.TILE_LAYOUT)
 
     patch_embedding_output = ttnn.linear(
-        pixel_values,
-        proj_weight,
-        bias=proj_bias,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
+        pixel_values, proj_weight, bias=proj_bias, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
     ttnn.deallocate(pixel_values)
 
@@ -70,7 +65,6 @@ def siglip_patch_embeddings(
         bias=parameters.projection.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(pixel_values)
 
@@ -95,7 +89,6 @@ def siglip_attention(
         bias=parameters.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.reallocate(hidden_states)
     (
@@ -114,26 +107,14 @@ def siglip_attention(
     query = ttnn.mul_(query, scale)
     value = ttnn.reallocate(value)
 
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(query)
     ttnn.deallocate(key)
 
     # Use softmax_in_place instead of attention_softmax_ (doesn't require mask)
     attention_probs = ttnn.softmax_in_place(attention_scores, numeric_stable=True)
 
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
-    )
+    context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
 
@@ -148,7 +129,6 @@ def siglip_attention(
         bias=parameters.proj.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(context_layer)
 
@@ -166,7 +146,6 @@ def siglip_intermediate(
         bias=parameters.fc1.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
         activation="gelu",
     )
     return output
@@ -184,7 +163,6 @@ def siglip_output(
         bias=parameters.fc2.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
     )
     ttnn.deallocate(hidden_states)
     output = ttnn.add(output, residual, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
@@ -332,12 +310,7 @@ def dinov2_attention(var0, *args, num_heads=16):
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
     query_key_value = ttnn.linear(
-        hidden_states,
-        args[3],
-        bias=args[2],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
+        hidden_states, args[3], bias=args[2], memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
     ttnn.reallocate(hidden_states)
     (
@@ -356,25 +329,13 @@ def dinov2_attention(var0, *args, num_heads=16):
         scale,
     )
     value = ttnn.reallocate(value)
-    attention_scores = ttnn.matmul(
-        query,
-        key,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
-    )
+    attention_scores = ttnn.matmul(query, key, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
 
     ttnn.deallocate(query)
     ttnn.deallocate(key)
     attention_probs = ttnn.softmax_in_place(attention_scores, numeric_stable=True)
 
-    context_layer = ttnn.matmul(
-        attention_probs,
-        value,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
-    )
+    context_layer = ttnn.matmul(attention_probs, value, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
     ttnn.deallocate(attention_probs)
     ttnn.deallocate(value)
     context_layer = ttnn.transformer.concatenate_heads(
@@ -382,12 +343,7 @@ def dinov2_attention(var0, *args, num_heads=16):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     self_output = ttnn.linear(
-        context_layer,
-        args[5],
-        bias=args[4],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        context_layer, args[5], bias=args[4], memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
     ttnn.deallocate(context_layer)
     var19 = ttnn.mul(self_output, args[6])
@@ -421,16 +377,10 @@ def dinov2_feedforward(var0, *args):
         bias=args[2],
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
         activation="gelu",
     )
     hidden_states = ttnn.linear(
-        hidden_states,
-        args[5],
-        bias=args[4],
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=10, x=12),
+        hidden_states, args[5], bias=args[4], memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16
     )
     hidden_states = ttnn.mul(hidden_states, args[6])
     var11 = ttnn.add(var0, hidden_states)

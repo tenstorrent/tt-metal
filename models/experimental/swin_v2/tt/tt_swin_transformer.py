@@ -133,6 +133,5 @@ class TtSwinTransformer:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.device.core_grid,
         )
         return x

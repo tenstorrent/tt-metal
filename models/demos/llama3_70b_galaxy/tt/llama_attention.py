@@ -271,7 +271,7 @@ class TtLlamaAttention(LightweightModule):
                     break
                 subblock_w -= 1
             self.norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[2, 2],
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
                 subblock_w=subblock_w,
                 block_h=2,  # 64 // 32
                 block_w=block_w,

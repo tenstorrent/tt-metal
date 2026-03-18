@@ -63,13 +63,7 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
-    core_grid = ttnn.CoreGrid(x=8, y=8)
     TILE_HEIGHT = 32
-
-    if batch_size == 2:
-        if (m_size == 1024 and k_size == 96 and n_size == 1024) or (m_size == 4096 and k_size == 64 and n_size == 4096):
-            # NOTE: matmul errors out with OOM otherwise
-            core_grid = None
 
     torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
@@ -93,13 +87,11 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
             input_tensor_a,
             input_tensor_b,
             bias=input_tensor_c,
-            core_grid=core_grid,
         )
     else:
         output_tensor = ttnn.matmul(
             input_tensor_a,
             input_tensor_b,
-            core_grid=core_grid,
         )
 
     output_tensor = ttnn.to_torch(output_tensor)

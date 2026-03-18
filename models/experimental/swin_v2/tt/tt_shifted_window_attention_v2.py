@@ -65,7 +65,6 @@ class TtShiftedWindowAttentionV2:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.device.core_grid,
         )
 
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -115,7 +114,6 @@ class TtShiftedWindowAttentionV2:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.device.core_grid,
         )
         ttnn.deallocate(v)
         ttnn.deallocate(attn)
@@ -134,7 +132,6 @@ class TtShiftedWindowAttentionV2:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            core_grid=self.device.core_grid,
         )
 
         x = ttnn.reshape(

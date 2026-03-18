@@ -26,7 +26,9 @@ class TtnnBGESelfOutput:
 
         # Create dynamic program config
         dynamic_self_out_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             in0_block_w=dim_t__x,
             out_subblock_h=1,  # Keep 1 (no FP32 accumulation on self-output)
             out_subblock_w=dim_t__x,  # Keep 4
@@ -61,7 +63,9 @@ class TtnnBGESelfOutput:
             block_h = 1
 
         dynamic_layernorm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_8x8.x - 1, core_grid_8x8.y - 1))}
+            ),
             subblock_w=dim_t__x,
             block_h=block_h,
             block_w=dim_t__x,

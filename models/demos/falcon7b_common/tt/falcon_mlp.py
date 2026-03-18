@@ -38,7 +38,6 @@ def falcon_dense_4h_to_h_matmul(
         input_tensor_b,
         memory_config=output_mem_config,
         dtype=output_dtype,
-        core_grid=core_grid,
         compute_kernel_config=compute_kernel_config,
     )
 
@@ -78,7 +77,6 @@ def falcon_dense_h_to_4h_matmul(
         input_tensor_b,
         memory_config=output_mem_config,
         dtype=output_dtype,
-        core_grid=core_grid,
         activation=fused_activation,
         compute_kernel_config=compute_kernel_config,
     )
@@ -245,7 +243,6 @@ class TtFalconMLPPrefill(nn.Module):
                 self.dense_h_to_4h_weights,
                 memory_config=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
-                core_grid=get_falcon_default_core_grid(x.device()),
                 compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
                 activation="gelu_approx",
             )
@@ -256,7 +253,6 @@ class TtFalconMLPPrefill(nn.Module):
                 self.dense_4h_to_h_weights,
                 memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
                 dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
-                core_grid=get_falcon_default_core_grid(hidden_states.device()),
                 compute_kernel_config=self.model_config["MLP_KERNEL_CONFIG"],
             )
 

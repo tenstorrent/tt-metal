@@ -414,7 +414,7 @@ class TtQwenModelArgs(TtModelArgs):
 
             # Chunk values based on what works best empirically
             self.model_config["SDPA_PROGCFG"] = lambda seqlen: ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(7, 10),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))}),
                 exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
                 k_chunk_size=256 if seqlen >= 2048 else 64,
@@ -449,7 +449,13 @@ class TtQwenModelArgs(TtModelArgs):
                     self.dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
                 )
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=do_core_grid_size,
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(
+                                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(do_core_grid_size.x - 1, do_core_grid_size.y - 1)
+                            )
+                        }
+                    ),
                     in0_block_w=self.dim
                     // self.tile_size
                     // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
@@ -472,7 +478,9 @@ class TtQwenModelArgs(TtModelArgs):
                     return self.matmul_1d_config(128, 1280, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=4)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(5, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                        ),
                         in0_block_w=5,
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -488,7 +496,9 @@ class TtQwenModelArgs(TtModelArgs):
                 if seq_len % 4096 == 0:
                     per_core_M = 20 * seq_len // 4096
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 7),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}
+                        ),
                         in0_block_w=4,
                         out_subblock_h=1,
                         out_subblock_w=8,
@@ -504,7 +514,9 @@ class TtQwenModelArgs(TtModelArgs):
                     per_core_M = 10 * seq_len // 2048
 
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 7),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}
+                        ),
                         in0_block_w=4,
                         out_subblock_h=1,
                         out_subblock_w=8,
@@ -520,7 +532,9 @@ class TtQwenModelArgs(TtModelArgs):
                     per_core_M = 10 * seq_len // 1024
 
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 7),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}
+                        ),
                         in0_block_w=4,
                         out_subblock_h=1,
                         out_subblock_w=8,
@@ -552,7 +566,9 @@ class TtQwenModelArgs(TtModelArgs):
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(5, 10),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 9))}
+                        ),
                         in0_block_w=4,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -632,7 +648,9 @@ class TtQwenModelArgs(TtModelArgs):
                         out_block_h = out_block_h_if_w_10
 
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(7, 7),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}
+                    ),
                     in0_block_w=2,  # seeing this to 2 because 4 gives oom for long seqlen continuous batching
                     out_subblock_h=1,
                     out_subblock_w=5,
@@ -654,7 +672,9 @@ class TtQwenModelArgs(TtModelArgs):
                 if seq_len == 128
                 else (
                     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))}
+                        ),
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -675,7 +695,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=1,
                         subblock_w=8,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}
+                        ),
                     )
                 else:
                     return ttnn.MinimalMatmulConfig(
@@ -684,7 +706,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
 
             self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
@@ -705,7 +729,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8))}
+                        ),
                     )
                 elif seq_len <= 8192:
                     return ttnn.MinimalMatmulConfig(
@@ -714,7 +740,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=1,
                         subblock_w=8,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8))}
+                        ),
                     )
                 else:  # For seq_len >= 16384, use the best config from sweep results
                     # This covers 16384, 32768, 65536, 131072
@@ -724,7 +752,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
 
             self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
@@ -743,7 +773,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8))}
+                        ),
                     )
                 elif seq_len <= 16384:  # Both 8K and 16K share the same config
                     return ttnn.MinimalMatmulConfig(
@@ -752,7 +784,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
                 elif seq_len <= 32768:
                     return ttnn.MinimalMatmulConfig(
@@ -761,7 +795,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
                 elif seq_len <= 65536:
                     return ttnn.MinimalMatmulConfig(
@@ -770,7 +806,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
                 else:  # For seq_len >= 131072
                     return ttnn.MinimalMatmulConfig(
@@ -779,7 +817,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8))}
+                        ),
                     )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
@@ -819,7 +859,9 @@ class TtQwenModelArgs(TtModelArgs):
                 if seq_len == 128
                 else (
                     ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))}
+                        ),
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -843,7 +885,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 6))}
+                        ),
                     )
                 elif seq_len <= 1024:
                     return ttnn.MinimalMatmulConfig(
@@ -852,7 +896,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
                 else:  # seqlen > 1024
                     return ttnn.MinimalMatmulConfig(
@@ -861,7 +907,9 @@ class TtQwenModelArgs(TtModelArgs):
                         N_block_size=8,
                         subblock_h=1,
                         subblock_w=8,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                        ),
                     )
 
             self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal_matmul_config
@@ -876,7 +924,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["PAGED_SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 6),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))}),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                     self.start_core, 48, self.sub_core_grids, row_wise=True
                 ),
@@ -887,7 +935,7 @@ class TtQwenModelArgs(TtModelArgs):
 
             # TODO: Need to uplift UpdateCache to support dynamic chunk sizes if non-paged
             self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 4),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                     self.start_core, 32, self.sub_core_grids, row_wise=True
                 ),
@@ -1289,7 +1337,13 @@ class TtQwenModelArgs(TtModelArgs):
 
             # Always use Galaxy configuration
             self.model_config["XQKV_DECODE_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(8, 5 if self.is_70b else lm_head_num_rows),
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, (5 if self.is_70b else lm_head_num_rows) - 1)
+                        )
+                    }
+                ),
                 in0_block_w=2 if self.is_70b else 1,
                 out_subblock_h=1,
                 out_subblock_w=1,
@@ -1819,7 +1873,9 @@ class TtQwenModelArgs(TtModelArgs):
             in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -1974,7 +2030,9 @@ class TtQwenModelArgs(TtModelArgs):
         grid = num_to_coregrid(num_cores)
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -2032,7 +2090,9 @@ class TtQwenModelArgs(TtModelArgs):
         grid = num_to_coregrid(num_cores)
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -2102,7 +2162,9 @@ class TtQwenModelArgs(TtModelArgs):
             out_subblock_h = overwrite_subblock_h
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             in0_block_w=per_core_k,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -2149,7 +2211,9 @@ class TtQwenModelArgs(TtModelArgs):
                 break
             subblock_w -= 1
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[grid.x, grid.y],
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             subblock_w=subblock_w,
             block_h=self.tile_padded_batch_rows // self.tile_size,
             block_w=block_w,

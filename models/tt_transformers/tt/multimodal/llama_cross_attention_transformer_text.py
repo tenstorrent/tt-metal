@@ -341,7 +341,6 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 h,
                 out_weight,
                 compute_kernel_config=self.configuration.compute_kernel_config_hifi2_na,
-                core_grid=None,
                 dtype=ttnn.bfloat16,
                 program_config=pc,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

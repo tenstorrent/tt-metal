@@ -158,7 +158,9 @@ def get_decode_sdpa_configs(config, bsz, device, max_seq_len=256):
 
     compute_grid_size = device.compute_with_storage_grid_size()
     sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        ),
         exp_approx_mode=False,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
@@ -901,7 +903,7 @@ class TTNNSpeechT5DecoderLayer:
 
         self.program_configs = {
             "layernorm_1_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}),
                 subblock_w=1,
                 block_h=per_core_M,
                 block_w=block_w,
@@ -990,7 +992,9 @@ class TTNNSpeechT5DecoderLayer:
 
         self.program_configs = {
             "layernorm_1_program_config": ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+                ),
                 subblock_w=1,
                 block_h=per_core_M,
                 block_w=block_w,

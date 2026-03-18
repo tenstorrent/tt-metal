@@ -203,7 +203,9 @@ def matmul_config(
     in0_block_w = find_largest_divisor(k // (ttnn.TILE_SIZE * grid_size[1])) if not in0_block_w else in0_block_w
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -264,7 +266,9 @@ def matmul_1d_config(
         out_subblock_h = overwrite_subblock_h
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        ),
         in0_block_w=per_core_k,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -465,7 +469,9 @@ def create_sharded_norm_config(grid, dim, tile_padded_batch_rows):
             break
         subblock_w -= 1
     return ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[grid.x, grid.y],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        ),
         subblock_w=subblock_w,
         block_h=tile_padded_batch_rows // ttnn.TILE_SIZE,
         block_w=block_w,

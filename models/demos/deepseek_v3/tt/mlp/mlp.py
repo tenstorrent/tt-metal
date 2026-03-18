@@ -385,7 +385,9 @@ class MLP(AbstractModule):
         per_core_N_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE * core_grid_size.x)
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=core_grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid_size.x - 1, core_grid_size.y - 1))}
+            ),
             in0_block_w=find_largest_divisor(K_tiles),
             out_subblock_h=1,
             out_subblock_w=find_largest_divisor(

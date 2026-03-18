@@ -24,7 +24,6 @@ parameters = {
     "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    "core_grid": [None],
 }
 
 
@@ -40,7 +39,6 @@ def run(
     input_b_memory_config,
     input_a_memory_config,
     output_memory_config,
-    core_grid,
     *,
     device,
 ) -> Tuple[bool, Optional[str]]:
@@ -88,7 +86,6 @@ def run(
         bias=bias,
         dtype=output_dtype,
         memory_config=output_memory_config,
-        core_grid=core_grid,
     )
     output_tensor = ttnn.to_torch(output_tensor)
 

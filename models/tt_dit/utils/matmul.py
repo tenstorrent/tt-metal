@@ -157,5 +157,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         N_block_size=N_block_size,
         subblock_h=subblock_h,
         subblock_w=subblock_w,
-        compute_with_storage_grid_size=core_grid,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+        ),
     )

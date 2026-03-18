@@ -31,7 +31,6 @@ class TTMlp(LightweightModule):
             bias=self.parameters["mlp_0_bias"],
             compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
             activation="relu",
             dtype=self.dtype,
         )
@@ -42,7 +41,6 @@ class TTMlp(LightweightModule):
             bias=self.parameters["mlp_2_bias"],
             compute_kernel_config=self.compute_kernel_config,
             memory_config=self.memory_config,
-            core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=self.dtype,
         )
 

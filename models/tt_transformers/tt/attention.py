@@ -839,7 +839,6 @@ class Attention(LightweightModule):
                 attn_output = ttnn.matmul(
                     self.user_selection_matrix,
                     attn_output,
-                    core_grid=ttnn.CoreGrid(y=4, x=8),
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
@@ -848,7 +847,6 @@ class Attention(LightweightModule):
             dense_out_sharded = ttnn.linear(
                 attn_output,
                 self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
                 dtype=ttnn.bfloat8_b if self.TG else None,

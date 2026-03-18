@@ -124,7 +124,9 @@ class MochiAttention(Module):
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=full_grid,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+            ),
             q_chunk_size=256,
             k_chunk_size=512,
             exp_approx_mode=False,  # NOTE: False is more correct
@@ -139,7 +141,13 @@ class MochiAttention(Module):
             self.default_sdpa_chunk_size,
         )
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.sdpa_worker_grid.x - 1, self.sdpa_worker_grid.y - 1)
+                    )
+                }
+            ),
             q_chunk_size=ring_sdpa_chunk_size[0],
             k_chunk_size=ring_sdpa_chunk_size[1],
             exp_approx_mode=False,  # NOTE: False is more correct

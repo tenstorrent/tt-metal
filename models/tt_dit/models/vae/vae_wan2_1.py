@@ -87,7 +87,6 @@ class WanAttentionBlock(Module):
             fp32_dest_acc_en=True,
         )
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
             k_chunk_size=256,
             exp_approx_mode=False,  # NOTE: False is more correct

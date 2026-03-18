@@ -536,7 +536,6 @@ class TtLlamaModel_optimized:
             self.lm_head,
             # TODO: increase precision?
             compute_kernel_config=self.model_config["COMPUTE_KERNEL_FP16_ACC_CONFIG"],
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_lm_head else None,
             dtype=ttnn.bfloat16,
             program_config=pc_lm_head,
         )

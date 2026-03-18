@@ -331,7 +331,9 @@ class ModelOptimisations1024x1024BH:
         self.matmul_versions = {
             "40_cores": {
                 "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     out_subblock_h=1,
                     out_subblock_w=8,
@@ -341,7 +343,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     out_subblock_h=1,
                     out_subblock_w=4,
@@ -351,7 +355,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_RESNET_LINEAR": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=10,
                     out_subblock_h=1,
                     out_subblock_w=1,
@@ -362,7 +368,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=16,
                     per_core_N=16,
@@ -372,7 +380,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=1,
                     per_core_M=16,
                     per_core_N=16,
@@ -382,7 +392,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=32,
@@ -392,7 +404,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=32,
@@ -402,7 +416,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=16,
                     per_core_N=4,
@@ -412,7 +428,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_TM_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=8,
@@ -422,7 +440,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=16,
                     per_core_N=12,
@@ -432,7 +452,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=24,
@@ -443,7 +465,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=True,
                 ),
                 "2D_ATTEN_K_V_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=4,  # max is 64, 4 seems optimal
                     per_core_M=1,
                     per_core_N=3,
@@ -453,7 +477,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_ATTEN_K_V_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=16,  # max is 64, 16 seems optimal
                     out_subblock_h=3,
                     out_subblock_w=1,
@@ -464,7 +490,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_ATTN_OUT_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=16,
                     per_core_N=4,
@@ -475,7 +503,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=True,
                 ),
                 "2D_ATTN_OUT_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=8,
@@ -486,7 +516,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=True,
                 ),
                 "2D_RESNET_CONV_320_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=2,
                     per_core_M=16,
                     per_core_N=4,
@@ -497,7 +529,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_640_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=8,
@@ -507,7 +541,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_2560_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=2,
                     per_core_M=4,
                     per_core_N=8,
@@ -517,7 +553,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=8,
@@ -528,7 +566,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=3,
                     per_core_M=16,
                     per_core_N=4,
@@ -538,7 +578,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1280_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=1,
                     per_core_M=16,
                     per_core_N=4,
@@ -548,7 +590,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=2,
                     per_core_M=16,
                     per_core_N=4,
@@ -558,7 +602,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 5),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 4))}
+                    ),
                     in0_block_w=2,
                     out_subblock_h=1,
                     out_subblock_w=5,
@@ -570,7 +616,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(5, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}
+                    ),
                     in0_block_w=1,
                     out_subblock_h=1,
                     out_subblock_w=5,
@@ -584,7 +632,9 @@ class ModelOptimisations1024x1024BH:
             },
             "full_grid": {
                 "2D_FF2_SEQ_LEN_1024": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=10,
                     out_subblock_h=1,
                     out_subblock_w=5,
@@ -594,7 +644,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_FF2_SEQ_LEN_4096": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(7, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}
+                    ),
                     in0_block_w=5,
                     out_subblock_h=1,
                     out_subblock_w=3,
@@ -604,7 +656,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_RESNET_LINEAR": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=10,
                     out_subblock_h=1,
                     out_subblock_w=1,
@@ -615,7 +669,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=16,
                     per_core_N=10,
@@ -625,7 +681,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_640_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=16,
                     per_core_N=10,
@@ -635,7 +693,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=20,
@@ -645,7 +705,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_GEGLU_LINEAR_1280_SPLIT_GELU": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=20,
@@ -655,7 +717,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=[ttnn.UnaryOpType.GELU, True],
                 ),
                 "2D_TM_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=16,
                     per_core_N=3,
@@ -665,7 +729,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_TM_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=5,
@@ -675,7 +741,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=16,
                     per_core_N=8,
@@ -685,7 +753,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_ATTN_QKV_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=15,
@@ -696,7 +766,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=True,
                 ),
                 "2D_ATTEN_K_V_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=1,
                     per_core_N=3,
@@ -706,7 +778,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_ATTEN_K_V_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=16,
                     out_subblock_h=3,
                     out_subblock_w=1,
@@ -717,7 +791,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_ATTN_OUT_LINEAR_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=16,
                     per_core_N=3,
@@ -728,7 +804,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=True,
                 ),
                 "2D_ATTN_OUT_LINEAR_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=5,
@@ -739,7 +817,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=True,
                 ),
                 "2D_RESNET_CONV_320_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=2,
                     per_core_M=16,
                     per_core_N=3,
@@ -750,7 +830,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_640_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=4,
                     per_core_M=4,
                     per_core_N=5,
@@ -760,7 +842,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_2560_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=2,
                     per_core_M=4,
                     per_core_N=5,
@@ -770,7 +854,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1920_1280": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=5,
                     per_core_M=4,
                     per_core_N=5,
@@ -781,7 +867,9 @@ class ModelOptimisations1024x1024BH:
                     fuse_batch=False,
                 ),
                 "2D_RESNET_CONV_1920_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=3,
                     per_core_M=16,
                     per_core_N=3,
@@ -791,7 +879,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_1280_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=1,
                     per_core_M=16,
                     per_core_N=3,
@@ -801,7 +891,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "2D_RESNET_CONV_960_640": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=2,
                     per_core_M=16,
                     per_core_N=3,
@@ -811,7 +903,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=2,
                     out_subblock_h=1,
                     out_subblock_w=5,
@@ -823,7 +917,9 @@ class ModelOptimisations1024x1024BH:
                     fused_activation=None,
                 ),
                 "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                    compute_with_storage_grid_size=(8, 8),
+                    allowed_worker_cores=ttnn.CoreRangeSet(
+                        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}
+                    ),
                     in0_block_w=1,
                     out_subblock_h=2,
                     out_subblock_w=2,
@@ -847,7 +943,7 @@ class ModelOptimisations1024x1024BH:
 
         self.layernorm_configs = {}
         self.layernorm_configs["640_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(5, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))}),
             subblock_w=4,
             block_h=16,
             block_w=4,
@@ -856,7 +952,9 @@ class ModelOptimisations1024x1024BH:
             legacy_rsqrt=True,
         )
         self.layernorm_configs["1280_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(self.core_grid_x, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.core_grid_x - 1, 8 - 1))}
+            ),
             subblock_w=1280 // 32 // self.core_grid_x,
             block_h=4,
             block_w=1280 // 32 // self.core_grid_x,
@@ -927,25 +1025,25 @@ class ModelOptimisations1024x1024BH:
         # region SDPA CONFIGS
         self.sdpa_configs = {}
         self.sdpa_configs["1024_K"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=128,
             k_chunk_size=1024,
             exp_approx_mode=False,
         )
         self.sdpa_configs["512_K"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=128,
             k_chunk_size=512,
             exp_approx_mode=False,
         )
         self.sdpa_configs["256_K"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=128,
             k_chunk_size=256,
             exp_approx_mode=False,
         )
         self.sdpa_configs["128_K"] = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             q_chunk_size=128,
             k_chunk_size=128,
             exp_approx_mode=False,

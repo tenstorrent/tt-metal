@@ -138,7 +138,9 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
         max_tiles_in_dest = 4
     subblock_w = find_subblock_w(num_tiles_per_core_w, max_tiles_in_dest)
     ln_block_sharded_prog_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[ln_num_cores_x, ln_num_cores_y],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ln_num_cores_x - 1, ln_num_cores_y - 1))}
+        ),
         subblock_w=subblock_w,
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
@@ -258,7 +260,7 @@ def get_model_config(model_config_str, prefill_seq_len=0, decode_batch_size=32):
         model_config[
             "ATTN_BATCHED_MM_PROGCFG"
         ] = lambda block_w, per_core_M, per_core_N: ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=[8, 4],
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
             in0_block_w=block_w,
             out_subblock_h=1,  # TODO: Maximize
             out_subblock_w=1,  # TODO: Maximize
@@ -314,7 +316,14 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["MLP_KERNEL_CONFIG"] = default_kernel_config
 
     mm_h_to_4h_prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(model_config["MLP_GRID_SIZE"].x - 1, model_config["MLP_GRID_SIZE"].y - 1),
+                )
+            }
+        ),
         in0_block_w=3,
         out_subblock_h=1,
         out_subblock_w=1,  # 8,
@@ -326,7 +335,14 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config["DENSE_H_TO_4H_MM_PROGCFG"] = mm_h_to_4h_prog_cfg
 
     mm_4h_to_h_prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=model_config["MLP_GRID_SIZE"],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(model_config["MLP_GRID_SIZE"].x - 1, model_config["MLP_GRID_SIZE"].y - 1),
+                )
+            }
+        ),
         in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=1,  # 6,
@@ -340,7 +356,7 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
 
     model_config["FUSED_QKV_MM_OPTIMIZED_MEMCFG"] = dram_memcfg
     model_config["FUSED_QKV_MM_OPTIMIZED_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=2,
         per_core_M=8,
         per_core_N=21,
@@ -366,7 +382,16 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config[
         "QKT_OPTIMIZED_PROGCFG"
     ] = lambda tiles_per_shard, seq_len, subblock_h, subblock_w: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=model_config["ATTN_OPTIMIZED_GRID_SIZE"],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        model_config["ATTN_OPTIMIZED_GRID_SIZE"].x - 1, model_config["ATTN_OPTIMIZED_GRID_SIZE"].y - 1
+                    ),
+                )
+            }
+        ),
         in0_block_w=2,
         per_core_M=tiles_per_shard,
         per_core_N=seq_len // 32,
@@ -391,7 +416,9 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config[
         "SOFTMAX_OPTIMIZED_PROGCFG"
     ] = lambda grid_size, subblock_w, block_h, block_w: ttnn.SoftmaxShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         subblock_w=subblock_w,
         block_h=block_h,
         block_w=block_w,
@@ -400,7 +427,16 @@ def set_prefill_config(model_config, seq_len, dram_memcfg):
     model_config[
         "QKTV_MM_OPTIMIZED_PROGCFG"
     ] = lambda tiles_per_shard, seq_len, subblock_h: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=model_config["ATTN_OPTIMIZED_GRID_SIZE"],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(
+                        model_config["ATTN_OPTIMIZED_GRID_SIZE"].x - 1, model_config["ATTN_OPTIMIZED_GRID_SIZE"].y - 1
+                    ),
+                )
+            }
+        ),
         in0_block_w=seq_len // 32,
         per_core_M=tiles_per_shard,
         per_core_N=2,

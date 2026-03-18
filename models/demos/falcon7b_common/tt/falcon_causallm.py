@@ -52,7 +52,6 @@ def falcon_lm_head_matmul(
         input_tensor_b,
         memory_config=output_mem_config,
         dtype=output_dtype,
-        core_grid=core_grid,
         compute_kernel_config=compute_kernel_config,
     )
 
@@ -166,7 +165,6 @@ class TtFalconCausalLM(TtFalconModelShared):
                     self.lm_head_weights,
                     memory_config=self.model_config["LM_HEAD_MM_OUTPUT_MEMCFG"],
                     dtype=self.model_config["LM_HEAD_MM_OUTPUT_DTYPE"],
-                    core_grid=get_falcon_default_core_grid(hidden_states.device()),
                     compute_kernel_config=self.model_config["LM_HEAD_KERNEL_CONFIG"],
                 )
         else:

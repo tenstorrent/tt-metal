@@ -567,7 +567,6 @@ class Attention(LightweightModule):
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
-                core_grid=None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"],
                 memory_config=attn_output_cat.memory_config(),
                 dtype=None,

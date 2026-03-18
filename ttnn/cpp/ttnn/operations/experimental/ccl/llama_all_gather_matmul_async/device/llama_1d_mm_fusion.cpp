@@ -934,7 +934,8 @@ ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core_agmm_f
         bias,
         output_tensors,
         broadcast_batch,
-        config.compute_with_storage_grid_size,
+        config.allowed_worker_cores.has_value() ? config.allowed_worker_cores.value().bounding_box().grid_size()
+                                                : a.device()->compute_with_storage_grid_size(),
         compute_kernel_config,
         ttnn::get_throttle_level(compute_kernel_config),
         config.in0_block_w,

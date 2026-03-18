@@ -19,7 +19,6 @@ struct MatmulParams {
     std::optional<tt::tt_metal::DataType> output_dtype = std::nullopt;
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
     bool untilize_out = false;
-    std::optional<CoreCoord> user_core_coord = std::nullopt;
     std::optional<ttnn::operations::unary::UnaryWithParam> user_fused_activation = std::nullopt;
     bool user_run_batched = false;
     bool transpose_a = false;

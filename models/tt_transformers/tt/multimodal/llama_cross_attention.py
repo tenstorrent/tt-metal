@@ -234,7 +234,6 @@ class TtLlamaCrossAttention(LightweightModule):
         cache_seq_len = xk.shape[-2]
 
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=32,
             k_chunk_size=128,
             exp_approx_mode=False,
@@ -347,7 +346,6 @@ class TtLlamaCrossAttention(LightweightModule):
         xq = self.q_norm(xq, mode=Mode.PREFILL)
 
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=128,
             k_chunk_size=128,
             exp_approx_mode=False,

@@ -109,7 +109,6 @@ class Conv1x1(Module):
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.mesh_device.core_grid,
         )
         ttnn.deallocate(x_tile_NTHWC)
 

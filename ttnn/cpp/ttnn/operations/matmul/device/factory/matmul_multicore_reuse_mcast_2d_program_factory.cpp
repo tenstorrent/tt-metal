@@ -1559,7 +1559,9 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
 
     auto fuse_batch = program_config.fuse_batch;
     auto in0_block_w = program_config.in0_block_w;
-    auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
+    auto compute_with_storage_grid_size = program_config.allowed_worker_cores.has_value()
+                                              ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                                              : a.device()->compute_with_storage_grid_size();
     auto out_subblock_h = program_config.out_subblock_h;
     auto out_subblock_w = program_config.out_subblock_w;
     auto out_block_h = program_config.out_block_h;

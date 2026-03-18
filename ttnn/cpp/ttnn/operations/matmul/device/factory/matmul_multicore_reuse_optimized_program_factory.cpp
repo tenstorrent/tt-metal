@@ -59,10 +59,12 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     // override_runtime_arguments for program cache reuse.
     const auto& program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
-    CoreCoord compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
-
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
+    CoreCoord compute_with_storage_grid_size =
+        program_config.allowed_worker_cores.has_value()
+            ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+            : a.device()->compute_with_storage_grid_size();
     auto& output = tensor_return_value.at(0);
 
     bool in0_is_sharded = a.is_sharded();
@@ -346,7 +348,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        auto device = a.device();
+        CoreCoord grid = program_config.allowed_worker_cores.has_value()
+                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                             : device->compute_with_storage_grid_size();
         std::tie(
             num_cores,
             all_cores,

@@ -132,7 +132,6 @@ def calculate_key_values(config, key_value_states, *, parameters):
         key_value_states,
         parameters.key_value.weight,
         bias=parameters.key_value.bias,
-        core_grid=core_grid,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn.deallocate(key_value_states)
@@ -179,7 +178,9 @@ def get_decode_sdpa_configs(config, bsz, device):
 
     compute_grid_size = device.compute_with_storage_grid_size()
     sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+        ),
         exp_approx_mode=False,
         q_chunk_size=256,
         k_chunk_size=256,
@@ -263,7 +264,9 @@ def functional_sdpa(
         k_chunk_size = 256
         compute_grid_size = query_states.device().compute_with_storage_grid_size()
         program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(compute_grid_size.x, compute_grid_size.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            ),
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
             exp_approx_mode=True,  # NOTE: False is more correct
@@ -376,7 +379,6 @@ def whisper_attention(
             hidden_states,
             parameters.query_key_value.weight,
             bias=parameters.query_key_value.bias,
-            core_grid=core_grid,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=fused_qkv_dtype,
         )

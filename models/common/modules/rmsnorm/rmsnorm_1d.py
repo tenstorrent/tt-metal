@@ -613,7 +613,9 @@ def _create_sharded_norm_program_config(
         subblock_w -= 1
 
     return ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[grid.x, grid.y],
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        ),
         subblock_w=subblock_w,
         block_h=tile_padded_batch_rows // tile_size,
         block_w=block_w,

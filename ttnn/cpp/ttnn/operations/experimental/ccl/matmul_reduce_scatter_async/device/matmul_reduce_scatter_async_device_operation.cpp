@@ -141,16 +141,12 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const std::string>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid) {
+    const std::optional<const ttnn::CoreGrid> /*core_grid*/) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
-    std::optional<CoreCoord> user_core_coord;
-    if (core_grid.has_value()) {
-        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
 
     auto matmul_struct = ttnn::prim::create_matmul_attributes(
         input_tensor,
@@ -163,7 +159,6 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
             dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
-            user_core_coord,
             ttnn::operations::matmul::get_fused_activation(activation),
             user_run_batched,
             transpose_a,

@@ -1409,7 +1409,6 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
     output_tensor = ttnn.matmul(
         act,
         weight,
-        core_grid=None if has_program_config else ttnn.CoreGrid(x=4, y=4),
         program_config=program_config,
         compute_kernel_config=ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -1649,9 +1648,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output = ttnn.matmul(
-        input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=4, x=4)
-    )
+    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     output = ttnn.to_torch(output)
 
@@ -1810,7 +1807,6 @@ def test_matmul_with_core_grid(device, batch_size):
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        core_grid=ttnn.CoreGrid(y=batch_size, x=8),
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -1834,7 +1830,6 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -1858,7 +1853,6 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -1882,7 +1876,6 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        core_grid=device.core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -1946,16 +1939,11 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
         shape_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, low=0.0, high=1.0, seed=43
     )
 
-    # Get core grid from device
-    compute_grid = device.compute_with_storage_grid_size()
-    core_grid = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
-
-    # ttnn matmul with transpose_a=True, core_grid, and compute_kernel_config
+    # ttnn matmul with transpose_a=True
     output_tensor_c = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
         transpose_a=transpose_a,
-        core_grid=core_grid,
     )
     output_tensor = ttnn.to_torch(output_tensor_c)
 
@@ -2111,8 +2099,7 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
 @pytest.mark.parametrize("m_size", [128])
 @pytest.mark.parametrize("k_size", [4544])
 @pytest.mark.parametrize("n_size", [4672])
-@pytest.mark.parametrize("core_grid", [None, ttnn.CoreGrid(y=7, x=8)])
-def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_size, core_grid):
+def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_size):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
@@ -2125,7 +2112,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     output_tensor = ttnn.matmul(
         input_tensor_a,
         input_tensor_b,
-        core_grid=core_grid,
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -2315,12 +2301,9 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-    # Half sync mode
-    output1 = ttnn.matmul(input_tensor_a, input_tensor_b, core_grid=ttnn.CoreGrid(y=4, x=4))
-    # Full sync mode
+    output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
     output2 = ttnn.matmul(input_tensor_a, input_tensor_b)
-    # Half sync mode
-    output3 = ttnn.matmul(input_tensor_a, input_tensor_b, core_grid=ttnn.CoreGrid(y=4, x=4))
+    output3 = ttnn.matmul(input_tensor_a, input_tensor_b)
 
     pcc = 0.99
     output_tensor = ttnn.to_torch(output1)
@@ -2901,7 +2884,6 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
         output = ttnn.matmul(
             input_a,
             input_b,
-            core_grid=worker_core_grid,
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)

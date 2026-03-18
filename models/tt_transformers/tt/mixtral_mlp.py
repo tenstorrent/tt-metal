@@ -88,7 +88,6 @@ class TtMixtralMLP(LightweightModule):
                 x,
                 self.w1,
                 compute_kernel_config=compute_kernel_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
                 dtype=ttnn.bfloat16,
                 activation="silu" if not pc_1 else None,
                 program_config=pc_1,
@@ -98,7 +97,6 @@ class TtMixtralMLP(LightweightModule):
                 x,
                 self.w3,
                 compute_kernel_config=compute_kernel_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
                 dtype=ttnn.bfloat16,
                 program_config=pc_3,
             )
@@ -114,7 +112,6 @@ class TtMixtralMLP(LightweightModule):
                 w2_in,
                 self.w2,
                 compute_kernel_config=compute_kernel_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_2,
             )

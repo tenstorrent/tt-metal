@@ -6,7 +6,7 @@ import ttnn
 
 program_configs = {
     "linear_config_1": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=3,
@@ -17,7 +17,7 @@ program_configs = {
         mcast_in0=False,
     ),
     "linear_config_2": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=3,
@@ -99,7 +99,6 @@ class TtPatchMergingV2:
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
-                core_grid=self.device.core_grid,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 

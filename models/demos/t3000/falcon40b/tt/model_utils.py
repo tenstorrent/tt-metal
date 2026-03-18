@@ -135,7 +135,9 @@ def matmul_1d_config(
         out_subblock_h = overwrite_subblock_h
 
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        ),
         in0_block_w=per_core_k,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
@@ -243,7 +245,9 @@ def matmul_2d_config(
     # )
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(grid.x, grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+        ),
         in0_block_w=per_core_k,  # how much inner dim you take each time
         out_subblock_h=out_subblock_h,  # Must be divisible by per_core_M
         out_subblock_w=out_subblock_w,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4 for is_fp32_accumulate otherwise <= 8

@@ -29,7 +29,6 @@ class TtFalconMLP:
             dtype=self.model_config["DENSE_H_TO_4H_MM_OUTPUT_DTYPE"],
             activation="gelu",
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
         )
         ff2_linear: ttnn.Tensor = ttnn.linear(
             ff1_linear,
@@ -37,7 +36,6 @@ class TtFalconMLP:
             memory_config=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"],
             dtype=self.model_config["DENSE_4H_TO_H_MM_OUTPUT_DTYPE"],
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
         )
         ttnn.deallocate(ff1_linear)
 

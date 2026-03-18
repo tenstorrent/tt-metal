@@ -778,7 +778,7 @@ class ModelArgs:
                 per_core_N=math.ceil(n_w1_w3 / ttnn.TILE_SIZE / self.cluster_shape[0]),
             )
             self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -789,7 +789,7 @@ class ModelArgs:
                 fuse_batch=False,
             )
             self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -801,7 +801,7 @@ class ModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -1441,7 +1441,7 @@ class ModelArgs:
             else min(64, chunk_start_idx & -chunk_start_idx)
         )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
@@ -1455,7 +1455,9 @@ class ModelArgs:
             start_core = ttnn.CoreCoord(1, 0)
             num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=sdpa_grid_size,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(sdpa_grid_size.x - 1, sdpa_grid_size.y - 1))}
+                ),
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                     start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
                 ),
@@ -1465,7 +1467,7 @@ class ModelArgs:
             )
         else:
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 exp_approx_mode=False,
                 q_chunk_size=0,
                 k_chunk_size=0,
@@ -1548,7 +1550,9 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))})
+                if is_blackhole()
+                else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -1790,7 +1794,14 @@ class ModelArgs:
                         self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     )
                     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                        compute_with_storage_grid_size=do_core_grid_size,
+                        allowed_worker_cores=ttnn.CoreRangeSet(
+                            {
+                                ttnn.CoreRange(
+                                    ttnn.CoreCoord(0, 0),
+                                    ttnn.CoreCoord(do_core_grid_size.x - 1, do_core_grid_size.y - 1),
+                                )
+                            }
+                        ),
                         in0_block_w=self.dim
                         // ttnn.TILE_SIZE
                         // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
@@ -3034,7 +3045,9 @@ class ModelArgs:
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -3221,7 +3234,9 @@ class ModelArgs:
 
         # tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_1d_program_factory.cpp
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -3293,7 +3308,9 @@ class ModelArgs:
             out_subblock_h = overwrite_subblock_h
 
         return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             in0_block_w=per_core_k,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -3340,7 +3357,9 @@ class ModelArgs:
                 break
             subblock_w -= 1
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[grid.x, grid.y],
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+            ),
             subblock_w=subblock_w,
             block_h=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
             block_w=block_w,
