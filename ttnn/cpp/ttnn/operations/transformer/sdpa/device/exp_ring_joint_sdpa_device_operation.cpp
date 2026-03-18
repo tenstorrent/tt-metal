@@ -41,11 +41,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         joint_tensor_k,
         joint_tensor_v};
 
-    // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
-    TT_FATAL(
-        args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
-        "SDPA coregrid overlaps with AllGather coregrid");
 
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
@@ -262,8 +258,7 @@ tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
         args.program_config,
         args.dim,
         args.num_links,
-        args.cluster_axis,
-        args.ccl_core_grid_offset);
+        args.cluster_axis);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADeviceOperation::create_op_performance_model(
@@ -338,7 +333,6 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const CoreCoord ccl_core_grid_offset,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -378,7 +372,6 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         multi_device_global_semaphore,
         subdevice_id,
         cluster_axis,
-        ccl_core_grid_offset,
         num_workers_per_link,
         num_buffers_per_channel);
 

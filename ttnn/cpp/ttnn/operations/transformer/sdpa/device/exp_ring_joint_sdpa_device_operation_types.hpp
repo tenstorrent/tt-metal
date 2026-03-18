@@ -33,7 +33,6 @@ struct ExpRingJointSDPAParams {
     std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     uint32_t cluster_axis;
-    CoreCoord ccl_core_grid_offset;
     uint32_t num_workers_per_link = 1;
     uint32_t num_buffers_per_channel = 8;
 
@@ -51,7 +50,6 @@ struct ExpRingJointSDPAParams {
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         uint32_t cluster_axis,
-        CoreCoord ccl_core_grid_offset,
         uint32_t num_workers_per_link = 1,
         uint32_t num_buffers_per_channel = 8) :
         joint_strategy(std::move(joint_strategy)),
@@ -67,7 +65,6 @@ struct ExpRingJointSDPAParams {
         semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
-        ccl_core_grid_offset(ccl_core_grid_offset),
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
 
@@ -82,7 +79,6 @@ struct ExpRingJointSDPAParams {
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("cluster_axis", cluster_axis);
-        attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
         if (scale.has_value()) {
             attrs.emplace_back("scale", scale);
         }

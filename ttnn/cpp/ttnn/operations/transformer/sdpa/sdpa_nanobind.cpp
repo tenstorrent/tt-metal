@@ -439,7 +439,6 @@ void bind_sdpa(nb::module_& mod) {
             mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
             topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
-            ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -476,7 +475,6 @@ void bind_sdpa(nb::module_& mod) {
                const MeshDevice& mesh_device,
                ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               CoreCoord ccl_core_grid_offset,
                uint32_t num_workers_per_link,
                uint32_t num_buffers_per_channel) {
                 auto outputs = self(
@@ -498,7 +496,6 @@ void bind_sdpa(nb::module_& mod) {
                     mesh_device,
                     topology,
                     subdevice_id,
-                    ccl_core_grid_offset,
                     scale,
                     compute_kernel_config,
                     num_workers_per_link,
@@ -526,7 +523,6 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("topology"),
             nb::arg("subdevice_id") = nb::none(),
-            nb::arg("ccl_core_grid_offset"),
             nb::arg("num_workers_per_link") = 1,
             nb::arg("num_buffers_per_channel") = 8});
 

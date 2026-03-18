@@ -117,7 +117,6 @@ struct ExecuteExpRingJointAttention {
         const MeshDevice& mesh_device,
         ttnn::ccl::Topology topology,
         std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-        CoreCoord ccl_core_grid_offset,
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         uint32_t num_workers_per_link = 1,

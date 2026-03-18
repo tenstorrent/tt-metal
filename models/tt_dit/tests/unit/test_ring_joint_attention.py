@@ -327,7 +327,6 @@ def run_ring_joint_sdpa(
     pcc_threshold,
     max_mse=None,
     sdpa_grid_override=None,
-    ccl_offset_override=None,
     num_workers_per_link=5,
     num_buffers_per_channel=48,
 ):
@@ -335,8 +334,6 @@ def run_ring_joint_sdpa(
     sdpa_compute_grid = (
         sdpa_grid_override if sdpa_grid_override is not None else (full_compute_grid.x, full_compute_grid.y - 1)
     )
-    ccl_core_grid_offset = ccl_offset_override if ccl_offset_override is not None else (0, full_compute_grid.y - 1)
-
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
@@ -492,7 +489,6 @@ def run_ring_joint_sdpa(
                 mesh_device=submesh,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=ccl_core_grid_offset,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
             )
@@ -1300,5 +1296,4 @@ def test_ring_joint_sdpa_dit_bh_glx_custom(
         pcc_threshold,
         max_mse=max_mse,
         sdpa_grid_override=(11, 10),
-        ccl_offset_override=(11, 0),
     )
