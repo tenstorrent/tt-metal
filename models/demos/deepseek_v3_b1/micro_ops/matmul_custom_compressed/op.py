@@ -181,7 +181,9 @@ class MatmulCustomCompressed:
         else:
             # Runtime path: create per-tile metadata tensor in L1
             # Each tile gets one uint32: [abs_addr:24 | fmt:8], precomputed with absolute addresses.
-            all_cores = ttnn.corerange_to_cores(core_grid)
+            # Row-wise ordering must match the HEIGHT_SHARDED buffer distribution
+            # (ShardOrientation.ROW_MAJOR → row_wise=true in C++ corerange_to_cores).
+            all_cores = ttnn.corerange_to_cores(core_grid, row_wise=True)
             num_tiles = num_tiles_k * out_w
             # fifo_rd_ptr - 1: the -1 is a HW convention for THCON address registers
             shard_data = []
