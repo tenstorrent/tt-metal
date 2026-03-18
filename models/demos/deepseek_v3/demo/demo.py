@@ -37,12 +37,14 @@ def _build_output_data(
     prompts: list[str] | None,
     generations: list[dict],
     statistics: dict,
+    model_params: dict,
     random_weights: bool,
 ) -> dict:
     output_data = {
         "prompts": prompts if prompts else [],
         "generations": [],
         "statistics": statistics,
+        "model_params": model_params,
     }
     for i, gen_result in enumerate(generations):
         output_data["generations"].append(
@@ -621,7 +623,7 @@ def run_demo(
                         if pre_tokenized_prompts is not None
                         else None
                     )
-                    batch_generations, batch_stats, model_params= gen.generate(
+                    batch_generations, batch_stats, model_params = gen.generate(
                         batch_prompts,
                         max_new_tokens=max_new_tokens,
                         teacher_forcing=token_acc,
@@ -662,7 +664,7 @@ def run_demo(
                         if any(key in s for s in all_stats):
                             statistics[key] = sum(float(s.get(key, 0) or 0) for s in all_stats)
             else:
-                generations, statistics = gen.generate(
+                generations, statistics, model_params = gen.generate(
                     prompt_list,
                     max_new_tokens=max_new_tokens,
                     teacher_forcing=token_acc,

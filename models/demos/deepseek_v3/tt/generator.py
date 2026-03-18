@@ -1026,7 +1026,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return value[index]
             return value[-1]
         return value
-    
+
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
         return self._sample_greedy(logits)
 
@@ -1514,13 +1514,16 @@ class DeepseekGenerator(WarmupForwardMixin):
             decode_step_user_tokens=decode_step_user_tokens,
         )
 
-    def _sample_on_host(self, logits: torch.Tensor) -> torch.Tensor | int:
+    def _sample_on_host(self, logits: torch.Tensor, start_user_idx: int = 0) -> torch.Tensor | int:
         """Sample on host using top-k/top-p/temperature from sampling_params."""
         if self.sampling_params is None:
             return torch.argmax(logits, dim=-1)
 
         if logits.ndim == 1:
             logits = logits.unsqueeze(0)
+        elif logits.ndim > 2:
+            # Normalize to [batch, vocab] so each sampled row maps to one user lane.
+            logits = logits.reshape(-1, logits.shape[-1])
 
         sampled_tokens = torch.argmax(logits, dim=-1)
         batch_size = logits.shape[0]
@@ -1562,7 +1565,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             probs = torch.softmax(scores, dim=-1)
             row_sum = probs.sum(dim=-1)
             valid_row = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sum) & (row_sum > 0)
-            if not bool(valid_row.item()):
+            if not bool(valid_row.all().item()):
                 continue
 
             generator: torch.Generator | None = None
@@ -1575,7 +1578,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 sampled_tokens[row_idx] = torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
 
         return sampled_tokens
-    
+
     def generate(
         self,
         prompts: Iterable[str],
@@ -1753,7 +1756,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 prefill_logits, torch.Tensor
                             ), "prefill_logits should be a torch.Tensor on host"
                             last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
-                            pred_token = int(self._sample_on_host(last_token_logits.unsqueeze(0)).item())
+                            pred_token = int(
+                                self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
+                            )
                         prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
                     self.ccl.reset_sem_counters()
                 if use_mtp_path:
@@ -1890,7 +1895,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                             break
                         logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                         profiler.start(f"decode_time_{gen_idx}")
-                        logits = self.decode_forward(
+                        decode_logits = self.decode_forward(
                             tokens=next_tokens,
                             start_pos=positions,
                             batch_size_per_row=self.batch_size_per_row,
@@ -1904,15 +1909,17 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_forward_passes += 1
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
-                            pred_tokens_device = self._sample_tokens_device(logits, enable_trace=self.enable_trace)
+                            pred_tokens_device = self._sample_tokens_device(
+                                decode_logits, enable_trace=self.enable_trace
+                            )
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                             )
                             if not self.enable_trace:
-                                ttnn.deallocate(logits)
+                                ttnn.deallocate(decode_logits)
                                 ttnn.deallocate(pred_tokens_device)
                         else:
-                            pred_token = int(self._sample_on_host(last_token_logits.unsqueeze(0)).item())
+                            pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
                             # Record user-0 prediction for accuracy, then force teacher token.
                             forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -2041,7 +2048,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         if mtp_verifies is not None:
             statistics["mtp_verifies"] = mtp_verifies
 
-            
         model_params = {
             "mesh_device": f"{self.mesh_device.shape[0]}x{self.mesh_device.shape[1]}",
             "model_path": str(self.model_path),
@@ -2058,12 +2064,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                 "top_p": self.sampling_params.top_p,
             },
         }
-        
+
         for page_tables in temp_decode_page_tables:
             self._release_page_table_tuple(page_tables)
 
         return generations, statistics, model_params
-        
 
     def _encode_prompt(self, prompt: str) -> List[int]:
         # Use HF chat template if a tokenizer is provided; otherwise synthesize simple token ids
