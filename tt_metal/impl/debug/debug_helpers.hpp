@@ -108,18 +108,36 @@ inline uint16_t watcher_host_file_hash(const std::string& path) {
 }
 
 // Resolve a file_id (low-16-bit FNV-1a hash of __FILE__) to a source file path.
-// Searches candidate_paths in order; returns the first path whose hash matches.
-// Returns an empty string if no match is found (hash collision or unknown file).
+// Scans all candidate_paths; returns the matching path only if exactly one matches.
+// Returns an empty string if no match is found or if multiple paths match (collision).
+//
+// Note: if ASSERT() fires inside a shared header (not the kernel's top-level
+// source file), __FILE__ will be the header path, which is not in
+// candidate_paths. In that case this function returns empty and the caller
+// falls back to the line-only message.
 inline std::string resolve_assert_file(uint16_t file_id, const std::vector<std::string>& candidate_paths) {
     if (file_id == 0) {
         return "";  // 0 means "no file info available"
     }
+    std::string matched;
     for (const auto& path : candidate_paths) {
         if (watcher_host_file_hash(path) == file_id) {
-            return path;
+            if (!matched.empty()) {
+                // Hash collision between two candidate paths - return empty to avoid
+                // displaying the wrong file name.
+                log_debug(
+                    tt::LogMetal,
+                    "Watcher: assert file_id 0x{:04x} matches multiple candidate "
+                    "paths ('{}' and '{}') - file name suppressed.",
+                    file_id,
+                    matched,
+                    path);
+                return "";
+            }
+            matched = path;
         }
     }
-    return "";  // hash collision or unknown file
+    return matched;
 }
 
 // Returns the assert message portion for a given assert type.
@@ -138,6 +156,13 @@ inline std::string get_debug_assert_message(
             if (!file_name.empty()) {
                 return fmt::format("tripped an assert at {}:{}.", file_name, line_num);
             } else {
+                if (file_id != 0) {
+                    log_debug(
+                        tt::LogMetal,
+                        "Watcher: assert file_id 0x{:04x} did not match any candidate source path "
+                        "(kernel compiled with different path format?)",
+                        file_id);
+                }
                 // file_id == 0 means old firmware without file reporting, or non-ASSERT() assert type.
                 return fmt::format(
                     "tripped an assert on line {}. "

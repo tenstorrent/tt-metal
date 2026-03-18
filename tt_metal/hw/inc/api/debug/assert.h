@@ -8,7 +8,7 @@
 #include "internal/hw_thread.h"
 
 // ---------------------------------------------------------------------------
-// Compile-time FNV-1a file hash
+// Compile-time FNV-1a file hash (watcher_detail namespace)
 //
 // Produces a stable uint16_t "file ID" from __FILE__ at compile time.
 // The host reconstructs the same hash over every known kernel source path to
@@ -16,11 +16,14 @@
 // Using the low 16 bits of a 32-bit FNV-1a hash keeps the mailbox impact to
 // 2 bytes while being collision-resistant enough for typical kernel source
 // sets (probability of any collision across ~1000 files is < 0.75%).
+// Called via watcher_detail::watcher_file_hash() from the ASSERT() macro.
 // ---------------------------------------------------------------------------
+namespace watcher_detail {
 constexpr uint16_t watcher_file_hash(const char* s, uint32_t h = 2166136261u) {
     return (*s == '\0') ? static_cast<uint16_t>(h & 0xFFFFu)
                         : watcher_file_hash(s + 1, (h ^ static_cast<uint8_t>(*s)) * 16777619u);
 }
+}  // namespace watcher_detail
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
@@ -61,10 +64,10 @@ inline void assert_and_hang(
 
 // The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
 // without {}s.
-#define ASSERT(condition, ...)                                                     \
-    do {                                                                           \
-        if (not(condition))                                                        \
-            assert_and_hang(__LINE__, watcher_file_hash(__FILE__), ##__VA_ARGS__); \
+#define ASSERT(condition, ...)                                                                     \
+    do {                                                                                           \
+        if (not(condition))                                                                        \
+            assert_and_hang(__LINE__, watcher_detail::watcher_file_hash(__FILE__), ##__VA_ARGS__); \
     } while (0)
 
 #define ASSERT_ENABLED 1
