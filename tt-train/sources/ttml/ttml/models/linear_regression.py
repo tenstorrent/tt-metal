@@ -68,9 +68,7 @@ class LinearRegression(AbstractModuleBase):
         # Create weight tensor: shape [1, 1, out_features, in_features]
         # Parameter wrapper automatically registers this via __setattr__
         weight_shape = (1, 1, out_features, in_features)
-        weight_np = np.random.uniform(
-            low=-init_k, high=init_k, size=weight_shape
-        ).astype(np.float32)
+        weight_np = np.random.uniform(low=-init_k, high=init_k, size=weight_shape).astype(np.float32)
         weight_tensor = ttml.autograd.Tensor.from_numpy(weight_np)
         self.weight = Parameter(weight_tensor)
 
@@ -78,9 +76,7 @@ class LinearRegression(AbstractModuleBase):
         # Parameter wrapper automatically registers this via __setattr__
         if bias:
             bias_shape = (1, 1, 1, out_features)
-            bias_np = np.random.uniform(
-                low=-init_k, high=init_k, size=bias_shape
-            ).astype(np.float32)
+            bias_np = np.random.uniform(low=-init_k, high=init_k, size=bias_shape).astype(np.float32)
             bias_tensor = ttml.autograd.Tensor.from_numpy(bias_np)
             self.bias = Parameter(bias_tensor)
         else:
@@ -102,9 +98,7 @@ class LinearRegression(AbstractModuleBase):
         return ttml.ops.linear.linear(x, self.weight.tensor, bias_tensor)
 
 
-def create_linear_regression_model(
-    in_features: int, out_features: int = 1, bias: bool = True
-) -> LinearRegression:
+def create_linear_regression_model(in_features: int, out_features: int = 1, bias: bool = True) -> LinearRegression:
     """Factory function to create a linear regression model.
 
     This function provides a convenient way to create a LinearRegression model,
@@ -123,6 +117,4 @@ def create_linear_regression_model(
         >>> x = ttml.autograd.Tensor.from_numpy(np.random.randn(32, 1, 1, 10).astype(np.float32))
         >>> y = model(x)
     """
-    return LinearRegression(
-        in_features=in_features, out_features=out_features, bias=bias
-    )
+    return LinearRegression(in_features=in_features, out_features=out_features, bias=bias)
