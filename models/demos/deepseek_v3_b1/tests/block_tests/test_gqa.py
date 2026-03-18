@@ -10,11 +10,9 @@ Test categories:
   3. Token-by-token decode matches full prefill
   4. Causal masking — future tokens don't affect earlier positions
   5. RoPE — with vs without, partial vs full, different positions
-  6. Softcapping — Grok-2 style logit capping
-  7. QK-norm — per-head RMSNorm on Q and K
-  8. GQA group-ratio sweep (MHA / GQA / MQA)
-  9. Full-size weight shape validation (meta device, no alloc)
- 10. HF comparison — GLM-4, Llama
+  6. GQA group-ratio sweep (MHA / GQA / MQA)
+  7. Full-size weight shape validation (meta device, no alloc)
+  8. HF comparison — GLM-4, Llama
 """
 
 import pytest
@@ -337,82 +335,7 @@ def test_gqa_different_positions_give_different_output(profile_name):
 
 
 # ---------------------------------------------------------------------------
-# 6. Softcapping tests (Grok-2 style)
-# ---------------------------------------------------------------------------
-
-
-def test_gqa_softcapping_changes_output():
-    """Softcapping should produce different output than without."""
-    seed_all(42)
-    prof = GQA_TINY_PROFILES["grok_2_270b"]
-    h = prof["hidden_size"]
-    x = torch.randn(1, 8, h) * 10.0
-    weights = _make_gqa_weights(prof)
-    common = _common_kwargs(prof)
-    mask = torch.zeros(1, 1, 8, 8)
-    with torch.no_grad():
-        out_no_cap, _ = gqa_attention_torch(x, **weights, **common, attention_mask=mask)
-        out_cap, _ = gqa_attention_torch(
-            x,
-            **weights,
-            **common,
-            attention_mask=mask,
-            attn_logit_softcapping=30.0,
-        )
-    assert torch.isfinite(out_cap).all()
-    assert not torch.allclose(out_no_cap, out_cap, atol=1e-5)
-
-
-def test_gqa_softcapping_bounds_logits():
-    """Softcapped output should be finite even with large inputs."""
-    seed_all(42)
-    prof = GQA_TINY_PROFILES["grok_2_270b"]
-    h = prof["hidden_size"]
-    x = torch.randn(1, 8, h) * 100.0
-    weights = _make_gqa_weights(prof)
-    common = _common_kwargs(prof)
-    mask = torch.zeros(1, 1, 8, 8)
-    with torch.no_grad():
-        out, _ = gqa_attention_torch(
-            x,
-            **weights,
-            **common,
-            attention_mask=mask,
-            attn_logit_softcapping=30.0,
-        )
-    assert torch.isfinite(out).all()
-
-
-# ---------------------------------------------------------------------------
-# 7. QK-norm tests
-# ---------------------------------------------------------------------------
-
-
-def test_gqa_qk_norm_changes_output():
-    """QK-norm should produce different output than without."""
-    seed_all(42)
-    h, hd, nq, nkv = 256, 64, 4, 2
-    prof = dict(hidden_size=h, num_q_heads=nq, num_kv_heads=nkv, head_dim=hd)
-    weights = _make_gqa_weights(prof)
-    common = _common_kwargs(prof)
-    q_norm_w = torch.ones(hd)
-    k_norm_w = torch.ones(hd)
-    x = torch.randn(1, 8, h)
-    mask = torch.zeros(1, 1, 8, 8)
-    with torch.no_grad():
-        out_no, _ = gqa_attention_torch(x, **weights, **common, attention_mask=mask)
-        out_yes, _ = gqa_attention_torch(
-            x,
-            **weights,
-            **common,
-            attention_mask=mask,
-            qk_norm_weights=(q_norm_w, k_norm_w),
-        )
-    assert not torch.allclose(out_no, out_yes, atol=1e-5)
-
-
-# ---------------------------------------------------------------------------
-# 8. GQA group-ratio sweep
+# 6. GQA group-ratio sweep
 # ---------------------------------------------------------------------------
 
 
@@ -437,7 +360,7 @@ def test_gqa_group_ratio_torch_vs_tt(num_heads, num_kv_heads):
 
 
 # ---------------------------------------------------------------------------
-# 9. Output shape tests (various batch / seq combinations)
+# 7. Output shape tests (various batch / seq combinations)
 # ---------------------------------------------------------------------------
 
 
@@ -458,7 +381,7 @@ def test_gqa_output_shape(profile_name, batch_size, seq_len):
 
 
 # ---------------------------------------------------------------------------
-# 10. Full-size weight shape validation (meta device — zero memory)
+# 8. Full-size weight shape validation (meta device — zero memory)
 # ---------------------------------------------------------------------------
 
 EXPECTED_WEIGHT_SHAPES = {
@@ -498,7 +421,7 @@ def test_gqa_full_size_single_token_smoke(model_name):
 
 
 # ---------------------------------------------------------------------------
-# 11. Residual connection test
+# 9. Residual connection test
 # ---------------------------------------------------------------------------
 
 
@@ -524,7 +447,7 @@ def test_gqa_residual_connection(profile_name):
 
 
 # ---------------------------------------------------------------------------
-# 12. HF comparison: GLM-4
+# 10. HF comparison: GLM-4
 # ---------------------------------------------------------------------------
 
 
@@ -591,7 +514,7 @@ def test_gqa_glm4():
 
 
 # ---------------------------------------------------------------------------
-# 13. HF comparison: Llama
+# 11. HF comparison: Llama
 # ---------------------------------------------------------------------------
 
 

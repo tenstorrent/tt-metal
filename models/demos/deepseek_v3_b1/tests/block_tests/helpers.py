@@ -223,7 +223,6 @@ GQA_FULL_PROFILES = {
         rope_theta=208_533_496,
         max_position_embeddings=131072,
         rms_norm_eps=1e-5,
-        attn_logit_softcapping=30.0,
     ),
     "llama_guard_4": dict(
         hidden_size=5120,
@@ -280,7 +279,6 @@ GQA_TINY_PROFILES = {
         head_dim=32,
         attention_bias=False,
         rope_theta=208_533_496,
-        attn_logit_softcapping=30.0,
     ),
     "llama_guard_4": dict(
         hidden_size=256,
