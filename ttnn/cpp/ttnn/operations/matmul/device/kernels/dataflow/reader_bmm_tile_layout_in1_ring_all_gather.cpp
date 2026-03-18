@@ -92,7 +92,7 @@ void kernel_main() {
     uint32_t vc = 0;
     uint32_t dram_read_offset = 0;
 
-    if constexpr (in1_is_dram_interleaved || in1_is_dram_sharded) {
+    if constexpr (in1_is_dram_sharded) {
         dram_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
         vc = get_arg_val<uint32_t>(rt_args_idx++);
         dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
