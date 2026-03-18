@@ -73,7 +73,7 @@ MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_f
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
                 return MatmulMeshWorkloadMultiCoreReuseMcast2DProgramFactory{};
             } else if constexpr (std::is_same_v<T, operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};
+                return MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory{};  // HERE JAKSA
             } else if constexpr (std::is_same_v<
                                      T,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
@@ -188,11 +188,12 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             "Input tensors must have the same rank, got a_shape rank: {} vs b_shape rank: {}",
             a_shape.rank(),
             b_shape.rank());
-        for (auto i = 0; i < a_shape.rank() - 2; i++) {
+        for (auto i = 0; i < a_shape.rank() - 3; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i],
+                a_shape[i] == b_shape[i] || a_shape[i] == 1 || b_shape[i] == 1,
                 "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or equivalent");
+                "BCMK*BCKN=BCMN or equivalent");  // HERE JAKSA - updated this so it passes unequal channel sizes only
+                                                  // if one of the is =1
         }
     }
 
