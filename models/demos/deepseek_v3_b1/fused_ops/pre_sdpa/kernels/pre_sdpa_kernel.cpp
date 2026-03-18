@@ -184,13 +184,10 @@ uint32_t per_core_rta_arg_idx = 0;
 
     deepseek_b1_ops::Rope::ReaderArgs qrope_args{
         .in_cb = get_named_compile_time_arg_val("qrope_in_cb"),
-        .cos_cb = get_named_compile_time_arg_val("qrope_cos_cb"),
-        .sin_cb = get_named_compile_time_arg_val("qrope_sin_cb"),
+        .cos_sin_cb = get_named_compile_time_arg_val("qrope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("qrope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("qrope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address"),
-        .trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb"),
-    };
+        .position_ids_tensor_address = get_named_compile_time_arg_val("qrope_position_ids_tensor_address")};
 
     // NCRISC: Sender args for QNOPE/QROPE cores
     // Senders write to intermediate CB, then compute tilizes to output CB
@@ -260,13 +257,10 @@ uint32_t per_core_rta_arg_idx = 0;
 
     deepseek_b1_ops::Rope::ReaderArgs krope_args{
         .in_cb = get_named_compile_time_arg_val("krope_in_cb"),
-        .cos_cb = get_named_compile_time_arg_val("krope_cos_cb"),
-        .sin_cb = get_named_compile_time_arg_val("krope_sin_cb"),
+        .cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb"),
         .cos_tensor_address = get_named_compile_time_arg_val("krope_cos_tensor_address"),
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
-        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address"),
-        .trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb"),
-    };
+        .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address")};
 
     deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
 
@@ -623,12 +617,10 @@ uint32_t per_core_rta_arg_idx = 0;
     // Qrope compute args (from compile-time args)
     deepseek_b1_ops::Rope::ComputeArgs qrope_args{
         get_named_compile_time_arg_val("qrope_in_cb"),  // Input from matmul2 output
-        get_named_compile_time_arg_val("qrope_cos_cb"),
-        get_named_compile_time_arg_val("qrope_sin_cb"),
+        get_named_compile_time_arg_val("qrope_cos_sin_cb"),
         get_named_compile_time_arg_val("qrope_trans_mat_cb"),
         get_named_compile_time_arg_val("qrope_rotated_in_interm_cb"),
-        get_named_compile_time_arg_val("qrope_cos_interm_cb"),
-        get_named_compile_time_arg_val("qrope_sin_interm_cb"),
+        get_named_compile_time_arg_val("qrope_cos_sin_interm_cb"),
         get_named_compile_time_arg_val("qrope_output_cb"),
     };
 
@@ -676,23 +668,19 @@ uint32_t per_core_rta_arg_idx = 0;
 
     // CB indices (passed as runtime args to ComputeArgs)
     constexpr uint32_t krope_input_cb = get_named_compile_time_arg_val("krope_in_cb");
-    constexpr uint32_t krope_cos_cb = get_named_compile_time_arg_val("krope_cos_cb");
-    constexpr uint32_t krope_sin_cb = get_named_compile_time_arg_val("krope_sin_cb");
+    constexpr uint32_t krope_cos_sin_cb = get_named_compile_time_arg_val("krope_cos_sin_cb");
     constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
     constexpr uint32_t krope_rotated_in_interm_cb = get_named_compile_time_arg_val("krope_rotated_in_interm_cb");
-    constexpr uint32_t krope_cos_interm_cb = get_named_compile_time_arg_val("krope_cos_interm_cb");
-    constexpr uint32_t krope_sin_interm_cb = get_named_compile_time_arg_val("krope_sin_interm_cb");
+    constexpr uint32_t krope_cos_sin_interm_cb = get_named_compile_time_arg_val("krope_cos_sin_interm_cb");
     constexpr uint32_t krope_output_cb = get_named_compile_time_arg_val("krope_output_cb");
 
     // Compute args: all CB indices
     deepseek_b1_ops::Rope::ComputeArgs krope_args{
         .in_cb = krope_input_cb,
-        .cos_cb = krope_cos_cb,
-        .sin_cb = krope_sin_cb,
+        .cos_sin_cb = krope_cos_sin_cb,
         .trans_mat_cb = krope_trans_mat_cb,
         .rotated_in_interm_cb = krope_rotated_in_interm_cb,
-        .cos_interm_cb = krope_cos_interm_cb,
-        .sin_interm_cb = krope_sin_interm_cb,
+        .cos_sin_interm_cb = krope_cos_sin_interm_cb,
         .out_cb = krope_output_cb,
     };
 
