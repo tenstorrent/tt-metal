@@ -135,12 +135,10 @@ class KVCacheBranch:
         # CONSOLIDATE!!!!!!!!!
         # Tile sizes: 1x32 = 64 bytes (BF16), 16x32 = 1024 bytes (BF16), 32x32 = 2048 bytes (BF16)
 
-        cos_cb = 0  # tile (NCRISC reads from DRAM)
-        sin_cb = 1  # tile (NCRISC reads from DRAM)
+        cos_sin_cb = 0  # tile (NCRISC reads from DRAM)
         trans_mat_cb = 2  # 1x32 tile, 64 bytes (sharded, 1 tile per core) - actually 32x32 for matmul
         rotated_input_interm_cb = 3  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
-        cos_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
-        sin_interm_cb = 5  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
+        cos_sin_interm_cb = 4  # 1x32 tile, 64 bytes (Wt tiles, intermediate)
         dkv_matmul_input_cb = 6  # 1x32 tile, 64 bytes (224 tiles = 1x7168)
         dkv_matmul_output_cb = 7  # 1x32 tile, 64 bytes (1 tile per core for rope input)
         dkv_matmul_weights_cb = 8  # 32x32 tile, 2048 bytes (sharded weights)
@@ -277,8 +275,7 @@ class KVCacheBranch:
         ]
         krope_ncrisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
-            ("cos_cb", cos_cb),
-            ("sin_cb", sin_cb),
+            ("cos_sin_cb", cos_sin_cb),
             ("cos_tensor_address", cos_tensor_address),
             ("sin_tensor_address", sin_tensor_address),
             ("position_ids_tensor_address", position_ids_tensor_addr),
@@ -290,12 +287,10 @@ class KVCacheBranch:
         ]
         krope_trisc_named_compile_time_args = [
             ("in_cb", dkv_matmul_output_cb),
-            ("cos_cb", cos_cb),
-            ("sin_cb", sin_cb),
+            ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("rotated_in_interm_cb", rotated_input_interm_cb),
-            ("cos_interm_cb", cos_interm_cb),
-            ("sin_interm_cb", sin_interm_cb),
+            ("cos_sin_interm_cb", cos_sin_interm_cb),
             ("out_cb", k_rope_output_cb),
             ("Wt", krope_Wt),
             ("Ht", krope_Ht),
@@ -367,27 +362,16 @@ class KVCacheBranch:
         krope_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
 
         rope_tile_descriptor = ttnn.TileDescriptor(rope_tile)
-        cos_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_cb,
+        cos_sin_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_sin_cb,
             data_format=data_format,
             page_size=rope_tile_size,
             tile=rope_tile_descriptor,
         )
-        cos_cb_descriptor = ttnn.CBDescriptor(
-            total_size=1 * rope_tile_size,
+        cos_sin_cb_descriptor = ttnn.CBDescriptor(
+            total_size=2 * rope_tile_size,
             core_ranges=krope_core_grid,
-            format_descriptors=[cos_cb_format],
-        )
-        sin_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=sin_cb,
-            data_format=data_format,
-            page_size=rope_tile_size,
-            tile=rope_tile_descriptor,
-        )
-        sin_cb_descriptor = ttnn.CBDescriptor(
-            total_size=1 * rope_tile_size,
-            core_ranges=krope_core_grid,
-            format_descriptors=[sin_cb_format],
+            format_descriptors=[cos_sin_cb_format],
         )
         # CB X: Trans_mat (sharded tensor)
         trans_mat_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(trans_mat_cb, trans_mat_tensor)
@@ -405,30 +389,16 @@ class KVCacheBranch:
             format_descriptors=[rotated_interm_format],
         )
 
-        # CB X: Cos intermediate (not backed by tensor)
-        cos_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=cos_interm_cb,
+        cos_sin_interm_format = ttnn.CBFormatDescriptor(
+            buffer_index=cos_sin_interm_cb,
             data_format=data_format,
             page_size=krope_tile_size,
             tile=krope_tile_descriptor,
         )
-        cos_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=1 * krope_tile_size,
+        cos_sin_interm_cb_descriptor = ttnn.CBDescriptor(
+            total_size=2 * krope_tile_size,
             core_ranges=krope_core_grid,
-            format_descriptors=[cos_interm_format],
-        )
-
-        # CB X: Sin intermediate (not backed by tensor)
-        sin_interm_format = ttnn.CBFormatDescriptor(
-            buffer_index=sin_interm_cb,
-            data_format=data_format,
-            page_size=krope_tile_size,
-            tile=krope_tile_descriptor,
-        )
-        sin_interm_cb_descriptor = ttnn.CBDescriptor(
-            total_size=1 * krope_tile_size,
-            core_ranges=krope_core_grid,
-            format_descriptors=[sin_interm_format],
+            format_descriptors=[cos_sin_interm_format],
         )
 
         k_rope_output_cb_format = ttnn.CBFormatDescriptor(
@@ -542,12 +512,10 @@ class KVCacheBranch:
                 kv_rmsnorm_input_cb_descriptor,
                 kv_rmsnorm_gamma_cb_descriptor,
                 kv_rmsnorm_output_cb_descriptor,
-                cos_cb_descriptor,
-                sin_cb_descriptor,
+                cos_sin_cb_descriptor,
                 trans_mat_cb_descriptor,
                 rotated_interm_cb_descriptor,
-                cos_interm_cb_descriptor,
-                sin_interm_cb_descriptor,
+                cos_sin_interm_cb_descriptor,
                 k_rope_output_cb_descriptor,
             ],
             semaphores=[

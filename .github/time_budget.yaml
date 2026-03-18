@@ -111,8 +111,8 @@ models:
     wh_n300: 30
     wh_galaxy: 30
   unit:
-    wh_llmbox: 305
-    wh_llmbox_perf: 90
+    wh_llmbox: 315
+    wh_llmbox_perf: 60
     wh_n150: 30
     wh_n300: 30
     wh_galaxy: 30
@@ -133,6 +133,7 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
+    bh_p150b_civ2: 250
     bh_deskbox: 250
     bh_llmbox: 1200
     bh_loudbox: 1200
