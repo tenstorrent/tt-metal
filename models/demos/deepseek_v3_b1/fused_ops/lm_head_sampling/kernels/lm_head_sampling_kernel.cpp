@@ -573,6 +573,8 @@ void kernel_main() {
     // Called once per spec-stage iteration, before lm_head_sampling().
     // ========================================================================
     auto verify = [&]() {
+        // Read the token metadata from the socket with NCRISC
+        // BRISC doesnt write out in READ_ONLY mode
         if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
             DeviceZoneScopedN("CCL_BROADCAST_READ");
             bcast(bcast_args, deepseek_b1_ops::BcastPhase::READ_ONLY);
@@ -606,15 +608,20 @@ void kernel_main() {
                     verification_accept = true;
                 }
             } else if (source_token_type == TOKEN_TYPE_SPEC) {
+                // If the source token received was a SPEC token
                 uint32_t accepted_spec = verified[0];
                 if (accepted_spec == SENTINEL) {
                     verification_stale = true;
                 }
             }
 
+            // If we get a BASE token and its an accpetance, on that pipeline step we skip sampling (speculation token
+            // will come from next step) If we get a SPEC token but we never commited to accepting the BASE previously,
+            // that means speculation token will come from the BASE token (it was a rejection)
             skip_sampling = verification_accept || verification_stale;
             bcast_args.sem_inc_value = skip_sampling ? 2 : 1;
 
+            // Write the metadata to the reference token address
             if constexpr (ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
                 auto staging = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_reference_token_addr);
                 staging[0] = source_token;
@@ -629,6 +636,7 @@ void kernel_main() {
                 noc_async_write(mtp_reference_token_addr, staging_noc, 24);
                 noc_async_write_barrier();
 
+                // Tell the argmax core the token metadata from upstream is ready
                 constexpr uint32_t verify_output_ready_sem_id =
                     get_named_compile_time_arg_val("verify_output_ready_semaphore_id");
                 uint64_t argmax_sem_addr = get_noc_addr(
@@ -802,6 +810,7 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(emb_cb, e_num_tiles);
             constexpr uint32_t emb_done_cb = get_named_compile_time_arg_val("mtp_embedding_done_cb");
+            // Siagnal to the e_rmsnorm that embedding is done using the emb_cb, e_rmsnorm can use it as the output cb
             cb_reserve_back(emb_done_cb, 1);
             cb_push_back(emb_done_cb, 1);
         }
@@ -836,17 +845,6 @@ void kernel_main() {
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
-        // Drain the EH Matmul output cb
-        if constexpr (Core::is_eh_matmul_core) {
-            cb_pop_front(eh_out_cb, eh_out_w);
-        }
-        // Drain the EH Mcast output cb
-        if constexpr (Core::is_mcast_receiver_core && !Core::is_eh_matmul_core) {
-            constexpr uint32_t mcast_eh_dst_cb_drain = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-            constexpr uint32_t mcast_eh_dst_pages_drain = get_named_compile_time_arg_val("mcast_eh_dst_num_pages");
-            cb_wait_front(mcast_eh_dst_cb_drain, mcast_eh_dst_pages_drain);
-            cb_pop_front(mcast_eh_dst_cb_drain, mcast_eh_dst_pages_drain);
-        }
         // Gather the logits from the EH Matmul
         if constexpr (Core::is_argmax_final_core) {
             DeviceZoneScopedN("MTP_LOGITS_GATHER");
@@ -893,6 +891,17 @@ void kernel_main() {
             socket_notify_receiver(logits_socket);
             update_socket_config(logits_socket);
         }
+        // Drain the EH Matmul output cb
+        if constexpr (Core::is_eh_matmul_core) {
+            cb_pop_front(eh_out_cb, eh_out_w);
+        }
+        // Drain the EH Mcast output cb
+        if constexpr (Core::is_mcast_receiver_core && !Core::is_eh_matmul_core) {
+            constexpr uint32_t mcast_eh_dst_cb_drain = get_named_compile_time_arg_val("mcast_eh_dst_cb");
+            constexpr uint32_t mcast_eh_dst_pages_drain = get_named_compile_time_arg_val("mcast_eh_dst_num_pages");
+            cb_wait_front(mcast_eh_dst_cb_drain, mcast_eh_dst_pages_drain);
+            cb_pop_front(mcast_eh_dst_cb_drain, mcast_eh_dst_pages_drain);
+        }
 #endif
     };
 
@@ -907,6 +916,7 @@ void kernel_main() {
     auto update_speculative_state = [&]() {
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (
+            // By the time we reach here, argmax has completed
             Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
             constexpr uint32_t verify_output_ready_sem_id =
                 get_named_compile_time_arg_val("verify_output_ready_semaphore_id");
@@ -929,10 +939,9 @@ void kernel_main() {
             cb_reserve_back(ArgmaxCTArgs::socket_cb_id, 1);
             auto out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(ArgmaxCTArgs::socket_cb_id));
 
-            // meta_skip = 1 means we treat the pipeline as passthrough or we skip sampling (ACCEPT or STALE)
+            // meta_skip = 1 means we treat the pipeline as passthrough (if we skip sampling)
             if (meta_skip) {
                 DeviceZoneScopedN("MTP_VERIFY_EARLY_OUTPUT");
-                // If we ACCEPT the spec token, we want to run sampling to get speculative token
                 if (meta_accept) {
                     out_ptr[0] = meta_base_output_token;
                     out_ptr[1] = TOKEN_TYPE_BASE;
@@ -948,7 +957,7 @@ void kernel_main() {
                 out_ptr[5] = 0;
                 out_ptr[6] = 0;
             } else
-            // meta_skip = 0 means we run sampling (REJECT or CONTINUATION)
+            // meta_skip = 0 means we did run sampling (BASE REJECT or SPEC CONTINUATION)
             {
                 DeviceZoneScopedN("MTP_VERIFY_LATE_OUTPUT");
                 uint32_t speculative_token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(verify_argmax_output_addr);
