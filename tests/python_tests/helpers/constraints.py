@@ -34,7 +34,7 @@ def get_valid_dest_accumulation_modes(formats):
     """
 
     if (
-        formats.input in [DataFormat.Bfp8_b, DataFormat.Float16_b]
+        formats.input in [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float16_b]
         and formats.output == DataFormat.Float16
     ):
         return [DestAccumulation.Yes]

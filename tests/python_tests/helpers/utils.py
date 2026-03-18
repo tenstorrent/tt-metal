@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import os
 import subprocess
 from collections import namedtuple
@@ -33,6 +34,7 @@ tolerances = {
     DataFormat.Int8: Tolerance(atol=0, rtol=0),
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
+    DataFormat.Bfp4_b: Tolerance(atol=0.25, rtol=0.3),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.Fp8_e4m3: Tolerance(atol=0.2, rtol=0.2),
@@ -184,6 +186,85 @@ def calculate_pcc(golden, input):
     return pcc_result
 
 
+def _bfp4_block_aware_compare(
+    golden: torch.Tensor, result: torch.Tensor, max_ulp_diff: int = 2
+) -> torch.Tensor:
+    """Compare two BFP4_b tensors allowing small ULP differences per 16-element block.
+
+    BFP4_b shares an exponent across each 16-element block, so the ULP size
+    depends on the block's max magnitude.  The SFPU hardware computes in FP32
+    with internal approximations (e.g. Newton-Raphson for rsqrt) that can
+    differ slightly from the golden model.  After Bfp4 quantization (3-bit
+    mantissa), these small intermediate differences can shift a value by up
+    to ``max_ulp_diff`` quantization steps.
+
+    For full tiles (n a multiple of 1024), we tilize before block-wise check and
+    untilize the validity mask. For partial tiles (num_faces 1 or 2: 256/512
+    elements), we compare block-by-block on flat data without tilize/untilize.
+    """
+    from helpers.tilize_untilize import tilize_block, untilize_block
+
+    BLOCK = 16
+    BFP4_MANTISSA_BITS = 3
+    TILE_SIZE = 1024
+
+    g_flat = golden.float().flatten()
+    r_flat = result.float().flatten()
+    n = g_flat.numel()
+
+    if n % TILE_SIZE == 0 and n > 0:
+        num_tiles = n // TILE_SIZE
+        tile_dim = (32 * num_tiles, 32)
+        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
+        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
+    else:
+        g_til = g_flat
+        r_til = r_flat
+
+    is_valid_til = torch.ones(n, dtype=torch.bool)
+
+    for blk_start in range(0, n, BLOCK):
+        blk_end = min(blk_start + BLOCK, n)
+        g_blk = g_til[blk_start:blk_end]
+        r_blk = r_til[blk_start:blk_end]
+
+        both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
+
+        finite_vals = torch.cat(
+            [
+                g_blk[torch.isfinite(g_blk)].abs(),
+                r_blk[torch.isfinite(r_blk)].abs(),
+            ]
+        )
+        if finite_vals.numel() == 0:
+            is_valid_til[blk_start:blk_end] = True
+            continue
+
+        block_max = finite_vals.max().item()
+        if block_max == 0:
+            is_valid_til[blk_start:blk_end] = (g_blk == r_blk) | both_nan
+            continue
+
+        block_exp = math.floor(math.log2(block_max))
+        one_ulp = 2.0 ** (block_exp - BFP4_MANTISSA_BITS + 1)
+
+        diff = (g_blk - r_blk).abs()
+        is_valid_til[blk_start:blk_end] = (diff <= max_ulp_diff * one_ulp) | both_nan
+
+    if n % TILE_SIZE == 0 and n > 0:
+        num_tiles = n // TILE_SIZE
+        tile_dim = (32 * num_tiles, 32)
+        is_valid = (
+            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
+            .flatten()
+            .bool()
+        )
+    else:
+        is_valid = is_valid_til
+
+    return is_valid
+
+
 def passed_test(
     golden_tensor,
     res_tensor,
@@ -219,12 +300,15 @@ def passed_test(
     golden_tensor = golden_tensor.type(format_dict[output_data_format])
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
-    is_close = torch.isclose(
-        golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
-    )
-    is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
+    if output_data_format == DataFormat.Bfp4_b:
+        is_valid = _bfp4_block_aware_compare(golden_tensor, res_tensor)
+    else:
+        is_close = torch.isclose(
+            golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
+        )
+        is_nan = torch.isnan(golden_tensor) & torch.isnan(res_tensor)
+        is_valid = is_close | is_nan
 
-    is_valid = is_close | is_nan
     is_within_tolerance = torch.all(is_valid)
 
     if print_errors:
@@ -325,6 +409,8 @@ def passed_test(
     #     values with less precision (Bfp8_b) and drops below 99% in that case
     if output_data_format == DataFormat.Bfp8_b:
         target_pcc = pow(0.99, L1_to_L1_iterations)
+    elif output_data_format == DataFormat.Bfp4_b:
+        target_pcc = 0.98
 
     if custom_pcc_threshold is not None:
         logger.info(
