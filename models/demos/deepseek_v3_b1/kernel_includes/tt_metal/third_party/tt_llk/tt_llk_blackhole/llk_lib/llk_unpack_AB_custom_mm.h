@@ -146,7 +146,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     //   Sequence: A0, A1, A2, A3 → first_half, second_half, first_half, second_half
     //   Where A0+A1 covers first kt_dim iteration (ct_dim tiles), A2+A3 covers second kt_dim iteration
 
-    const std::uint32_t first_half_iterations = ct_dim + 1 >> 1;  // Round up for odd ct_dim
+    const std::uint32_t first_half_iterations = (ct_dim + 1) >> 1;  // Round up for odd ct_dim
     const std::uint32_t second_half_iterations = ct_dim >> 1;     // Round down for odd ct_dim
     // Both halves can take up to 9 iterations, meaning max of 18 tiles in width with full odd dim support
     // Although 16 is still the practical limit due to size of dst
