@@ -144,6 +144,14 @@ double bw = estimate_noc_bandwidth(params);
 double lat = estimate_noc_latency(params);
 ```
 
+## CMake
+
+Add the following to your `CMakeLists.txt` to link against the estimator:
+
+```cmake
+target_link_libraries(my_target PRIVATE tt_metal_noc_estimator)
+```
+
 ## Notes
 
 - Set as many parameters as possible to get the most accurate estimate, some parameters can significantly impact predicted performance
