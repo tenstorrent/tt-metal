@@ -22,6 +22,81 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
+static void prepare_receiver_bidir(
+    tt::tt_metal::IDevice* const recv_device,
+    const CoreCoord& recv_core,
+    uint32_t transfer_size,
+    uint32_t transfer_count,
+    std::vector<uint32_t>& all_zeros,
+    DataMovementProcessor processor,
+    uint32_t recv_l1_address,
+    uint32_t barrier_address,
+    tt_metal::Program* recv_program) {
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), all_zeros, recv_l1_address);
+
+    auto recv_eth_config = tt_metal::EthernetConfig{
+        .noc = tt_metal::NOC::NOC_0,
+        .processor = processor,
+        .compile_args =
+            {
+                transfer_size,
+                transfer_count,
+                barrier_address,
+            },
+    };
+    eth_test_common::set_arch_specific_eth_config(recv_eth_config);
+
+    auto recv_kernel = tt_metal::CreateKernel(
+        *recv_program,
+        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_recv_kernel.cpp",
+        recv_core,
+        recv_eth_config);
+
+    tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, recv_core, {});
+}
+
+static void prepare_sender_bidir(
+    tt::tt_metal::IDevice* const send_device,
+    const CoreCoord& send_core,
+    uint32_t transfer_size,
+    uint32_t transfer_count,
+    uint32_t send_delta_addr,
+    std::vector<uint32_t>& inputs,
+    DataMovementProcessor processor,
+    uint32_t num_bytes_per_send,
+    uint32_t send_l1_address,
+    uint32_t recv_l1_address,
+    uint32_t barrier_address,
+    tt_metal::Program* send_program) {
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
+
+    auto send_eth_config = tt_metal::EthernetConfig{
+        .noc = tt_metal::NOC::NOC_0,
+        .processor = processor,
+        .compile_args =
+            {
+                num_bytes_per_send,
+                transfer_size,
+                transfer_count,
+                send_delta_addr,
+                send_l1_address,
+                recv_l1_address,
+                barrier_address,
+            },
+    };
+    eth_test_common::set_arch_specific_eth_config(send_eth_config);
+
+    auto send_kernel = tt_metal::CreateKernel(
+        *send_program,
+        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_send_kernel.cpp",
+        send_core,
+        send_eth_config);
+
+    tt_metal::SetRuntimeArgs(*send_program, send_kernel, send_core, {});
+}
+
 template <typename FIXTURE>
 static bool run_test_bandwidth_bidir(
     FIXTURE* fixture,
@@ -34,7 +109,7 @@ static bool run_test_bandwidth_bidir(
     auto* const recv_device = recv_mesh_device->get_devices()[0];
     uint32_t transfer_size = 160 * 1024;
     uint32_t num_bytes_per_send = transfer_size / 2;
-    uint32_t transfer_count = 10240 * 2;
+    uint32_t transfer_count = 20 << 10;
     uint64_t total_transferred = (uint64_t)transfer_size * transfer_count;
     DataMovementProcessor processor0 = DataMovementProcessor::RISCV_0;
     DataMovementProcessor processor1 = DataMovementProcessor::RISCV_1;
@@ -52,105 +127,57 @@ static bool run_test_bandwidth_bidir(
     tt_metal::Program send_program = tt_metal::Program(), recv_program_ = tt_metal::Program();
     tt_metal::Program& recv_program = same_device ? send_program : recv_program_;
 
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), all_zeros, recv_l1_address);
-
-    auto recv_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor0,
-        .compile_args =
-            {
-                transfer_size,
-                transfer_count,
-                barrier_address,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(recv_eth_config);
-
-    auto recv_kernel = tt_metal::CreateKernel(
-        recv_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_recv_kernel.cpp",
+    /* Receivers */
+    prepare_receiver_bidir(
+        recv_device,
         recv_core,
-        recv_eth_config);
+        transfer_size,
+        transfer_count,
+        all_zeros,
+        processor0,
+        recv_l1_address,
+        barrier_address,
+        &recv_program);
 
-    tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, {});
-
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        send_device->id(), send_device->ethernet_core_from_logical_core(send_core), all_zeros, recv_l1_address);
-
-    recv_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor1,
-        .compile_args =
-            {
-                transfer_size,
-                transfer_count,
-                barrier_address,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(recv_eth_config);
-
-    recv_kernel = tt_metal::CreateKernel(
-        send_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_recv_kernel.cpp",
+    prepare_receiver_bidir(
+        send_device,
         send_core,
-        recv_eth_config);
+        transfer_size,
+        transfer_count,
+        all_zeros,
+        processor1,
+        recv_l1_address,
+        barrier_address,
+        &send_program);
 
-    tt_metal::SetRuntimeArgs(send_program, recv_kernel, recv_core, {});
-
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        send_device->id(), send_device->ethernet_core_from_logical_core(send_core), inputs, send_l1_address);
-
-    auto send_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor0,
-        .compile_args =
-            {
-                num_bytes_per_send,
-                transfer_size,
-                transfer_count,
-                send_delta_addr,
-                send_l1_address,
-                recv_l1_address,
-                barrier_address,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(send_eth_config);
-
-    auto send_kernel = tt_metal::CreateKernel(
-        send_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_send_kernel.cpp",
+    /* Senders */
+    prepare_sender_bidir(
+        send_device,
         send_core,
-        send_eth_config);
+        transfer_size,
+        transfer_count,
+        send_delta_addr,
+        inputs,
+        processor0,
+        num_bytes_per_send,
+        send_l1_address,
+        recv_l1_address,
+        barrier_address,
+        &send_program);
 
-    tt_metal::SetRuntimeArgs(send_program, send_kernel, send_core, {});
-
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        recv_device->id(), recv_device->ethernet_core_from_logical_core(recv_core), inputs, send_l1_address);
-
-    send_eth_config = tt_metal::EthernetConfig{
-        .noc = tt_metal::NOC::NOC_0,
-        .processor = processor1,
-        .compile_args =
-            {
-                num_bytes_per_send,
-                transfer_size,
-                transfer_count,
-                send_delta_addr,
-                send_l1_address,
-                recv_l1_address,
-                barrier_address,
-            },
-    };
-    eth_test_common::set_arch_specific_eth_config(send_eth_config);
-
-    send_kernel = tt_metal::CreateKernel(
-        send_program,
-        "tests/tt_metal/tt_metal/deployment/kernels/eth_bidir_send_kernel.cpp",
+    prepare_sender_bidir(
+        recv_device,
         recv_core,
-        send_eth_config);
-
-    tt_metal::SetRuntimeArgs(recv_program, send_kernel, send_core, {});
+        transfer_size,
+        transfer_count,
+        send_delta_addr,
+        inputs,
+        processor1,
+        num_bytes_per_send,
+        send_l1_address,
+        recv_l1_address,
+        barrier_address,
+        &recv_program);
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
