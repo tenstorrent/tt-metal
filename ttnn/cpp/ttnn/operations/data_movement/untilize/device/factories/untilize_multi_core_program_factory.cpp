@@ -29,6 +29,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     const auto& a = tensor_args.input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -111,9 +112,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     }
 
     // Block reader: unbacked double-buffer CB, reads from L1 shard block-by-block.
-    // Required for uneven sharding where CB backing has a size mismatch.
-    // Even sharding uses zero-copy backed CB (fast production path).
-    bool use_block_reader = input_is_sharded && has_uneven_sharding;
+    // Required for uneven sharding (CB backing mismatch) and the slow untilize path
+    // (llk_unpack_untilize reads past CB boundary when CB is backed at L1 edge).
+    // The pack_untilize path with even sharding uses zero-copy backed CB (fast production path).
+    bool use_block_reader = input_is_sharded && (has_uneven_sharding || !use_pack_untilize);
 
     // Input CB
     uint32_t input_cb_num_tiles;
@@ -231,8 +233,19 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     }
 
     // Compute kernel file
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+    std::string compute_kernel;
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+        log_debug(tt::LogOp, "Using slow untilize.");
+        compute_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
+    } else {
+        log_debug(tt::LogOp, "Using fast pack untilize.");
+        compute_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
+            "pack_untilize_variable_num_blocks.cpp");
+    }
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input

@@ -29,6 +29,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
 
     // const auto& a = input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -198,8 +199,19 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
     }
 
     // Compute kernel file
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+    std::string compute_kernel;
+    if (!use_pack_untilize || input.dtype() == DataType::UINT16) {
+        log_debug(tt::LogOp, "Using slow untilize.");
+        compute_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+        unpack_to_dest_mode[src0_cb_index] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
+    } else {
+        log_debug(tt::LogOp, "Using fast pack untilize.");
+        compute_kernel = std::string(
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
+            "pack_untilize_variable_num_blocks.cpp");
+    }
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input

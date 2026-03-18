@@ -29,16 +29,19 @@ dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16]
 
 @pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
+@pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 512])
 @pytest.mark.parametrize("W", [1024, 256])
-def test_untilize_2D(device, in_dtype, use_multicore, H, W):
+def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
+        pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
 
-    output_tt = ttnn.untilize(ttnn_input, use_multicore=use_multicore)
+    output_tt = ttnn.untilize(ttnn_input, use_multicore=use_multicore, use_pack_untilize=use_pack_untilize)
     output_torch = ttnn.to_torch(output_tt)
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
@@ -67,16 +70,22 @@ def test_tilize_2D(device, in_dtype, use_multicore, H, W):
 
 @pytest.mark.parametrize("in_dtype", dtypes)
 @pytest.mark.parametrize("use_multicore", [False, True])
+# Fails on int32 if use_pack_untilize is False AND dtype is uint32/int32
+@pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 43])
 @pytest.mark.parametrize("W", [64, 76])
-def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, H, W):
+def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
+        pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
     torch_input_shape = [H, W]
 
     torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
 
-    output_tt = ttnn.untilize_with_unpadding(ttnn_input, [H - 1, W - 1], use_multicore=use_multicore)
+    output_tt = ttnn.untilize_with_unpadding(
+        ttnn_input, [H - 1, W - 1], use_multicore=use_multicore, use_pack_untilize=use_pack_untilize
+    )
     output_torch = ttnn.to_torch(output_tt)
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)

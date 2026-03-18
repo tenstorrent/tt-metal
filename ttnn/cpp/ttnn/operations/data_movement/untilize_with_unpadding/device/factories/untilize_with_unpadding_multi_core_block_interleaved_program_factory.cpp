@@ -24,6 +24,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
+    bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     Program program{};
@@ -204,10 +205,18 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
+    bool use_pack_kernel = true;
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+        use_pack_kernel = false;
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
+    }
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -218,7 +227,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -229,7 +240,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     if (has_cliff_row) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -241,7 +254,9 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create(
     if (has_cliff_col) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,

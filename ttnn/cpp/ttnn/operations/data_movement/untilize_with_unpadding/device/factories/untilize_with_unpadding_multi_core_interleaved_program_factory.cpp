@@ -24,6 +24,7 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::cached_program_t
 UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
+    bool use_pack_untilize = operation_attributes.use_pack_untilize;
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::tt_metal::Program program{};
@@ -105,7 +106,13 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create(
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
+        compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        unpack_to_dest_mode[tt::CBIndex::c_0] =
+            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
+    }
 
     if (!core_range.empty()) {
         CreateKernel(

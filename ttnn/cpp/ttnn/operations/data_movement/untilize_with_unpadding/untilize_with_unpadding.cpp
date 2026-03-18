@@ -64,6 +64,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     const ttnn::Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
+    bool use_pack_untilize,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     bool fp32_dest_acc_en = input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::FLOAT32;
 
@@ -100,6 +101,7 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
             ttnn::Shape(output_end),
             memory_config,
             use_multicore,
+            use_pack_untilize,
             fp32_dest_acc_en,
             enough_space_width,
             enough_space_height,

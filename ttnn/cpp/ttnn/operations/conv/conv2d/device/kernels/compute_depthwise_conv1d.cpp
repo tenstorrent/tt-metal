@@ -10,7 +10,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 #ifdef FUSE_BIAS
 #include "api/compute/bcast.h"
@@ -23,6 +22,18 @@
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
+
+inline void tilize_in(uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
+    tilize_init(in_cb_id, in_block_w, out_cb_id);
+    for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
+        cb_wait_front(in_cb_id, in_block_w);
+        cb_reserve_back(out_cb_id, in_block_w);
+        tilize_block(in_cb_id, in_block_w, out_cb_id);
+        cb_push_back(out_cb_id, in_block_w);
+        cb_pop_front(in_cb_id, in_block_w);
+    }
+    tilize_uninit(in_cb_id, out_cb_id);
+}
 
 inline void eltwise_mul_and_add_block_v2(
     uint32_t in0_cb_id,
@@ -126,7 +137,9 @@ void kernel_main() {
         for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
             uint32_t i = in0_block_h_i * in0_num_blocks_w + in0_block_w_i;
             if constexpr (tilize_in0) {
-                compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_num_subblocks_read);
+                reconfig_data_format_srca(in0_cb_id);
+                pack_reconfig_data_format(tilized_in0_cb_id);
+                tilize_in(in0_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
             }
             reconfig_data_format_srca(tilized_in0_cb_id);
             pack_reconfig_data_format(eltwise_mul_partials_cb);

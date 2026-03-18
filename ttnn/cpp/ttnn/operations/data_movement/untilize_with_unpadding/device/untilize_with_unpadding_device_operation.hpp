@@ -51,6 +51,7 @@ Tensor untilize_with_unpadding(
     const ttnn::Shape& output_tensor_end,
     const std::optional<MemoryConfig>& output_mem_config,
     bool use_multicore,
+    bool use_pack_untilize,
     bool fp32_dest_acc_en,
     bool enough_space_width,
     bool enough_space_height,

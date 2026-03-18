@@ -340,7 +340,6 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
-            "ttnn/kernel_lib/*",
             "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [

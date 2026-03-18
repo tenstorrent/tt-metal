@@ -8,7 +8,6 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "api/compute/pack_untilize.h"
-#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 template <
     uint32_t Wt,
@@ -135,14 +134,18 @@ void kernel_main() {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
-        // Tilize input with activation pattern (Ht rows × Wt tiles)
-        compute_kernel_lib::tilize<
-            Wt,
-            cb_in,
-            cb_tilize,
-            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(Ht);
+        // tilize input
+        tilize_init(cb_in, Wt, cb_tilize);
+        for (uint32_t h = 0; h < Ht; ++h) {
+            cb_wait_front(cb_in, Wt);
+            cb_reserve_back(cb_tilize, Wt);
+
+            tilize_block(cb_in, Wt, cb_tilize);
+
+            cb_push_back(cb_tilize, Wt);
+            cb_pop_front(cb_in, Wt);
+        }
+        tilize_uninit(cb_in, cb_tilize);
 
         // transpose
         cb_wait_front(cb_tilize, HtWt);

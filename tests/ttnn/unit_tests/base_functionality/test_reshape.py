@@ -777,7 +777,6 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
         assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
-@pytest.mark.timeout(320)
 def test_reshape_oob(device):
     """
     Test proves that this reshape op writes data out of bounds, corrupting

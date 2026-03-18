@@ -145,7 +145,10 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     std::string compute_kernel_name =
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
+    if (tiles_per_channel_dim > MAX_PACK_UNTILIZE_WIDTH) {
+        compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+    }
 
     log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
 

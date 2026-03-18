@@ -197,6 +197,13 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
             "Output memory config layout must be INTERLEAVED but got {}",
             operation_attributes.output_mem_config.memory_layout());
     }
+
+    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
+    if (!operation_attributes.use_pack_untilize) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
+            "Pack untilize must be enabled to support uint32/int32 data types");
+    }
 }
 
 TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_specs(
@@ -272,6 +279,7 @@ Tensor untilize_with_unpadding(
     const ttnn::Shape& output_tensor_end,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     bool use_multicore,
+    bool use_pack_untilize,
     bool fp32_dest_acc_en,
     bool enough_space_width,
     bool enough_space_height,
@@ -281,6 +289,7 @@ Tensor untilize_with_unpadding(
             .output_tensor_end = output_tensor_end,
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
             .use_multicore = use_multicore,
+            .use_pack_untilize = use_pack_untilize,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,

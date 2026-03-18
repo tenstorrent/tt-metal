@@ -30,6 +30,7 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+            use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -46,14 +47,17 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
                const ttnn::Shape& output_tensor_end,
                const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
+               bool use_pack_untilize,
                const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
+                return self(
+                    input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
             },
             nb::arg("input_tensor"),
             nb::arg("output_tensor_end"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("use_multicore") = true,
+            nb::arg("use_pack_untilize") = true,
             nb::arg("sub_core_grids") = nb::none()});
 }
 
