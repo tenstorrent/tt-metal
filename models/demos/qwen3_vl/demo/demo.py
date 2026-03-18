@@ -462,9 +462,10 @@ def test_demo(
             model_args=model_args,
         )
         pad_token_id = tokenizer.pad_token_id
+        max_prompt_len = max(x.shape[0] for x in input_embeds)
         assert (
-            model_args.max_seq_len >= max(x.shape[0] for x in input_embeds) + max_generated_tokens
-        ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({(x.shape[0] for x in input_embeds)}) + max generated tokens ({max_generated_tokens})"
+            model_args.max_seq_len >= max_prompt_len + max_generated_tokens
+        ), f"max_seq_len ({model_args.max_seq_len}) must be >= than max prompt length ({max_prompt_len}) + max generated tokens ({max_generated_tokens})"
         pad_embedding_tt = get_pad_embedding(reference_model, pad_token_id, model_args)
         (
             input_prefill_pt,

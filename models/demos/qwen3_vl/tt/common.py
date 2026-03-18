@@ -170,8 +170,8 @@ def preprocess_inputs_prefill_ttnn(
     if max_prefill_len is None:
         max_prefill_len = model_args.max_seq_len
 
-    # Print the length of encoded prompts
-    logger.info("Encoded prompt lengths:" + ", ".join(str(prompt.shape[1]) for prompt in input_embeds))
+    # Print the length of encoded prompts (sequence length dimension)
+    logger.info("Encoded prompt lengths:" + ", ".join(str(prompt.shape[0]) for prompt in input_embeds))
 
     max_prompt_len = max(prompt.shape[0] for prompt in input_embeds)
     assert (
