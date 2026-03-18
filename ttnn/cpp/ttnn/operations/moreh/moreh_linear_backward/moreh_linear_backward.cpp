@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::moreh::moreh_linear_backward {
 
-static std::tuple<bool, bool, bool> get_required_outputs(const std::vector<bool>& are_required_outputs) {
+std::tuple<bool, bool, bool> get_required_outputs(const std::vector<bool>& are_required_outputs) {
     if (are_required_outputs.size() != 3) {
         TT_FATAL(are_required_outputs.size() == 3, "are_required_outputs size must be 3");
     }

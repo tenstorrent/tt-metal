@@ -57,10 +57,12 @@ void bind_moreh_clip_grad_norm_operation(nb::module_& mod) {
                 * For very large numbers of input tensors, the operation is batched based on device core count.
 
             Example:
-                >>> # Clip gradients with L2 norm
-                >>> gradients = [ttnn.from_torch(torch.randn(32, 64), device=device) for _ in range(3)]
-                >>> total_norm = ttnn.moreh_clip_grad_norm(gradients, max_norm=1.0, norm_type=2.0)
-                >>> print(f"Total norm before clipping: {total_norm}")
+
+            .. code-block:: python
+                # Clip gradients with L2 norm
+                gradients = [ttnn.from_torch(torch.randn(32, 64), device=device) for _ in range(3)]
+                total_norm = ttnn.moreh_clip_grad_norm(gradients, max_norm=1.0, norm_type=2.0)
+                print(f"Total norm before clipping: {total_norm}")
         )doc";
 
     ttnn::bind_function<"moreh_clip_grad_norm">(
