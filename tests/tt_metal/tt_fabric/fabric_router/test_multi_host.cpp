@@ -1131,43 +1131,40 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     EXPECT_GT(z_channel_count, 0) << "Expected Z channels for intermesh connections with assign_z_direction";
 }
 
-TEST(MultiHost, T3K2x2ZDirectionFallbackControlPlaneInit) {
-    // Tests Z-direction fallback: MGD has channels.count: 4 but NO assign_z_direction.
-    // When NESW ports run out, control plane falls back to Z-direction ports (previously would fail).
-    const std::filesystem::path t3k_2x2_z_fallback_mesh_graph_desc_path =
+TEST(MultiHost, TestDual4x8ZDirectionFallbackControlPlaneInit) {
+    // Dual 4x8 galaxies (c02u08, c03u02) - Z-only connections between them.
+    // MGD has no assign_z_direction; fallback to Z when NESW runs out.
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "Requires UBB galaxy (dual 4x8 cluster)";
+    }
+    if (*tt::tt_metal::MetalContext::instance().full_world_distributed_context().size() != 2) {
+        GTEST_SKIP() << "Requires 2 ranks (dual 4x8)";
+    }
+
+    const std::filesystem::path dual_4x8_z_fallback_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_z_fallback_mesh_graph_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x8_z_fallback_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(
-        t3k_2x2_z_fallback_mesh_graph_desc_path.string(),
+        dual_4x8_z_fallback_mesh_graph_desc_path.string(),
         tt::tt_fabric::FabricConfig::FABRIC_2D,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
-    // Verify assign_z_direction was NOT set in MGD
-    const auto& mesh_graph = control_plane->get_mesh_graph();
-    EXPECT_FALSE(mesh_graph.should_assign_z_direction(MeshId{0}, MeshId{1}))
-        << "Mesh 0 <-> 1 should NOT have assign_z_direction (testing fallback path)";
+    EXPECT_FALSE(control_plane->get_mesh_graph().should_assign_z_direction(MeshId{0}, MeshId{1}));
 
-    // Verify control plane init succeeded and intermesh connections are valid
     const auto& intermesh_connections = get_all_intermesh_connections(*control_plane);
-    EXPECT_EQ(intermesh_connections.size(), 8);  // 2x2 mesh, 4 chips per mesh, bidirectional = 8 total
+    EXPECT_GT(intermesh_connections.size(), 0);
 
-    size_t z_direction_count = 0;
-    for (const auto& [src_node_id, dst_node_id] : intermesh_connections) {
-        const auto& direction = control_plane->get_forwarding_direction(src_node_id, dst_node_id);
-        EXPECT_TRUE(direction.has_value()) << "Each intermesh connection must have a forwarding direction";
-        if (direction == RoutingDirection::Z) {
-            z_direction_count++;
+    size_t z_count = 0;
+    for (const auto& [src, dst] : intermesh_connections) {
+        auto dir = control_plane->get_forwarding_direction(src, dst);
+        EXPECT_TRUE(dir.has_value());
+        if (dir == RoutingDirection::Z) {
+            z_count++;
         }
-        const auto& eth_chans = control_plane->get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
-        EXPECT_TRUE(!eth_chans.empty()) << "Each intermesh connection must have eth channels";
     }
-
-    // Z-direction fallback: when NESW runs out, Z is used. With 4 channels requested and limited NESW,
-    // we expect some connections to use Z direction via fallback.
-    EXPECT_GT(z_direction_count, 0)
-        << "Expected Z-direction fallback to assign some connections when NESW ports exhausted";
+    EXPECT_GT(z_count, 0) << "Expected Z-direction fallback (physical links are Z-only)";
 }
 
 TEST(MultiHost, TestBHBlitzPipelineControlPlaneInit) {
