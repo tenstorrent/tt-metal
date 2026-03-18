@@ -401,7 +401,6 @@ jobs:
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         env:
           PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
-          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '7,7' || '' }}
         run: |
           $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
       - name: Prepare Tracy reports
