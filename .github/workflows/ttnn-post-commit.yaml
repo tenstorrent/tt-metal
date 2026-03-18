@@ -86,8 +86,6 @@ jobs:
           merge_gate="${{ inputs.merge-gate-call }}"
           matrix='${{ steps.build-matrix.outputs.matrix }}'
           filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
-          # [TO REVERT] Restrict dispatch validation to the specific failing test group only.
-          filtered=$(echo "$filtered" | jq -c 'map(select(.name == "ttnn fused group"))')
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
             echo "::error::No tests left after filtering for merge_gate=$merge_gate"
