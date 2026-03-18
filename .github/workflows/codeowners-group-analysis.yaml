@@ -55,12 +55,9 @@ jobs:
     steps:
       - name: Parse comment and get PR info
         id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Properly escape comment body to handle quotes
-          COMMENT_BODY=$(cat <<'COMMENT_EOF'
-          ${{ github.event.comment.body }}
-          COMMENT_EOF
-          )
           PR_NUMBER="${{ github.event.issue.number }}"
           COMMENT_AUTHOR="${{ github.event.comment.user.login }}"
 
