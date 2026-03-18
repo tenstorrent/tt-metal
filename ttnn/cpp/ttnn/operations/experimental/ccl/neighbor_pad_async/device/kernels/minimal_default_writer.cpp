@@ -479,5 +479,5 @@ void kernel_main() {
         uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[st], signal_noc_y[st], barrier_sem);
         noc_semaphore_inc(sem_noc_addr, 1);
     }
-    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
