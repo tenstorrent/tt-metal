@@ -102,16 +102,19 @@ ttnn::Tensor slice(
     bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
 
     Tensor input = input_tensor;
-    rm_only =
-        (input_tensor.layout() == Layout::TILE &&
-         (!no_step || one_dimensional || input_tensor.is_sharded() || !handled_tile_alignment));
+    // Use row-major path if:
+    // 1. Input is NOT in TILE layout, OR
+    // 2. Input is in TILE layout AND any of these conditions apply:
+    //    - Has non-unit steps (strided slice)
+    //    - Is 1D tensor
+    //    - Slice begins are not tile-aligned
+    // The tile path handles any end values (they get padded to tile boundaries
+    // downstream), so only begin alignment matters.
+    rm_only = (input_tensor.layout() != Layout::TILE) || (!no_step || one_dimensional || !handled_tile_alignment);
     if (rm_only) {
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
-        TT_FATAL(
-            input.dtype() != DataType::UINT16,
-            "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
     }
 

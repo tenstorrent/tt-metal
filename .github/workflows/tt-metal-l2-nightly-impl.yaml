@@ -459,7 +459,7 @@ jobs:
         if: always()
 
   ttnn-sdxl-tests:
-    if: ${{ inputs.run_sdxl_tests }}
+    if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100' }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -467,12 +467,14 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
-        TT_MM_THROTTLE_PERF: 5
+        # Only use MLPerf HF cache on non-CIv2 runners (P150b uses LFC via TT_GH_CI_INFRA)
+        HF_HUB_CACHE: ${{ inputs.runner-label == 'P150b' && '' || '/mnt/MLPerf/huggingface/hub' }}
+        TT_MM_THROTTLE_PERF: ${{ inputs.arch == 'blackhole' && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent ${{ inputs.runner-label == 'P150b' && '-e TT_GH_CI_INFRA=1' || '' }}"
     defaults:
       run:
         shell: bash
@@ -495,12 +497,19 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ttnn nightly sdxl tests
+      - name: ttnn nightly sdxl tests (wormhole)
+        if: ${{ inputs.arch == 'wormhole_b0' }}
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
           pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
           pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly sdxl tests (blackhole P150b)
+        if: ${{ inputs.arch == 'blackhole' && inputs.runner-label == 'P150b' }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
         if: ${{ inputs.runner-label == 'N300' }}
         timeout-minutes: ${{ inputs.timeout }}
