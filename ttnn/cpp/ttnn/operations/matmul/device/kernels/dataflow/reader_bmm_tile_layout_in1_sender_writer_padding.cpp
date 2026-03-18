@@ -189,6 +189,8 @@ void kernel_main() {
                         l1_write_addr_in1;  // copy start address of block, to be used for mcasting
 
                     // Copy in1 block into CB, as the default kernel
+                    // uint32_t help1 = in1_tensor_current_inner_dim_block_start_tile_id;
+                    // uint32_t help2 = 0;
                     uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
                     for (uint32_t h = 0; h < in1_block_h; ++h) {
                         uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
@@ -200,11 +202,16 @@ void kernel_main() {
                             in1_tensor_tile_id += in1_tensor_stride_w;
                         }
                         in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                        // help2 = in1_tensor_tile_id;
                     }
                     in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 
                     // Barrier! make sure the reads are done
                     noc_async_read_barrier();
+                    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                    // DPRINT_DATA0({ DPRINT << " in1 reader - batch: " << b << " from DRAM " << in1_block_num_tiles <<
+                    // " tiles: (" << help1 << " - " << help2 << ")"  << TileSlice(1, 0, sr, TSLICE_OUTPUT_CB,
+                    // TSLICE_WR_PTR, true, false) << ENDL(); });
 
                     // DPRINT << "starting mcast of " << in1_block_num_tiles << " tiles from batch: " << b << ", block:
                     // " << block << ENDL();

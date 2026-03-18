@@ -1196,15 +1196,15 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
-    std::cout << "in0_CB_tiles: (" << in0_CB_tiles << ")" << std::endl;
-    std::cout << "in1_CB_tiles: (" << in1_CB_tiles << ")" << std::endl;
-    std::cout << "in2_CB_tiles: (" << in2_CB_tiles << ")" << std::endl;
-    std::cout << "in3_CB_tiles: (" << in3_CB_tiles << ")" << std::endl;
-    std::cout << "out_CB_tiles: (" << out_CB_tiles << ")" << std::endl;
-    std::cout << "interm0_CB_tiles: (" << interm0_CB_tiles << ")" << std::endl;
-    std::cout << "untilize_out: (" << untilize_out << ")" << std::endl;
-    std::cout << "in0_B: (" << in0_B << ")" << std::endl;
-    std::cout << "in1_B: (" << in1_B << ")" << std::endl;
+    // std::cout << "in0_CB_tiles: (" << in0_CB_tiles << ")" << std::endl;
+    // std::cout << "in1_CB_tiles: (" << in1_CB_tiles << ")" << std::endl;
+    // std::cout << "in2_CB_tiles: (" << in2_CB_tiles << ")" << std::endl;
+    // std::cout << "in3_CB_tiles: (" << in3_CB_tiles << ")" << std::endl;
+    // std::cout << "out_CB_tiles: (" << out_CB_tiles << ")" << std::endl;
+    // std::cout << "interm0_CB_tiles: (" << interm0_CB_tiles << ")" << std::endl;
+    // std::cout << "untilize_out: (" << untilize_out << ")" << std::endl;
+    // std::cout << "in0_B: (" << in0_B << ")" << std::endl;
+    // std::cout << "in1_B: (" << in1_B << ")" << std::endl;
 
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
@@ -1212,9 +1212,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
 
-    std::cout << "all cores: (" << compute_with_storage_grid_size.x << ", " << compute_with_storage_grid_size.y << ")"
-              << std::endl;
-    std::cout << "num cores: (" << num_cores << ")" << std::endl;
+    // std::cout << "all cores: (" << compute_with_storage_grid_size.x << ", " << compute_with_storage_grid_size.y <<
+    // ")"
+    //           << std::endl;
+    // std::cout << "num cores: (" << num_cores << ")" << std::endl;
 
     CoreRange in1_mcast_sender(start_core, start_core);
     CoreRangeSet in1_mcast_receivers;
@@ -1257,6 +1258,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     const auto in0_block_h_for_in0_reader = keep_in0_in_l1 ? per_core_M : in0_block_h;
     const auto out_num_blocks_x_for_in0_reader = keep_in0_in_l1 ? 1 : out_num_blocks_x;
     const auto out_num_blocks_y_for_in0_reader = keep_in0_in_l1 ? 1 : out_num_blocks_y;
+    const auto num_blocks_for_in0_reader = keep_in0_in_l1 ? 1 : num_blocks;
 
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
@@ -1275,7 +1277,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in0_shard_width_in_tiles,
         (std::uint32_t)in0_shard_height_in_tiles,
         // in0/in1 common args
-        (std::uint32_t)num_blocks,                       // num_blocks
+        (std::uint32_t)num_blocks_for_in0_reader,        // num_blocks
         (std::uint32_t)out_num_blocks_x_for_in0_reader,  // out_num_blocks_x
         (std::uint32_t)out_num_blocks_y_for_in0_reader,  // out_num_blocks_y
         // in0 mcast args
@@ -2972,18 +2974,21 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
-    std::cout << "a shape: (" << ashape << "), b shape: (" << bshape << ")" << std::endl;
-    std::cout << "transpose a: (" << transpose_a << "), transpose b: (" << transpose_b << ")" << std::endl;
-    std::cout << "Mt: (" << Mt << "), Nt: (" << Nt << "), Kt: (" << Kt << ")" << std::endl;
-    std::cout << "per_core_M: (" << per_core_M << "), per_core_N: (" << per_core_N << "), in0_block_w: (" << in0_block_w
-              << ")" << std::endl;
-    std::cout << "num_cores_x: (" << num_cores_x << "), num_cores_y: (" << num_cores_y << "), num_cores: (" << num_cores
-              << ")" << std::endl;
-    std::cout << "num_blocks_y: (" << num_blocks_y << "), num_blocks_x: (" << num_blocks_x << "), num_blocks_total: ("
-              << num_blocks_total << ")" << std::endl;
-    std::cout << "___________OUTPUT SIZE - logical:" << output.logical_shape() << "_________" << std::endl;
-    std::cout << "___________OUTPUT SIZE - physical:" << output.padded_shape() << "_________" << std::endl;
-    std::cout << "___________ALL OUTPUTS SIZE:" << output_tensors.size() << "_________" << std::endl;
+    // std::cout << "a shape: (" << ashape << "), b shape: (" << bshape << ")" << std::endl;
+    // std::cout << "transpose a: (" << transpose_a << "), transpose b: (" << transpose_b << ")" << std::endl;
+    // std::cout << "Mt: (" << Mt << "), Nt: (" << Nt << "), Kt: (" << Kt << ")" << std::endl;
+    // std::cout << "per_core_M: (" << per_core_M << "), per_core_N: (" << per_core_N << "), in0_block_w: (" <<
+    // in0_block_w
+    //           << ")" << std::endl;
+    // std::cout << "num_cores_x: (" << num_cores_x << "), num_cores_y: (" << num_cores_y << "), num_cores: (" <<
+    // num_cores
+    //           << ")" << std::endl;
+    // std::cout << "num_blocks_y: (" << num_blocks_y << "), num_blocks_x: (" << num_blocks_x << "), num_blocks_total:
+    // ("
+    //           << num_blocks_total << ")" << std::endl;
+    // std::cout << "___________OUTPUT SIZE - logical:" << output.logical_shape() << "_________" << std::endl;
+    // std::cout << "___________OUTPUT SIZE - physical:" << output.padded_shape() << "_________" << std::endl;
+    // std::cout << "___________ALL OUTPUTS SIZE:" << output_tensors.size() << "_________" << std::endl;
 
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
     // TODO: Move these validates to op validate and properly check for this
@@ -3297,10 +3302,10 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            std::cout << "tensor_return_value before program is created_____________________________: " << std::endl;
-            for (size_t i = 0; i < tensor_return_value.size(); ++i) {
-                std::cout << "Tensor[" << i << "] shape: " << tensor_return_value[i].logical_shape() << std::endl;
-            }
+            // std::cout << "tensor_return_value before program is created_____________________________: " << std::endl;
+            // for (size_t i = 0; i < tensor_return_value.size(); ++i) {
+            //     std::cout << "Tensor[" << i << "] shape: " << tensor_return_value[i].logical_shape() << std::endl;
+            // }
             auto single_device_program =
                 MatmulMultiCoreReuseMcast1DProgramFactory::create(attributes, tensor_args, tensor_return_value);
             shared_variables[mesh_coord_range] = single_device_program.shared_variables;

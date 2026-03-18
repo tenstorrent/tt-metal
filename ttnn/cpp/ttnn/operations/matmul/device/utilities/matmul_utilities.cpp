@@ -116,11 +116,6 @@ ttnn::Shape compute_matmul_output_shape(
     const auto a_rank = input_shape_a.rank();
     const auto b_rank = input_shape_b.rank();
 
-    std::cout << "input_shape_a: " << input_shape_a << std::endl;
-    std::cout << "input_shape_b: " << input_shape_b << std::endl;
-    std::cout << "a_rank: " << a_rank << std::endl;
-    std::cout << "b_rank: " << b_rank << std::endl;
-
     // Rank difference will be used to align batch dimensions
     const int32_t out_rank = std::max<int32_t>(a_rank, b_rank) - (a_rank == 1 || b_rank == 1);
     const int32_t rank_difference = std::max<int32_t>(0, out_rank - a_rank);
