@@ -117,9 +117,9 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
 def test_host_io_loopback_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
+    """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
-    """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
