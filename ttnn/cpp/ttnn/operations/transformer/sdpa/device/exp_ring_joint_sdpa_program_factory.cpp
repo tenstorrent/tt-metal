@@ -1416,8 +1416,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 const uint32_t ag_tile_id_start = link * base_tiles + std::min(link, remainder);
                 const uint32_t ag_tile_id_end = (link + 1) * base_tiles + std::min(link + 1, remainder);
 
-                // Semaphore on this core that remote writers increment when K/V arrives
-                const uint32_t out_ready_sem_id = CreateSemaphore(program, {core}, 0);
+                // Use a global semaphore so the address is stable across program invocations
+                const uint32_t out_ready_sem_addr = args.semaphore[0].address();
 
                 writer_args.push_back(ag_direction);
                 writer_args.push_back(ag_input_Wt);
@@ -1429,7 +1429,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(ag_tile_id_start);
                 writer_args.push_back(ag_tile_id_end);
                 writer_args.push_back(static_cast<uint32_t>(args.ring_size));
-                writer_args.push_back(out_ready_sem_id);
+                writer_args.push_back(out_ready_sem_addr);
                 writer_args.push_back(k_addr);
                 writer_args.push_back(v_addr);
                 writer_args.push_back(gathered_k_addr);

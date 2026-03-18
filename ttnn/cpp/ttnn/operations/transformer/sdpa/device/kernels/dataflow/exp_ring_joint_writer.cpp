@@ -439,7 +439,7 @@ void kernel_main() {
         ag_tile_id_start = get_arg_val<uint32_t>(argidx++);
         ag_tile_id_end = get_arg_val<uint32_t>(argidx++);
         ag_ring_size = get_arg_val<uint32_t>(argidx++);
-        const uint32_t out_ready_sem_id = get_arg_val<uint32_t>(argidx++);
+        const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(argidx++);
         k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
@@ -468,11 +468,11 @@ void kernel_main() {
         fabric_set_unicast_route<false>(pkt_hdr_sem, 1);
 
         // Semaphore on this core that remote senders will atomically increment via fabric
-        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(out_ready_sem_id));
+        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
 
         // Destination for sem_inc packets: same physical NOC coordinates on all chips
         const uint64_t remote_out_ready_sem_noc_addr =
-            safe_get_noc_addr(my_x[0], my_y[0], get_semaphore(out_ready_sem_id), 0);
+            safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
         pkt_hdr_sem->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_out_ready_sem_noc_addr, 1});
 
@@ -800,43 +800,47 @@ void kernel_main() {
                         stats_tile_bytes);
                 }
 
-                for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
-                    const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                    const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                    const bool kv_chunk_is_beyond_logical_n =
-                        !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
+#ifdef USE_MUX
+                if (do_ag) {
+                    for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+                        const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                        const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                        const bool kv_chunk_is_beyond_logical_n =
+                            !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
 
-                    if (kv_chunk_is_beyond_logical_n) {
-                        continue;
-                    }
-
-                    Slice kv_slice;
-                    uint32_t end_seq_tile;
-
-                    if (kv_chunk_is_joint) {
-                        const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
-                        const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
-                        kv_slice =
-                            Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        end_seq_tile = Lt;
-                    } else {
-                        if (ring_iter == 0) {
-                            const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                            kv_slice =
-                                Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                            end_seq_tile = std::min(logical_nt, local_padded_Nt);
-                        } else {
-                            const uint32_t gathered_kv_start_tile =
-                                ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                            kv_slice = Slice(
-                                nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                            end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                        if (kv_chunk_is_beyond_logical_n) {
+                            continue;
                         }
-                    }
 
-                    // TODO: Read K chunk here
-                    // TODO: Read V chunk here
+                        Slice kv_slice;
+                        uint32_t end_seq_tile;
+
+                        if (kv_chunk_is_joint) {
+                            const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
+                            const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
+                            kv_slice =
+                                Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                            end_seq_tile = Lt;
+                        } else {
+                            if (ring_iter == 0) {
+                                const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
+                                kv_slice = Slice(
+                                    nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                                end_seq_tile = std::min(logical_nt, local_padded_Nt);
+                            } else {
+                                const uint32_t gathered_kv_start_tile =
+                                    ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
+                                kv_slice = Slice(
+                                    nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                                end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                            }
+                        }
+
+                        // TODO: Read K chunk here
+                        // TODO: Read V chunk here
+                    }
                 }
+#endif
 
                 if (is_last_ring_iter) {
                     write_block(
