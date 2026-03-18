@@ -18,7 +18,7 @@ OutputLayout = Literal["NLC", "NHWC"]
 PaddingType = int | tuple[int, int] | Literal["same"]
 
 
-params_to_config_values = {
+PARAMS_TO_CONFIG_VALUES = {
     (1, 512, 10): (100_000, 32),
     (512, 512, 3): (20_000, 32),
     (768, 768, 128): (50, 32),
@@ -70,20 +70,18 @@ class Conv1dConfiguration:
     # config_tensors_in_dram: bool = True
 
 
-def input1d_to_2d(
+def reshape_input_to_conv2d(
     input_tensor: ttnn.Tensor,
 ) -> ttnn.Tensor:
-    batch_size, input_length, input_channel = input_tensor.shape
-    return ttnn.reshape(input_tensor, (batch_size, 1, input_length, input_channel))
+    batch_size, input_length, in_channels = input_tensor.shape
+    return ttnn.reshape(input_tensor, (batch_size, 1, input_length, in_channels))
 
 
 def input_shape_to_memory_config(
     input_shape, output_length, in_channels, kernel_size, device: ttnn.MeshDevice
 ) -> ttnn.MemoryConfig:
-    batch_size, input_height, input_width, input_channels = input_shape
-    memory_cost = (
-        batch_size * input_height * input_width * input_channels * 2
-    )  # assuming bfloat16, so 2 bytes per element
+    batch_size, input_height, input_width, in_channels = input_shape
+    memory_cost = batch_size * input_height * input_width * in_channels * 2  # assuming bfloat16, so 2 bytes per element
     if (output_length, in_channels, kernel_size) in dims_to_num_slices:
         return ttnn.DRAM_MEMORY_CONFIG
 
@@ -91,19 +89,18 @@ def input_shape_to_memory_config(
 
     if memory_cost > 64 * 1_400_000:  # if input is larger than 1.4MB, use DRAM to avoid L1 thrashing
         return ttnn.DRAM_MEMORY_CONFIG
-    if input_channels < 16:
+    if in_channels < 16:
         return ttnn.DRAM_MEMORY_CONFIG
 
     nhw = batch_size * input_height * input_width
-    c = input_channels
 
     # Use best sharding strategy based on NHW-to-C ratio:
     # - HEIGHT_SHARDED if NHW >> C
     # - WIDTH_SHARDED if C >> NHW
     # - BLOCK_SHARDED if NHW ~= C
-    if nhw >= 4 * c:
+    if nhw >= 4 * in_channels:
         strategy = ttnn.ShardStrategy.HEIGHT
-    elif c >= 4 * nhw:
+    elif in_channels >= 4 * nhw:
         strategy = ttnn.ShardStrategy.WIDTH
     else:
         strategy = ttnn.ShardStrategy.BLOCK
@@ -191,8 +188,8 @@ def output_length_from_input_length(input_length, conv1d_config: Conv1dConfigura
 
 
 def get_conv2d_config_values(output_length, in_channels, out_channels, kernel_size) -> tuple[int, int]:
-    if (in_channels, out_channels, kernel_size) in params_to_config_values:
-        len_per_slice, act_block_h_override = params_to_config_values[(in_channels, out_channels, kernel_size)]
+    if (in_channels, out_channels, kernel_size) in PARAMS_TO_CONFIG_VALUES:
+        len_per_slice, act_block_h_override = PARAMS_TO_CONFIG_VALUES[(in_channels, out_channels, kernel_size)]
         slice_num = (output_length + len_per_slice - 1) // len_per_slice
     else:
         act_block_h_override = 0
@@ -312,7 +309,7 @@ class Conv1d:
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 
-        wt = state_dict[weight_key].reshape(
+        reshaped_weight = state_dict[weight_key].reshape(
             self.configuration.out_channels,
             self.configuration.in_channels // self.configuration.groups,
             1,
@@ -322,7 +319,7 @@ class Conv1d:
         self.torch_weight = state_dict[weight_key].detach().to(torch.float32).contiguous()
         bias = state_dict[bias_key] if bias_key in state_dict and state_dict[bias_key] is not None else None
         self.torch_bias = None if bias is None else bias.detach().to(torch.float32).contiguous()
-        self.weight_tensor = ttnn.from_torch(wt, dtype=ttnn.bfloat16)
+        self.weight_tensor = ttnn.from_torch(reshaped_weight, dtype=ttnn.bfloat16)
         self.bias_tensor = None
         if bias is not None:
             self.bias_tensor = ttnn.from_torch(
@@ -334,11 +331,11 @@ class Conv1d:
         self,
         input_tensor: ttnn.Tensor,
     ):
-        input_2d = input1d_to_2d(input_tensor)
+        input_2d = reshape_input_to_conv2d(input_tensor)
         batch_size = input_2d.shape[0]
         input_length = input_2d.shape[2]
         conv2d_config, slice_config, compute_config = get_conv_configs(input_length, self.configuration, self.device)
-        conv_result, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
+        out, [self.weight_tensor, self.bias_tensor] = ttnn.conv2d(
             input_tensor=input_2d,
             weight_tensor=self.weight_tensor,
             return_output_dim=False,
@@ -360,9 +357,9 @@ class Conv1d:
             compute_config=compute_config,
             slice_config=slice_config,
         )
-        output_shape = conv_result.shape
-        x = ttnn.reshape(conv_result, (batch_size, output_shape[2], output_shape[3]))
-        return x
+        output_shape = out.shape
+        out = ttnn.reshape(out, (batch_size, output_shape[2], output_shape[3]))
+        return out
 
     def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
         # Compare TT Conv1d output against torch.nn.functional.conv1d reference.

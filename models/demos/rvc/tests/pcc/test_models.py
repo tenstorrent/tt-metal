@@ -61,7 +61,7 @@ def test_generator(device):
         device=device,
     )
 
-    tt_output = tt_generator(tt_input, g=None)
+    tt_output = tt_generator(tt_input, conditioning=None)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
     tt_output_torch = tt_output_torch.reshape(batch_size, -1, 1).permute(0, 2, 1)
 

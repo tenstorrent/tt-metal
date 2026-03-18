@@ -96,22 +96,22 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
-def is_height_sharded_gn_from_dims(N, L, C):
-    physical_height_to_width_ratio = (N * L) / C
+def is_height_sharded_gn_from_dims(batch_size, sequnce_length, num_channels):
+    physical_height_to_width_ratio = (batch_size * sequnce_length) / num_channels
     threshold = 4
 
     return physical_height_to_width_ratio >= threshold
 
 
-def pad_nhw_to_multiple_of_32(x: ttnn.Tensor) -> tuple[ttnn.Tensor, int]:
-    N, L, C = x.shape
-    padded_length = math.ceil(L / 64) * 64
-    if padded_length == L:
-        return x, L
+def pad_sequence_length_to_multiple_of_32(x: ttnn.Tensor) -> tuple[ttnn.Tensor, int]:
+    batch_size, sequnce_length, num_channels = x.shape
+    padded_length = math.ceil(sequnce_length / 64) * 64
+    if padded_length == sequnce_length:
+        return x, sequnce_length
 
-    x_4d = ttnn.reshape(x, (N, 1, L, C))
-    x_padded = ttnn.pad(x_4d, padding=((0, 0), (0, 0), (0, padded_length - L), (0, 0)), value=0.0)
-    return ttnn.reshape(x_padded, (N, padded_length, C)), L
+    x_4d = ttnn.reshape(x, (batch_size, 1, sequnce_length, num_channels))
+    x_padded = ttnn.pad(x_4d, padding=((0, 0), (0, 0), (0, padded_length - sequnce_length), (0, 0)), value=0.0)
+    return ttnn.reshape(x_padded, (batch_size, padded_length, num_channels)), sequnce_length
 
 
 class GroupNorm1D:
@@ -191,22 +191,20 @@ class GroupNorm1D:
         # self.negative_mask = ttnn.to_device(self.negative_mask, device)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x, original_length = pad_nhw_to_multiple_of_32(x)
-        N, L, C = x.shape
-        is_height_sharded = is_height_sharded_gn_from_dims(N, L, C)
+        x, original_length = pad_sequence_length_to_multiple_of_32(x)
+        batch_size, sequnce_length, num_channels = x.shape
+        is_height_sharded = is_height_sharded_gn_from_dims(batch_size, sequnce_length, num_channels)
         sharded_mem_config, grid_size = determine_expected_group_norm_sharded_config_and_grid_size(
             device=self.device,
             num_channels=self.num_channels + self.channels_padding,
             num_groups=self.num_groups + self.num_groups_padding,
-            input_nhw=N * L,
+            input_nhw=batch_size * sequnce_length,
             is_height_sharded=is_height_sharded,
             is_row_major=True,
         )
-        x0 = ttnn.reshape(x, (N, 1, L, C))
+        x0 = ttnn.reshape(x, (batch_size, 1, sequnce_length, num_channels))
         x1 = ttnn.to_memory_config(x0, sharded_mem_config)
-        # if x1.buffer_address() != x0.buffer_address():
-        #     ttnn.deallocate(x0)
-        x2 = ttnn.group_norm(
+        out = ttnn.group_norm(
             x1,
             input_mask=self.input_mask_tensor_dict[1 if is_height_sharded else grid_size.x],
             num_groups=self.num_groups + self.num_groups_padding,
@@ -219,30 +217,27 @@ class GroupNorm1D:
             inplace=False,
         )
         ttnn.deallocate(x1)
-        # x3 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
-        x3 = x2
-        # ttnn.deallocate(x2)
-        x4 = ttnn.reshape(x3, (N, L, C))
-        x4_torch = ttnn.to_torch(x4)
-        x4 = ttnn.from_torch(
+        out = ttnn.reshape(out, (batch_size, sequnce_length, num_channels))
+        x4_torch = ttnn.to_torch(out)
+        out = ttnn.from_torch(
             x4_torch,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
 
-        if L != original_length:
-            x4 = ttnn.slice(x4, (0, 0, 0), (N, original_length, C))
-        return x4
+        if sequnce_length != original_length:
+            out = ttnn.slice(out, (0, 0, 0), (batch_size, original_length, num_channels))
+        return out
 
     def gp_slice(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Slicing for group partitioning. Only used for height sharded config with num_groups == num_channels (group size of 1)
-        N, L, C = x.shape
+        batch_size, sequnce_length, num_channels = x.shape
         num_cores_nhw = self.grid_size.x * self.grid_size.y
         length_block = 1024 * 9
         res_cat = []
-        for i in range(0, L, length_block):
-            x_block = ttnn.slice(x, (0, i, 0), (N, min(i + length_block, L), C))
+        for i in range(0, sequnce_length, length_block):
+            x_block = ttnn.slice(x, (0, i, 0), (batch_size, min(i + length_block, sequnce_length), num_channels))
             x_result = self.__call__(x_block)
             res_cat.append(x_result)
 

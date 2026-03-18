@@ -71,7 +71,7 @@ class WN:
             layer.load_state_dict(state_dict, key=f"res_skip_layers.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        output = ttnn.zeros_like(x)
+        out = ttnn.zeros_like(x)
         g_proj = None
         if g is not None:
             if self.cond_layer is None:
@@ -79,32 +79,34 @@ class WN:
             g_proj = self.cond_layer(g)
 
         for i, (in_layer, res_skip_layer) in enumerate(zip(self.in_layers, self.res_skip_layers, strict=True)):
-            x_in = in_layer(x)
+            conv_out = in_layer(x)
             if g_proj is not None:
                 cond_offset = i * 2 * self.hidden_channels
-                g_l = ttnn.slice(
+                layer_conditioning = ttnn.slice(
                     g_proj,
                     (0, 0, cond_offset),
                     (g_proj.shape[0], g_proj.shape[1], cond_offset + 2 * self.hidden_channels),
                 )
             else:
-                g_l = ttnn.zeros_like(x_in)
+                layer_conditioning = ttnn.zeros_like(conv_out)
 
-            in_act = ttnn.add(x_in, g_l, output_tensor=x_in)
-            t_act, s_act = ttnn.chunk(in_act, 2, dim=-1)
-            acts = ttnn.multiply(
-                ttnn.sigmoid(s_act, output_tensor=s_act), ttnn.tanh(t_act, output_tensor=t_act), output_tensor=s_act
+            input_activation = ttnn.add(conv_out, layer_conditioning, output_tensor=conv_out)
+            t_activation, s_activation = ttnn.chunk(input_activation, 2, dim=-1)
+            gates_activations = ttnn.multiply(
+                ttnn.sigmoid(s_activation, output_tensor=s_activation),
+                ttnn.tanh(t_activation, output_tensor=t_activation),
+                output_tensor=s_activation,
             )
 
-            res_skip_acts = res_skip_layer(acts)
+            res_skip_out = res_skip_layer(gates_activations)
             if i < self.num_layers - 1:
-                res_acts, skip_acts = ttnn.chunk(res_skip_acts, 2, dim=-1)
-                x = ttnn.add(x, res_acts, output_tensor=x)
-                output = ttnn.add(output, skip_acts, output_tensor=output)
+                residual_out, skip_out = ttnn.chunk(res_skip_out, 2, dim=-1)
+                x = ttnn.add(x, residual_out, output_tensor=x)
+                out = ttnn.add(out, skip_out, output_tensor=out)
             else:
-                output = ttnn.add(output, res_skip_acts, output_tensor=output)
+                out = ttnn.add(out, res_skip_out, output_tensor=out)
 
-        return output
+        return out
 
 
 class ResBlock1:
@@ -153,10 +155,10 @@ class ResBlock1:
         # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
         x = ttnn.clone(x)
         for c1, c2 in zip(self.convs1, self.convs2, strict=True):
-            xt0 = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
-            xt1 = c1(xt0)
-            xt2 = c2(xt1)
-            x = ttnn.add(xt2, x, output_tensor=x)
+            hidden = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
+            hidden = c1(hidden)
+            hidden = c2(hidden)
+            x = ttnn.add(hidden, x, output_tensor=x)
         return x
 
 

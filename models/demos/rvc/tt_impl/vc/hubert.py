@@ -50,10 +50,6 @@ class MultiheadSelfAttention:
         self.out_proj.load_state_dict(state_dict=state_dict, key="out_proj", module_prefix=module_prefix)
 
     def __call__(self, query: ttnn.Tensor) -> ttnn.Tensor:
-        tgt_len, bsz, embed_dim = query.shape
-        if embed_dim != self.embed_dim:
-            raise ValueError(f"query dim {embed_dim} != {self.embed_dim}")
-
         src_len = query.shape[0]
 
         query_proj = self.q_proj(query)
@@ -72,7 +68,7 @@ class MultiheadSelfAttention:
         ttnn.deallocate(key_proj)
         ttnn.deallocate(value_proj)
 
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
+        attn_out = ttnn.transformer.scaled_dot_product_attention(
             query_heads,
             key_heads,
             value_heads,
@@ -83,10 +79,10 @@ class MultiheadSelfAttention:
         ttnn.deallocate(key_heads)
         ttnn.deallocate(value_heads)
 
-        attn_output = ttnn.transformer.concatenate_heads(attn_output)
-        attn_output = self.out_proj(attn_output)
+        attn_out = ttnn.transformer.concatenate_heads(attn_out)
+        attn_out = self.out_proj(attn_out)
 
-        return attn_output
+        return attn_out
 
     def deallocate(self) -> None:
         self.k_proj.deallocate()
@@ -189,10 +185,10 @@ class ConvFeatureExtractionModel:
         self.conv_layers: list[Conv1d] = []
 
         in_d = 1
-        for i, cl in enumerate(conv_layers):
-            if len(cl) != 3:
-                raise ValueError(f"invalid conv definition: {cl}")
-            dim, k, stride = cl
+        for i, conv_config in enumerate(conv_layers):
+            if len(conv_config) != 3:
+                raise ValueError(f"invalid conv definition: {conv_config}")
+            dim, k, stride = conv_config
             self.conv_layers.append(
                 Conv1d(
                     device=device,
@@ -269,7 +265,6 @@ class PositionalConvEmbedding:
             dtype=ttnn.bfloat16,
             activation="gelu",
         )
-        self.remove = 1 if kernel_size % 2 == 0 else 0
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         self.conv.load_state_dict(state_dict=state_dict, key="0", module_prefix=module_prefix)

@@ -12,8 +12,6 @@ import ttnn
 class LayerNorm:
     """Stateful LayerNorm wrapper around `ttnn.layer_norm` for last-dim normalization."""
 
-    total_layernorm_time = 0.0
-
     def __init__(
         self,
         device: ttnn.MeshDevice,

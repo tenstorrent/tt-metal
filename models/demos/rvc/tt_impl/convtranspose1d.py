@@ -36,7 +36,7 @@ def resolve_padding(
     return (padding, padding)
 
 
-params_to_config_values = {
+PARAMS_TO_CONFIG_VALUES = {
     (512, 256, 16): (10_000, 32),
     (256, 128, 16): (10_000, 32),
     (128, 64, 4): (100_000, 32),
@@ -109,8 +109,8 @@ def output_length_from_input_length(input_length, conv1d_config: Conv1dConfigura
 
 
 def get_conv2d_config_values(output_length, in_channels, out_channels, kernel_size) -> tuple[int, int]:
-    if (in_channels, out_channels, kernel_size) in params_to_config_values:
-        len_per_slice, act_block_h_override = params_to_config_values[(in_channels, out_channels, kernel_size)]
+    if (in_channels, out_channels, kernel_size) in PARAMS_TO_CONFIG_VALUES:
+        len_per_slice, act_block_h_override = PARAMS_TO_CONFIG_VALUES[(in_channels, out_channels, kernel_size)]
         slice_num = (output_length + len_per_slice - 1) // len_per_slice
     else:
         slice_num = 1
@@ -160,12 +160,11 @@ def get_conv_configs(
     )
 
 
-def input1d_to_2d(input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-    batch_size = input_tensor.shape[0]
-    input_length = input_tensor.shape[1]
-    input_channel = input_tensor.shape[2]
-    input_t = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.reshape(input_t, (batch_size, 1, input_length, input_channel))
+def reshape_input_to_conv2d(
+    input_tensor: ttnn.Tensor,
+) -> ttnn.Tensor:
+    batch_size, input_length, in_channels = input_tensor.shape
+    return ttnn.reshape(input_tensor, (batch_size, 1, input_length, in_channels))
 
 
 class ConvTranspose1d:
@@ -226,15 +225,15 @@ class ConvTranspose1d:
             module_prefix = ""
         base_key = f"{module_prefix}{key}" if module_prefix else key
         bias_key = f"{base_key}.bias"
-        wt_torch = state_dict[f"{base_key}.weight"]
-        wt = wt_torch.reshape(
+        reshaped_weight_torch = state_dict[f"{base_key}.weight"]
+        reshaped_weight = reshaped_weight_torch.reshape(
             self.configuration.in_channels,
             self.configuration.out_channels // self.configuration.groups,
             1,
             self.configuration.kernel_size,
         )
         self.weight_tensor = ttnn.from_torch(
-            wt,
+            reshaped_weight,
             dtype=ttnn.bfloat16,
         )
 
@@ -246,11 +245,11 @@ class ConvTranspose1d:
             )
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        input_2d = input1d_to_2d(input_tensor)
+        input_2d = reshape_input_to_conv2d(input_tensor)
         batch_size = input_2d.shape[0]
         input_length = input_2d.shape[2]
         conv2d_config, slice_config, compute_config = get_conv_configs(input_length, self.configuration, self.device)
-        output, [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
+        out, [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
             input_tensor=input_2d,
             weight_tensor=self.weight_tensor,
             return_output_dim=False,
@@ -272,6 +271,6 @@ class ConvTranspose1d:
             compute_config=compute_config,
             dram_slice_config=slice_config,
         )
-        output_shape = output.shape
-        x = ttnn.reshape(output, (batch_size, output_shape[2], output_shape[3]))
-        return x
+        output_shape = out.shape
+        out = ttnn.reshape(out, (batch_size, output_shape[2], output_shape[3]))
+        return out
