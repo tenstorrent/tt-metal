@@ -120,6 +120,8 @@ tt_metal/tools/**/CMakeLists.txt @kmabeeTT @nhuang-tt @mo-tenstorrent @ihamer-tt
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 tt_metal/impl/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-bypass
+tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @tenstorrent/codeowner-bypass
+tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @tenstorrent/codeowner-bypass
 
 # metal misc
 tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
