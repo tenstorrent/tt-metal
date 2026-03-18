@@ -29,7 +29,7 @@ jobs:
     needs: [build-docker-image]
     if: ${{ always() && (needs.build-docker-image.result == 'success' || needs.build-docker-image.result == 'skipped') }}
     runs-on: tt-ubuntu-2204-large-stable
-    timeout-minutes: 60
+    timeout-minutes: 45
     container:
       image: >-
         harbor.ci.tenstorrent.net/${{
