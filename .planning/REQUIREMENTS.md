@@ -44,8 +44,8 @@
 
 ### Connection API
 
-- [ ] **CONN-01**: Private `append_fabric_connection_rt_args` variant for Metal-layer-only callers (not published under fabric API)
-- [ ] **CONN-02**: VC2 WorkerConnectionAdapter: same template as existing, type alias with VC2's stream ID hardcoded
+- [x] **CONN-01**: Private `append_fabric_connection_rt_args` variant for Metal-layer-only callers (not published under fabric API)
+- [x] **CONN-02**: VC2 WorkerConnectionAdapter: same template as existing, type alias with VC2's stream ID hardcoded
 
 ### Testing
 
@@ -94,8 +94,8 @@
 | FLOW-01 | Phase 4 | Complete |
 | FLOW-02 | Phase 4 | Complete |
 | FLOW-03 | Phase 4 | Complete |
-| CONN-01 | Phase 5 | Pending |
-| CONN-02 | Phase 5 | Pending |
+| CONN-01 | Phase 5 | Complete |
+| CONN-02 | Phase 5 | Complete |
 | TEST-01 | Phase 5 | Pending |
 | TEST-02 | Phase 5 | Pending |
 | TEST-03 | Phase 5 | Pending |

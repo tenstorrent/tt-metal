@@ -91,7 +91,7 @@ Plans:
   3. VC2 non-Z router test passes: worker injects into VC2 sender, VC2 receiver writes locally, data verified
   4. VC2 Z-router test passes: worker injects into VC2 sender, traffic forwards through VC0's receiver, data verified
   5. All existing regression tests continue to pass (test_fabric_ubench + test_fabric_sanity)
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 05-01-PLAN.md — Remove TT_FATAL guard, gate requires_vc2 on RT option, add VC2 adapter type alias, create private VC2 connection API
@@ -108,4 +108,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 2. Constants & Config Foundation | 2/2 | Complete | 2026-03-17 |
 | 3. Channel Mapping & Allocation | 2/2 | Complete | 2026-03-17 |
 | 4. Builder Wiring & Flow Control | 1/2 | In progress | - |
-| 5. Connection API & Testing | 0/2 | Not started | - |
+| 5. Connection API & Testing | 1/2 | In Progress|  |

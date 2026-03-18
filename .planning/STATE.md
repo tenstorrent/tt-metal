@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-18T00:50:01.852Z"
-last_activity: 2026-03-18 -- Plan 04-01 executed
+stopped_at: Phase 5 context gathered
+last_updated: "2026-03-18T15:53:11.810Z"
+last_activity: 2026-03-18 -- Plan 04-02 executed
 progress:
   total_phases: 5
-  completed_phases: 3
-  total_plans: 10
-  completed_plans: 8
-  percent: 80
+  completed_phases: 4
+  total_plans: 8
+  completed_plans: 9
+  percent: 90
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-03-17)
 
 ## Current Position
 
-Phase: 4 of 5 (Builder Wiring & Flow Control)
-Plan: 2 of 2 in current phase
-Status: Phase 04 complete, ready for phase 05
-Last activity: 2026-03-18 -- Plan 04-02 executed
+Phase: 5 of 5 (Connection API & Testing)
+Plan: 1 of 2 in current phase
+Status: Plan 05-01 complete
+Last activity: 2026-03-18 -- Plan 05-01 executed
 
-Progress: [########--] 80%
+Progress: [#########-] 90%
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [########--] 80%
 | Phase 03 P02 | 19min | 2 tasks | 1 files |
 | Phase 04 P01 | 8min | 2 tasks | 4 files |
 | Phase 04 P02 | 5min | 2 tasks | 3 files |
+| Phase 05 P01 | 5min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,8 @@ Recent decisions affecting current work:
 - [04-01] VC2 stream IDs dual-use: ID 30 shared with tensix_relay (UDM exclusive), ID 31 shared with multi_risc_teardown scratch
 - [04-02] VC2 enablement derived from actual_sender_channels_vc2 > 0 (avoids FabricBuilderContext dependency in emit_ct_args)
 - [04-02] Firmware heuristic replaced with ACTUAL_VC*_SENDER_CHANNELS derivation -- no behavioral change for non-VC2 configs
+- [05-01] VC2 connection API kept private (fabric_vc2_connection.hpp/.cpp), not exposed in public fabric.hpp
+- [05-01] VC2 sender channel index = get_num_sender_channels(0) + get_num_sender_channels(1) (dynamic, not hardcoded)
 
 ### Pending Todos
 
@@ -92,6 +95,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-18T03:13:13Z
-Stopped at: Completed 04-02-PLAN.md
-Resume file: .planning/phases/05-connection-api/ (next phase)
+Last session: 2026-03-18T16:19:22Z
+Stopped at: Completed 05-01-PLAN.md
+Resume file: .planning/phases/05-connection-api-testing/05-01-SUMMARY.md
