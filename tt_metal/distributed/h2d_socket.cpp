@@ -385,14 +385,14 @@ std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     return descriptor_path_;
 }
 
-std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id) {
+std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
     auto descriptor_path = fmt::format("/dev/shm/tt_h2d_{}.json", socket_id);
     auto start_time = std::chrono::high_resolution_clock::now();
     while (!std::filesystem::exists(descriptor_path)) {
         auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::high_resolution_clock::now() - start_time)
                               .count();
-        if (elapsed_ms > 10000) {
+        if (elapsed_ms > timeout_ms.value_or(10000)) {
             TT_THROW("Timeout waiting for descriptor file to be created: {}", descriptor_path);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

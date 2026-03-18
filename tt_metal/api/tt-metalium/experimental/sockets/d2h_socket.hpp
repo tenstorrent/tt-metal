@@ -85,7 +85,8 @@ public:
      * @param socket_id The identifier used when the owner called export_descriptor().
      * @return A connected D2HSocket ready for data transfer.
      */
-    static std::unique_ptr<D2HSocket> connect(const std::string& socket_id);
+    static std::unique_ptr<D2HSocket> connect(
+        const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.

@@ -89,7 +89,8 @@ public:
      * @param descriptor_path Path to the JSON descriptor file exported by the owner.
      * @return A connected H2DSocket ready for data transfer.
      */
-    static std::unique_ptr<H2DSocket> connect(const std::string& socket_id);
+    static std::unique_ptr<H2DSocket> connect(
+        const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
      * @brief Exports a descriptor file for cross-process socket attachment.

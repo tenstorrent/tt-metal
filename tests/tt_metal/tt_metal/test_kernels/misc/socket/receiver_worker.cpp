@@ -4,7 +4,6 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
@@ -14,10 +13,9 @@ void kernel_main() {
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(4);
 
-    DPRINT << "Start receiver worker" << ENDL();
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);
     set_receiver_socket_page_size(receiver_socket, page_size);
-    DPRINT << "Receiver socket created" << ENDL();
+
     // Reads one page at a time and sends ack to sender, can be optimized to notify
     // receiver after reading larger chunks
     // In this example the local_cb isn't actually needed (we can just get the rptr)
@@ -34,25 +32,17 @@ void kernel_main() {
     //  - In this case, an additional CB would be needed to synchronize the receiver and
     //    compute kernels (socket_notify_sender cannot be called until compute is done with
     //    pages in the local CB)
-    DPRINT << "Run for iter count: " << num_iterations << ENDL();
     for (uint32_t i = 0; i < num_iterations; i++) {
-        DPRINT << "Iteration: " << i << ENDL();
         uint32_t outstanding_data_size = data_size;
         uint64_t dst_noc_addr = get_noc_addr(local_l1_buffer_addr);
-        DPRINT << "Outstanding data size: " << outstanding_data_size << ENDL();
         while (outstanding_data_size) {
-            DPRINT << "Waiting for pages" << ENDL();
             socket_wait_for_pages(receiver_socket, 1);
-            DPRINT << "Writing to NOC" << ENDL();
             noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
             dst_noc_addr += page_size;
             outstanding_data_size -= page_size;
             noc_async_write_barrier();
-            DPRINT << "Writing to NOC done" << ENDL();
             socket_pop_pages(receiver_socket, 1);
-            DPRINT << "Notifying sender" << ENDL();
             socket_notify_sender(receiver_socket);
-            DPRINT << "Notifying sender done" << ENDL();
         }
     }
     update_socket_config(receiver_socket);
