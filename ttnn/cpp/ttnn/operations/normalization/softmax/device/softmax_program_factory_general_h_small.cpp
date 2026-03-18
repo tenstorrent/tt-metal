@@ -54,6 +54,10 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     // Circular buffers
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Reader generates mask/scaler with uint16_t (1024 elements = 2048 bytes). Use Float16_b for these CBs when
+    // input is BFloat8_B so tile size matches; BFloat8_B tile layout is different and would be overflowed (issue
+    // #32934).
+    const auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     operations::CreateCircularBuffer(
         program,
@@ -61,8 +65,8 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
         data_format,
         {
             {tt::CBIndex::c_0, Ht},                         // input
-            {tt::CBIndex::c_1, 1},                          // mask
-            {tt::CBIndex::c_2, 1},                          // scaler
+            {tt::CBIndex::c_1, 1, mask_scaler_format},      // mask
+            {tt::CBIndex::c_2, 1, mask_scaler_format},      // scaler
             {tt::CBIndex::c_16, Ht},                        // output
             {tt::CBIndex::c_24, Ht, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},   // reduce

@@ -408,7 +408,9 @@ Tensor softmax(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     bool numeric_stable) {
     // Constants
-    const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
+    // BFLOAT8_B on general (H/W/C) paths uses Float16_b for mask/scaler CBs and needs fp32 accumulation for correctness
+    // (issue #32934)
+    const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT8_B;
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
