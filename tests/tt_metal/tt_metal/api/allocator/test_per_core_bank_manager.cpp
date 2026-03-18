@@ -42,7 +42,14 @@ BankManager make_per_core_bank_manager(uint64_t bank_size, uint32_t alignment, u
     std::vector<int64_t> bank_offsets(num_banks, 0);
     auto deps = make_per_core_dependencies(num_banks);
     return BankManager(
-        BufferType::DRAM, bank_offsets, bank_size, alignment, /*alloc_offset=*/0, /*disable_interleaved=*/false, deps);
+        BufferType::DRAM,
+        bank_offsets,
+        bank_size,
+        alignment,
+        /*dram_alignment_bytes=*/alignment,
+        /*alloc_offset=*/0,
+        /*disable_interleaved=*/false,
+        deps);
 }
 
 DeviceAddr alloc(BankManager& bm, uint32_t size, AllocatorID id, bool bottom_up = true) {
@@ -120,7 +127,7 @@ TEST(PerCoreAllocation, HundredTenBanksScaling) {
     EXPECT_EQ(deps.num_allocators(), NUM_BANKS + 1);
 
     std::vector<int64_t> bank_offsets(NUM_BANKS, 0);
-    BankManager bm(BufferType::DRAM, bank_offsets, 1024 * 1024, 1024, 0, false, deps);
+    BankManager bm(BufferType::DRAM, bank_offsets, 1024 * 1024, 1024, 1024, 0, false, deps);
     CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(NUM_BANKS - 1, 0)));
 
     // Allocate different sizes on each bank
