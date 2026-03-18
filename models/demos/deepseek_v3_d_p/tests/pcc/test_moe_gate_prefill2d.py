@@ -3,7 +3,6 @@
 
 
 import random
-from dataclasses import dataclass
 
 import pytest
 import torch
@@ -13,61 +12,13 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import Gate as ReferenceMoEGate
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import linear as referenceLinear
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_gate_outputs
-from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGateConfig, MoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     adjust_shapes_for_testing,
     calculate_average_recall,
     get_input_mem_config,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
-
-
-@dataclass
-class MoEGateConfig:
-    # gate_params
-
-    ccl_config = {}
-    mm_configs = {}
-
-    dim: int = 7168
-    max_seq_len = 4096 * 32
-    sp_dim = 4096
-    n_routed_experts: int = 256
-    n_shared_experts: int = 2
-    n_activated_experts: int = 8
-    n_expert_groups: int = 8
-    n_limited_groups: int = 4
-    route_scale: float = 1.0
-    score_func: str = "sigmoid"
-    summed_experts_per_group: int = 2
-    topk_groups: int = 4
-
-    # grid_config
-    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 9))})
-    num_cores = 110
-
-    mm_configs["DEFAULT_PROGRAM_CONFIG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
-        in0_block_w=56,
-        out_subblock_h=2,
-        out_subblock_w=4,
-        out_block_h=2,
-        out_block_w=4,
-        per_core_M=2,
-        per_core_N=8,
-        fuse_batch=True,
-        mcast_in0=False,
-    )
-    mm_configs["DEFAULT_COMPUTE_CONFIG"] = ttnn.types.BlackholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
-    )
-
-    ccl_config["DISPATCH_AXIS"] = 0
-    ccl_config["TP_AXIS"] = 1
-    ccl_config["NUM_LINKS"] = 2
 
 
 @pytest.mark.parametrize(
