@@ -34,7 +34,7 @@ void bind_rs_matmul(nb::module_& mod) {
             * :attr:`all_gather_core_grid_offset` (ttnn.CoreCoord): Core grid offset for the all-gather operation.
 
         Keyword Args:
-            * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`num_links` (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
             * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter stage. Defaults to `ttnn.Topology.Linear`.
             * :attr:`memory_config_ag` (Optional[ttnn.MemoryConfig]): Memory configuration for the All Gather operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
@@ -61,7 +61,7 @@ void bind_rs_matmul(nb::module_& mod) {
         nb::arg("cross_device_semaphore"),
         nb::arg("cluster_axis"),
         nb::arg("mesh_device"),
-        nb::arg("num_links"),
+        nb::arg("num_links") = nb::none(),
         nb::arg("subdevice_id"),
         nb::kw_only(),
         nb::arg("second_weight_tensor") = nb::none(),
