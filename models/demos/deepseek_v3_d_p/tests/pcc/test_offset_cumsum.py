@@ -17,23 +17,26 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, extract_mesh_config
 
 
-def torch_offset_cumsum(histograms: torch.Tensor) -> torch.Tensor:
+def torch_offset_cumsum(histograms: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Reference implementation: shifted prefix sum across devices.
 
     Given per-device histograms of shape [num_devices, n_routed_experts],
-    returns [num_devices + 1, n_routed_experts] where row k = sum of rows 0..k-1
-    (row 0 is all zeros).
+    returns:
+      - dispatch_offsets: [num_devices, n_routed_experts] where row k = sum of rows 0..k-1
+        (row 0 is all zeros).
+      - total_counts_per_expert: [1, n_routed_experts] sum of all rows.
 
     Args:
         histograms: [num_devices, n_routed_experts] int tensor.
 
     Returns:
-        [num_devices + 1, n_routed_experts] int tensor of shifted prefix sums.
+        Tuple of (dispatch_offsets, total_counts_per_expert).
     """
     cum = torch.cumsum(histograms, dim=0)
     zeros = torch.zeros(1, histograms.shape[1], dtype=histograms.dtype)
-    return torch.cat([zeros, cum], dim=0)
+    full = torch.cat([zeros, cum], dim=0)
+    return full[:-1, :], full[-1:, :]
 
 
 @pytest.mark.parametrize(
@@ -113,8 +116,8 @@ def test_offset_cumsum(
     histograms = torch.randint(0, 32, (dispatch_group_size, n_routed_experts), dtype=torch.int32)
 
     # Torch reference: shifted prefix sum
-    torch_result = torch_offset_cumsum(histograms)  # [dispatch_group_size + 1, n_routed_experts]
-    logger.info(f"Torch reference shape: {torch_result.shape}")
+    torch_offsets, torch_totals = torch_offset_cumsum(histograms)
+    logger.info(f"Torch reference shapes: offsets={torch_offsets.shape}, totals={torch_totals.shape}")
 
     # Shard histograms across devices along the SP axis
     # Each device gets its own 1D histogram of shape [n_routed_experts]
@@ -140,41 +143,59 @@ def test_offset_cumsum(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Run ttnn op
-    tt_result = ttnn.offset_cumsum(
+    # Run ttnn op — now returns (dispatch_offsets, total_counts_per_expert)
+    tt_offsets, tt_totals = ttnn.offset_cumsum(
         tt_histograms,
         cluster_axis=sp_axis,
         num_links=num_links,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Each device should have the same full [dispatch_group_size + 1, n_routed_experts] result
-    device_tensors = ttnn.get_device_tensors(tt_result)
     all_passed = True
 
-    for dev_idx, dt in enumerate(device_tensors):
+    # Verify dispatch_offsets on each device
+    for dev_idx, dt in enumerate(ttnn.get_device_tensors(tt_offsets)):
         tt_out = ttnn.to_torch(dt).to(torch.int32)
-        # Squeeze any extra leading dims added by ttnn
         while tt_out.dim() > 2:
             tt_out = tt_out.squeeze(0)
 
-        logger.info(f"Device {dev_idx}: tt_shape={tt_out.shape}, ref_shape={torch_result.shape}")
+        logger.info(f"Device {dev_idx} offsets: tt_shape={tt_out.shape}, ref_shape={torch_offsets.shape}")
 
-        if tt_out.shape != torch_result.shape:
-            logger.error(f"Device {dev_idx}: shape mismatch tt={tt_out.shape} ref={torch_result.shape}")
+        if tt_out.shape != torch_offsets.shape:
+            logger.error(f"Device {dev_idx}: offsets shape mismatch tt={tt_out.shape} ref={torch_offsets.shape}")
             all_passed = False
             continue
 
-        matches = torch.equal(tt_out, torch_result)
-        if not matches:
-            diff_mask = tt_out != torch_result
+        if not torch.equal(tt_out, torch_offsets):
+            diff_mask = tt_out != torch_offsets
             num_diff = diff_mask.sum().item()
-            total = torch_result.numel()
-            logger.error(f"Device {dev_idx}: {num_diff}/{total} elements differ")
-            logger.error(f"  Max abs diff: {(tt_out - torch_result).abs().max().item()}")
+            logger.error(f"Device {dev_idx}: offsets {num_diff}/{torch_offsets.numel()} elements differ")
+            logger.error(f"  Max abs diff: {(tt_out - torch_offsets).abs().max().item()}")
             all_passed = False
         else:
-            logger.info(f"Device {dev_idx}: PASS")
+            logger.info(f"Device {dev_idx} offsets: PASS")
+
+    # Verify total_counts_per_expert on each device
+    for dev_idx, dt in enumerate(ttnn.get_device_tensors(tt_totals)):
+        tt_out = ttnn.to_torch(dt).to(torch.int32)
+        while tt_out.dim() > 2:
+            tt_out = tt_out.squeeze(0)
+
+        logger.info(f"Device {dev_idx} totals: tt_shape={tt_out.shape}, ref_shape={torch_totals.shape}")
+
+        if tt_out.shape != torch_totals.shape:
+            logger.error(f"Device {dev_idx}: totals shape mismatch tt={tt_out.shape} ref={torch_totals.shape}")
+            all_passed = False
+            continue
+
+        if not torch.equal(tt_out, torch_totals):
+            diff_mask = tt_out != torch_totals
+            num_diff = diff_mask.sum().item()
+            logger.error(f"Device {dev_idx}: totals {num_diff}/{torch_totals.numel()} elements differ")
+            logger.error(f"  Max abs diff: {(tt_out - torch_totals).abs().max().item()}")
+            all_passed = False
+        else:
+            logger.info(f"Device {dev_idx} totals: PASS")
 
     assert all_passed, "offset_cumsum output does not match torch reference on one or more devices"
     logger.info("offset_cumsum matches torch reference!")

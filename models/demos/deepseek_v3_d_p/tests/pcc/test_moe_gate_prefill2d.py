@@ -153,7 +153,7 @@ def test_forward_pass(
     reference_topk_weights_reshaped = reference_topk_weights.view(mesh_device.shape[0], seq_len_per_device, -1)
     reference_topk_indices_reshaped = reference_topk_indices.view(mesh_device.shape[0], seq_len_per_device, -1)
 
-    tt_topk_weights, tt_topk_indices, tt_logits, dispatch_offsets = tt_model(tt_input)
+    tt_topk_weights, tt_topk_indices, tt_logits, dispatch_offsets, total_counts_per_expert = tt_model(tt_input)
     per_device_topk_weight = ttnn.get_device_tensors(tt_topk_weights)
     per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
     per_device_topk_logits = ttnn.get_device_tensors(tt_logits)
@@ -230,7 +230,8 @@ def test_forward_pass(
         num_experts_per_tok=config.n_activated_experts,
     )
 
-    reference_offsets = torch.vstack([expert_offsets, cum_sum[-1:]]).long()
+    reference_offsets = expert_offsets.long()
+    reference_totals = cum_sum[-1:].long()
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):
@@ -258,6 +259,32 @@ def test_forward_pass(
                 f"Dispatch offsets mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
             )
 
+    per_device_totals = ttnn.get_device_tensors(total_counts_per_expert)
+    for device_id in range(len(per_device_totals)):
+        tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
+        row = device_id // n_tp_devices
+        col = device_id % n_tp_devices
+
+        totals_match = torch.equal(tt_totals_torch, reference_totals)
+        status_char = "✅" if totals_match else "❌"
+        if totals_match:
+            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Total counts match exactly")
+        else:
+            diff = (tt_totals_torch - reference_totals).abs()
+            max_diff = diff.max().item()
+            num_mismatches = (diff > 0).sum().item()
+            total_elements = diff.numel()
+            logger.info(
+                f"{status_char} Device {device_id} (row={row}, col={col}): "
+                f"Total counts MISMATCH - max_diff={max_diff}, "
+                f"mismatches={num_mismatches}/{total_elements}"
+            )
+            all_passed = False
+            assert_msgs.append(
+                f"Device {device_id} (row={row}, col={col}): "
+                f"Total counts mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
+            )
+
     assert all_passed, "\n".join(assert_msgs)
 
     ttnn.deallocate(tt_input)
@@ -265,3 +292,4 @@ def test_forward_pass(
     ttnn.deallocate(tt_topk_indices)
     ttnn.deallocate(tt_logits)
     ttnn.deallocate(dispatch_offsets)
+    ttnn.deallocate(total_counts_per_expert)

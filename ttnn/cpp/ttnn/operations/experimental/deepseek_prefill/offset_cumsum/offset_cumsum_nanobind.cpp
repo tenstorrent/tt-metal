@@ -5,6 +5,7 @@
 #include "offset_cumsum_nanobind.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum.hpp"
@@ -19,8 +20,11 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
             performs all_gather along the specified cluster_axis to produce a 2D tensor
             [num_devices, n_routed_experts], then computes a shifted prefix sum in integer arithmetic.
 
-            Output is a 2D UINT32 tensor of shape [num_devices + 1, n_routed_experts] where row k
-            contains the sum of rows 0..k-1 from the gathered input (row 0 is all zeros).
+            Returns a tuple of two UINT32 tensors:
+              - dispatch_offsets: shape [num_devices, n_routed_experts] where row k contains the
+                sum of rows 0..k-1 from the gathered input (row 0 is all zeros).
+              - total_counts_per_expert: shape [1, n_routed_experts] containing the total count
+                across all devices for each expert (i.e. the sum of all input rows).
 
             Args:
                 * :attr:`input_tensor`: 1D UINT32 tensor of expert counts [n_routed_experts].
