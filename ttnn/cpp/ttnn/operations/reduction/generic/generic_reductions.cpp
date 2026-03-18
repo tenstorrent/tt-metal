@@ -14,6 +14,8 @@
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation.hpp"
 
 namespace ttnn::operations::reduction {
 
@@ -367,6 +369,25 @@ static Tensor std_var_impl(
         return zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
     }
 
+    // For now, only support reduction on a single dimension.
+    TT_FATAL(dim.size() == 1 && dim[0] == rank - 1, "for now, only support STD/VAR reduction on the W dimension");
+
+    // For now support only interleaved tensors.
+    TT_FATAL(!input_tensor_arg.is_sharded(), "Welford variance does not yet support sharded inputs");
+
+
+
+
+    // If tensor is 1D, reshape to 2D because the reduction kernel only supports 2D tensors.
+    // Use H dimension for Welford reduce.
+    ttnn::Tensor input_tensor = (rank == 1) ? ttnn::reshape(input_tensor_arg, ttnn::Shape{input_shape[0], 1}) : input_tensor_arg;
+
+    if (input_tensor.layout() != Layout::TILE) {
+        ttnn::Shape padded_shape = data_movement::pad_to_tile_shape(input_tensor.padded_shape());
+        // Fill value doesn't matter for Std/Var reduction, because paddeed values are ignored by the reduction kernel.
+        input_tensor = ttnn::tilize_with_val_padding(input_tensor, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+    }
+
     int reduced_volume = 1;
     for (int axis : dim) {
         reduced_volume *= input_shape[axis];
@@ -380,6 +401,7 @@ static Tensor std_var_impl(
 
     scalar /= reduced_volume;
 
+/*
     auto mean_tensor = reduce_impl<ReduceType::Sum>(
         input_tensor_arg,
         dim,
@@ -404,7 +426,19 @@ static Tensor std_var_impl(
     if constexpr (reduce_type == ReduceType::Std) {
         output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
     }
-    return output_tensor;
+
+*/
+    ttnn::Tensor output_tensor;
+    if constexpr (reduce_type == ReduceType::Std) {
+        output_tensor = ttnn::prim::welford_reduce(input_tensor, tt::tt_metal::ReduceOpMath::STD, scalar, memory_config, std::nullopt, compute_kernel_config, sub_core_grids);
+    } else if constexpr (reduce_type == ReduceType::Var) {
+        output_tensor = ttnn::prim::welford_reduce(input_tensor, tt::tt_metal::ReduceOpMath::VAR, scalar, memory_config, std::nullopt, compute_kernel_config, sub_core_grids);
+    } else {
+        TT_THROW("Unsupported reduction type: {} for Welford reduce. Expected Std or Var.", reduce_type);
+    }
+
+    // Compensate for any shape adjustments applied to the input tensor.
+    return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
 }
 
 template <ReduceType reduce_type>
