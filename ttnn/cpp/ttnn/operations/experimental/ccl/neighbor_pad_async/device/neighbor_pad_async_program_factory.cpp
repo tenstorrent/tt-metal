@@ -47,7 +47,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_mesh_workload_t NeighborPadAsyncMesh
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
             auto cached_program = create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value);
-            shared_variables[single_coord_range] = cached_program.shared_variables;
+            shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
             mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
         }
     }
@@ -182,14 +182,42 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t forward_device_offset = 0;
     uint32_t backward_device_offset = 0;
 
-    // Determine first/last device from physical neighbor availability along the primary axis.
-    is_first_device = !backward_coord.has_value();
-    is_last_device = !forward_coord.has_value();
-    if (!is_first_device) {
-        backward_device_offset = 1;
-    }
-    if (!is_last_device) {
-        forward_device_offset = 1;
+    if (operation_attributes.secondary_cluster_axis.has_value()) {
+        // secondary_cluster_axis==1, devices on row
+        // secondary_mesh_shape(0) == number of rows, (1) is number of cols
+        uint32_t secondary_cluster_axis_val = operation_attributes.secondary_cluster_axis.value();
+        uint32_t row_index = device_index / operation_attributes.secondary_mesh_shape.value().at(1);
+        uint32_t col_index = device_index % operation_attributes.secondary_mesh_shape.value().at(1);
+        if (secondary_cluster_axis_val) {
+            // row
+            if (col_index != 0) {
+                is_first_device = false;
+                backward_device_offset = 1;
+            }
+            if (col_index != operation_attributes.secondary_mesh_shape.value().at(1) - 1) {
+                is_last_device = false;
+                forward_device_offset = 1;
+            }
+        } else {
+            // column
+            if (row_index != 0) {
+                is_first_device = false;
+                backward_device_offset = operation_attributes.secondary_mesh_shape.value().at(1);
+            }
+            if (row_index != (operation_attributes.secondary_mesh_shape.value().at(0) - 1)) {
+                is_last_device = false;
+                forward_device_offset = operation_attributes.secondary_mesh_shape.value().at(1);
+            }
+        }
+    } else {
+        is_first_device = !backward_coord.has_value();
+        is_last_device = !forward_coord.has_value();
+        if (!is_first_device) {
+            backward_device_offset = 1;
+        }
+        if (!is_last_device) {
+            forward_device_offset = 1;
+        }
     }
 
     log_trace(
@@ -288,7 +316,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     uint32_t num_sticks_to_write_per_packet = 1;
-    uint32_t cb_num_pages = 2 * num_sticks_to_write_per_packet;  // double buffering
+    uint32_t cb_num_pages = 3 * num_sticks_to_write_per_packet;  // triple buffering
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     // CBs for transferring data between reader and writer
@@ -406,7 +434,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     auto [h_mcast_forward_args, h_mcast_backward_args] = ::ttnn::ccl::get_forward_backward_line_mcast_configuration(
         mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
-    // KERNEL CREATION — Consolidated: 6 kernels per device
+    // KERNEL CREATION — Consolidated: 6 kernels per device (down from ~280)
     // Each logical role (H reader, H writer, local reader, local writer, W reader, W writer)
     // uses a single kernel on a CoreRangeSet. Per-core variation (direction, routing) is
     // handled via runtime args instead of separate compile-time-arg kernels.
@@ -485,12 +513,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 (operation_attributes.dim > 0) ? link_dims_to_read : outer_dim_size,  // outer_dim_size
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 (operation_attributes.dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
-                num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
-                corner_sticks_per_row};   // num_l1_recv_sticks_per_row (corners-only for 2D)
+                num_sticks_per_halo_dim};  // num_sticks_per_halo_dim
             // Per-core direction args (moved from compile-time for kernel consolidation)
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
             reader_rt_args.push_back(direction);                                     // direction
+            reader_rt_args.push_back(corner_sticks_per_row);                         // num_l1_recv_sticks_per_row
             SetRuntimeArgs(program, h_reader_kernel_id, {core}, reader_rt_args);
 
             // For 2D case, H fabric writer uses output row width and W offset

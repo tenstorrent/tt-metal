@@ -24,6 +24,8 @@ ttnn::Tensor neighbor_pad_async(
     const std::optional<std::vector<size_t>>& num_preferred_links = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::ccl::Topology> topology = std::nullopt,
+    std::optional<uint32_t> secondary_cluster_axis = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt);
 
 }  // namespace ttnn::experimental

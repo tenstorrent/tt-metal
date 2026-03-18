@@ -20,24 +20,6 @@
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
 
-// Runtime-arg versions of route info readers, local to this kernel.
-// Used because consolidated kernels have per-core routing via runtime args.
-inline ccl_routing_utils::line_unicast_route_info_t get_line_unicast_route_info_from_rt_args(uint32_t& arg_idx) {
-    return {
-        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
-}
-
-inline ccl_routing_utils::line_multicast_route_info_t get_line_multicast_route_info_from_rt_args(uint32_t& arg_idx) {
-    return {
-        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .e_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .w_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .n_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
-}
-
 // Compile-time args (uniform across all cores sharing this kernel)
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr bool is_padding_zeros = get_compile_time_arg_val(1);
@@ -93,8 +75,8 @@ void kernel_main() {
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
-    auto unicast_route_info = get_line_unicast_route_info_from_rt_args(arg_idx);
-    auto barrier_multicast_route_info = get_line_multicast_route_info_from_rt_args(arg_idx);
+    auto unicast_route_info = ccl_routing_utils::get_line_unicast_route_info_from_rt_args(arg_idx);
+    auto barrier_multicast_route_info = ccl_routing_utils::get_line_multicast_route_info_from_rt_args(arg_idx);
 
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
@@ -178,18 +160,13 @@ void kernel_main() {
     // Corners-only optimization for 2D H writers:
     // Only W-boundary sticks (corners) go to neighbor L1; non-corner sticks go directly to DRAM.
     // Phase 2 W reader only needs corners, so this is safe.
-    // Derivation: the output row is [pad2_left | W interior sticks | pad2_right].
-    // The factory sets stick_start_id = pad2_left (the W offset where interior data begins),
-    // num_sticks_per_halo_dim = W + pad2_left + pad2_right (full output row width),
-    // and num_sticks_to_read = W (interior width). So:
-    //   pad2_left_sticks  = stick_start_id = pad2_left
-    //   pad2_right_sticks = (W + pad2_left + pad2_right) - W - pad2_left = pad2_right
-    // These can be different (asymmetric W padding is supported).
+    // pad2_left_sticks = left corners count (sticks W reader dir=0 needs from right side)
+    // pad2_right_sticks = right corners count (sticks W reader dir=1 needs from left side)
     uint32_t pad2_left_sticks = 0;
     uint32_t pad2_right_sticks = 0;
     if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-        pad2_left_sticks = stick_start_id;
-        pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;
+        pad2_left_sticks = stick_start_id;  // = pad2_left (W offset in output row)
+        pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;  // = pad2_right
     }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;

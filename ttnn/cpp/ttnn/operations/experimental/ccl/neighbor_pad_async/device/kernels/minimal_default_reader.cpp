@@ -53,12 +53,12 @@ void kernel_main() {
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
-    // Number of corner sticks per pad row in L1 recv buffer (= pad2_left + pad2_right for 2D corners-only)
-    const uint32_t num_l1_recv_sticks_per_row = get_arg_val<uint32_t>(arg_idx++);
     // Per-core direction args (moved from compile-time for kernel consolidation)
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
+    // Number of corner sticks per pad row in L1 recv buffer (= pad2_left + pad2_right for 2D corners-only)
+    const uint32_t num_l1_recv_sticks_per_row = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
