@@ -44,8 +44,6 @@ def create_fabric_router_config(max_payload_size):
     ],
 )
 def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
@@ -119,8 +117,6 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
 def test_host_io_loopback_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
-    if ttnn.get_num_devices() < 32:
-        pytest.skip("Test requires a full galaxy")
     """Test H2D/D2H loopback with an embedding tensor loaded to DRAM."""
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
