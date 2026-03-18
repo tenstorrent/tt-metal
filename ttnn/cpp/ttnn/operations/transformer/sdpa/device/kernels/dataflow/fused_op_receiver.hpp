@@ -36,7 +36,7 @@ struct RingSDPAOpReceiver {
         ASSERT(initialized);
         return seq.get_next_ring_id([&](uint32_t, uint32_t val) {
             if (this->wait_for_op_signal) {
-                noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptr, val);
+                // noc_semaphore_wait_min(this->signal_op_semaphore_addr_ptr, val);
             }
         });
     }
