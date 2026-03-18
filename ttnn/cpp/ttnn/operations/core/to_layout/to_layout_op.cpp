@@ -168,11 +168,18 @@ Tensor to_layout_impl(
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
                     pad_value_variant = pad_value;
                 } else if (tensor.dtype() == ttnn::DataType::INT32) {
+                    TT_FATAL(
+                        pad_value >= static_cast<float>(std::numeric_limits<int32_t>::min()) &&
+                            pad_value < static_cast<float>(std::numeric_limits<int32_t>::max()),
+                        "Pad value must be in the range of INT32 type");
+                    // static_cast safely truncates the float into a signed integer,
+                    // while std::bit_cast reinterprets those exact bits as unsigned to cleanly handle negative
+                    // wrap-arounds.
                     pad_value_variant = std::bit_cast<uint32_t>(static_cast<int32_t>(pad_value));
                 } else {
                     TT_FATAL(
                         pad_value >= 0.0f && pad_value < static_cast<float>(std::numeric_limits<uint32_t>::max()),
-                        "Pad value must be a non-negative integer for unsigned integer types");
+                        "Pad value must be in the range of UINT32 type");
                     pad_value_variant = (uint32_t)pad_value;
                 }
                 tensor = ttnn::tilize_with_val_padding(
