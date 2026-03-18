@@ -501,6 +501,276 @@ LLM emits: "Here is the summary. Audio saved to /tmp/summary.wav."
 
 ---
 
+## Coding Agent Extension
+
+A coding agent uses the same agentic loop but with a different LLM and a different
+tool set. Most coding tools require **no model** — they are pure Python subprocess
+calls. The LLM reasons about what to do; the tools execute it.
+
+### LLM Swap for Coding
+
+Use **Qwen2.5-Coder-7B-Instruct** instead of Llama 3B. It runs on N300 and is
+specifically fine-tuned on code generation, debugging, and explanation.
+
+| Mode | LLM | DRAM | Best for |
+|------|-----|------|---------|
+| General agent | Llama 3.2 3B Instruct | ~6 GB BF16 | Audio, vision, QA |
+| Coding agent | Qwen2.5-Coder-7B-Instruct | ~7 GB BF8 | Code gen, debug, refactor |
+
+Both fit on N300 with the tool set. Select at startup via `--mode general|coding`.
+
+### Coding Tool Definitions
+
+#### Pure Subprocess Tools (no model required)
+
+**`execute_python(code, timeout=30)`**
+```python
+{
+    "name": "execute_python",
+    "description": "Executes Python code in an isolated subprocess and returns stdout/stderr. "
+                   "Use to test code, run computations, or verify fixes.",
+    "parameters": {
+        "code": {"type": "string", "description": "Python code to execute"},
+        "timeout": {"type": "integer", "default": 30, "description": "Max seconds to wait"}
+    }
+}
+# Implementation: subprocess.run(["python", "-c", code], capture_output=True, timeout=timeout)
+# Returns: {"stdout": str, "stderr": str, "exit_code": int}
+```
+
+**`execute_shell(command, timeout=30)`**
+```python
+{
+    "name": "execute_shell",
+    "description": "Runs a shell command and returns output. "
+                   "Use for pip install, git commands, file operations, running scripts.",
+    "parameters": {
+        "command": {"type": "string", "description": "Shell command to run"},
+        "timeout": {"type": "integer", "default": 30}
+    }
+}
+# Implementation: subprocess.run(command, shell=True, capture_output=True, timeout=timeout)
+# Safety: run in a restricted working directory, block rm -rf / and similar
+```
+
+**`read_file(path)`**
+```python
+{
+    "name": "read_file",
+    "description": "Reads the contents of a file. Use before editing to see current content.",
+    "parameters": {
+        "path": {"type": "string", "description": "Absolute or relative file path"}
+    }
+}
+# Returns: {"content": str, "lines": int} or {"error": str} if not found
+```
+
+**`write_file(path, content)`**
+```python
+{
+    "name": "write_file",
+    "description": "Writes content to a file, creating it if needed. "
+                   "Use to save generated code or apply fixes.",
+    "parameters": {
+        "path": {"type": "string"},
+        "content": {"type": "string", "description": "Full file content to write"}
+    }
+}
+```
+
+**`patch_file(path, old_string, new_string)`**
+```python
+{
+    "name": "patch_file",
+    "description": "Replaces an exact string in a file. Safer than write_file for small edits.",
+    "parameters": {
+        "path": {"type": "string"},
+        "old_string": {"type": "string", "description": "Exact text to replace (must be unique in file)"},
+        "new_string": {"type": "string", "description": "Replacement text"}
+    }
+}
+```
+
+**`list_directory(path, recursive=False)`**
+```python
+{
+    "name": "list_directory",
+    "description": "Lists files and directories at a path.",
+    "parameters": {
+        "path": {"type": "string"},
+        "recursive": {"type": "boolean", "default": False}
+    }
+}
+```
+
+**`run_tests(path, flags="")`**
+```python
+{
+    "name": "run_tests",
+    "description": "Runs pytest on a file or directory and returns pass/fail/error output. "
+                   "Use to verify a fix or check for regressions.",
+    "parameters": {
+        "path": {"type": "string", "description": "Test file or directory"},
+        "flags": {"type": "string", "default": "-x", "description": "Extra pytest flags, e.g. '-k test_name'"}
+    }
+}
+# Implementation: subprocess.run(["pytest", path, flags, "--tb=short"], ...)
+```
+
+#### Model-Backed Coding Tools
+
+**`search_codebase(query, directory=".")`**
+```python
+{
+    "name": "search_codebase",
+    "description": "Semantically searches a codebase for code related to a query. "
+                   "Use to find where a function is defined, how a feature is implemented, "
+                   "or which files are relevant to a bug.",
+    "parameters": {
+        "query": {"type": "string", "description": "What to search for, e.g. 'attention forward pass'"},
+        "directory": {"type": "string", "default": ".", "description": "Directory to search"}
+    }
+}
+```
+- **Backend:** BGE-Large-EN (N150/N300) — embed all `.py` files at startup into an
+  in-memory vector index; at query time embed the query and return top-k cosine matches
+- **Returns:** `list[{file, line, snippet, score}]`
+- **Index built once at startup** over the project directory; refresh on `write_file`
+
+**`explain_error(error, code)`**
+```python
+{
+    "name": "explain_error",
+    "description": "Explains what an error message means and suggests a fix. "
+                   "Use when execute_python or run_tests returns an error you cannot interpret.",
+    "parameters": {
+        "error": {"type": "string", "description": "The full error/traceback"},
+        "code": {"type": "string", "description": "The code that produced the error"}
+    }
+}
+```
+- **Backend:** The LLM itself (Qwen2.5-Coder) — implemented as a nested LLM call
+  with a focused system prompt, not a separate model
+- **Returns:** `str` — plain-language explanation + suggested fix
+
+### Coding Agent Loop (ReAct pattern)
+
+The coding agent follows the **ReAct** (Reason + Act) pattern:
+Think → Act (tool call) → Observe (result) → repeat until done.
+
+```
+User: "Write a function to compute fibonacci and add tests for it"
+
+Turn 1:
+  LLM thinks: "I need to write the function first."
+  LLM emits:  write_file("fib.py", "def fib(n): ...")
+  Result:     "Written successfully"
+
+Turn 2:
+  LLM thinks: "Now write the tests."
+  LLM emits:  write_file("test_fib.py", "def test_fib(): ...")
+  Result:     "Written successfully"
+
+Turn 3:
+  LLM thinks: "Run the tests to verify."
+  LLM emits:  run_tests("test_fib.py")
+  Result:     "FAILED: AssertionError: fib(0) expected 0 got 1"
+
+Turn 4:
+  LLM thinks: "fib(0) is wrong. Read the file and fix it."
+  LLM emits:  read_file("fib.py")
+  Result:     "def fib(n): ..."
+
+Turn 5:
+  LLM emits:  patch_file("fib.py", "if n <= 1: return 1", "if n <= 0: return 0\n    if n == 1: return 1")
+  Result:     "Patched"
+
+Turn 6:
+  LLM emits:  run_tests("test_fib.py")
+  Result:     "PASSED 5 tests"
+
+LLM final answer: "Done. fib.py and test_fib.py are written. All 5 tests pass."
+```
+
+### Codebase Semantic Search Flow
+
+BGE-Large builds a vector index over source files at startup:
+
+```python
+# loader.py — at startup
+from models.demos.bge_large_en.runner.performant_runner import BGERunner
+
+bge = BGERunner(device)
+
+# Index all Python files in project (one-time, ~30s for large codebases)
+code_index = build_code_index(
+    bge,
+    directory=".",
+    glob="**/*.py",
+    chunk_size=50,      # lines per chunk
+    overlap=10,         # overlap between chunks
+)
+
+# At query time (fast — embedding is TTNN-accelerated):
+# query_embedding = bge.embed([query])
+# scores = cosine_similarity(query_embedding, code_index.embeddings)
+# return top_k chunks with file + line range
+```
+
+### DRAM Budget for Coding Agent on N300
+
+```
+Qwen2.5-Coder-7B (BF8)    ~7.0 GB
+BGE-Large (code search)    ~0.7 GB
+BERT Large (QA)            ~0.7 GB
+SpeechT5 (optional TTS)    ~0.6 GB
+KV cache + traces          ~1.0 GB
+────────────────────────────────
+Total                     ~10.0 GB / 24 GB   (14 GB headroom)
+```
+
+Coding agent does not need Whisper, OWL-ViT, or ViT — audio/vision tools
+are optional and can be added if needed.
+
+### Safety Constraints for Code Execution
+
+All subprocess tools run with:
+- **Working directory:** a sandboxed temp directory, not the repo root
+- **Blocked commands:** `rm -rf /`, `sudo`, `curl | bash`, `dd`, device resets
+- **Timeout:** hard kill after N seconds (default 30)
+- **No network access:** `subprocess.run(..., env={**os.environ, "no_proxy": "*"})`
+- **Output truncation:** cap stdout/stderr at 4096 chars to stay within context window
+
+```python
+BLOCKED_PATTERNS = [
+    r"rm\s+-rf\s+/",
+    r"sudo\s+",
+    r"tt-smi\s+-r",      # NEVER reset device from agent
+    r">\s*/dev/sd",
+]
+
+def safe_execute(command: str) -> dict:
+    for pattern in BLOCKED_PATTERNS:
+        if re.search(pattern, command):
+            return {"error": f"Blocked: command matches unsafe pattern '{pattern}'"}
+    return subprocess.run(command, shell=True, capture_output=True, timeout=30, cwd=SANDBOX_DIR)
+```
+
+### File Structure Addition
+
+```
+models/demos/minimax_m2/agentic/
+├── tool_wrappers/
+│   ├── ...                     (existing tools)
+│   ├── code_executor.py        ← execute_python, execute_shell, run_tests
+│   ├── file_tools.py           ← read_file, write_file, patch_file, list_directory
+│   └── code_search.py          ← BGE-Large vector index + semantic search
+├── coding_agent_tools.py       ← CODING_TOOL_SCHEMAS + dispatch
+└── coding_demo.py              ← CLI: python coding_demo.py "fix the bug in fib.py"
+```
+
+---
+
 ## Current Status & Next Steps
 
 ### MiniMax-M2 Bringup (Galaxy — separate from N300 agentic work)
