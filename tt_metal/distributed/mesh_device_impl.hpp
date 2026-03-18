@@ -177,9 +177,6 @@ private:
     // Active distributed context used by mesh command queues (split from distributed_context_).
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 
-    // Throws TT_THROW if sub_device_manager_tracker_ is null (remote-only device)
-    void validate_sub_device_manager_tracker() const;
-
     friend class ::tt::tt_metal::experimental::DispatchContext;
 
 public:
