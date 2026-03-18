@@ -75,17 +75,27 @@ static constexpr std::size_t num_sender_channels_1d = 2;
 static constexpr std::size_t num_sender_channels_2d = 8;
 // Max including VC2 — used only for array sizing
 static constexpr std::size_t num_sender_channels_2d_with_vc2 = num_sender_channels_2d + num_sender_channels_vc2;
-// Max without VC2 — feeds L1 layout, firmware CT args, and host-side array sizing
-// VC2 will increase these when actually wired through (Phase 4+)
-static constexpr std::size_t num_max_sender_channels =
+// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+static constexpr std::size_t num_max_sender_channels_without_vc2 =
     std::max({num_sender_channels_1d, num_sender_channels_2d, num_sender_channels_z_router});
+// = max(2, 8, 9) = 9
+// Absolute maximum — used for host-side array sizing (always big enough for any config)
+static constexpr std::size_t num_max_sender_channels =
+    std::max({num_sender_channels_1d, num_sender_channels_2d_with_vc2, num_sender_channels_z_router_with_vc2});
+// = max(2, 9, 10) = 10
 static constexpr std::size_t num_receiver_channels_1d = 1;
 // Without VC2 — VC2 receiver added dynamically
 static constexpr std::size_t num_receiver_channels_2d = 2;  // VC0(1) + VC1(1)
 // Max including VC2 — used only for array sizing
 static constexpr std::size_t num_receiver_channels_2d_with_vc2 = num_receiver_channels_2d + num_receiver_channels_vc2;
-// Max without VC2 — feeds L1 layout, firmware CT args, and host-side array sizing
-static constexpr std::size_t num_max_receiver_channels = std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
+// Without VC2 — used for firmware CT args and L1 layout when VC2 is disabled
+static constexpr std::size_t num_max_receiver_channels_without_vc2 =
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d, num_receiver_channels_z_router});
+// = max(1, 2, 2) = 2
+// Absolute maximum — used for host-side array sizing (always big enough for any config)
+static constexpr std::size_t num_max_receiver_channels =
+    std::max({num_receiver_channels_1d, num_receiver_channels_2d_with_vc2, num_receiver_channels_z_router});
+// = max(1, 3, 2) = 3
 
 static constexpr std::size_t num_downstream_edms_vc0 = 1;
 static constexpr std::size_t num_downstream_edms_2d_vc0 = 3;
