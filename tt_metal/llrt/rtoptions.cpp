@@ -104,7 +104,7 @@ enum class EnvVarID {
     TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
-    TT_METAL_SPLIT_PREFETCHER,              // Split prefetch_hd into reader (BRISC) + writer stub (NCRISC)
+    TT_METAL_SPLIT_PREFETCHER,                 // Split prefetch_hd into reader (BRISC) + writer stub (NCRISC)
 
     // ========================================
     // PROFILING & PERFORMANCE
