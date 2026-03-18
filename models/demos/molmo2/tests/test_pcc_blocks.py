@@ -211,10 +211,10 @@ def test_pcc_blocks():
         ref_ff_norm.weight.data = ff_norm_weight
         ref_ff_norm_out = ref_ff_norm(ref_after_attn)
 
-        # SwiGLU (HuggingFace order: first half is UP, second half is GATE)
+        # SwiGLU (HuggingFace order: first half is GATE, second half is UP)
         ref_ff_proj_out = F.linear(ref_ff_norm_out, ff_proj)
-        up = ref_ff_proj_out[..., :intermediate_dim]
-        gate = ref_ff_proj_out[..., intermediate_dim:]
+        gate = ref_ff_proj_out[..., :intermediate_dim]
+        up = ref_ff_proj_out[..., intermediate_dim:]
         ref_swiglu = F.silu(gate) * up
         ref_mlp_out = F.linear(ref_swiglu, ff_out)
 
