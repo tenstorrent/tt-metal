@@ -230,11 +230,9 @@ bool requires_forced_assignment_to_noc1() {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = is_2D_topology(topology);
-    // Allocate L1 addresses for MAX sender channels (9) to support all router types
-    // Even though most routers use fewer channels, we need addresses for all possible channels
-    uint32_t num_sender_channels = is_2D_routing
-                                       ? builder_config::num_max_sender_channels
-                                       : builder_config::get_sender_channel_count(false);  // Use MAX (9) instead of 8
+    // Allocate L1 addresses for global max sender channels so layout is stable across all configs
+    uint32_t num_sender_channels =
+        is_2D_routing ? builder_config::num_max_sender_channels : builder_config::get_sender_channel_count(false);
     uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -268,6 +266,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
                                                   builder_config::MAX_NUM_VCS,
                                                   builder_config::num_max_sender_channels>);
         next_l1_addr += this->datapath_usage_buffer_size;
+        next_l1_addr = tt::align(next_l1_addr, eth_word_l1_alignment);
     } else {
         this->datapath_usage_l1_address = 0;
         this->datapath_usage_buffer_size = 0;
