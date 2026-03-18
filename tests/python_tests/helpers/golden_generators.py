@@ -60,6 +60,21 @@ def check_bfp8_b(operand: list) -> list:
     return operand
 
 
+def check_bfp4_b(operand: list) -> list:
+    """Check if datum is BFP4_B: if there is a +/- inf then zero out entire row of 16 elements because they share the same exponent and therefore get zeroed out in tensix."""
+    not_finite = [math.inf, -math.inf]
+    for i, x in enumerate(operand):
+        if x in not_finite or math.isnan(x):
+            # Zero out the entire row of 16 elements
+            for col in range(16):
+                row = i // 16
+                index = row * 16 + col
+                if not (operand[index] in not_finite or math.isnan(operand[index])):
+                    operand[index] = 0.0
+
+    return operand
+
+
 def convert_nan_to_inf(operand: list) -> list:
     return [math.inf if math.isnan(x) else x for x in operand]
 
@@ -83,7 +98,12 @@ def reassemble_float_after_fidelity(data_format, sgn1, sgn2, exp1, exp2, mant1, 
     exponent1 = exp1.to(torch.int16)
     exponent2 = exp2.to(torch.int16)
 
-    if data_format in [DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Float32]:
+    if data_format in [
+        DataFormat.Float16_b,
+        DataFormat.Bfp8_b,
+        DataFormat.Bfp4_b,
+        DataFormat.Float32,
+    ]:
         exponent1 = exponent1 - 127
         exponent2 = exponent2 - 127
     elif data_format == DataFormat.Float16:
@@ -245,6 +265,7 @@ class SrcFormatModel:
         """Returns tuple (matrix_sign, matrix_exponent, matrix_mantissa)"""
         CONVERSION_MAP = {
             DataFormat.Bfp8_b: SrcFormatModel._bfp8b_to_tf32,
+            DataFormat.Bfp4_b: SrcFormatModel._bfp8b_to_tf32,
             DataFormat.Float16_b: SrcFormatModel._fp16b_to_tf32,
             DataFormat.Float16: SrcFormatModel._fp16_to_tf32,
             DataFormat.Float32: SrcFormatModel._fp32_to_tf32,
@@ -798,6 +819,54 @@ def _bfp8b_to_float16b(operand, dimensions=None):
     return quantized
 
 
+def _bfp4b_to_float16b(operand, dimensions=None):
+    BFP4_BLOCK = 16
+    flat = operand.flatten().to(torch.float32)
+    n = flat.numel()
+
+    # Reinterpret float32 bits as int32 (zero-copy) — match hardware packer which
+    # operates on the full fp32 dest register value, not the truncated bfloat16.
+    u32 = flat.view(torch.int32)
+
+    signs = (u32 >> 31) & 1
+    exps = (u32 >> 23) & 0xFF
+    # bfp4_b has 3 mantissa bits: 1 implicit leading bit + 2 explicit bits.
+    # Hardware takes bits 23:21 of the 24-bit mantissa (with implicit leading 1),
+    # i.e. (mantissa_with_implicit >> 21) & 0x7.
+    mants = ((u32 & 0x7FFFFF) >> 21) | 0x4
+
+    # Reshape into (num_blocks, 16) for block-wise max
+    exps_blocks = exps.view(-1, BFP4_BLOCK)
+    mants_blocks = mants.view(-1, BFP4_BLOCK)
+    signs_blocks = signs.view(-1, BFP4_BLOCK)
+
+    # Shared exponent = max per block (same as hardware packer)
+    shared_exps = exps_blocks.max(dim=1, keepdim=True).values
+
+    # Right-shift mantissa by per-element delta
+    deltas = shared_exps - exps_blocks
+    shifted = mants_blocks >> deltas
+
+    # Unpack: fract_value = bit2*(1/1) + bit1*(1/2) + bit0*(1/4)
+    # = shifted * 2^(shared_exp - 127 - 2) where bit2 is the implicit leading 1
+    # Scale: 2^(shared_exp - 127 - 2) = 2^(shared_exp - 129)
+    values = shifted.float() * torch.exp2((shared_exps - 129).float())
+
+    # Apply sign
+    values = torch.where(signs_blocks.bool(), -values, values)
+
+    quantized = values.flatten()[:n].to(torch.bfloat16)
+
+    if dimensions is not None:
+        quantized = untilize_block(
+            quantized,
+            stimuli_format=DataFormat.Float16_b,
+            dimensions=dimensions,
+        ).flatten()
+
+    return quantized
+
+
 @register_golden
 class MatmulGolden(FidelityMasking):
 
@@ -821,6 +890,12 @@ class MatmulGolden(FidelityMasking):
         if input_B_format == DataFormat.Bfp8_b:
             dims = input_B_dimensions if tilize else None
             operand2 = _bfp8b_to_float16b(operand2, dims)
+        if input_A_format == DataFormat.Bfp4_b:
+            dims = input_A_dimensions if tilize else None
+            operand1 = _bfp4b_to_float16b(operand1, dims)
+        if input_B_format == DataFormat.Bfp4_b:
+            dims = input_B_dimensions if tilize else None
+            operand2 = _bfp4b_to_float16b(operand2, dims)
 
         t1 = to_tensor(operand1, data_format)
         t2 = to_tensor(operand2, data_format)
@@ -968,6 +1043,17 @@ class BroadcastGolden:
         else:
             input_flat = torch.tensor(operand, dtype=torch_format).flatten()
 
+        # For block-floating-point formats, quantize the input tile-by-tile BEFORE
+        # extracting broadcast values.  The hardware unpacks src_B from its block-float
+        # encoding before applying the broadcast, so the shared-exponent quantization
+        # is determined by the original (non-broadcast) 16-element rows of the tile.
+        # If we quantized after broadcasting we would get wrong shared exponents because
+        # all 16 repeated copies of the same value form a trivial block.
+        if data_format == DataFormat.Bfp4_b:
+            input_flat = _bfp4b_to_float16b(input_flat)
+        elif data_format == DataFormat.Bfp8_b:
+            input_flat = _bfp8b_to_float16b(input_flat)
+
         # Calculate output size based on variable face dimensions
         elements_per_tile = face_r_dim * FACE_DIM * num_faces
 
@@ -1068,8 +1154,13 @@ class DataCopyGolden:
         num_faces: int = 4,
         input_dimensions: list[int] = [32, 32],
         face_r_dim: int = 16,  # Default to 16 for backward compatibility
+        input_format=None,
     ):
         torch_format = format_dict[data_format]
+
+        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
+        if input_format == DataFormat.Bfp4_b:
+            operand1 = _bfp4b_to_float16b(operand1)
 
         height, width = input_dimensions[0], input_dimensions[1]
 
@@ -1131,6 +1222,24 @@ class DataCopyGolden:
                 result = torch.clamp(result, min_val, max_val)
 
             result = result.to(torch_format)
+
+        # Apply bfp4_b output quantization round-trip to match hardware behaviour
+        if data_format == DataFormat.Bfp4_b:
+            result_t = (
+                result.float()
+                if isinstance(result, torch.Tensor)
+                else torch.tensor(result, dtype=torch.float32)
+            )
+            flat = result_t.ravel()
+            if num_faces == 4:
+                data = tilize_block(
+                    flat, input_dimensions, DataFormat.Float16_b
+                ).ravel()
+                dims = input_dimensions
+            else:
+                data = flat
+                dims = None
+            result = _bfp4b_to_float16b(data, dims)
 
         return result
 
@@ -1412,6 +1521,10 @@ class UnarySFPUGolden:
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
 
+        # Quantize input to match what hardware actually unpacks from bfp4_b L1 memory
+        if input_format == DataFormat.Bfp4_b:
+            operand1 = _bfp4b_to_float16b(operand1)
+
         # Special handling for Column and Row reduction which needs to process the entire tensor
         if operation in [MathOperation.ReduceColumn, MathOperation.ReduceRow]:
             return self.ops[operation](operand1, reduce_pool)
@@ -1468,16 +1581,24 @@ class UnarySFPUGolden:
             ]
         ]
 
+        op_dtype = (
+            torch.float32
+            if data_format == DataFormat.Bfp4_b
+            else format_dict[dst_format]
+        )
         result[
             ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
             + TILE_SIZE * iterations
-        ] = torch.tensor(op_res, dtype=format_dict[dst_format])
+        ] = torch.tensor(op_res, dtype=op_dtype)
 
         if not skip_tilize:
             result = untilize_block(result, input_format, dimensions).flatten()
 
         if self.data_format == DataFormat.Bfp8_b:
             check_bfp8_b(result)
+
+        if self.data_format == DataFormat.Bfp4_b:
+            check_bfp4_b(result)
 
         match (dst_format, data_format):
             # in the following cases, nans are preserved
@@ -1491,6 +1612,17 @@ class UnarySFPUGolden:
             case _:
                 result = convert_nan_to_inf(result)
 
+        if data_format == DataFormat.Bfp4_b:
+            result_t = (
+                torch.tensor(result, dtype=torch.float32)
+                if not isinstance(result, torch.Tensor)
+                else result.float()
+            )
+            tilized = tilize_block(
+                result_t.flatten(), dimensions, DataFormat.Float16_b
+            ).flatten()
+            result = _bfp4b_to_float16b(tilized, dimensions)
+
         # depending on `data_format`, `inf` values may get converted when unpacked to L1.
         if dst_format == DataFormat.Float16:
             match data_format:
@@ -1499,6 +1631,8 @@ class UnarySFPUGolden:
                 case DataFormat.Float32:
                     result = convert_inf_to_value(result, 131008.0)
                 case DataFormat.Bfp8_b:
+                    result = convert_inf_to_value(result, 130048.0)
+                case DataFormat.Bfp4_b:
                     result = convert_inf_to_value(result, 130048.0)
 
         return torch.tensor(result, dtype=format_dict[data_format])
@@ -1730,64 +1864,83 @@ class EltwiseBinaryGolden(FidelityMasking):
             MathOperation.Elwmul: self._mul,
         }
 
+    def _quantize_input(self, operand, fmt, data_format):
+        """Quantize a single operand to match what hardware sees after unpack."""
+        if fmt is None:
+            return to_tensor(operand, data_format)
+        if fmt == DataFormat.Bfp4_b:
+            return _bfp4b_to_float16b(operand)
+        if fmt == DataFormat.Bfp8_b:
+            return _bfp8b_to_float16b(operand)
+        if fmt.is_mx_format():
+            return quantize_mx_tensor_chunked(operand, fmt)
+        return to_tensor(operand, data_format)
+
     def __call__(
-        self, op, operand1, operand2, data_format, math_fidelity, input_format=None
+        self,
+        op,
+        operand1,
+        operand2,
+        data_format,
+        math_fidelity,
+        input_format=None,
+        input_format_B=None,
     ):
         if op not in self.ops:
             raise ValueError(f"Unsupported Eltwise operation: {op}")
 
-        # Quantize MX format operands to match what hardware sees after unpack
-        # This simulates the quantization that occurs during pack→unpack roundtrip
-        # Only quantize if input_format is explicitly provided and is MX format.
-        # If input_format is None, operands are in an unknown format and should not be quantized.
-        if input_format is not None and input_format.is_mx_format():
-            operand1 = quantize_mx_tensor_chunked(operand1, input_format)
-            operand2 = quantize_mx_tensor_chunked(operand2, input_format)
-            # Keep as bfloat16 for math (hardware sees bfloat16 after unpacking MX)
-            t1 = operand1
-            t2 = operand2
-            # For fidelity masking, use bfloat16 format
-            math_format_for_fidelity = DataFormat.Float16_b
-        else:
-            t1 = to_tensor(operand1, data_format)
-            t2 = to_tensor(operand2, data_format)
-            math_format_for_fidelity = data_format
+        # If input_format_B is not provided, it defaults to input_format.
+        if input_format_B is None:
+            input_format_B = input_format
 
+        # Step 1: Quantize each input independently to match what hardware sees
+        # after unpacking from L1. Each operand uses its own format.
+        operand1 = self._quantize_input(operand1, input_format, data_format)
+        operand2 = self._quantize_input(operand2, input_format_B, data_format)
+
+        # Use bfloat16 for fidelity masking when any input is a block-float format.
+        uses_block_float = any(
+            fmt is not None
+            and (fmt in (DataFormat.Bfp4_b, DataFormat.Bfp8_b) or fmt.is_mx_format())
+            for fmt in (input_format, input_format_B)
+        )
+        math_format_for_fidelity = (
+            DataFormat.Float16_b if uses_block_float else data_format
+        )
+
+        t1, t2 = operand1, operand2
+
+        # Step 2: Compute the operation (with fidelity masking for Elwmul).
         MATH_FIDELITY_TO_ITER_COUNT = {
             MathFidelity.LoFi: 0,
             MathFidelity.HiFi2: 1,
             MathFidelity.HiFi3: 2,
             MathFidelity.HiFi4: 3,
         }
-
         fidelity_iter_count = MATH_FIDELITY_TO_ITER_COUNT[math_fidelity]
 
-        res = 0
-
-        # If multiply is chosen apply fidelity
         if op == MathOperation.Elwmul:
-            res = None
+            result = None
             for fidelity_iter in range(fidelity_iter_count + 1):
                 t1, t2 = self._apply_fidelity_masking(
                     math_format_for_fidelity, t1, t2, fidelity_iter
                 )
                 phase_result = self.ops[op](t1, t2)
-
                 if fidelity_iter == 0:
-                    res = phase_result
+                    result = phase_result
                 else:
-                    res += phase_result
-
-            result = res
+                    result += phase_result
         else:
             result = self.ops[op](t1, t2)
 
-        if data_format.is_mx_format():
-            if op == MathOperation.Elwmul:
-                result = result.to(torch.bfloat16)
-            result = quantize_mx_tensor_chunked(result, data_format)
+        # Step 3: Quantize output to match what hardware packs back into L1.
+        if data_format == DataFormat.Bfp4_b:
+            result = _bfp4b_to_float16b(result.to(torch.bfloat16))
+        elif data_format == DataFormat.Bfp8_b:
+            result = _bfp8b_to_float16b(result.to(torch.bfloat16))
+        elif data_format.is_mx_format():
+            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
         else:
-            # Convert to output format when output is non-MX
             result = to_tensor(result, data_format)
 
         return result
@@ -1857,7 +2010,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 dst_idx,
             )
 
-        if not skip_tilize and data_format != DataFormat.Bfp8_b:
+        if not skip_tilize and data_format not in (
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+        ):
             result = tilize_block(tensor.flatten(), dimensions, data_format).flatten()
         else:
             result = tensor.flatten().clone()
@@ -1906,7 +2062,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
             result[dst_row_start : dst_row_start + elements_per_row] = result_row
 
-        if not skip_tilize and data_format != DataFormat.Bfp8_b:
+        if not skip_tilize and data_format not in (
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+        ):
             result = untilize_block(result, data_format, dimensions)
 
         return result

@@ -138,6 +138,13 @@ def infer_unpack_out(
     if input_format.is_mx_format():
         return DataFormat.Float16_b
 
+    # Sub-byte BFP formats (Bfp4_b) can only exist in L1.
+    # The Wormhole HW unpacker only supports BFP4_b → BFP8_b conversion
+    # (not BFP4_b → Float16_b). The unpacker expands 4-bit mantissas to 8-bit
+    # in the BFP8_b register format, preserving the shared exponent structure.
+    if input_format == DataFormat.Bfp4_b:
+        return DataFormat.Bfp8_b
+
     if input_format == DataFormat.Float32 and not unpacking_to_dest:
         # When input format in L1 is Float32 + unpacking to src registers (instead of directly to dest register)
         # Source registers can store 19-bit values, so we truncate Float32 to Tf32 if we know dest will be 32-bit format
@@ -254,6 +261,15 @@ def infer_pack_in(
         # For wormhole architecture, gasket cannot perform this conversion and packer takes input Float32 (from dest register) converting to Float16_A.
         # For blackhole architecture, gasket able to convert Float32 to Float16_A before packing (reduces work on packer).
         return DataFormat.Float32 if is_wormhole else output_format
+
+    # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
+    # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
+    if output_format == DataFormat.Bfp4_b:
+        return (
+            DataFormat.Float32
+            if is_fp32_dest_acc_en == DestAccumulation.Yes
+            else DataFormat.Float16_b
+        )
 
     # Default:
     # With float32 dest reg datums, packer gasket can do any conversion thus packer input can be the desired output format

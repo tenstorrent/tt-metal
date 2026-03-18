@@ -14,6 +14,7 @@ from .format_config import DataFormat
 from .llk_params import format_tile_sizes
 from .logger import logger
 from .pack import (
+    pack_bfp4_b,
     pack_bfp8_b,
     pack_bfp16,
     pack_fp8_e4m3,
@@ -202,6 +203,7 @@ class StimuliConfig:
             DataFormat.Float16_b: pack_bfp16,
             DataFormat.Float32: pack_fp32,
             DataFormat.Bfp8_b: pack_bfp8_b,
+            DataFormat.Bfp4_b: pack_bfp4_b,
             DataFormat.Int32: pack_int32,
             DataFormat.MxFp8R: pack_mxfp8r,
             DataFormat.MxFp8P: pack_mxfp8p,
@@ -244,7 +246,7 @@ class StimuliConfig:
 
         pack_function_lambda = lambda buffer_tile: (
             pack_function(buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim)
-            if pack_function in [pack_bfp8_b, pack_mxfp8r, pack_mxfp8p]
+            if pack_function in [pack_bfp8_b, pack_bfp4_b, pack_mxfp8r, pack_mxfp8p]
             else pack_function(buffer_tile)
         )
 
@@ -284,7 +286,7 @@ class StimuliConfig:
 
         pack_function_lambda = lambda buffer_tile: (
             pack_function(buffer_tile, num_faces=num_faces, face_r_dim=face_r_dim)
-            if pack_function in [pack_bfp8_b, pack_mxfp8r, pack_mxfp8p]
+            if pack_function in [pack_bfp8_b, pack_bfp4_b, pack_mxfp8r, pack_mxfp8p]
             else pack_function(buffer_tile)
         )
 
@@ -363,6 +365,7 @@ class StimuliConfig:
             location,
             self.write_full_tiles,
         )
+
         StimuliConfig.write_matrix(
             self.buffer_B,
             self.tile_count_B,
@@ -469,6 +472,7 @@ class StimuliConfig:
         read_data = read_from_device(
             location, self.buf_res_addr, num_bytes=read_bytes_cnt
         )
+
         # Only pass tile_stride_bytes for dense tile dimensions.
         # For backward-compatible path (use_dense_tile_dimensions=False),
         # let unpack_res_tiles default to format_tile_sizes which strides at

@@ -59,6 +59,7 @@ class DataFormat(Enum):
     Float16_b = DataFormatInfo("Float16_b", 2)
     Bfp8 = DataFormatInfo("Bfp8", 1)  # WH/BH specific
     Bfp8_b = DataFormatInfo("Bfp8_b", 1)  # WH/BH specific
+    Bfp4_b = DataFormatInfo("Bfp4_b", 1)  # WH/BH specific
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
     Tf32 = DataFormatInfo("Tf32", 3)
@@ -108,6 +109,7 @@ class DataFormat(Enum):
         return self in {
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
             DataFormat.Tf32,
             DataFormat.Float32,
         }
@@ -117,6 +119,9 @@ class DataFormat(Enum):
         num_exponents = 0
         if self in {DataFormat.Bfp8, DataFormat.Bfp8_b}:
             num_exponents = num_datums // 16
+        elif self in {DataFormat.Bfp4_b}:
+            num_exponents = num_datums // 16
+            return (num_datums // 2) + num_exponents
         elif self.is_mx_format():
             # MX formats: 1 scale (E8M0, 8 bits) per 32 elements
             num_exponents = num_datums // 32
@@ -329,6 +334,7 @@ WORMHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Tf32: 4,
     DataFormat.Float16_b: 5,
     DataFormat.Bfp8_b: 6,
+    DataFormat.Bfp4_b: 7,
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
@@ -343,6 +349,7 @@ BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Tf32: 4,
     DataFormat.Float16_b: 5,
     DataFormat.Bfp8_b: 6,
+    DataFormat.Bfp4_b: 7,
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
@@ -472,6 +479,7 @@ def is_dest_acc_needed(format: InputOutputFormat) -> bool:
     We must notify the user that this has happened and change the test output to reflect this.
     """
     return (
-        format.input_format in [DataFormat.Bfp8_b, DataFormat.Float16_b]
+        format.input_format
+        in [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float16_b]
         and format.output_format == DataFormat.Float16
     )
