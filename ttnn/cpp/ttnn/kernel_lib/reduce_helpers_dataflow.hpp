@@ -17,17 +17,21 @@ using ckernel::ReduceDim;
 // =============================================================================
 // Reduce scaler helpers API
 //
+// Both APIs below generate a scaler tile consumed by the reduce LLK.
+// They must ONLY be used for that purpose — not for arbitrary constant tiles.
+//
 // calculate_and_prepare_reduce_scaler (DEFAULT / PREFERRED):
-//   Computes the correct scaler based on pool type, reduce dimension, and
-//   reduce factor (e.g. 1/N for AVG, 1.0 for SUM/MAX), and prepares the
-//   CB tile with it. Use this for all standard reduce operations.
+//   Computes the standard reduce scaler (1/N for AVG, 1.0 for SUM/MAX) from
+//   pool type, reduce dimension, and reduce factor, then writes it to a CB tile.
+//   Use this for all reduce operations that use a standard scaler.
 //
 // prepare_reduce_scaler:
-//   Prepares a CB tile for reduce using a caller-provided float scaler.
-//   Use ONLY when:
-//     (1) Not all cores use the same scaler (since calculate_and_prepare_reduce_scaler
-//         takes the scaler value as a template argument, it must be the same on every core), and/or
-//     (2) The scaler is not a standard reduce scaler (i.e. not 1/N for AVG or 1 for SUM/MAX).
+//   Writes a caller-provided float value into a CB tile for reduce.
+//   Use ONLY when the reduce scaler is non-standard — i.e., it is NOT the
+//   usual 1/N for AVG or 1.0 for SUM/MAX. For example:
+//     - Different cores reduce over different-sized partitions (sharded with
+//       uneven splits), so each core needs a different 1/N value.
+//     - The scaler combines reduction with another factor (e.g., 1/(N*M)).
 // =============================================================================
 
 /**
