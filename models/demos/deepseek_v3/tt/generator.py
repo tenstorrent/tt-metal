@@ -215,6 +215,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
+        # sampling values of all users are assumed to be the same default values if not provided in constructor.
         self.sample_on_device = sample_on_device
         self.sampling_params = (
             sampling_params
@@ -238,9 +239,8 @@ class DeepseekGenerator(WarmupForwardMixin):
             self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
 
         logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
-        # sampling values of all users are assumed to be the same when initialized with generator constructor.
         logger.info(
-            f"Sampling parameters: "
+            f"Sampling parameters for first user (other users may have different values): "
             + f"temperature={self.sampling_params.temperature[0]}, "
             + f"top_p={self.sampling_params.top_p[0]}, "
             + f"top_k={self.sampling_params.top_k[0]}"
@@ -1017,6 +1017,16 @@ class DeepseekGenerator(WarmupForwardMixin):
             logits = logits.squeeze(0)
         return torch.argmax(logits, dim=-1)  # [B]
 
+    @staticmethod
+    def _get_sampling_value(value, index: int):
+        if isinstance(value, list):
+            if not value:
+                return None
+            if index < len(value):
+                return value[index]
+            return value[-1]
+        return value
+    
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
         return self._sample_greedy(logits)
 
@@ -1509,53 +1519,61 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self.sampling_params is None:
             return torch.argmax(logits, dim=-1)
 
-        if self.sampling_params.temperature <= 0:
-            return torch.argmax(logits, dim=-1)
-
-        scores = logits / self.sampling_params.temperature
-
-        if self.sampling_params.top_k > 0:
-            top_k = min(self.sampling_params.top_k, scores.shape[-1])
-            kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
-            scores = scores.masked_fill(scores < kth_values, float("-inf"))
-
-        if 0.0 < self.sampling_params.top_p < 1.0:
-            sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
-            sorted_probs = torch.softmax(sorted_scores, dim=-1)
-            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
-            remove_mask = cumulative_probs > self.sampling_params.top_p
-            remove_mask[..., 1:] = remove_mask[..., :-1].clone()
-            remove_mask[..., 0] = False
-            sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
-
-            filtered_scores = torch.full_like(scores, float("-inf"))
-            filtered_scores.scatter_(dim=-1, index=sorted_indices, src=sorted_scores)
-            scores = filtered_scores
-
-        probs = torch.softmax(scores, dim=-1)
-        row_sums = probs.sum(dim=-1)
-        valid_rows = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sums) & (row_sums > 0)
-
-        # Honor sampling.seed (if provided) for deterministic host-side sampling.
-        generator: torch.Generator | None = None
-        if self.sampling_params.seed is not None:
-            generator = torch.Generator(device=probs.device).manual_seed(int(self.sampling_params.seed))
-
-        if valid_rows.all():
-            if generator is None:
-                return torch.multinomial(probs, num_samples=1).squeeze(-1)
-            return torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
+        if logits.ndim == 1:
+            logits = logits.unsqueeze(0)
 
         sampled_tokens = torch.argmax(logits, dim=-1)
-        if valid_rows.any():
+        batch_size = logits.shape[0]
+
+        for row_idx in range(batch_size):
+            user_idx = start_user_idx + row_idx
+            temperature = self._get_sampling_value(self.sampling_params.temperature, user_idx)
+            top_k = self._get_sampling_value(self.sampling_params.top_k, user_idx)
+            top_p = self._get_sampling_value(self.sampling_params.top_p, user_idx)
+            seed = self._get_sampling_value(getattr(self.sampling_params, "seed", None), user_idx)
+
+            temperature = float(temperature) if temperature is not None else 1.0
+            top_k = int(top_k) if top_k is not None else 0
+            top_p = float(top_p) if top_p is not None else 1.0
+
+            if temperature <= 0:
+                continue
+
+            scores = logits[row_idx : row_idx + 1] / temperature
+
+            if top_k > 0:
+                top_k = min(top_k, scores.shape[-1])
+                kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
+                scores = scores.masked_fill(scores < kth_values, float("-inf"))
+
+            if 0.0 < top_p < 1.0:
+                sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
+                sorted_probs = torch.softmax(sorted_scores, dim=-1)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                remove_mask = cumulative_probs > top_p
+                remove_mask[..., 1:] = remove_mask[..., :-1].clone()
+                remove_mask[..., 0] = False
+                sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
+
+                filtered_scores = torch.full_like(scores, float("-inf"))
+                filtered_scores.scatter_(dim=-1, index=sorted_indices, src=sorted_scores)
+                scores = filtered_scores
+
+            probs = torch.softmax(scores, dim=-1)
+            row_sum = probs.sum(dim=-1)
+            valid_row = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sum) & (row_sum > 0)
+            if not bool(valid_row.item()):
+                continue
+
+            generator: torch.Generator | None = None
+            if seed is not None:
+                generator = torch.Generator(device=probs.device).manual_seed(int(seed))
+
             if generator is None:
-                sampled_tokens[valid_rows] = torch.multinomial(probs[valid_rows], num_samples=1).squeeze(-1)
+                sampled_tokens[row_idx] = torch.multinomial(probs, num_samples=1).squeeze(-1)
             else:
-                sampled_tokens[valid_rows] = torch.multinomial(
-                    probs[valid_rows],
-                    num_samples=1,
-                    generator=generator,
-                ).squeeze(-1)
+                sampled_tokens[row_idx] = torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
+
         return sampled_tokens
     
     def generate(

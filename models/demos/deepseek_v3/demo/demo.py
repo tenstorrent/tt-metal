@@ -91,11 +91,40 @@ def _print_performance_metrics(results: dict) -> None:
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
 
 
-def _print_model_params(results: dict) -> None:
+def _format_model_params_for_reporting(model_params: dict, summarize_sampling: bool = True) -> dict:
+    """Summarize sampling arrays for concise reporting."""
+    if not summarize_sampling:
+        return model_params
+
+    sampling = model_params.get("sampling")
+    if not isinstance(sampling, dict):
+        return model_params
+
+    formatted_sampling = {}
+    for key, value in sampling.items():
+        if isinstance(value, (list, tuple)):
+            if value and all(v == value[0] for v in value):
+                formatted_sampling[key] = {"same_value_all_users": value[0], "count": len(value)}
+            else:
+                formatted_sampling[key] = {
+                    "same_value_all_users": False,
+                    "note": "all values are not same",
+                    "first_3_values": list(value[:3]),
+                    "count": len(value),
+                }
+        else:
+            formatted_sampling[key] = value
+
+    return {**model_params, "sampling": formatted_sampling}
+
+
+def _print_model_params(results: dict, summarize_sampling: bool = True) -> None:
     """Print model parameters from model_params."""
     if "model_params" in results and results["model_params"]:
         logger.info("=== Model Parameters ===")
-        model_params = results["model_params"]
+        model_params = _format_model_params_for_reporting(
+            results["model_params"], summarize_sampling=summarize_sampling
+        )
         for key in sorted(model_params):
             logger.info(f"{key}: {model_params[key]}")
         logger.info("=====================")
@@ -750,7 +779,9 @@ def main() -> None:
             prompts=args.prompts,
             generations=results["generations"],
             statistics=results.get("statistics", {}),
-            model_params=results.get("model_params", {}),
+            model_params=_format_model_params_for_reporting(
+                results.get("model_params", {}),
+            ),
             random_weights=bool(args.random_weights),
         )
         if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
