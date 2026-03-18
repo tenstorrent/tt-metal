@@ -13,40 +13,6 @@ from models.demos.rvc.tt_impl.linear import Linear
 LRELU_SLOPE = 0.1
 
 
-class LayerNorm:
-    def __init__(self, device: ttnn.MeshDevice, channels: int, eps: float = 1e-5) -> None:
-        self.device = device
-        self.channels = channels
-        self.eps = eps
-        self.gamma: ttnn.Tensor | None = None
-        self.beta: ttnn.Tensor | None = None
-
-    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
-        if module_prefix is None:
-            module_prefix = ""
-        gamma_key = f"{module_prefix}gamma" if module_prefix else "gamma"
-        beta_key = f"{module_prefix}beta" if module_prefix else "beta"
-        if gamma_key not in state_dict:
-            raise KeyError(f"Missing required parameter: {gamma_key}")
-        if beta_key not in state_dict:
-            raise KeyError(f"Missing required parameter: {beta_key}")
-        self.gamma = ttnn.from_torch(
-            state_dict[gamma_key].reshape(1, 1, self.channels),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-        self.beta = ttnn.from_torch(
-            state_dict[beta_key].reshape(1, 1, self.channels),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-        )
-
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
-
-
 class WN:
     def __init__(
         self,

@@ -11,15 +11,10 @@ import torch
 import ttnn
 from models.demos.rvc.tt_impl.conv1d import Conv1d
 from models.demos.rvc.tt_impl.convtranspose1d import ConvTranspose1d
+from models.demos.rvc.tt_impl.layernorm import LayerNorm
 from models.demos.rvc.tt_impl.linear import Linear
 from models.demos.rvc.tt_impl.synthesizer.attentions import FFN, MultiHeadAttention
-from models.demos.rvc.tt_impl.synthesizer.modules import (
-    LRELU_SLOPE,
-    LayerNorm,
-    ResBlock1,
-    ResBlock2,
-    ResidualCouplingLayer,
-)
+from models.demos.rvc.tt_impl.synthesizer.modules import LRELU_SLOPE, ResBlock1, ResBlock2, ResidualCouplingLayer
 
 
 def ttnn_randn_fallback(shape, dtype, device):
