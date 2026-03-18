@@ -202,7 +202,8 @@ inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32
     return pack_tile_addr;
 }
 
-template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, bool untilize = false>
+template <bool is_fp32_dest_acc_en, bool out_of_order_output = false,
+          bool untilize = false, bool revert_dst_invalid_bits = false>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -210,7 +211,8 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
     std::uint32_t pack_tile_addr = get_output_tile_address<out_of_order_output, untilize>(output_id, output_tile_index);
 
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize,
+               revert_dst_invalid_bits>(tile_index, pack_tile_addr);
 }
 
 /*************************************************************************
