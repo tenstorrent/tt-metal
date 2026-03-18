@@ -72,7 +72,6 @@ struct ReduceToOneB1 {
         uint32_t localCb,
         uint32_t scratchCb,
         uint32_t packetCb,
-        uint32_t packetHeaderCb,
         uint32_t numHops,
         uint32_t dstFabricNodeChipId,
         uint32_t dstFabricNodeMeshId,
@@ -93,7 +92,6 @@ struct ReduceToOneB1 {
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t packet_cb = packetCb;
-        static constexpr uint32_t packet_header_cb = packetHeaderCb;
         static constexpr uint32_t num_hops = numHops;
         static constexpr uint32_t dst_fabric_node_chip_id = dstFabricNodeChipId;
         static constexpr uint32_t dst_fabric_node_mesh_id = dstFabricNodeMeshId;
@@ -347,9 +345,6 @@ struct ReduceToOneB1 {
                 noc_async_write_barrier();
 
                 if constexpr (CTArgs::enable_downstream_socket) {
-                    // Per-shard useful bytes (strips padding from padded payload_size_bytes)
-                    constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
-
                     if (args.socket_config_addr != 0) {
                         // Aggregator: wait for all other workers, then stream to downstream socket.
                         // The aggregator core IS the output core, so all shards are already in local L1.
@@ -358,6 +353,7 @@ struct ReduceToOneB1 {
                         noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
                         noc_semaphore_set(agg_sem_ptr, 0);
 
+                        constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                         set_sender_socket_page_size(sender_socket, CTArgs::agg_output_size_bytes);
                         socket_reserve_pages(sender_socket, 1);
@@ -378,19 +374,27 @@ struct ReduceToOneB1 {
                         socket_notify_receiver(sender_socket);
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
-                        noc_async_write_barrier();
                         update_socket_config(sender_socket);
-                        if (args.persistent_enable != 0) {
-                            uint64_t fc_sem = get_noc_addr(
-                                args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
-                            noc_semaphore_inc(fc_sem, 1);
-                            noc_async_write_barrier();
-                        }
                     } else if (args.agg_sem_l1_addr != 0) {
-                        // Non-aggregator worker: signal the aggregator that our shard is ready.
-                        uint64_t agg_sem_noc =
-                            get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
-                        noc_semaphore_inc(agg_sem_noc, 1);
+                        if (args.persistent_enable != 0) {
+                            // No socket: aggregator waits for all workers before signaling.
+                            volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                            noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                            noc_semaphore_set(agg_sem_ptr, 0);
+                        } else {
+                            // Non-aggregator worker: signal the aggregator that our shard is ready.
+                            uint64_t agg_sem_noc =
+                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                            noc_semaphore_inc(agg_sem_noc, 1);
+                            noc_async_atomic_barrier();
+                        }
+                    }
+                    if (args.persistent_enable != 0) {
+                        uint64_t fc_sem = get_noc_addr(
+                            args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                        noc_semaphore_inc(fc_sem, 1);
+                        noc_async_atomic_barrier();
                     }
                 }
 
@@ -402,10 +406,9 @@ struct ReduceToOneB1 {
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
-            // Get packet header from CB (persistent across iterations)
-            uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
-                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            // Get packet header
+            PacketHeaderPool::reset();
+            auto* packet_header = PacketHeaderPool::allocate_header(1);
 
             // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
             set_unicast_route(
