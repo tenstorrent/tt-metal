@@ -99,6 +99,7 @@ private:
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoordinateRangeSet& device_range,
         uint32_t pcie_alignment);
+    PinnedBufferInfo init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_l1_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t requested_size);
     void write_socket_metadata(
@@ -127,6 +128,10 @@ private:
     std::shared_ptr<uint32_t[]> host_buffer_ = nullptr;
     uint32_t* bytes_sent_ptr_ = nullptr;
     std::function<void(void*, uint32_t, uint64_t)> pcie_writer_ = nullptr;
+
+    bool using_hugepage_ = false;
+    uint32_t* hugepage_data_host_ptr_ = nullptr;
+    volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -9,10 +9,13 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include "impl/dispatch/system_memory_manager.hpp"
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <cstdlib>
 #include <cstring>
 #include <sys/mman.h>
+#include <immintrin.h>
 
 namespace tt::tt_metal::distributed {
 
@@ -51,6 +54,37 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         .pcie_xy_enc = noc_addr.value().pcie_xy_enc,
         .addr_lo = static_cast<uint32_t>(noc_addr.value().addr & 0xFFFFFFFFull),
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
+}
+
+D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {
+    using_hugepage_ = true;
+
+    auto* device = mesh_device->get_device(sender_core_.device_coord);
+    auto device_id = device->id();
+    auto& sysmem_mgr = device->sysmem_manager();
+
+    auto [data_host_ptr, data_dev_addr] = sysmem_mgr.allocate_region(fifo_size_);
+    hugepage_data_host_ptr_ = static_cast<uint32_t*>(data_host_ptr);
+    std::memset(hugepage_data_host_ptr_, 0, fifo_size_);
+
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    ChipId mmio_device_id = cluster.get_associated_mmio_device(device_id);
+    const auto& soc = cluster.get_soc_desc(mmio_device_id);
+    const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::NOC0);
+    TT_ASSERT(!pcie_cores.empty());
+    auto pcie_xy = pcie_cores.front();
+    uint32_t pcie_xy_enc = hal.noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+
+    log_info(
+        tt::LogMetal,
+        "D2HSocket: Using hugepage fallback for device {} "
+        "(data_dev_addr=0x{:x}, pcie_xy_enc=0x{:x})",
+        device_id,
+        data_dev_addr,
+        pcie_xy_enc);
+
+    return PinnedBufferInfo{.pcie_xy_enc = pcie_xy_enc, .addr_lo = data_dev_addr, .addr_hi = 0};
 }
 
 void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -167,15 +201,35 @@ D2HSocket::D2HSocket(
     MeshCoordinateRangeSet sender_device_range_set;
     sender_device_range_set.merge(MeshCoordinateRange(sender_core_.device_coord));
 
-    const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    PinnedBufferInfo data_info = init_host_buffer(mesh_device, sender_device_range_set, pcie_alignment);
+    bool can_use_pinned_memory = cluster.is_iommu_enabled() || hal.get_supports_64_bit_pcie_addressing();
 
-    PinnedBufferInfo bytes_sent_info = data_info;
-    uint64_t bytes_sent_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
-    bytes_sent_info.addr_lo = static_cast<uint32_t>(bytes_sent_addr & 0xFFFFFFFFull);
-    bytes_sent_info.addr_hi = static_cast<uint32_t>(bytes_sent_addr >> 32);
+    PinnedBufferInfo data_info;
+    PinnedBufferInfo bytes_sent_info;
+
+    if (can_use_pinned_memory) {
+        data_info = init_host_buffer(mesh_device, sender_device_range_set, pcie_alignment);
+        uint64_t bytes_sent_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
+        bytes_sent_info = data_info;
+        bytes_sent_info.addr_lo = static_cast<uint32_t>(bytes_sent_addr & 0xFFFFFFFFull);
+        bytes_sent_info.addr_hi = static_cast<uint32_t>(bytes_sent_addr >> 32);
+    } else {
+        data_info = init_host_buffer_hugepage(mesh_device);
+
+        auto* device = mesh_device->get_device(sender_core_.device_coord);
+        auto& sysmem_mgr = device->sysmem_manager();
+        auto [bs_host_ptr, bs_dev_addr] = sysmem_mgr.allocate_region(sizeof(uint32_t));
+        hugepage_bytes_sent_host_ptr_ = static_cast<volatile uint32_t*>(bs_host_ptr);
+        *const_cast<uint32_t*>(hugepage_bytes_sent_host_ptr_) = 0;
+
+        bytes_sent_info = data_info;
+        bytes_sent_info.addr_lo = bs_dev_addr;
+        bytes_sent_info.addr_hi = 0;
+    }
 
     if (l1_data_buffer_size > 0) {
         init_l1_data_buffer(mesh_device, l1_data_buffer_size);
@@ -188,7 +242,9 @@ D2HSocket::D2HSocket(
 
 D2HSocket::~D2HSocket() noexcept {
     barrier(1000);
-    pinned_memory_.reset();
+    if (!using_hugepage_) {
+        pinned_memory_.reset();
+    }
 }
 
 void D2HSocket::set_page_size(uint32_t page_size) {
@@ -204,8 +260,7 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
         while (bytes_recv < bytes_adjustment) {
-            tt_driver_atomics::mfence();
-            volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+            volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_ptr_[0];
             bytes_recv = bytes_sent_value - bytes_acked_;
             bytes_sent_ = bytes_sent_value;
         }
@@ -223,10 +278,18 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
-        tt_driver_atomics::mfence();
-        volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
-        bytes_recv = bytes_sent_value - bytes_acked_;
-        bytes_sent_ = bytes_sent_value;
+        if (using_hugepage_) {
+            _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+            _mm_lfence();
+            uint32_t bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
+            bytes_recv = bytes_sent_value - bytes_acked_;
+            bytes_sent_ = bytes_sent_value;
+        } else {
+            tt_driver_atomics::mfence();
+            volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+            bytes_recv = bytes_sent_value - bytes_acked_;
+            bytes_sent_ = bytes_sent_value;
+        }
     }
 }
 
@@ -248,11 +311,21 @@ void D2HSocket::notify_sender() {
 }
 
 void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
-    volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+    auto read_bytes_sent = [this]() -> uint32_t {
+        if (using_hugepage_) {
+            _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+            _mm_lfence();
+            return *hugepage_bytes_sent_host_ptr_;
+        } else {
+            tt_driver_atomics::mfence();
+            return bytes_sent_ptr_[0];
+        }
+    };
+
+    volatile uint32_t bytes_sent_value = read_bytes_sent();
     auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_acked_ - bytes_sent_value != 0) {
-        tt_driver_atomics::mfence();
-        bytes_sent_value = bytes_sent_ptr_[0];
+        bytes_sent_value = read_bytes_sent();
         if (timeout_ms.has_value()) {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::high_resolution_clock::now() - start_time)
@@ -273,9 +346,16 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
     TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
     uint32_t num_bytes = num_pages * page_size_;
     TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
-    auto* socket_data_ptr = host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
     this->wait_for_bytes(num_bytes);
-    std::memcpy(data, socket_data_ptr, num_bytes);
+    uint32_t* src = using_hugepage_ ? hugepage_data_host_ptr_ + (read_ptr_ / sizeof(uint32_t))
+                                    : host_buffer_.get() + (read_ptr_ / sizeof(uint32_t));
+    if (using_hugepage_) {
+        for (uint32_t i = 0; i < num_bytes; i += 64) {
+            _mm_clflush(reinterpret_cast<char*>(src) + i);
+        }
+        _mm_lfence();
+    }
+    std::memcpy(data, src, num_bytes);
     this->pop_bytes(num_bytes);
 
     if (notify_sender) {
@@ -285,8 +365,15 @@ void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
 
 uint32_t D2HSocket::pages_available() {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking available pages.");
-    tt_driver_atomics::mfence();
-    volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+    uint32_t bytes_sent_value;
+    if (using_hugepage_) {
+        _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
+        _mm_lfence();
+        bytes_sent_value = *hugepage_bytes_sent_host_ptr_;
+    } else {
+        tt_driver_atomics::mfence();
+        bytes_sent_value = bytes_sent_ptr_[0];
+    }
     bytes_sent_ = bytes_sent_value;
     uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
     return bytes_recv / page_size_;
