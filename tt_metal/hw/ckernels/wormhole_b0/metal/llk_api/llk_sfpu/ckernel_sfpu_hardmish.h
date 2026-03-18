@@ -32,11 +32,18 @@ constexpr std::array<float, 13> HARDMISH_LUT = {{
     0.0000000000e+00f, 1.0000000000e+00f, 0.0000000000e+00f
 }};
 
+// Boundary clamping: hardmish(x) = 0 for x<-2, x for x>0
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void hardmish() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = piecewise_polynomial_eval<HARDMISH_NUM_DEGREE, HARDMISH_NUM_SEGMENTS, HARDMISH_LUT_SIZE>(HARDMISH_LUT, x);
+        sfpi::vFloat result = piecewise_polynomial_eval<HARDMISH_NUM_DEGREE, HARDMISH_NUM_SEGMENTS, HARDMISH_LUT_SIZE>(HARDMISH_LUT, x);
+        v_if(x >= 0.0f) { result = x; }
+        v_endif;
+        v_if(x < -2.0f) { result = 0.0f; }
+        v_endif;
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
