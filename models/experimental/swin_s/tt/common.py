@@ -77,19 +77,26 @@ class Conv:
         # Enabling kernel stride folding lands in to matmul where it fails because of
         # dimensionality mismatch. Disabling it to avoid the issue. Once #31313 is fixed, this can be re-enabled.
         conv_config.enable_kernel_stride_folding = False
+
+        # Save shape before conv2d since deallocate_activation=True will deallocate input_tensor
+        batch_size = input_tensor.shape[0]
+        in_channels = input_tensor.shape[3]
+        input_height = input_tensor.shape[1]
+        input_width = input_tensor.shape[2]
+
         [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
-            in_channels=input_tensor.shape[3],
+            in_channels=in_channels,
             out_channels=self.out_channels,
             device=device,
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[3]),
-            batch_size=input_tensor.shape[0],
-            input_height=input_tensor.shape[1],
-            input_width=input_tensor.shape[2],
+            batch_size=batch_size,
+            input_height=input_height,
+            input_width=input_width,
             conv_config=conv_config,
             compute_config=compute_config,
             groups=self.groups,
@@ -98,9 +105,7 @@ class Conv:
             dtype=self.dtype,
         )
 
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[3])
-        )
+        output_tensor = ttnn.reshape(output_tensor, (batch_size, _out_height, _out_width, output_tensor.shape[3]))
         del _out_height, _out_width
 
         return output_tensor

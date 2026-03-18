@@ -11,10 +11,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
     assert len(features_nhwc.shape) == 4, "Input tensor must be 4D"
     assert features_nhwc.shape[0] == 1, "Batch size must be 1"
-    tmp = ttnn.cumsum(features_nhwc, dim=1, dtype=features_nhwc.dtype)
+    dtype = features_nhwc.dtype
+    tmp = ttnn.cumsum(features_nhwc, dim=1, dtype=dtype)
     ttnn.deallocate(features_nhwc)
     tmp = ttnn.move(tmp)
-    return ttnn.cumsum(tmp, dim=2, dtype=features_nhwc.dtype)
+    return ttnn.cumsum(tmp, dim=2, dtype=dtype)
 
 
 def ttnn_integral_image_channel_last(features_nhwc):

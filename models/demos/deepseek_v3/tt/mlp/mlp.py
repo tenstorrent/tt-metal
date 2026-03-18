@@ -475,11 +475,11 @@ class MLP(AbstractModule):
             Output tensor without reduce_scatter applied
         """
         if mode == "prefill":
+            # Save num_layers before _forward_prefill_compute_only which deallocates x
+            num_layers = x.shape[0]
+
             # For SharedExpert, we handle de-chunking here since no reduce_scatter follows
             output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
-
-            # De-chunk the output if needed (for SharedExpert usage)
-            num_layers = x.shape[0]
             _, num_chunks, _, output_dim = output.shape
             if num_chunks > 1:
                 output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])

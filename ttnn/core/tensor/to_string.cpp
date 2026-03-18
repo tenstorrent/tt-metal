@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/to_string.hpp"
+#include "tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -13,6 +14,8 @@
 namespace ttnn {
 
 std::string to_string(const tt::tt_metal::Tensor& tensor) {
+    tt::tt_metal::GhostSpecAccessGuard guard("ttnn::to_string");
+
     tt::tt_metal::GraphTracker::instance().track_function_start("ttnn::to_string", tensor);
 
     const auto& shape = tensor.logical_shape();

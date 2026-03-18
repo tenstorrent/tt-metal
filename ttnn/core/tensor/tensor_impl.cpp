@@ -512,6 +512,8 @@ std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
 }
 
 std::string to_string(const Tensor& tensor) {
+    tt::tt_metal::GhostSpecAccessGuard guard("ttnn::to_string");
+
     return dispatch(tensor.dtype(), [&]<typename T>() { return to_string_impl<T>(tensor); });
 }
 

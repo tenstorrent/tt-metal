@@ -70,11 +70,14 @@ ConvTranspose2dResult conv_transpose2d_L1(
     const std::optional<const MemoryConfig>& memory_config,
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
+    // Save input tensor attributes before any operation that could deallocate it
+    const DataType input_dtype = input_tensor.dtype();
+    const Layout input_layout = input_tensor.layout();
+    const DataType output_dtype = dtype.value_or(input_dtype);
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     DeviceComputeKernelConfig compute_config =
-        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
 
     // Compute all transposed conv2d dimension transformations using the consolidated helper
     // This is the single source of truth for dimension calculations
@@ -137,8 +140,8 @@ ConvTranspose2dResult conv_transpose2d_L1(
             dims.full_input_height,
             dims.full_input_width,
             compute_grid_size,
-            input_tensor.layout(),
-            input_tensor.dtype(),
+            input_layout,
+            input_dtype,
             output_dtype,
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
@@ -184,7 +187,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
-        input_tensor.layout(),
+        input_layout,
         false,
         mm_conv,
         input_tensor_post_tm.memory_config());
@@ -890,11 +893,14 @@ Result conv_transpose2d_DRAM(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
+    // Save input tensor attributes before any operation that could deallocate it
+    const DataType input_dtype = input_tensor.dtype();
+    const Layout input_layout = input_tensor.layout();
+    const DataType output_dtype = dtype.value_or(input_dtype);
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor.dtype());
     DeviceComputeKernelConfig compute_config =
-        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor.dtype(), weight_dtype));
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
 
     // Compute all transposed conv2d dimension transformations using the consolidated helper
     // This is the single source of truth for dimension calculations
@@ -923,8 +929,8 @@ Result conv_transpose2d_DRAM(
             output_padding,
             dilation,
             groups,
-            input_tensor.layout(),
-            input_tensor.dtype(),
+            input_layout,
+            input_dtype,
             output_dtype,
             weight_tensor.dtype(),
             weight_tensor.logical_shape()[3],
@@ -1061,8 +1067,8 @@ Result conv_transpose2d_DRAM(
         output_padding,
         dilation,
         groups,
-        input_tensor.layout(),
-        input_tensor.dtype(),
+        input_layout,
+        input_dtype,
         output_dtype,
         weight_tensor_on_device,
         bias_tensor_on_device.has_value() ? std::make_optional(std::ref(bias_tensor_on_device.value())) : std::nullopt,

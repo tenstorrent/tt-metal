@@ -112,8 +112,10 @@ class basic_transformer_block:
                 attn_output = ttnn.to_memory_config(attn_output, hidden_states.memory_config())
         sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config())
         ttnn.deallocate(attn_output)
+        # Save shape before deallocating since we need it for the condition check
+        hidden_states_shape_2 = hidden_states.shape[-2]
         ttnn.deallocate(hidden_states)
-        if hidden_states.shape[-2] == 8192:
+        if hidden_states_shape_2 == 8192:
             hidden_states = ttnn.reallocate(sum)
         else:
             hidden_states = sum
@@ -148,8 +150,10 @@ class basic_transformer_block:
                     attn_output = ttnn.to_memory_config(attn_output, hidden_states.memory_config())
             sum = ttnn.add(attn_output, hidden_states, memory_config=hidden_states.memory_config())
             ttnn.deallocate(attn_output)
+            # Save shape before deallocating since we need it for the condition check
+            hidden_states_shape_2 = hidden_states.shape[-2]
             ttnn.deallocate(hidden_states)
-            if hidden_states.shape[-2] == 8192:
+            if hidden_states_shape_2 == 8192:
                 hidden_states = ttnn.reallocate(sum)
             else:
                 hidden_states = sum

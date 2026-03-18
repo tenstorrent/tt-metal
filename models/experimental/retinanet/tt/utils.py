@@ -156,10 +156,11 @@ class TTConv2D:
         if self.is_reshape:
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
             output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
+            # Use input_shape[-4] instead of input_tensor.shape[0] since deallocate_activation may have deallocated input_tensor
             output_tensor = ttnn.reshape(
-                output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
+                output_tensor, (input_shape[-4], _out_height, _out_width, output_tensor.shape[-1])
             )
-        return output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
+        return output_tensor, (input_shape[-4], _out_height, _out_width, output_tensor.shape[-1])
 
 
 class TTUpsample:

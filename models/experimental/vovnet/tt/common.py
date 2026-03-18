@@ -124,6 +124,9 @@ class Conv:
             packer_l1_acc=False,
         )
 
+        # Save batch_size before conv2d since deallocate_activation may deallocate input_tensor
+        batch_size = input_tensor.shape[0]
+
         output_tensor, [_out_height, _out_width], [self.weights, self.bias] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
@@ -134,7 +137,7 @@ class Conv:
             kernel_size=self.kernel_size,
             stride=(self.conv_params[0], self.conv_params[1]),
             padding=(self.conv_params[2], self.conv_params[-1]),
-            batch_size=input_tensor.shape[0],
+            batch_size=batch_size,
             input_height=input_height,
             input_width=input_width,
             conv_config=self.conv_config,
@@ -147,9 +150,7 @@ class Conv:
 
         if self.fused_op:
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-            output_tensor = ttnn.reshape(
-                output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
-            )
+            output_tensor = ttnn.reshape(output_tensor, (batch_size, _out_height, _out_width, output_tensor.shape[-1]))
             output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
