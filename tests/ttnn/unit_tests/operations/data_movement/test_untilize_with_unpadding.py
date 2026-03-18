@@ -212,7 +212,6 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize(
     "tensor_shape, output_end",
     [
@@ -253,7 +252,6 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
 def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
     device,
     dtype,
-    use_pack_untilize,
     tensor_shape,
     output_end,
     input_shard_orientation,
@@ -279,7 +277,6 @@ def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
         output_tensor_end=output_end,
         memory_config=output_memory_config,
         use_multicore=True,
-        use_pack_untilize=use_pack_untilize,
     )
     # In untilize_with_unpadding, if the tensor has rank > 4, it ignores the output_end parameter
     if len(tensor_shape) > 4:
@@ -290,7 +287,6 @@ def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, output_end",
     [
@@ -321,7 +317,6 @@ def test_untilize_with_unpadding_multi_core_nd_sharded_to_interleaved(
 def test_untilize_with_unpadding_multi_core_nd_shard_to_interleaved_uneven_input_shard_spec(
     device,
     dtype,
-    use_pack_untilize,
     tensor_shape,
     shard_shape,
     output_end,
@@ -343,7 +338,6 @@ def test_untilize_with_unpadding_multi_core_nd_shard_to_interleaved_uneven_input
         output_tensor_end=output_end,
         memory_config=output_memory_config,
         use_multicore=True,
-        use_pack_untilize=use_pack_untilize,
     )
 
     if len(tensor_shape) > 4:
@@ -354,7 +348,6 @@ def test_untilize_with_unpadding_multi_core_nd_shard_to_interleaved_uneven_input
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[8, 256, 256]])
 @pytest.mark.parametrize(
     "input_shard_shape",
@@ -391,7 +384,6 @@ def test_untilize_with_unpadding_multi_core_nd_shard_to_interleaved_uneven_input
 def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_shard_specs(
     device,
     dtype,
-    use_pack_untilize,
     tensor_shape,
     input_shard_shape,
     output_shard_shape,
@@ -423,7 +415,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
         output_tensor_end=output_end,
         memory_config=output_memory_config,
         use_multicore=True,
-        use_pack_untilize=use_pack_untilize,
     )
 
     if len(tensor_shape) > 4:
@@ -434,7 +425,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[4, 128, 128]])
 @pytest.mark.parametrize(
     "input_shard_shape",
@@ -464,7 +454,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
 def test_untilize_with_unpadding_multicore_nd_shard_round_robin_input_to_grid_2d_output(
     device,
     dtype,
-    use_pack_untilize,
     tensor_shape,
     input_shard_shape,
     output_shard_shape,
@@ -502,7 +491,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_round_robin_input_to_grid_2d
         output_tensor_end=output_end,
         memory_config=output_memory_config,
         use_multicore=True,
-        use_pack_untilize=use_pack_untilize,
     )
 
     if len(tensor_shape) > 4:
@@ -513,7 +501,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_round_robin_input_to_grid_2d
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[4, 192, 256]])
 @pytest.mark.parametrize(
     "input_shard_shape",
@@ -552,7 +539,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_round_robin_input_to_grid_2d
 def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_shard_specs_shard_shape_flattened(
     device,
     dtype,
-    use_pack_untilize,
     tensor_shape,
     input_shard_shape,
     output_shard_shape,
@@ -584,7 +570,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
         output_tensor_end=output_end,
         memory_config=output_memory_config,
         use_multicore=True,
-        use_pack_untilize=use_pack_untilize,
     )
 
     if len(tensor_shape) > 4:
@@ -595,7 +580,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("use_pack_untilize", [True, False])
 @pytest.mark.parametrize("tensor_shape", [[8, 256, 256]])
 @pytest.mark.parametrize(
     "input_shard_shape",
@@ -639,7 +623,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
 def test_untilize_with_unpadding_multicore_nd_shard_to_legacy_shard(
     device,
     dtype,
-    use_pack_untilize,
     tensor_shape,
     input_shard_shape,
     output_end,
@@ -711,7 +694,6 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_legacy_shard(
         output_tensor_end=output_end,
         memory_config=output_memory_config,
         use_multicore=True,
-        use_pack_untilize=use_pack_untilize,
     )
 
     if len(tensor_shape) > 4:

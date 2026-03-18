@@ -322,21 +322,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
-
-    const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // This is done only in the non-causal case:
     // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
-    // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
     const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (8 / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1 && !args.is_causal;
+                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1 && !args.is_causal;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+
+    const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
+    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
