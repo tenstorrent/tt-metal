@@ -14,7 +14,6 @@ Phase-1 standalone implementation:
 from dataclasses import dataclass
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (

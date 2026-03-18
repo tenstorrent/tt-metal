@@ -162,6 +162,7 @@ def build_all_reduce_test_inputs(
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_iter, num_warmup_iter", [(30, 15)])
 @pytest.mark.parametrize(
     "device_params",
@@ -187,6 +188,7 @@ def test_ccl_all_reduce(
     fuse_residual_add,
     num_warmup_iter,
     num_iter,
+    num_links,
 ):
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -220,7 +222,8 @@ def test_ccl_all_reduce(
         cluster_axis=cluster_axis,
         persistent_output_tensor=inputs.output_tensor_mesh,
         residual_tensor_mesh=inputs.residual_tensor_mesh,
-        semaphores=inputs.semaphores,
+        semaphores=inputs.semaphores[:num_links],
+        num_links=num_links,
     )
     ttnn.synchronize_device(submesh)
 
@@ -234,7 +237,8 @@ def test_ccl_all_reduce(
             cluster_axis=cluster_axis,
             persistent_output_tensor=inputs.output_tensor_mesh,
             residual_tensor_mesh=inputs.residual_tensor_mesh,
-            semaphores=inputs.semaphores,
+            semaphores=inputs.semaphores[:num_links],
+            num_links=num_links,
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -249,7 +253,8 @@ def test_ccl_all_reduce(
             cluster_axis=cluster_axis,
             persistent_output_tensor=inputs.output_tensor_mesh,
             residual_tensor_mesh=inputs.residual_tensor_mesh,
-            semaphores=inputs.semaphores,
+            semaphores=inputs.semaphores[:num_links],
+            num_links=num_links,
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)

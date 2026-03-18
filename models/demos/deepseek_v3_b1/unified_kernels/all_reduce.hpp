@@ -241,14 +241,14 @@ private:
 #if defined(COMPILE_FOR_TRISC)
     template <bool acquire_regs, bool pop_cbs>
     static FORCE_INLINE void batched_add(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
-        cb_wait_front(cb_a, num_tiles);
-        cb_wait_front(cb_b, num_tiles);
         cb_reserve_back(cb_out, num_tiles);
 
         if constexpr (acquire_regs) {
             tile_regs_acquire();
         }
         for (uint32_t i = 0; i < num_tiles; i++) {
+            cb_wait_front(cb_a, i + 1);
+            cb_wait_front(cb_b, i + 1);
             add_tiles(cb_a, cb_b, i, i, i);
         }
         tile_regs_commit();
