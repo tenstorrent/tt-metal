@@ -398,6 +398,21 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::CBDescriptor::address_offset,
             "Byte offset from buffer base address for CB placement (default 0)")
         .def(
+            "add_format_descriptor",
+            [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBFormatDescriptor& fmt) {
+                self.format_descriptors.push_back(fmt);
+            },
+            nb::arg("fmt"),
+            R"pbdoc(
+                Add a format descriptor to this CB descriptor.
+
+                Used for CB aliasing: multiple format descriptors share the same
+                L1 allocation but have different CB IDs and tile formats.
+
+                Args:
+                    fmt: A CBFormatDescriptor to add to this descriptor's alias group
+            )pbdoc")
+        .def(
             "has_buffer",
             [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
             R"pbdoc(
