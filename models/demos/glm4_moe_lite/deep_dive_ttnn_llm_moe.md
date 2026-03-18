@@ -493,6 +493,111 @@ GLM4-MoE-Lite CCL flow per decoder layer (reduce path, T3K):
   (Plus 2 all_gather calls total in LM Head at the very end)
 ```
 
+### 3.9 Why Both "reduce" and "a2a" Paths Exist
+
+A common question: if the a2a path is not the default and performs worse for the current deployment, why is it in the codebase at all?
+
+The answer is that each path is the **only correct or efficient** solution under different token distribution scenarios. Both exist because the model must support both deployment modes.
+
+#### 3.9.1 Today: vLLM + T3K Decode (Replicated Tokens)
+
+vLLM sends tokens to the model **replicated** — every device has the same `[batch, 1, hidden]`. Under this condition, `all_to_all_dispatch` is counterproductive:
+
+```
+What happens if you use a2a with replicated tokens (8 devices, batch=32):
+
+  D0 has tokens [t0..t31]    (all 32 users)
+  D1 has tokens [t0..t31]    (same 32 users, COPIES)
+  ...
+  D7 has tokens [t0..t31]    (same 32 users, COPIES)
+
+  all_to_all_dispatch: "send each token to the device owning its expert"
+
+  But EVERY device already has every token. So:
+    D0 receives tokens from D0,D1,...,D7 = 8 copies of the same tokens
+    Token count inflates: 32 -> 256 effective tokens per device
+
+  Then sparse_matmul processes 256 tokens instead of 32 = 8x more work
+  Then all_to_all_combine sends 256 results back = another Ethernet round trip
+
+  Total: 2 CCL ops + 8x compute inflation = TERRIBLE for decode
+```
+
+The reduce path avoids all of this:
+```
+  Each device already has all tokens (replicated).
+  Each device runs sparse_matmul on just its 8 local experts (32 tokens).
+  One all_reduce sums the partials. Done.
+
+  Total: 1 CCL op, no token inflation
+```
+
+This is why the code defaults to `dispatch_impl="reduce"` and the docstring explicitly warns about token inflation:
+
+```python
+# moe_tt.py lines 1191-1199 (docstring)
+# - all_to_all_dispatch expects input tokens to be sharded across the
+#   dispatch axis. In our vLLM bring-up (replicated activations on a mesh),
+#   using all-to-all can inflate the effective token count and crater
+#   decode throughput.
+# - Default path is therefore a replicated-token strategy.
+# - The older all-to-all dispatch/combine path remains available behind
+#   GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a for future DP-sharded inputs.
+```
+
+#### 3.9.2 Future: Data-Parallel Serving (Sharded Tokens)
+
+Imagine a future deployment with 256 concurrent users, where the batch is **sharded** across devices:
+
+```
+  D0 has tokens for users 0-31      (32 UNIQUE users)
+  D1 has tokens for users 32-63     (32 DIFFERENT users)
+  D2 has tokens for users 64-95     (32 DIFFERENT users)
+  ...
+  D7 has tokens for users 224-255   (32 DIFFERENT users)
+```
+
+Now the reduce path **cannot work**:
+```
+  D0 only has users 0-31.
+  D0's local experts are 0-7.
+  But user 5 on D0 needs expert 40 (lives on D5).
+  D0 does NOT have expert 40's weights. It cannot compute the answer.
+  D5 does NOT have user 5's hidden states. It cannot compute either.
+
+  Someone has to move either the tokens or the weights across Ethernet.
+  Moving tokens (a2a dispatch) is far cheaper than moving weights.
+```
+
+With sharded tokens, the a2a path is the only viable solution:
+```
+  all_to_all_dispatch:
+    D0 sends user 5's hidden states to D5 (where expert 40 lives)
+    D5 sends user 200's hidden states to D0 (where expert 3 lives)
+    No inflation: each token moves to exactly 1 destination device
+
+  sparse_matmul: each device processes only the tokens actually routed to it
+
+  all_to_all_combine: results go back to originating devices
+
+  Total: 2 CCL ops, but ZERO redundancy in compute or memory
+```
+
+#### 3.9.3 Decision Table: When Each Path Wins
+
+| Deployment Scenario | Token Distribution | Better Path | Why |
+|--------------------|--------------------|-------------|-----|
+| vLLM decode (today) | Replicated (all devices have all tokens) | **reduce** | 1 CCL op, no inflation |
+| Data-parallel serving (future) | Sharded (each device has unique tokens) | **a2a** | Only way to route tokens to expert-home devices |
+| Large-batch prefill (future) | Sharded | **a2a** | Memory savings (no 8x replication of long sequences) |
+| Single device | N/A | Neither | No CCL needed, direct compute |
+
+The environment variable `GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL` is the switch:
+- Unset or `"reduce"` (default): replicated-token path with `all_reduce`
+- `"a2a"` or `"all_to_all"`: sharded-token path with `all_to_all_dispatch` + `all_to_all_combine`
+
+When the serving stack evolves to support data-parallel sharded batches, flipping that flag activates the a2a path without any model code changes.
+
 ---
 
 ## Part 4: Dense MLP vs Mixture-of-Experts on TTNN
