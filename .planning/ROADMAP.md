@@ -75,12 +75,11 @@ Plans:
   3. Stream ID 30 is assigned as increment-on-write register for VC2 sender flow control, and stream ID 31 for VC2 receiver flow control (non-Z only)
   4. CT arg emission (MAX_NUM_SENDER_CHANNELS_VC2, VC2_SENDER_CHANNEL_START, etc.) correctly accounts for VC2 channels in index derivation
   5. All existing regression tests pass unchanged
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
-- [ ] 04-03: TBD
+- [ ] 04-01-PLAN.md — Bump host max channels to 10/3, add _without_vc2 variants, VC2 stream reg entries, extend firmware CT arg arrays
+- [ ] 04-02-PLAN.md — Conditional CT arg emission, ACTUAL_VC2 CT arg, replace heuristic, VC2 stream IDs, runtime args
 
 ### Phase 5: Connection API & Testing
 **Goal**: Workers can inject traffic into VC2 channels via a private connection API, and end-to-end tests verify VC2 data flow on both non-Z and Z routers
@@ -108,5 +107,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | 1. Overlay Register Cleanup | 2/2 | Complete   | 2026-03-17 |
 | 2. Constants & Config Foundation | 1/2 | In progress | - |
 | 3. Channel Mapping & Allocation | 0/2 | Not started | - |
-| 4. Builder Wiring & Flow Control | 0/3 | Not started | - |
+| 4. Builder Wiring & Flow Control | 0/2 | Not started | - |
 | 5. Connection API & Testing | 0/2 | Not started | - |
