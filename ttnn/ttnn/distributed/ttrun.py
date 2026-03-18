@@ -929,7 +929,12 @@ def build_mpi_command(
     config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
-    mpi_launcher = get_mpi_launcher()
+    # Prefer mpirun-ulfm (Open MPI with ULFM fault tolerance), fall back to mpirun if not found
+    mpi_launcher = shutil.which("mpirun-ulfm")
+    if not mpi_launcher:
+        logger.warning(f"{TT_RUN_PREFIX} mpirun-ulfm not found in PATH, falling back to mpirun")
+        mpi_launcher = "mpirun"
+
     cmd = [mpi_launcher]
 
     # Check if --bind-to is already specified in mpi_args
@@ -975,7 +980,7 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     if len(cmd) > PRETTY_PRINT_THRESHOLD:
         logger.info(f"{prefix} Command:")
         parts = []
-        current_part = ["mpirun"]
+        current_part = [Path(cmd[0]).name if cmd else "mpirun"]
 
         for arg in cmd[1:]:
             if arg == ":":
