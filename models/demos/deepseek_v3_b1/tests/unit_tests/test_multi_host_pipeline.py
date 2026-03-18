@@ -63,6 +63,8 @@ def create_fabric_router_config(max_payload_size):
 )
 def test_multi_host_loopback_pipeline(mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode):
     """Test multi-stage pipeline with embedding: H2D receives token, looks up embedding, streams through all devices, D2H sends embedding row back."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
 
     if not is_slow_dispatch():
@@ -250,6 +252,8 @@ def test_multi_host_loopback_pipeline_with_embedding(
     mesh_device, h2d_mode, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor
 ):
     """Test multi-host pipeline with embedding: H2D receives token, looks up embedding row, streams it through pipeline stages across hosts, D2H sends embedding row back."""
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
     pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
 
     if not is_slow_dispatch():
@@ -458,6 +462,8 @@ def test_multi_host_loopback_pipeline_with_embedding(
 def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
@@ -563,6 +569,8 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
 def test_pipeline_block_no_loopback(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
 
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
