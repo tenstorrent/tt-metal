@@ -61,12 +61,12 @@ MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 
 class WhisperGenerator:
     """
-    Whisper generator with trace support for efficient inference.
+    Whisper generator with persistent trace support for efficient inference.
 
-    The decode trace (embedding -> decoder -> lm_head -> argmax) is captured once per
-    generation and reused for all decode iterations within that generation. It is released
-    before the next generation's prefill because prefill operations allocate L1 memory
-    that can overlap with the decode trace's intermediate buffers, corrupting it.
+    The decode trace (embedding -> decoder -> lm_head -> argmax) is captured once on the
+    first generation and reused across all subsequent generations. The first decode iteration
+    of each generation runs un-traced to populate the cross-attention cache with new encoder
+    outputs, after which the persistent trace takes over.
 
     Pre-allocated DRAM tensors (KV cache, cross-attention cache, encoder hidden states,
     position tensors) maintain stable addresses across generations.
@@ -571,13 +571,6 @@ class WhisperGenerator:
         # Invalidate cross-attention cache for new generation
         self._invalidate_cross_attn_cache()
 
-        # Release decode trace
-        # The trace is recaptured at the start of each generation's decode loop
-        for trace_key in list(self.trace_id_decode.keys()):
-            if self.trace_id_decode[trace_key] is not None:
-                ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
-                self.trace_id_decode[trace_key] = None
-
         # Process input features
         all_input_features = []
         start_encode = time.time()
@@ -1025,7 +1018,7 @@ class WhisperGenerator:
 
         # If persistent decode trace exists, write current token to device buffer
         # so the trace reads the correct token on its first execution this generation
-        if self.trace_id_decode[trace_key] is not None and self.cross_attn_cache_valid:
+        if self.trace_id_decode[trace_key] is not None:
             token_host = ttnn.from_torch(
                 input_ids.reshape(-1, input_ids.shape[-1]),
                 dtype=ttnn.uint32,
