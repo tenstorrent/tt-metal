@@ -53,7 +53,6 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
-#include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
@@ -61,6 +60,8 @@
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -132,7 +133,6 @@ void py_module(nb::module_& mod) {
 
     broadcast_to::detail::bind_broadcast_to(mod);
 
-    operations::experimental::ternary::detail::bind_where(mod);
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
@@ -140,6 +140,10 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
+
+    // DeepSeek prefill MoE operations
+    deepseek_prefill::detail::bind_dispatch(mod);
+    deepseek_prefill::detail::bind_combine(mod);
 }
 
 }  // namespace ttnn::operations::experimental

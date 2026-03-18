@@ -102,6 +102,11 @@ class DecoderLayer:
         user_id=0,
         batch_size=1,
     ):
+        seqlen = hidden_states.shape[-2]
+        if seqlen > 32 * 1024:
+            # Reallocate hidden states to prevent memory fragmentation.
+            hidden_states = ttnn.move(hidden_states)
+
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
         residual = hidden_states

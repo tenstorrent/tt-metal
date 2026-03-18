@@ -125,60 +125,65 @@ def load_throughput_expert_weights(
     hidden_size = config.hidden_size
     intermediate_size = config.intermediate_size
 
-    # Extract weights from state dict
-    # Assume state_dict has keys like "gate_up_proj" (fused) and "down_proj"
-    # or individual "gate_proj", "up_proj", "down_proj"
+    if state_dict:
+        # Extract weights from state dict
+        # Assume state_dict has keys like "gate_up_proj" (fused) and "down_proj"
+        # or individual "gate_proj", "up_proj", "down_proj"
+        if "gate_up_proj" in state_dict:
+            # Fused gate/up projection - unfuse
+            gate_up = state_dict["gate_up_proj"]
+            # gate_up shape: [num_experts, hidden_size, 2 * intermediate_size] (interleaved)
+            w1 = gate_up[..., ::2].reshape(1, num_experts, hidden_size, intermediate_size)
+            w3 = gate_up[..., 1::2].reshape(1, num_experts, hidden_size, intermediate_size)
 
-    if "gate_up_proj" in state_dict:
-        # Fused gate/up projection - unfuse
-        gate_up = state_dict["gate_up_proj"]
-        # gate_up shape: [num_experts, hidden_size, 2 * intermediate_size] (interleaved)
-        w1 = gate_up[..., ::2].reshape(1, num_experts, hidden_size, intermediate_size)
-        w3 = gate_up[..., 1::2].reshape(1, num_experts, hidden_size, intermediate_size)
-
-        # Unfuse bias if present
-        if "gate_up_proj_bias" in state_dict:
-            gate_up_bias = state_dict["gate_up_proj_bias"]
-            w1_bias = gate_up_bias[..., ::2].reshape(1, num_experts, 1, intermediate_size)
-            w3_bias = gate_up_bias[..., 1::2].reshape(1, num_experts, 1, intermediate_size)
+            # Unfuse bias if present
+            if "gate_up_proj_bias" in state_dict:
+                gate_up_bias = state_dict["gate_up_proj_bias"]
+                w1_bias = gate_up_bias[..., ::2].reshape(1, num_experts, 1, intermediate_size)
+                w3_bias = gate_up_bias[..., 1::2].reshape(1, num_experts, 1, intermediate_size)
+            else:
+                w1_bias = torch.zeros(1, num_experts, 1, intermediate_size)
+                w3_bias = torch.zeros(1, num_experts, 1, intermediate_size)
         else:
-            w1_bias = torch.zeros(1, num_experts, 1, intermediate_size)
-            w3_bias = torch.zeros(1, num_experts, 1, intermediate_size)
-    else:
-        # Separate gate and up projections
-        w1 = state_dict["gate_proj"].reshape(1, num_experts, hidden_size, intermediate_size)
-        w3 = state_dict["up_proj"].reshape(1, num_experts, hidden_size, intermediate_size)
-        w1_bias = state_dict.get("gate_proj_bias", torch.zeros(1, num_experts, 1, intermediate_size)).reshape(
-            1, num_experts, 1, intermediate_size
-        )
-        w3_bias = state_dict.get("up_proj_bias", torch.zeros(1, num_experts, 1, intermediate_size)).reshape(
-            1, num_experts, 1, intermediate_size
-        )
+            # Separate gate and up projections
+            w1 = state_dict["gate_proj"].reshape(1, num_experts, hidden_size, intermediate_size)
+            w3 = state_dict["up_proj"].reshape(1, num_experts, hidden_size, intermediate_size)
+            w1_bias = state_dict.get("gate_proj_bias", torch.zeros(1, num_experts, 1, intermediate_size)).reshape(
+                1, num_experts, 1, intermediate_size
+            )
+            w3_bias = state_dict.get("up_proj_bias", torch.zeros(1, num_experts, 1, intermediate_size)).reshape(
+                1, num_experts, 1, intermediate_size
+            )
 
-    # Load down projection weights (always needed)
-    w2 = state_dict["down_proj"].reshape(1, num_experts, intermediate_size, hidden_size)
-    w2_bias = state_dict.get("down_proj_bias", torch.zeros(1, num_experts, 1, hidden_size)).reshape(
-        1, num_experts, 1, hidden_size
-    )
+        # Load down projection weights (always needed)
+        w2 = state_dict["down_proj"].reshape(1, num_experts, intermediate_size, hidden_size)
+        w2_bias = state_dict.get("down_proj_bias", torch.zeros(1, num_experts, 1, hidden_size)).reshape(
+            1, num_experts, 1, hidden_size
+        )
+    else:
+        w1 = None
+        w3 = None
+        w1_bias = None
+        w3_bias = None
+        w2 = None
+        w2_bias = None
+
+    # Compute w2 cache suffix based on config (independent of state_dict)
+    w2_cache_suffix = ""
     if config.pad_w2:
         # Pad w2 output dimension for tile alignment in CCL operations.
         # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
         # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.
-        hidden_size = config.hidden_size
         scattered_local_hidden = hidden_size // mesh_device.shape[1]
         padded_scattered_local_hidden = ((scattered_local_hidden + 31) // 32) * 32  # Round up to tile boundary
         w2_pad_size = (padded_scattered_local_hidden * mesh_device.shape[1]) - hidden_size
-
-        if w2_pad_size > 0 and mesh_device.shape[1] > 1:
-            # Pad the output dimension of w2 weight: [input_dim, hidden_size] -> [input_dim, padded_hidden]
-            w2 = torch.nn.functional.pad(w2, (0, w2_pad_size), "constant", value=0.0)
-            # Pad bias similarly
-            w2_bias = torch.nn.functional.pad(w2_bias, (0, w2_pad_size), "constant", value=0.0)
-
         # Use unique cache key when padding is applied
         w2_cache_suffix = f"_padded{w2_pad_size}" if w2_pad_size > 0 and mesh_device.shape[1] > 1 else ""
-    else:
-        w2_cache_suffix = ""
+
+        if state_dict and w2_pad_size > 0 and mesh_device.shape[1] > 1:
+            # Pad the output dimension of w2 weight: [input_dim, hidden_size] -> [input_dim, padded_hidden]
+            w2 = torch.nn.functional.pad(w2, (0, w2_pad_size), "constant", value=0.0)
+            w2_bias = torch.nn.functional.pad(w2_bias, (0, w2_pad_size), "constant", value=0.0)
 
     w2_tt = _shard_experts_by_device(
         w2,
@@ -215,13 +220,6 @@ def load_throughput_expert_weights(
         # -> w1_w3_fused: [1, num_experts, hidden_size, 2*intermediate_size]
         weights_cache_suffix = "throughput_w1_w3_fused"
         bias_cache_suffix = "throughput_w1_w3_bias_fused"
-        w1_w3_fused = torch.cat([w1, w3], dim=-1)
-
-        # Fuse biases
-        # w1_bias: [1, num_experts, 1, intermediate_size]
-        # w3_bias: [1, num_experts, 1, intermediate_size]
-        # -> w1_w3_bias_fused: [1, num_experts, 1, 2*intermediate_size]
-        w1_w3_bias_fused = torch.cat([w1_bias, w3_bias], dim=-1)
 
         if config.pad_w1_w3:
             ideal_core_grid_size = 64
@@ -231,10 +229,24 @@ def load_throughput_expert_weights(
                 math.ceil(fused_hidden_size_t / ideal_core_grid_size) * ideal_core_grid_size * ttnn.TILE_SIZE
             )
             pad_size = int(required_fused_hidden_size - fused_hidden_size)
-            w1_w3_fused = torch.nn.functional.pad(w1_w3_fused, (0, pad_size))
-            w1_w3_bias_fused = torch.nn.functional.pad(w1_w3_bias_fused, (0, pad_size))
             weights_cache_suffix += f"_padded{pad_size}"
             bias_cache_suffix += f"_padded{pad_size}"
+        else:
+            pad_size = 0
+
+        if state_dict:
+            # Fuse biases
+            # w1_bias: [1, num_experts, 1, intermediate_size]
+            # w3_bias: [1, num_experts, 1, intermediate_size]
+            # -> w1_w3_bias_fused: [1, num_experts, 1, 2*intermediate_size]
+            w1_w3_fused = torch.cat([w1, w3], dim=-1)
+            w1_w3_bias_fused = torch.cat([w1_bias, w3_bias], dim=-1)
+            if pad_size > 0:
+                w1_w3_fused = torch.nn.functional.pad(w1_w3_fused, (0, pad_size))
+                w1_w3_bias_fused = torch.nn.functional.pad(w1_w3_bias_fused, (0, pad_size))
+        else:
+            w1_w3_fused = None
+            w1_w3_bias_fused = None
 
         w1_w3_fused_tt = _shard_experts_by_device(
             w1_w3_fused,

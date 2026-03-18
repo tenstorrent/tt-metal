@@ -437,8 +437,7 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 640, 16, 16))
     inputs.append((1, 1280, 16, 16))
     inputs.append((1, 2560, 16, 16))
-    # This test is removed to test_group_norm_DRAM because of the Issue #36408. To be added back after the issue is resolved.
-    # inputs.append((1, 1920, 16, 16))
+    inputs.append((1, 1920, 16, 16))
     inputs.append((1, 1920, 32, 32))
     inputs.append((1, 1280, 32, 32))
     inputs.append((1, 960, 32, 32))
@@ -449,21 +448,113 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base
-    N, C, H, W = input_shape
+    if layout == ttnn.TILE_LAYOUT and inplace:
+        pytest.skip("Tile layout requires non-inplace tensors.")
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
 
-    # Use 5x5 grid for shape (1, 640, 16, 16) (temporary workaround for issue #36408)
-    if (C, H, W) == (640, 16, 16):
-        grid_size = ttnn.CoreGrid(y=4, x=4)
-    else:
-        grid_size = ttnn.CoreGrid(y=8, x=8)
+    core_grid = ttnn.CoreGrid(y=8, x=8)
+
+    # Generate torch tensor
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+
+    if not perf_test_mode:
+        # Execute torch group_norm
+        torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+        torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    # Generate ttnn tensor
+    dummy_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    tt_input_tensor = ttnn.from_torch(
+        dummy_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=layout,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=dummy_tensor.shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+        device=device,
+    )
+
+    # Generate input mask
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    # Execute ttnn group_norm
+    tt_output_tensor = ttnn.group_norm(
+        tt_input_tensor,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        memory_config=tt_input_tensor.memory_config(),
+        core_grid=core_grid,
+        inplace=inplace,
+        use_welford=use_welford,
+    )
+    ttnn.synchronize_device(device)
+
+    if not perf_test_mode:
+        tt_output_tensor = ttnn.from_device(tt_output_tensor)
+        tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+        assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9996)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+# Paramemeters need to stay consistent with usage in
+# models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
+def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+    # Only one test case has C == 512, which has TILE_LAYOUT and inplace False
+    # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
+    N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = C != 512
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+# Oppositive of previous test in terms of inplace, for full coverage purposes.
+def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_test_mode=False):
+    # Only one test case has C == 512, which has TILE_LAYOUT and inplace True
+    # ALL other inputs have ROW_MAJOR_LAYOUT and inplace False
+    N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = C == 512
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 1280, 64, 64),
+        (1, 1280, 32, 32),
+        (1, 1920, 64, 64),
+        (1, 1920, 32, 32),
+        (1, 2560, 32, 32),
+        (1, 320, 128, 128),
+        (1, 320, 64, 64),
+        (1, 640, 64, 64),
+        (1, 640, 32, 32),
+        (1, 960, 64, 64),
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@run_for_blackhole("blackhole specific tests")
+def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
+    torch.manual_seed(0)
+
+    num_groups = 32  #  always 32 for SDXL Base
+    N, C, H, W = input_shape
+
+    core_grid = ttnn.CoreGrid(y=8, x=8)
 
     # Generate torch tensor
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -474,38 +565,33 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
         torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Generate ttnn tensor
-    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    dummy_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
     tt_input_tensor = ttnn.from_torch(
-        tt_input_tensor,
+        dummy_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.create_sharded_memory_config(
+            shape=dummy_tensor.shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
         device=device,
     )
 
     # Generate input mask
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B)
     input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
-
-    # Generate shard config
-    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_shape = N * H * W // grid_size.x, C // grid_size.y
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
-    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=sharded_mem_config)
 
     # Execute ttnn group_norm
     tt_output_tensor = ttnn.group_norm(
         tt_input_tensor,
         num_groups=num_groups,
         input_mask=input_mask_tensor,
-        memory_config=sharded_mem_config,
-        core_grid=grid_size,
+        memory_config=tt_input_tensor.memory_config(),
+        core_grid=core_grid,
         inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
-        use_welford=use_welford,
+        use_welford=False,
     )
     ttnn.synchronize_device(device)
 
