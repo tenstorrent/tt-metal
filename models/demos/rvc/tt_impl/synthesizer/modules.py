@@ -21,21 +21,21 @@ class LayerNorm:
         self.gamma: ttnn.Tensor | None = None
         self.beta: ttnn.Tensor | None = None
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         gamma_key = f"{module_prefix}gamma" if module_prefix else "gamma"
         beta_key = f"{module_prefix}beta" if module_prefix else "beta"
-        if gamma_key not in parameters:
+        if gamma_key not in state_dict:
             raise KeyError(f"Missing required parameter: {gamma_key}")
-        if beta_key not in parameters:
+        if beta_key not in state_dict:
             raise KeyError(f"Missing required parameter: {beta_key}")
         self.gamma = ttnn.from_torch(
-            parameters[gamma_key].reshape(1, 1, self.channels),
+            state_dict[gamma_key].reshape(1, 1, self.channels),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
         self.beta = ttnn.from_torch(
-            parameters[beta_key].reshape(1, 1, self.channels),
+            state_dict[beta_key].reshape(1, 1, self.channels),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
@@ -94,13 +94,13 @@ class WN:
                 )
             )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         if self.cond_layer is not None:
-            self.cond_layer.load_state_dict(parameters, key="cond_layer", module_prefix=module_prefix)
+            self.cond_layer.load_state_dict(state_dict, key="cond_layer", module_prefix=module_prefix)
         for i, layer in enumerate(self.in_layers):
-            layer.load_state_dict(parameters, key=f"in_layers.{i}", module_prefix=module_prefix)
+            layer.load_state_dict(state_dict, key=f"in_layers.{i}", module_prefix=module_prefix)
         for i, layer in enumerate(self.res_skip_layers):
-            layer.load_state_dict(parameters, key=f"res_skip_layers.{i}", module_prefix=module_prefix)
+            layer.load_state_dict(state_dict, key=f"res_skip_layers.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         output = ttnn.zeros_like(x)
@@ -175,11 +175,11 @@ class ResBlock1:
                 )
             )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i, conv in enumerate(self.convs1):
-            conv.load_state_dict(parameters, key=f"convs1.{i}", module_prefix=module_prefix)
+            conv.load_state_dict(state_dict, key=f"convs1.{i}", module_prefix=module_prefix)
         for i, conv in enumerate(self.convs2):
-            conv.load_state_dict(parameters, key=f"convs2.{i}", module_prefix=module_prefix)
+            conv.load_state_dict(state_dict, key=f"convs2.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
@@ -215,9 +215,9 @@ class ResBlock2:
                 )
             )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i, conv in enumerate(self.convs):
-            conv.load_state_dict(parameters, key=f"convs.{i}", module_prefix=module_prefix)
+            conv.load_state_dict(state_dict, key=f"convs.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
@@ -262,21 +262,21 @@ class ResidualCouplingLayer:
             out_features=self.half_channels,
         )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         enc_module_prefix = f"{module_prefix}enc." if module_prefix else "enc."
         pre_key = (
             "pre_linear"
-            if (f"{module_prefix}pre_linear.weight" if module_prefix else "pre_linear.weight") in parameters
+            if (f"{module_prefix}pre_linear.weight" if module_prefix else "pre_linear.weight") in state_dict
             else "pre"
         )
         post_key = (
             "post_linear"
-            if (f"{module_prefix}post_linear.weight" if module_prefix else "post_linear.weight") in parameters
+            if (f"{module_prefix}post_linear.weight" if module_prefix else "post_linear.weight") in state_dict
             else "post"
         )
-        self.pre_linear.load_state_dict(parameters, key=pre_key, module_prefix=module_prefix)
-        self.enc.load_state_dict(parameters, module_prefix=enc_module_prefix)
-        self.post_linear.load_state_dict(parameters, key=post_key, module_prefix=module_prefix)
+        self.pre_linear.load_state_dict(state_dict, key=pre_key, module_prefix=module_prefix)
+        self.enc.load_state_dict(state_dict, module_prefix=enc_module_prefix)
+        self.post_linear.load_state_dict(state_dict, key=post_key, module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x0, x1 = ttnn.chunk(x, 2, dim=-1)

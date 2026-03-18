@@ -147,14 +147,14 @@ class GroupNorm1D:
         }
         self.device = device
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
         base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
         weight_tensor_padded = torch.nn.functional.pad(
-            parameters[weight_key], (0, self.channels_padding), "constant", 0
+            state_dict[weight_key], (0, self.channels_padding), "constant", 0
         )
-        bias_tensor_padded = torch.nn.functional.pad(parameters[bias_key], (0, self.channels_padding), "constant", 0)
+        bias_tensor_padded = torch.nn.functional.pad(state_dict[bias_key], (0, self.channels_padding), "constant", 0)
 
         weight = ttnn.create_group_norm_weight_bias_rm(
             input_tensor=weight_tensor_padded, num_channels=self.num_channels + self.channels_padding, num_cores_x=1

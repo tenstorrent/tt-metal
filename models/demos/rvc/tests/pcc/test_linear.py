@@ -34,11 +34,11 @@ def test_linear(device, activation):
         dtype=ttnn.bfloat16,
         activation=activation,
     )
-    parameters = {
+    state_dict = {
         "proj.linear.weight": torch_linear.weight,
         "proj.linear.bias": torch_linear.bias,
     }
-    tt_linear.load_state_dict(parameters=parameters, key="linear", module_prefix="proj.")
+    tt_linear.load_state_dict(state_dict=state_dict, key="linear", module_prefix="proj.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16),

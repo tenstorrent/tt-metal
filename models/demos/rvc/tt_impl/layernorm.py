@@ -32,24 +32,24 @@ class LayerNorm:
         self.dtype = dtype
         self.memory_config = memory_config
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
         base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 
-        if weight_key not in parameters:
+        if weight_key not in state_dict:
             raise KeyError(f"Missing required parameter: {weight_key}")
-        if bias_key not in parameters:
+        if bias_key not in state_dict:
             raise KeyError(f"Missing required parameter: {bias_key}")
 
         self.weight = ttnn.from_torch(
-            parameters[weight_key].reshape(1, 1, self.normalized_shape),
+            state_dict[weight_key].reshape(1, 1, self.normalized_shape),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
         self.bias = ttnn.from_torch(
-            parameters[bias_key].reshape(1, 1, self.normalized_shape),
+            state_dict[bias_key].reshape(1, 1, self.normalized_shape),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,

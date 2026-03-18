@@ -51,8 +51,8 @@ def test_generator(device):
         upsample_kernel_sizes=list(upsample_kernel_sizes),
         gin_channels=gin_channels,
     )
-    parameters = {f"dec.{k}": v for k, v in torch_generator.state_dict().items()}
-    tt_generator.load_state_dict(parameters, module_prefix="dec.")
+    state_dict = {f"dec.{k}": v for k, v in torch_generator.state_dict().items()}
+    tt_generator.load_state_dict(state_dict, module_prefix="dec.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16).permute(0, 2, 1),

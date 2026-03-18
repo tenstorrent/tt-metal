@@ -47,8 +47,8 @@ def test_residual_coupling_layer(device):
         gin_channels=gin_channels,
     )
 
-    parameters = {f"flow.{k}": v for k, v in torch_layer.state_dict().items()}
-    tt_layer.load_state_dict(parameters=parameters, module_prefix="flow.")
+    state_dict = {f"flow.{k}": v for k, v in torch_layer.state_dict().items()}
+    tt_layer.load_state_dict(state_dict=state_dict, module_prefix="flow.")
 
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16).permute(0, 2, 1),

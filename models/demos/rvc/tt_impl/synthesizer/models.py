@@ -84,12 +84,12 @@ class Embedding:
         self.embedding_dim = embedding_dim
         self.weight: ttnn.Tensor | None = None
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         weight_key = f"{module_prefix}weight" if module_prefix else "weight"
-        if weight_key not in parameters:
+        if weight_key not in state_dict:
             raise KeyError(f"Missing required parameter: {weight_key}")
         self.weight = ttnn.from_torch(
-            parameters[weight_key].detach(),
+            state_dict[weight_key].detach(),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
@@ -97,7 +97,7 @@ class Embedding:
 
     def __call__(self, indices: ttnn.Tensor) -> ttnn.Tensor:
         if self.weight is None:
-            raise ValueError("Embedding parameters are not loaded.")
+            raise ValueError("Embedding state_dict are not loaded.")
         return ttnn.embedding(indices, self.weight, layout=ttnn.TILE_LAYOUT)
 
 
@@ -137,12 +137,12 @@ class Encoder:
         ]
         self.norm_layers_2 = [LayerNorm(device, hidden_channels) for _ in range(self.num_layers)]
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i in range(self.num_layers):
-            self.attn_layers[i].load_state_dict(parameters, module_prefix=f"{module_prefix}attn_layers.{i}.")
-            self.norm_layers_1[i].load_state_dict(parameters, module_prefix=f"{module_prefix}norm_layers_1.{i}.")
-            self.ffn_layers[i].load_state_dict(parameters, module_prefix=f"{module_prefix}ffn_layers.{i}.")
-            self.norm_layers_2[i].load_state_dict(parameters, module_prefix=f"{module_prefix}norm_layers_2.{i}.")
+            self.attn_layers[i].load_state_dict(state_dict, module_prefix=f"{module_prefix}attn_layers.{i}.")
+            self.norm_layers_1[i].load_state_dict(state_dict, module_prefix=f"{module_prefix}norm_layers_1.{i}.")
+            self.ffn_layers[i].load_state_dict(state_dict, module_prefix=f"{module_prefix}ffn_layers.{i}.")
+            self.norm_layers_2[i].load_state_dict(state_dict, module_prefix=f"{module_prefix}norm_layers_2.{i}.")
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for i in range(self.num_layers):
@@ -185,17 +185,17 @@ class TextEncoder:
             out_features=out_channels * 2,
         )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.emb_phone.load_state_dict(parameters, key="emb_phone", module_prefix=module_prefix)
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.emb_phone.load_state_dict(state_dict, key="emb_phone", module_prefix=module_prefix)
         if self.use_f0 and self.emb_pitch is not None:
-            self.emb_pitch.load_state_dict(parameters, module_prefix=f"{module_prefix}emb_pitch.")
-        self.encoder.load_state_dict(parameters, module_prefix=f"{module_prefix}encoder.")
+            self.emb_pitch.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_pitch.")
+        self.encoder.load_state_dict(state_dict, module_prefix=f"{module_prefix}encoder.")
         proj_key = (
             "proj_linear"
-            if (f"{module_prefix}proj_linear.weight" if module_prefix else "proj_linear.weight") in parameters
+            if (f"{module_prefix}proj_linear.weight" if module_prefix else "proj_linear.weight") in state_dict
             else "proj"
         )
-        self.proj_linear.load_state_dict(parameters, key=proj_key, module_prefix=module_prefix)
+        self.proj_linear.load_state_dict(state_dict, key=proj_key, module_prefix=module_prefix)
 
     def __call__(self, phone: ttnn.Tensor, pitch: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         x = self.emb_phone(phone)
@@ -235,9 +235,9 @@ class ResidualCouplingBlock:
         ]
         self.device = device
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i, flow in enumerate(self.flows):
-            flow.load_state_dict(parameters, module_prefix=f"{module_prefix}flows.{i}.")
+            flow.load_state_dict(state_dict, module_prefix=f"{module_prefix}flows.{i}.")
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         for flow in self.flows:
@@ -307,20 +307,20 @@ class Generator:
                 out_features=upsample_initial_channel,
             )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.conv_pre.load_state_dict(parameters, key="conv_pre", module_prefix=module_prefix)
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.conv_pre.load_state_dict(state_dict, key="conv_pre", module_prefix=module_prefix)
         if self.cond_linear is not None:
             cond_key = (
                 "cond_linear"
-                if (f"{module_prefix}cond_linear.weight" if module_prefix else "cond_linear.weight") in parameters
+                if (f"{module_prefix}cond_linear.weight" if module_prefix else "cond_linear.weight") in state_dict
                 else "cond"
             )
-            self.cond_linear.load_state_dict(parameters, key=cond_key, module_prefix=module_prefix)
+            self.cond_linear.load_state_dict(state_dict, key=cond_key, module_prefix=module_prefix)
         for i, up in enumerate(self.ups):
-            up.load_state_dict(parameters, key=f"ups.{i}", module_prefix=module_prefix)
+            up.load_state_dict(state_dict, key=f"ups.{i}", module_prefix=module_prefix)
         for i, rb in enumerate(self.resblocks):
-            rb.load_state_dict(parameters, module_prefix=f"{module_prefix}resblocks.{i}.")
-        self.conv_post.load_state_dict(parameters, key="conv_post", module_prefix=module_prefix)
+            rb.load_state_dict(state_dict, module_prefix=f"{module_prefix}resblocks.{i}.")
+        self.conv_post.load_state_dict(state_dict, key="conv_post", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x = self.conv_pre(x)
@@ -406,8 +406,8 @@ class SourceModuleHnNSF:
             device=device, in_features=harmonic_num + 1, out_features=1, dtype=ttnn.bfloat16, activation="tanh"
         )
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.l_linear.load_state_dict(parameters=parameters, key="l_linear", module_prefix=module_prefix)
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.l_linear.load_state_dict(state_dict=state_dict, key="l_linear", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, upp: int = 1) -> ttnn.Tensor:
         sine_wavs = self.l_sin_gen(x, upp)
@@ -500,22 +500,22 @@ class GeneratorNSF:
         )
         self.cond_linear = Linear(device=device, in_features=gin_channels, out_features=upsample_initial_channel)
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.conv_pre.load_state_dict(parameters, key="conv_pre", module_prefix=module_prefix)
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.conv_pre.load_state_dict(state_dict, key="conv_pre", module_prefix=module_prefix)
         cond_key = (
             "cond_linear"
-            if (f"{module_prefix}cond_linear.weight" if module_prefix else "cond_linear.weight") in parameters
+            if (f"{module_prefix}cond_linear.weight" if module_prefix else "cond_linear.weight") in state_dict
             else "cond"
         )
-        self.cond_linear.load_state_dict(parameters, key=cond_key, module_prefix=module_prefix)
-        self.m_source.load_state_dict(parameters, module_prefix=f"{module_prefix}m_source.")
+        self.cond_linear.load_state_dict(state_dict, key=cond_key, module_prefix=module_prefix)
+        self.m_source.load_state_dict(state_dict, module_prefix=f"{module_prefix}m_source.")
         for i, up in enumerate(self.ups):
-            up.load_state_dict(parameters, key=f"ups.{i}", module_prefix=module_prefix)
+            up.load_state_dict(state_dict, key=f"ups.{i}", module_prefix=module_prefix)
         for i, nc in enumerate(self.noise_convs):
-            nc.load_state_dict(parameters, key=f"noise_convs.{i}", module_prefix=module_prefix)
+            nc.load_state_dict(state_dict, key=f"noise_convs.{i}", module_prefix=module_prefix)
         for i, rb in enumerate(self.resblocks):
-            rb.load_state_dict(parameters, module_prefix=f"{module_prefix}resblocks.{i}.")
-        self.conv_post.load_state_dict(parameters, key="conv_post", module_prefix=module_prefix)
+            rb.load_state_dict(state_dict, module_prefix=f"{module_prefix}resblocks.{i}.")
+        self.conv_post.load_state_dict(state_dict, key="conv_post", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, f0: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         har_source_tt = self.m_source(f0, self.upp)
@@ -595,11 +595,11 @@ class SynthesizerTrnMsNSF:
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.emb_g = Embedding(device, spk_embed_dim, gin_channels)
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.enc_p.load_state_dict(parameters, module_prefix=f"{module_prefix}enc_p.")
-        self.dec.load_state_dict(parameters, module_prefix=f"{module_prefix}dec.")
-        self.flow.load_state_dict(parameters, module_prefix=f"{module_prefix}flow.")
-        self.emb_g.load_state_dict(parameters, module_prefix=f"{module_prefix}emb_g.")
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.enc_p.load_state_dict(state_dict, module_prefix=f"{module_prefix}enc_p.")
+        self.dec.load_state_dict(state_dict, module_prefix=f"{module_prefix}dec.")
+        self.flow.load_state_dict(state_dict, module_prefix=f"{module_prefix}flow.")
+        self.emb_g.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_g.")
 
     def __call__(
         self, phone: ttnn.Tensor, pitch: ttnn.Tensor, nsff0: ttnn.Tensor, speaker_id: ttnn.Tensor
@@ -665,11 +665,11 @@ class SynthesizerTrnMsNSF_nono:
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
         self.emb_g = Embedding(device, spk_embed_dim, gin_channels)
 
-    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
-        self.enc_p.load_state_dict(parameters, module_prefix=f"{module_prefix}enc_p.")
-        self.dec.load_state_dict(parameters, module_prefix=f"{module_prefix}dec.")
-        self.flow.load_state_dict(parameters, module_prefix=f"{module_prefix}flow.")
-        self.emb_g.load_state_dict(parameters, module_prefix=f"{module_prefix}emb_g.")
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.enc_p.load_state_dict(state_dict, module_prefix=f"{module_prefix}enc_p.")
+        self.dec.load_state_dict(state_dict, module_prefix=f"{module_prefix}dec.")
+        self.flow.load_state_dict(state_dict, module_prefix=f"{module_prefix}flow.")
+        self.emb_g.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_g.")
 
     def __call__(self, phone: ttnn.Tensor, speaker_id: ttnn.Tensor) -> ttnn.Tensor:
         g = self.emb_g(speaker_id)
