@@ -399,3 +399,82 @@ Tensor lerp(
 }
 
 }  // namespace ttnn::operations::ternary
+
+namespace ttnn {
+
+Tensor where(
+    const Tensor& predicate,
+    const operations::ternary::TensorScalarVariant& value_true,
+    const operations::ternary::TensorScalarVariant& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::ternary::where(predicate, value_true, value_false, memory_config, output, sub_core_grids);
+}
+
+template <typename T>
+    requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
+Tensor where(
+    const Tensor& predicate,
+    const T& value_true,
+    const T& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::ternary::where<T>(predicate, value_true, value_false, memory_config, output, sub_core_grids);
+}
+
+template Tensor where<int32_t>(
+    const Tensor&,
+    const int32_t&,
+    const int32_t&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+template Tensor where<uint32_t>(
+    const Tensor&,
+    const uint32_t&,
+    const uint32_t&,
+    const std::optional<MemoryConfig>&,
+    const std::optional<Tensor>&,
+    const std::optional<CoreRangeSet>&);
+
+Tensor addcmul(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    operations::ternary::ScalarVariant value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    return operations::ternary::addcmul(input_a, input_b, input_c, value, memory_config, output);
+}
+
+Tensor addcdiv(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    return operations::ternary::addcdiv(input_a, input_b, input_c, value, memory_config, output);
+}
+
+Tensor lerp(
+    const Tensor& input,
+    const Tensor& end,
+    float weight,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    return operations::ternary::lerp(input, end, weight, memory_config, output);
+}
+
+Tensor lerp(
+    const Tensor& input,
+    const Tensor& end,
+    const Tensor& weight,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    return operations::ternary::lerp(input, end, weight, memory_config, output);
+}
+
+}  // namespace ttnn

@@ -13,12 +13,10 @@
 
 namespace ttnn {
 
-namespace operations::ternary {
-
 Tensor where(
     const Tensor& predicate,
-    const TensorScalarVariant& value_true,
-    const TensorScalarVariant& value_false,
+    const operations::ternary::TensorScalarVariant& value_true,
+    const operations::ternary::TensorScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
@@ -37,7 +35,7 @@ Tensor addcmul(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
-    ScalarVariant value = 1.0f,
+    operations::ternary::ScalarVariant value = 1.0f,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
 
@@ -62,12 +60,5 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
-
-}  // namespace operations::ternary
-
-using operations::ternary::addcdiv;
-using operations::ternary::addcmul;
-using operations::ternary::lerp;
-using operations::ternary::where;
 
 }  // namespace ttnn
