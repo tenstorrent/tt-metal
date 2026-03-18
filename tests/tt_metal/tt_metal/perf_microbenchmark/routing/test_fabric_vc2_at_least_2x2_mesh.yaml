@@ -6,9 +6,9 @@
 
 Tests:
   ### VC2 NON-Z NEIGHBOR EXCHANGE ###
-  - name: "VC2NeighborExchangeUnicast"
+  - name: "VC2MeshNeighbourExchange"
     fabric_setup:
-      topology: NeighborExchange
+      topology: Mesh
       use_vc2: true
 
     parametrization_params:

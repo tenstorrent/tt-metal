@@ -67,7 +67,7 @@ Each task was committed atomically:
 1. **Task 1: Bump max channel constants and add VC2 stream reg entries** - `df0cab654a7` (feat)
 2. **Task 2: Extend firmware CT args arrays to 10 sender / 3 receiver entries** - `0f1db01a507` (feat)
 
-**Plan metadata:** [pending] (docs: complete plan)
+**Plan metadata:** `837022f1dd0` (docs: complete plan)
 
 ## Files Created/Modified
 - `tt_metal/fabric/builder/fabric_builder_config.hpp` - Added _without_vc2 variants, bumped max constants to 10/3

@@ -42,6 +42,13 @@ void append_fabric_vc2_connection_rt_args(
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
+    const auto& builder_context = fabric_context.get_builder_context();
+    TT_FATAL(
+        builder_context.requires_vc2(),
+        "VC2 connection requested but VC2 is not enabled. "
+        "VC2 requires: 2D fabric topology (Mesh/Torus), multi-mesh configuration, Blackhole architecture, "
+        "no UDM/mux extension mode, and TT_METAL_ENABLE_FABRIC_VC2 runtime option. "
+        "Current topology may not meet these conditions.");
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Resolve forwarding direction (same logic as public API)
