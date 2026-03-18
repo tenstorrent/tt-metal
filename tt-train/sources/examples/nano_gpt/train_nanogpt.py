@@ -43,7 +43,7 @@ from ttml.models.llama import (
     LlamaRopeScalingConfig,
 )
 from ttml.modules import Parameter
-from ttml.common.utils import round_up_to_tile, get_tt_metal_home, create_optimizer
+from ttml.common.utils import round_up_to_tile, get_tt_metal_runtime_root, create_optimizer
 from ttml.common.config import load_config, TrainingConfig as BaseTrainingConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
 
