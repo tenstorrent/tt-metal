@@ -227,15 +227,10 @@ class LMHeadSampling:
         enable_mtp=False,
         enable_mtp_verification=False,
         reference_token_tensor=None,
-        verification_result_tensor=None,
-        speculative_tokens_tensor=None,
         unverified_spec_tensor=None,
         verified_spec_tensor=None,
-        verify_ready_semaphore=None,
         eh_subblock_k=None,
         mtp_logits_socket_output=None,
-        mtp_max_spec_depth=8,
-        token_input_socket=None,
         verify_output_staging_tensor=None,
     ):
         """
@@ -289,17 +284,11 @@ class LMHeadSampling:
             and eh_projection_tensor is not None
         )
         # MTP verification is enabled if the verification tensors are provided
-        enable_mtp_verification = (
-            enable_mtp_verification
-            and reference_token_tensor is not None
-            and verification_result_tensor is not None
-            and speculative_tokens_tensor is not None
-        )
+        enable_mtp_verification = enable_mtp_verification and reference_token_tensor is not None
         assert not (
             enable_mtp and enable_mtp_verification
         ), "enable_mtp and enable_mtp_verification are mutually exclusive"
         has_mtp_logits_socket_output = enable_mtp and mtp_logits_socket_output is not None
-        has_token_input_socket = enable_mtp_verification and token_input_socket is not None
         socket_mode_none = 0
         socket_mode_d2h = 1
         socket_mode_d2d = 2
@@ -546,9 +535,8 @@ class LMHeadSampling:
         mtp_ready_semaphore_id = 4
         mcast_eh_data_sender_semaphore_id = 5
         mcast_eh_data_receiver_semaphore_id = 6
-        mtp_done_semaphore_id = 7
-        verify_argmax_done_semaphore_id = 8
-        verify_output_ready_semaphore_id = 9
+        verify_output_ready_semaphore_id = 7
+        skip_pipeline_semaphore_id = 8
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -840,7 +828,10 @@ class LMHeadSampling:
                                 "socket output active core must match argmax final core and emitting mesh device for lm_head_sampling"
                             )
 
-                    argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
+                    if enable_mtp:
+                        argmax_socket_mode = socket_mode_none
+                    else:
+                        argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
@@ -1041,26 +1032,22 @@ class LMHeadSampling:
                     ("sender_noc_x", int(core_noc_x) if enable_mtp else 0),
                     ("sender_noc_y", int(core_noc_y) if enable_mtp else 0),
                     ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp else 0),
-                    ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp else 0),
                     # [MTP Logits Socket]
                     ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
                     ("mtp_logits_num_eh_cores", num_eh_matmul_cores if enable_mtp else 0),
                     ("mtp_logits_eh_shard_size", eh_shard_size_bytes if enable_mtp else 0),
-                    # [Argmax socket deferral for verification stage]
-                    ("argmax_defer_socket_output", 1 if enable_mtp_verification else 0),
-                    # [MTP Verification speculative depth]
-                    ("mtp_max_spec_depth", mtp_max_spec_depth if enable_mtp_verification else 0),
-                    # [Token input socket]
-                    ("has_token_input_socket", 1 if has_token_input_socket else 0),
-                    ("token_input_page_size", socket_page_size_bytes if has_token_input_socket else 0),
-                    # [Cross-core verification semaphores]
-                    (
-                        "verify_argmax_done_semaphore_id",
-                        verify_argmax_done_semaphore_id if enable_mtp_verification else 0,
-                    ),
+                    ("mtp_logits_payload_size", packet_size_bytes if (enable_mtp or enable_mtp_verification) else 0),
+                    # [Argmax socket deferral — main kernel handles all socket sends]
+                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
+                    # [Cross-core verification semaphore]
                     (
                         "verify_output_ready_semaphore_id",
                         verify_output_ready_semaphore_id if enable_mtp_verification else 0,
+                    ),
+                    # [Skip pipeline semaphore (broadcast-based skip)]
+                    (
+                        "skip_pipeline_semaphore_id",
+                        skip_pipeline_semaphore_id if enable_mtp_verification else 0,
                     ),
                 ]
 
@@ -1111,21 +1098,19 @@ class LMHeadSampling:
                     ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp else 0),
                     ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp else 0),
                     ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp else 0),
-                    ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp else 0),
                     ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
                     ("mtp_logits_num_eh_cores", 0),
                     ("mtp_logits_eh_shard_size", 0),
-                    ("argmax_defer_socket_output", 1 if enable_mtp_verification else 0),
-                    ("mtp_max_spec_depth", mtp_max_spec_depth if enable_mtp_verification else 0),
-                    ("has_token_input_socket", 1 if has_token_input_socket else 0),
-                    ("token_input_page_size", 0),
-                    (
-                        "verify_argmax_done_semaphore_id",
-                        verify_argmax_done_semaphore_id if enable_mtp_verification else 0,
-                    ),
+                    ("mtp_logits_payload_size", packet_size_bytes if (enable_mtp or enable_mtp_verification) else 0),
+                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     (
                         "verify_output_ready_semaphore_id",
                         verify_output_ready_semaphore_id if enable_mtp_verification else 0,
+                    ),
+                    # [Skip pipeline semaphore (broadcast-based skip)]
+                    (
+                        "skip_pipeline_semaphore_id",
+                        skip_pipeline_semaphore_id if enable_mtp_verification else 0,
                     ),
                 ]
 
@@ -1180,21 +1165,19 @@ class LMHeadSampling:
                         else 0,
                     ),
                     ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp else 0),
-                    ("mtp_done_semaphore_id", mtp_done_semaphore_id if enable_mtp else 0),
                     ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
                     ("mtp_logits_num_eh_cores", 0),
                     ("mtp_logits_eh_shard_size", 0),
-                    ("argmax_defer_socket_output", 1 if enable_mtp_verification else 0),
-                    ("mtp_max_spec_depth", mtp_max_spec_depth if enable_mtp_verification else 0),
-                    ("has_token_input_socket", 1 if has_token_input_socket else 0),
-                    ("token_input_page_size", 0),
-                    (
-                        "verify_argmax_done_semaphore_id",
-                        verify_argmax_done_semaphore_id if enable_mtp_verification else 0,
-                    ),
+                    ("mtp_logits_payload_size", packet_size_bytes if (enable_mtp or enable_mtp_verification) else 0),
+                    ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     (
                         "verify_output_ready_semaphore_id",
                         verify_output_ready_semaphore_id if enable_mtp_verification else 0,
+                    ),
+                    # [Skip pipeline semaphore (broadcast-based skip)]
+                    (
+                        "skip_pipeline_semaphore_id",
+                        skip_pipeline_semaphore_id if enable_mtp_verification else 0,
                     ),
                 ]
 
@@ -1236,22 +1219,10 @@ class LMHeadSampling:
                         ncrisc_bcast_common_args += [
                             int(mtp_logits_socket_output.get_config_buffer_address()),
                         ]
-                    # [TOKEN INPUT SOCKET] config addr for receiving T_base via D2D
-                    if has_token_input_socket:
-                        ncrisc_bcast_common_args += [
-                            int(token_input_socket.get_config_buffer_address()),
-                        ]
-                    # [MTP Verification] reference token addr, verification result addr, speculative token addr,
-                    # unverified spec addr, verified spec addr
+                    # [MTP Verification] reference token addr, unverified spec addr, verified spec addr
                     if enable_mtp_verification:
                         ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
-                        verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
-                        spec_tokens_dev = ttnn.get_device_tensors(speculative_tokens_tensor)[device_idx]
-                        ncrisc_bcast_common_args += [
-                            int(ref_token_dev.buffer_address()),
-                            int(verify_result_dev.buffer_address()),
-                            int(spec_tokens_dev.buffer_address()),
-                        ]
+                        ncrisc_bcast_common_args.append(int(ref_token_dev.buffer_address()))
                         if unverified_spec_tensor is not None:
                             unverified_dev = ttnn.get_device_tensors(unverified_spec_tensor)[device_idx]
                             ncrisc_bcast_common_args.append(int(unverified_dev.buffer_address()))
@@ -1275,13 +1246,17 @@ class LMHeadSampling:
                         input_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
                         ncrisc_bcast_common_args.append(int(input_core_phys.x))
                         ncrisc_bcast_common_args.append(int(input_core_phys.y))
+                    # Compute combined page size for spec stage (logits + 64 bytes metadata)
+                    bcast_socket_page_size = packet_size_bytes
+                    if enable_mtp_verification and recv_socket_on_this_device:
+                        bcast_socket_page_size = packet_size_bytes + 64
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
                         0,
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
                         int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
-                        packet_size_bytes if recv_socket_on_this_device else 0,
+                        bcast_socket_page_size if recv_socket_on_this_device else 0,
                         1 if recv_socket_on_this_device else 0,
                         persistent_enable,
                         int(persistent_target_input_core_phys.x),
@@ -1367,22 +1342,10 @@ class LMHeadSampling:
                         ncrisc_bcast_common_args += [
                             int(mtp_logits_socket_output.get_config_buffer_address()),
                         ]
-                    # [TOKEN INPUT SOCKET] config addr for receiving T_base via D2D
-                    if has_token_input_socket:
-                        ncrisc_bcast_common_args += [
-                            int(token_input_socket.get_config_buffer_address()),
-                        ]
-                    # [MTP Verification] reference token addr, verification result addr, speculative token addr,
-                    # unverified spec addr, verified spec addr
+                    # [MTP Verification] reference token addr, unverified spec addr, verified spec addr
                     if enable_mtp_verification:
                         ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
-                        verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
-                        spec_tokens_dev = ttnn.get_device_tensors(speculative_tokens_tensor)[device_idx]
-                        ncrisc_bcast_common_args += [
-                            int(ref_token_dev.buffer_address()),
-                            int(verify_result_dev.buffer_address()),
-                            int(spec_tokens_dev.buffer_address()),
-                        ]
+                        ncrisc_bcast_common_args.append(int(ref_token_dev.buffer_address()))
                         if unverified_spec_tensor is not None:
                             unverified_dev = ttnn.get_device_tensors(unverified_spec_tensor)[device_idx]
                             ncrisc_bcast_common_args.append(int(unverified_dev.buffer_address()))
@@ -1406,13 +1369,17 @@ class LMHeadSampling:
                         input_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
                         ncrisc_bcast_common_args.append(int(input_core_phys.x))
                         ncrisc_bcast_common_args.append(int(input_core_phys.y))
+                    # Compute combined page size for spec stage (logits + 64 bytes metadata)
+                    bcast_socket_page_size = packet_size_bytes
+                    if enable_mtp_verification and recv_socket_on_this_device:
+                        bcast_socket_page_size = packet_size_bytes + 64
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
                         int(final_core_phys.y),
                         int(scratch_tensors_per_device[device_idx].buffer_address()),
                         int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
                         int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
-                        packet_size_bytes if recv_socket_on_this_device else 0,
+                        bcast_socket_page_size if recv_socket_on_this_device else 0,
                         1 if recv_socket_on_this_device else 0,
                         persistent_enable,
                         int(persistent_target_input_core_phys.x),
@@ -1657,8 +1624,11 @@ class LMHeadSampling:
                         cbs_list.append(argmax_socket_cb_descriptor)
 
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
+                # For spec stage (verification), CB30 holds logits + 64 bytes metadata.
                 if not skip_ccl:
                     bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
+                    if enable_mtp_verification:
+                        bcast_pkt_cb_descriptor.total_size += 64
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
                 # ================================================================
@@ -1709,8 +1679,18 @@ class LMHeadSampling:
                                 core_ranges=all_cores,
                                 initial_value=0,
                             ),
+                        ]
+                    )
+                if enable_mtp_verification:
+                    semaphore_descriptors.extend(
+                        [
                             ttnn.SemaphoreDescriptor(
-                                id=mtp_done_semaphore_id,
+                                id=verify_output_ready_semaphore_id,
+                                core_ranges=all_cores,
+                                initial_value=0,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=skip_pipeline_semaphore_id,
                                 core_ranges=all_cores,
                                 initial_value=0,
                             ),
@@ -1989,7 +1969,7 @@ class LMHeadSampling:
         if mcast_dst_working_buf_tensor is not None:
             io_tensors.append(mcast_dst_working_buf_tensor)
         if enable_mtp_verification:
-            io_tensors.extend([reference_token_tensor, verification_result_tensor, speculative_tokens_tensor])
+            io_tensors.append(reference_token_tensor)
             if unverified_spec_tensor is not None:
                 io_tensors.append(unverified_spec_tensor)
             if verified_spec_tensor is not None:

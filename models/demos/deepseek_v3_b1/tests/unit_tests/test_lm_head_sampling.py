@@ -303,6 +303,123 @@ def _compute_expected_mtp_output_synthetic(iteration: int) -> torch.Tensor:
     return mtp_output
 
 
+_GOLDEN_SENTINEL = 0xFFFFFFFF
+_TOKEN_TYPE_BASE = 0
+_TOKEN_TYPE_SPEC = 1
+
+
+def _build_golden_weights():
+    """Return the Torch tensors mirroring _SyntheticWeightProvider for use in golden computations."""
+    K = _EMBED_HIDDEN
+    n_total = _LM_HEAD_N_SYNTHETIC
+    torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
+
+    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
+    torch_b = torch.full((K, n_total), -1.0, dtype=torch.bfloat16)
+    torch_b[torch.arange(K), winner_per_row] = 1
+    torch_indices = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
+
+    torch_embedding_table = torch.zeros((_VOCAB_SIZE, K), dtype=torch.bfloat16)
+    torch_embedding_table[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % K] = 1
+
+    num_devices = 8
+    torch.manual_seed(42)
+    mtp_embedding = torch.randn((num_devices * n_total, K), dtype=torch.bfloat16)
+    h_gamma = torch.randn((1, K), dtype=torch.bfloat16)
+    e_gamma = torch.randn((1, K), dtype=torch.bfloat16)
+    eh_proj = torch.randn((K + K, K), dtype=torch.bfloat16)
+
+    return dict(
+        gamma=torch_gamma,
+        b=torch_b,
+        indices=torch_indices,
+        embedding_table=torch_embedding_table,
+        mtp_embedding=mtp_embedding,
+        h_gamma=h_gamma,
+        e_gamma=e_gamma,
+        eh_proj=eh_proj,
+    )
+
+
+def _compute_golden_mtp_verification(token_id: int, weights: dict) -> tuple[int, int]:
+    """Compute (T_base, T_spec) for a single token through Stage 1 + Stage 3.
+
+    Stage 1: embed token_id -> LM head -> T_base, also produces MTP logits.
+    Stage 3: LM head on MTP logits -> T_spec.
+    """
+    K = _EMBED_HIDDEN
+    activation = weights["embedding_table"][token_id].unsqueeze(0).float()  # [1, K]
+    gamma = weights["gamma"].float()
+    b = weights["b"].float().unsqueeze(0)
+    indices = weights["indices"]
+
+    t_base_tensor, mtp_logits = LMHeadSampling.golden(
+        activation,
+        gamma,
+        b,
+        indices=indices,
+        k=1,
+        p=1.0,
+        fuse_mtp=True,
+        embedding_tensor=weights["mtp_embedding"].float(),
+        h_gamma_tensor=weights["h_gamma"].float(),
+        e_gamma_tensor=weights["e_gamma"].float(),
+        eh_projection_tensor=weights["eh_proj"].float(),
+    )
+    t_base = int(t_base_tensor.to(torch.uint32).item())
+
+    t_spec_tensor, _ = LMHeadSampling.golden(
+        mtp_logits.float(),
+        gamma,
+        b,
+        indices=indices,
+        k=1,
+        p=1.0,
+    )
+    t_spec = int(t_spec_tensor.to(torch.uint32).item())
+    return t_base, t_spec
+
+
+def _simulate_verification_step(
+    t_base: int,
+    t_spec: int,
+    source_token_type: int,
+    unverified: int,
+    verified: int,
+) -> tuple[int, list[int], int, int]:
+    """Simulate the kernel's verification state machine for one step.
+
+    Returns (num_tokens, output_tokens, new_unverified, new_verified).
+    output_tokens is a list of (token, type, pos_offset) tuples.
+    """
+    accept = False
+    stale = False
+
+    if source_token_type == _TOKEN_TYPE_BASE:
+        if unverified != _GOLDEN_SENTINEL and t_base == unverified:
+            accept = True
+            verified = unverified
+            unverified = _GOLDEN_SENTINEL
+    elif source_token_type == _TOKEN_TYPE_SPEC:
+        if verified == _GOLDEN_SENTINEL:
+            stale = True
+
+    skip = accept or stale
+
+    if skip:
+        if accept:
+            return 1, [(t_base, _TOKEN_TYPE_BASE)], unverified, verified
+        else:
+            return 0, [], unverified, verified
+    else:
+        if source_token_type == _TOKEN_TYPE_BASE:
+            unverified = t_spec
+        else:
+            verified = _GOLDEN_SENTINEL
+            unverified = t_spec
+        return 2, [(t_base, _TOKEN_TYPE_BASE), (t_spec, _TOKEN_TYPE_SPEC)], unverified, verified
+
+
 def _is_lm_head_sampling_perf_enabled():
     return os.getenv("RUN_LM_HEAD_SAMPLING_PERF", "0") == "1"
 
@@ -1434,19 +1551,6 @@ def test_single_device_mtp_verification(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint32,
     )
-    verification_result_tensor = to_device(
-        torch.zeros((1, 1), dtype=torch.uint32),
-        output_index_mem_config,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint32,
-    )
-    speculative_tokens_tensor = to_device(
-        torch.zeros((1, 1), dtype=torch.uint32),
-        output_index_mem_config,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.uint32,
-    )
-
     # Reset scores and output for the verification op (reuse same weights/input)
     ttnn_scores_v = to_device(
         torch.zeros((M, n_total), dtype=torch.bfloat16),
@@ -1479,26 +1583,16 @@ def test_single_device_mtp_verification(
         enable_mtp=False,
         enable_mtp_verification=True,
         reference_token_tensor=reference_token_tensor,
-        verification_result_tensor=verification_result_tensor,
-        speculative_tokens_tensor=speculative_tokens_tensor,
     )
     ttnn.synchronize_device(submesh)
 
     spec_token = ttnn.to_torch(ttnn_output_index_v).to(torch.uint32).reshape(1, 1)
-    verify_result = ttnn.to_torch(verification_result_tensor).to(torch.uint32).reshape(1, 1)
-    stored_spec = ttnn.to_torch(speculative_tokens_tensor).to(torch.uint32).reshape(1, 1)
 
     logger.info(f"Spec token: {spec_token.item()}, base token: {base_token.item()}")
-    logger.info(f"Verification result: {verify_result.item()} (1=match, 0=no_match)")
-    logger.info(f"Stored speculative token: {stored_spec.item()}")
 
     assert torch.equal(
         spec_token, base_token
     ), f"Spec token should match base token (same inputs). spec={spec_token.item()}, base={base_token.item()}"
-    assert verify_result.item() == 1, f"Verification should match (same inputs). Got {verify_result.item()}"
-    assert (
-        stored_spec.item() == spec_token.item()
-    ), f"Stored spec token should equal the spec token. stored={stored_spec.item()}, spec={spec_token.item()}"
     logger.info("MTP verification test PASSED: speculative token matches base token")
 
 
@@ -3511,14 +3605,15 @@ def test_lm_head_sampling_pipeline_mtp_verification_4stage_single_galaxy(mesh_de
 def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
     """
     4-stage MTP speculative decoding full-cycle pipeline:
-    P0(Embed) -> P1(LMHead+MTP, logits->P2) -> P2(MTP_LMHead+Verify) -> P3(Token fwd) -> P0(D2H).
+    P0(Embed) -> P1(LMHead+MTP) -> P2(Passthrough) -> P3(MTP_LMHead+Verify) -> P0(D2H).
 
-    Verifies:
-    - Token output flows correctly through the pipeline for N iterations.
-    - The MTP verification stage produces accept/reject results in its
-      persistent state tensors.
-    - The verification stage's deferred socket output forwards the token with
-      metadata (token_type, token_pos) to the downstream stage.
+    Each decode step injects 2 tokens back-to-back (base + spec) and reads
+    2 outputs.  The base token from Stage 1 is carried in the same packet as
+    the MTP logits (metadata).  Output is verified against a Torch golden
+    that mirrors the kernel's verification state machine.
+
+    Output packet layout (7 uint32s in a 64-byte page):
+        [token_0, type_0, pos_0, num_tokens, token_1, type_1, pos_1]
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -3528,7 +3623,7 @@ def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
     if num_procs != 4:
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
-    iterations = 10
+    decode_steps = 5
 
     config = create_single_galaxy_mtp_full_cycle_pipeline_configuration(
         _SyntheticWeightProvider(),
@@ -3540,56 +3635,94 @@ def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            for iteration in range(iterations):
-                logger.info(f"[MTP Full Cycle] Writing token for iteration {iteration}")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+            weights = _build_golden_weights()
+            unverified = _GOLDEN_SENTINEL
+            verified = _GOLDEN_SENTINEL
+            page_words = TOKEN_PAGE_SIZE_BYTES // 4
+
+            def _make_token_tensor(token_id):
+                t = torch.zeros(1, page_words, dtype=torch.uint32)
+                t[0, 0] = token_id
+                return ttnn.from_torch(t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            def _read_output():
+                out = ttnn.from_torch(
+                    torch.zeros(1, page_words, dtype=torch.uint32),
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
-                pipeline.write_token(token_tensor)
-                pipeline.read_output(output_tensor)
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].item()
-                logger.info(f"[MTP Full Cycle] Iteration {iteration} output token: {got}")
+                pipeline.read_output(out)
+                return ttnn.to_torch(out).to(torch.uint32).flatten().tolist()
 
-        logger.info(f"[MTP Full Cycle] Barrier for P{pipeline.my_mesh_id}")
+            def _verify_output(got, expected_num_tokens, expected_tokens, step_label):
+                got_num = got[3]
+                assert (
+                    got_num == expected_num_tokens
+                ), f"{step_label}: num_tokens mismatch. expected={expected_num_tokens}, got={got_num}"
+                if expected_num_tokens >= 1:
+                    assert (
+                        got[0] == expected_tokens[0][0]
+                    ), f"{step_label}: token_0 mismatch. expected={expected_tokens[0][0]}, got={got[0]}"
+                    assert (
+                        got[1] == expected_tokens[0][1]
+                    ), f"{step_label}: type_0 mismatch. expected={expected_tokens[0][1]}, got={got[1]}"
+                if expected_num_tokens >= 2:
+                    assert (
+                        got[4] == expected_tokens[1][0]
+                    ), f"{step_label}: token_1 mismatch. expected={expected_tokens[1][0]}, got={got[4]}"
+                    assert (
+                        got[5] == expected_tokens[1][1]
+                    ), f"{step_label}: type_1 mismatch. expected={expected_tokens[1][1]}, got={got[5]}"
+
+            # ── Seed: write token_id=0, always REJECT (unverified == SENTINEL) ──
+            seed_id = 0
+            t_base, t_spec = _compute_golden_mtp_verification(seed_id, weights)
+            num_toks, toks, unverified, verified = _simulate_verification_step(
+                t_base, t_spec, _TOKEN_TYPE_BASE, unverified, verified
+            )
+            logger.info(f"[MTP Full Cycle] Seed: token_id={seed_id}, expect num_tokens={num_toks}")
+            pipeline.write_token(_make_token_tensor(seed_id))
+            seed_out = _read_output()
+            _verify_output(seed_out, num_toks, toks, "Seed")
+            logger.info(
+                f"[MTP Full Cycle] Seed output: token_0={seed_out[0]} "
+                f"num_tokens={seed_out[3]} token_1={seed_out[4]}"
+            )
+
+            prev_out = seed_out
+
+            # ── Decode loop: 2 writes (base + spec) per step ──
+            for step in range(decode_steps):
+                base_id = prev_out[0]
+                spec_id = prev_out[4] if prev_out[3] >= 2 else 0
+
+                # Write base token
+                t_base, t_spec = _compute_golden_mtp_verification(base_id, weights)
+                num_toks, toks, unverified, verified = _simulate_verification_step(
+                    t_base, t_spec, _TOKEN_TYPE_BASE, unverified, verified
+                )
+                label = f"Step {step}.base(id={base_id})"
+                logger.info(f"[MTP Full Cycle] {label}: expect num_tokens={num_toks}")
+                pipeline.write_token(_make_token_tensor(base_id))
+                base_out = _read_output()
+                _verify_output(base_out, num_toks, toks, label)
+                logger.info(f"[MTP Full Cycle] {label}: out=[" f"{base_out[0]},{base_out[3]},{base_out[4]}]")
+
+                # Write spec token
+                t_base2, t_spec2 = _compute_golden_mtp_verification(spec_id, weights)
+                num_toks2, toks2, unverified, verified = _simulate_verification_step(
+                    t_base2, t_spec2, _TOKEN_TYPE_BASE, unverified, verified
+                )
+                label2 = f"Step {step}.spec(id={spec_id})"
+                logger.info(f"[MTP Full Cycle] {label2}: expect num_tokens={num_toks2}")
+                pipeline.write_token(_make_token_tensor(spec_id))
+                spec_out = _read_output()
+                _verify_output(spec_out, num_toks2, toks2, label2)
+                logger.info(f"[MTP Full Cycle] {label2}: out=[" f"{spec_out[0]},{spec_out[3]},{spec_out[4]}]")
+
+                prev_out = spec_out
+
         pipeline.barrier()
-        logger.info(f"[MTP Full Cycle] Barrier completed for P{pipeline.my_mesh_id}")
-
         pipeline.terminate()
-
-        # On the verification stage (P2), read back the persistent state tensors
-        # to verify the accept/reject logic wrote meaningful values.
-        if pipeline.my_mesh_id == 2:
-            logger.info(f"[MTP Full Cycle] Verifying persistent state on P{pipeline.my_mesh_id}")
-            state = pipeline._stage_kind._state
-
-            pipeline_config = pipeline._pipeline_config
-            exit_coord = pipeline_config[pipeline.my_mesh_id].exit_node_coord
-            exit_device_idx = exit_coord[0] * mesh_device.shape[1] + exit_coord[1]
-
-            verify_result_dev = ttnn.get_device_tensors(state["verification_result_tensor"])[exit_device_idx]
-            verify_result = ttnn.to_torch(verify_result_dev).to(torch.uint32).item()
-            logger.info(f"[MTP Full Cycle] verification_result = {verify_result}")
-
-            spec_token_dev = ttnn.get_device_tensors(state["speculative_tokens_tensor"])[exit_device_idx]
-            spec_token = ttnn.to_torch(spec_token_dev).to(torch.uint32).item()
-            logger.info(f"[MTP Full Cycle] speculative_token = {spec_token}")
-
-            unverified_dev = ttnn.get_device_tensors(state["unverified_spec_tensor"])[exit_device_idx]
-            unverified = ttnn.to_torch(unverified_dev).to(torch.uint32).flatten().tolist()
-            logger.info(f"[MTP Full Cycle] unverified_spec = {unverified}")
-
-            verified_dev = ttnn.get_device_tensors(state["verified_spec_tensor"])[exit_device_idx]
-            verified = ttnn.to_torch(verified_dev).to(torch.uint32).flatten().tolist()
-            logger.info(f"[MTP Full Cycle] verified_spec = {verified}")
-
-            assert spec_token != 0xFFFFFFFF, "Speculative token was never written by the verification kernel"
-            logger.info("[MTP Full Cycle] Persistent state verification passed")
-
-        pipeline.barrier()
     finally:
         pass

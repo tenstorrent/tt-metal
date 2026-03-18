@@ -71,7 +71,7 @@ def create_single_galaxy_mtp_verification_pipeline_configuration(
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy MTP speculative decoding pipeline:
-    Embed -> LMHead+MTP -> MTP_LMHead+Verify -> Token fwd -> loopback."""
+    Embed(0) -> LMHead+MTP(1) -> Passthrough(2) -> MTP_LMHead+Verify(3) -> loopback."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
@@ -82,21 +82,23 @@ def create_single_galaxy_mtp_verification_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             mtp_weights=weight_provider.load_mtp_weights(device),
+            mtp_logits_target_mesh_id=3,
         )
 
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return MTPVerificationLMHeadStage(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
+            mtp_logits_source_mesh_id=1,
         )
 
     return PipelineConfiguration(
         {
             0: stage_0,
             1: stage_1,
-            2: stage_2,
-            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            3: stage_3,
         }
     )
 
@@ -108,12 +110,13 @@ def create_single_galaxy_mtp_full_cycle_pipeline_configuration(
     persistent_mode: bool = True,
 ) -> PipelineConfiguration:
     """4-stage single-galaxy MTP full speculative decoding cycle:
-    Embed -> LMHead+MTP (logits→P2) -> MTP_LMHead+Verify -> Token fwd -> loopback.
+    Embed(0) -> LMHead+MTP(1) -> Passthrough(2) -> MTP_LMHead+Verify(3) -> loopback.
 
-    Stage 1 sends MTP logits to Stage 2 via a dedicated D2D socket and forwards
-    T_base through the standard pipeline path. Stage 2 runs its own LM head on
-    the incoming activation, verifies its T_spec against the reference token
-    stored in persistent state, and forwards the verification result downstream.
+    Stage 1 sends MTP logits to Stage 3 via a dedicated D2D socket and forwards
+    T_base through the standard pipeline path (via Stage 2 passthrough).
+    Stage 3 runs its own LM head on the incoming logits, verifies its T_spec
+    against the reference token stored in persistent state, and forwards the
+    verification result downstream.
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
@@ -125,22 +128,23 @@ def create_single_galaxy_mtp_full_cycle_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
             mtp_weights=weight_provider.load_mtp_weights(device),
-            mtp_logits_target_mesh_id=2,
+            mtp_logits_target_mesh_id=3,
         )
 
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return MTPVerificationLMHeadStage(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
+            mtp_logits_source_mesh_id=1,
         )
 
     return PipelineConfiguration(
         {
             0: stage_0,
             1: stage_1,
-            2: stage_2,
-            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            3: stage_3,
         }
     )
 

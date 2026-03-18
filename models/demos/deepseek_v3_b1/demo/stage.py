@@ -50,6 +50,10 @@ MTP_LOGITS_D2D_CORE = ttnn.CoreCoord(11, 2)
 MTP_LOGITS_PAGE_SIZE_BYTES = mtp_padded_dim * 2
 MTP_LOGITS_FIFO_SIZE = MTP_LOGITS_PAGE_SIZE_BYTES * 2
 
+# Combined logits + 64-byte metadata packet sent by the MTP kernel
+MTP_LOGITS_COMBINED_PAGE_SIZE = MTP_LOGITS_PAGE_SIZE_BYTES + 64
+MTP_LOGITS_COMBINED_FIFO_SIZE = MTP_LOGITS_COMBINED_PAGE_SIZE * 2
+
 
 @dataclass
 class StageContext:
@@ -200,10 +204,13 @@ class MTPVerificationLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
+        mtp_logits_source_mesh_id: int | None = None,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
+        self._mtp_logits_source_mesh_id = mtp_logits_source_mesh_id
+        self._mtp_logits_recv_interface: SocketInterface | None = None
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -348,40 +355,18 @@ class MTPVerificationLMHeadStage(StageKind):
         # and controls the mcast, enabling future skip optimization.
         _SENTINEL = 0xFFFFFFFF
         max_spec_depth = 8
-        input_core_scalar_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
-        )
         reference_token_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 3), _SENTINEL, dtype=torch.uint32),
+            torch.full((num_devices, 1, 8), _SENTINEL, dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
-                ttnn.ShardSpec(mcast_core_grid, (1, 3), ttnn.ShardOrientation.ROW_MAJOR),
+                ttnn.ShardSpec(mcast_core_grid, (1, 8), ttnn.ShardOrientation.ROW_MAJOR),
             ),
             mesh_mapper=mesh_mapper,
         )
-        verification_result_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 1), _SENTINEL, dtype=torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=input_core_scalar_mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-        speculative_tokens_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, 1), _SENTINEL, dtype=torch.uint32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=input_core_scalar_mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-
         spec_state_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
@@ -440,13 +425,9 @@ class MTPVerificationLMHeadStage(StageKind):
             "ttnn_output_index": ttnn_output_index,
             "scratch_buffer": scratch_buffer,
             "reference_token_tensor": reference_token_tensor,
-            "verification_result_tensor": verification_result_tensor,
-            "speculative_tokens_tensor": speculative_tokens_tensor,
             "unverified_spec_tensor": unverified_spec_tensor,
             "verified_spec_tensor": verified_spec_tensor,
             "verify_output_staging_tensor": verify_output_staging_tensor,
-            "max_spec_depth": max_spec_depth,
-            "token_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
             "out_ready_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
             "barrier_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
@@ -456,6 +437,34 @@ class MTPVerificationLMHeadStage(StageKind):
         }
         if self._persistent_mode:
             self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
+
+        if self._mtp_logits_source_mesh_id is not None:
+            source_id = self._mtp_logits_source_mesh_id
+            logits_send_core = ttnn.MeshCoreCoord(pipeline_config[source_id].exit_node_coord, MTP_LOGITS_D2D_CORE)
+            logits_recv_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, MTP_LOGITS_D2D_CORE)
+            logits_downstream_core = ttnn.MeshCoreCoord(
+                pipeline_config[my_mesh_id].entry_node_coord,
+                MTPVerificationLMHeadStage.LMHEAD_INPUT_CORE,
+            )
+            self._mtp_logits_recv_interface = SocketInterface(
+                page_size=MTP_LOGITS_COMBINED_PAGE_SIZE,
+                socket_fifo_size=MTP_LOGITS_COMBINED_FIFO_SIZE,
+                data_size_per_transfer=MTP_LOGITS_COMBINED_PAGE_SIZE,
+                send_core_coord=logits_send_core,
+                recv_core_coord=logits_recv_core,
+                downstream_core_coord=logits_downstream_core,
+                sender_mesh=MeshWrapper(mesh_id=source_id),
+                receiver_mesh=MeshWrapper(mesh_device),
+            )
+            self._state["lmhead_input_socket"] = self._mtp_logits_recv_interface.get_downstream_socket()
+
+    def run_auxiliary_sockets(self) -> None:
+        if self._mtp_logits_recv_interface is not None:
+            self._mtp_logits_recv_interface.run()
+
+    def terminate_auxiliary(self) -> None:
+        if self._mtp_logits_recv_interface is not None:
+            self._mtp_logits_recv_interface.terminate(False)
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state
@@ -482,18 +491,15 @@ class MTPVerificationLMHeadStage(StageKind):
             fabric_scratch_tensor=d["scratch_buffer"],
             fp32_dest_acc_en=self._fp32_dest_acc_en,
             skip_ccl=False,
+            socket_input=d.get("lmhead_input_socket"),
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             enable_mtp=False,
             enable_mtp_verification=True,
             reference_token_tensor=d["reference_token_tensor"],
-            verification_result_tensor=d["verification_result_tensor"],
-            speculative_tokens_tensor=d["speculative_tokens_tensor"],
             unverified_spec_tensor=d["unverified_spec_tensor"],
             verified_spec_tensor=d["verified_spec_tensor"],
-            mtp_max_spec_depth=d["max_spec_depth"],
-            token_input_socket=d["token_input_socket"],
             verify_output_staging_tensor=d["verify_output_staging_tensor"],
         )
 
@@ -815,9 +821,9 @@ class LMHeadStage(StageKind):
                 pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
             )
             self._mtp_logits_socket_interface = SocketInterface(
-                page_size=MTP_LOGITS_PAGE_SIZE_BYTES,
-                socket_fifo_size=MTP_LOGITS_FIFO_SIZE,
-                data_size_per_transfer=MTP_LOGITS_PAGE_SIZE_BYTES,
+                page_size=MTP_LOGITS_COMBINED_PAGE_SIZE,
+                socket_fifo_size=MTP_LOGITS_COMBINED_FIFO_SIZE,
+                data_size_per_transfer=MTP_LOGITS_COMBINED_PAGE_SIZE,
                 send_core_coord=logits_send_core,
                 recv_core_coord=logits_recv_core,
                 upstream_core_coord=logits_upstream_core,
