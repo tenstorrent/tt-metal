@@ -3390,7 +3390,7 @@ class AttentionBlock:
                 # ================================================================
                 # bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
                 # bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if upstream_socket is not None else None
+                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if upstream_socket is not None else []
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
@@ -3992,6 +3992,7 @@ class AttentionBlock:
                     brisc_args=ctx["per_core_brisc_args"],
                     trisc_args=ctx["per_core_trisc_args"],
                 ),
+                defines=ctx["device_kernel_defines"],
                 noc_mode=noc_mode,
             )
 
