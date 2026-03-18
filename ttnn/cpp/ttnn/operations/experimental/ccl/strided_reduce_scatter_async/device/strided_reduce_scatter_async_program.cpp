@@ -212,7 +212,6 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t slice_Wt,
     const uint32_t normalized_dim,
     const uint32_t mm_M_unit_blocks_per_core,
-    const uint32_t mm_N_full_blocks_per_slice,
     const uint32_t mm_block_ht,
     const uint32_t mm_cores_y,
     const uint32_t N_full_block_wt,
@@ -225,6 +224,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t mm_blocks_sem_override) {
     // Strided reader compile args - include MM blocking parameters
     // CT arg indices must match kernel: see minimal_ring_strided_reduce_scatter_async_reader.cpp
+    // mm_N_full_blocks_per_slice removed; computed dynamically via get_slice_N_block_info.
     return {
         ring_index,                         // [0]  my_chip_id
         ring_size,                          // [1]  ring_size
@@ -241,17 +241,16 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         slice_Wt,                           // [12] slice_Wt
         normalized_dim,                     // [13] dim normalized to 4D
         mm_M_unit_blocks_per_core,          // [14] mm_M_unit_blocks_per_core
-        mm_N_full_blocks_per_slice,         // [15] mm_N_full_blocks_per_slice
-        mm_block_ht,                        // [16] mm_block_ht
-        mm_cores_y,                         // [17] mm_cores_y
-        N_full_block_wt,                    // [18] N_full_block_wt
-        chunk_width_in_tiles,               // [19] chunk_width_in_tiles
-        chunks_per_mm_N_full_block,         // [20] chunks_per_mm_N_full_block
-        mm_block_wt,                        // [21] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
-        slice_Ht_per_core,                  // [22] slice_Ht_per_core
-        static_cast<uint32_t>(fuse_mm_op),  // [23] fuse_mm_op (consumed via FUSE_MM_OP_SIGNALER define)
-        slice_Ht,                           // [24] slice_Ht (total height in tiles across all MM cores)
-        mm_blocks_sem_override,             // [25] mm_blocks_sem_override (used by FUSE_MM_OP_SIGNALER)
+        mm_block_ht,                        // [15] mm_block_ht
+        mm_cores_y,                         // [16] mm_cores_y
+        N_full_block_wt,                    // [17] N_full_block_wt
+        chunk_width_in_tiles,               // [18] chunk_width_in_tiles
+        chunks_per_mm_N_full_block,         // [19] chunks_per_mm_N_full_block
+        mm_block_wt,                        // [20] mm_block_wt (used by FUSE_MM_OP_SIGNALER)
+        slice_Ht_per_core,                  // [21] slice_Ht_per_core
+        static_cast<uint32_t>(fuse_mm_op),  // [22] fuse_mm_op (consumed via FUSE_MM_OP_SIGNALER define)
+        slice_Ht,                           // [23] slice_Ht (total height in tiles across all MM cores)
+        mm_blocks_sem_override,             // [24] mm_blocks_sem_override (used by FUSE_MM_OP_SIGNALER)
     };
 }
 
@@ -691,7 +690,6 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
             slice_Wt,
             normalized_dim,
             mm_M_unit_blocks_per_core,
-            mm_N_full_blocks_per_slice,
             mm_block_ht_val,
             mm_cores_y_val,
             mm_N_full_block_wt_val,

@@ -32,19 +32,18 @@ constexpr uint32_t slice_C = get_compile_time_arg_val(11);
 constexpr uint32_t slice_Wt = get_compile_time_arg_val(12);
 constexpr uint32_t dim = get_compile_time_arg_val(13);
 constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(14);
-constexpr uint32_t mm_N_full_blocks_per_slice = get_compile_time_arg_val(15);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
-constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(18);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
-constexpr uint32_t mm_block_wt = get_compile_time_arg_val(21);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(22);
-// [23]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(24);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(15);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(16);
+constexpr uint32_t mm_N_full_block_wt = get_compile_time_arg_val(17);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(18);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(19);
+constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
+constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
+// [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
 // 0 = use computed formula (divisible case); >0 = wait for exactly this many mm blocks per chunk
 // (used when slice_Wt % mm_N_full_block_wt != 0 and the whole row is one chunk)
-constexpr uint32_t mm_blocks_sem_override = get_compile_time_arg_val(25);
+constexpr uint32_t mm_blocks_sem_override = get_compile_time_arg_val(24);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -60,8 +59,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 26;  // [21]=mm_block_wt, [22]=slice_Ht_per_core, [23]=fuse_mm_op (via
-                                     // FUSE_MM_OP_SIGNALER define), [24]=slice_Ht, [25]=mm_blocks_sem_override
+    constexpr uint32_t ct_idx = 25;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht, [24]=mm_blocks_sem_override
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -160,6 +159,8 @@ void kernel_main() {
                     const bool do_reduce = i != 0;
                     const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
+                    const uint32_t mm_N_full_blocks_per_slice =
+                        get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt).first;
 
                     // Wait for all chunk_piece_idx tiles for this ring iteration to be written by the neighboring
                     // device
