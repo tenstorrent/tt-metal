@@ -153,7 +153,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 14 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 15 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
 
   connections {
@@ -234,7 +234,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 30 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
@@ -315,7 +315,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
@@ -395,7 +395,7 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 62 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
-    channels { count: 6 policy: RELAXED }
+    channels { count: 8 policy: RELAXED }
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 63 } }
