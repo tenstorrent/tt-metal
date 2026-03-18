@@ -1,0 +1,8 @@
+﻿ttnn.reduce\_to\_root
+=====================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.reduce_to_root:
+
+.. autooperation:: ttnn.reduce_to_root
