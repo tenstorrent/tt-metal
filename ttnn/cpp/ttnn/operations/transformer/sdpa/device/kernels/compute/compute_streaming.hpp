@@ -839,81 +839,29 @@ static void sdpa_inner_loop_step(
 #endif
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
-            // qkt_subblock_h=1: split-drain (sub_exp interleaved with V matmul).
-            // qkt_subblock_h>1: non-split drain (all sub_exp first, then full V matmul).
-            // Note: constexpr on qkt_subblock_h eliminates the dead branch at compile time.
-            if constexpr (qkt_subblock_h == 1) {
-                const uint32_t matmul_inner = actual_sbw;
-                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_sub * actual_sbw,
-                        qkt_subblock_h,
-                        actual_sbw);
+            // Split-drain: interleave per-column-subblock sub_exp with partial V matmul.
+            // Each kt_sub softmaxes one column chunk of the last row, then multiplies
+            // with the corresponding V rows; partial products accumulate via L1.
+            const uint32_t matmul_inner = actual_sbw;
+            for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
+                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                    cb_qkt_im,
+                    cur.max,
+                    cur.sum,
+                    KT_stride,
+                    q_num_subblocks - 1,
+                    kt_sub * actual_sbw,
+                    qkt_subblock_h,
+                    actual_sbw);
 
-                    if (kt_sub == 0) {
-                        cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-                    }
-                    if (kt_sub > 0) {
-                        PACK((llk_pack_reconfig_l1_acc(1)));
-                    }
-
-                    {
-                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                        uint32_t v_index_offset = 0;
-                        if constexpr (!uniform_unpack_format) {
-                            reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
-                        }
-#ifdef ARCH_BLACKHOLE
-                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
-#else
-                        mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
-#endif
-                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            blocked_matmul_and_pack<false, vDHt, vDHt>(
-                                cb_qkt_im,
-                                cb_v_in,
-                                cur.out,
-                                qktv_in0_index_offset + kt_sub * matmul_inner,
-                                kt_sub * matmul_inner * vDHt + v_index_offset,
-                                0,
-                                v_subblock * qktv_subblock_w,
-                                qktv_subblock_w,
-                                qktv_subblock_h,
-                                matmul_inner,
-                                KT_stride);
-                            v_index_offset += qktv_subblock_w;
-                        }
-                        if constexpr (!uniform_unpack_format) {
-                            reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
-                        }
-                    }
-
-                    if (kt_sub > 0) {
-                        PACK((llk_pack_reconfig_l1_acc(0)));
-                    }
+                if (kt_sub == 0) {
+                    cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
+                    cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
                 }
-            } else {
-                // Non-split drain: drain all sub_exp in-place, then full matmul.
-                for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_sub * actual_sbw,
-                        qkt_subblock_h,
-                        actual_sbw);
+                if (kt_sub > 0) {
+                    PACK((llk_pack_reconfig_l1_acc(1)));
                 }
 
-                cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
-                cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
@@ -921,28 +869,32 @@ static void sdpa_inner_loop_step(
                         reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                     }
 #ifdef ARCH_BLACKHOLE
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
+                    mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
 #else
-                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
 #endif
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         blocked_matmul_and_pack<false, vDHt, vDHt>(
                             cb_qkt_im,
                             cb_v_in,
                             cur.out,
-                            qktv_in0_index_offset,
-                            v_index_offset,
+                            qktv_in0_index_offset + kt_sub * matmul_inner,
+                            kt_sub * matmul_inner * vDHt + v_index_offset,
                             0,
                             v_subblock * qktv_subblock_w,
                             qktv_subblock_w,
                             qktv_subblock_h,
-                            active_Sk,
+                            matmul_inner,
                             KT_stride);
                         v_index_offset += qktv_subblock_w;
                     }
                     if constexpr (!uniform_unpack_format) {
                         reconfig_data_format(cb_v_in, cur.out, cb_qkt_im, cur.out);
                     }
+                }
+
+                if (kt_sub > 0) {
+                    PACK((llk_pack_reconfig_l1_acc(0)));
                 }
             }
             qktv_in0_index_offset += qktv_subblock_h * KT_stride;
