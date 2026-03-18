@@ -123,7 +123,6 @@ class MatmulCustomCompressed:
                 - "constexpr_unroll": fully template-unrolled constexpr formats.
         """
         core_grid = a_tensor.memory_config().shard_spec.grid
-        data_tensor = ct.get_data_tensor()
 
         # Shapes
         a_shard_shape = a_tensor.memory_config().shard_spec.shape
@@ -142,20 +141,8 @@ class MatmulCustomCompressed:
         # CB0: A tensor — standard
         cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
 
-        # CB1: compressed data, override format to bfp8 for HW init
-        tile_32x32 = ttnn.Tile([32, 32])
-        cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb_in1,
-            data_tensor,
-            total_size=ct.max_shard_size,
-        )
-        cb1_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb_in1,
-            data_format=ttnn.bfloat8_b,
-            page_size=ct.max_shard_size,
-            tile=ttnn.TileDescriptor(tile_32x32),
-        )
-        cb1_desc.format_descriptors = [cb1_fmt]
+        # CB1: compressed data — per-core or lockstep depending on ct mode
+        cb1_descs = ct.cb_descriptor_from_compressed_tensor(cb_in1, total_size=ct.max_shard_size)
 
         # CB2: output — standard
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
@@ -197,9 +184,9 @@ class MatmulCustomCompressed:
             all_cores = ttnn.corerange_to_cores(core_grid)
             num_tiles = num_tiles_k * out_w
             # fifo_rd_ptr - 1: the -1 is a HW convention for THCON address registers
-            base_addr_shifted = (data_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
             shard_data = []
             for core_coord in all_cores:
+                base_addr_shifted = (ct.get_data_l1_address_per_core(core_coord) >> _CB_ADDR_SHIFT) - 1
                 shard_assignment = ct.get_assignment_per_shard(core_coord)
                 tiles = pack_tile_pairs(shard_assignment, base_addr_shifted)
                 shard_data.extend(tiles)
@@ -239,9 +226,10 @@ class MatmulCustomCompressed:
 
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[cb0_desc, cb1_desc, cb2_desc],
+            cbs=[cb0_desc, *cb1_descs, cb2_desc],
             semaphores=[],
         )
 
-        io_tensors = [a_tensor, data_tensor, output_tensor]
+        # io_tensors: include per-core data tensors for lifetime management
+        io_tensors = [a_tensor, *ct.get_io_tensors(), output_tensor]
         return ttnn.generic_op(io_tensors, program_descriptor)

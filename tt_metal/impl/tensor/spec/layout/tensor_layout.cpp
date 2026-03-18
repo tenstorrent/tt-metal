@@ -227,8 +227,12 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
             nd_shard_spec->orientation,
             nd_shard_spec->shard_distribution_strategy);
     }
-    return BufferShardingArgs(
-        std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    auto sharding_args =
+        BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
+    if (memory_config_.per_core_shard_sizes().has_value()) {
+        sharding_args.set_per_core_shard_sizes(*memory_config_.per_core_shard_sizes());
+    }
+    return sharding_args;
 }
 
 size_t TensorLayout::compute_packed_buffer_size_bytes(const tt::tt_metal::Shape& shape) const {

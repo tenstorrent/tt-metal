@@ -29,6 +29,7 @@ def _run_matmul_custom_compressed(
     pcc_threshold=0.98,
     impl="constexpr_compact",
     tile_scaler=None,
+    per_core_allocation=False,
 ):
     """Helper: run custom compressed A @ decompress(B_compressed).
 
@@ -67,7 +68,9 @@ def _run_matmul_custom_compressed(
     assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats, bfp0_mae_threshold=bfp0_mae)
     b_shard_spec = ttnn.ShardSpec(core_grid, [K, n_per_core], ttnn.ShardOrientation.ROW_MAJOR)
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec)
-    ct = CompressedTensor.from_torch(torch_b, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        torch_b, assigner, device=device, memory_config=b_mem_config, per_core_allocation=per_core_allocation
+    )
 
     logger.info(f"Custom compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
@@ -513,3 +516,34 @@ def test_matmul_custom_compressed_hybrid(device):
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
     logger.info(pcc_message)
     assert passing, pcc_message
+
+
+# --- Per-core allocation: runtime path ---
+
+
+def test_matmul_custom_compressed_per_core_runtime_large(device):
+    """[1, 7168] x [7168, 32], mixed bfp8+bfp4. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 32, formats=["bfp8", "bfp4"], impl="runtime", per_core_allocation=True
+    )
+
+
+def test_matmul_custom_compressed_per_core_runtime_multicore(device):
+    """[1, 7168] x [7168, 128], bfp8, 2 cores. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 128, formats=["bfp8"], impl="runtime", num_cores=2, per_core_allocation=True
+    )
+
+
+def test_matmul_custom_compressed_per_core_runtime_mixed_multicore(device):
+    """[1, 7168] x [7168, 416], mixed bfp8+bfp4, 13 cores. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 32 * 13, formats=["bfp8", "bfp4"], impl="runtime", num_cores=13, per_core_allocation=True
+    )
+
+
+def test_matmul_custom_compressed_per_core_runtime_all_formats(device):
+    """[1, 7168] x [7168, 32], mixed bfp8+bfp4+bfp2+bfp0. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 32, formats=["bfp8", "bfp4", "bfp2", "bfp0"], impl="runtime", per_core_allocation=True
+    )
