@@ -198,6 +198,7 @@ ttnn/cpp/ttnn/kernel_lib/ @tenstorrent/metalium-developers-convolutions @tenstor
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass @jonathansuTT
+ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/conv3d/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
