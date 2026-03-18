@@ -266,6 +266,7 @@ from ttnn.types import (
     MeshProgramDescriptor,
     merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
+    get_cb_address,
     UnpackToDestMode,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
