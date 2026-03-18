@@ -18,6 +18,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     mesh_tensor_to_torch,
     infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -128,6 +129,8 @@ def mesh_device_fixture():
 
     if not mesh_shape:
         mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
 
     if mesh_shape:
         # Create mesh device based on env var
@@ -227,6 +230,24 @@ def run(
                 mesh_shape = _parse_mesh_shape(tp.get("mesh_device_shape"))
                 if mesh_shape:
                     break
+
+    if is_mesh_device and mesh_shape:
+        try:
+            dev_shape = device.shape
+            if callable(dev_shape):
+                dev_shape = dev_shape()
+            dev_rows, dev_cols = dev_shape[0], dev_shape[1]
+        except Exception:
+            dev_rows, dev_cols = 1, 1
+        if dev_rows < mesh_shape[0] or dev_cols < mesh_shape[1]:
+            return [
+                (
+                    False,
+                    f"Device mesh ({dev_rows}x{dev_cols}) too small for traced mesh shape "
+                    f"({mesh_shape[0]}x{mesh_shape[1]}). Set MESH_DEVICE_SHAPE or run on a larger device.",
+                ),
+                None,
+            ]
 
     # Create input tensor (indices)
     if not is_host:

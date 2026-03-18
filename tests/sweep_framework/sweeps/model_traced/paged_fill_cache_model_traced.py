@@ -22,6 +22,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 TIMEOUT = 300
@@ -86,6 +87,8 @@ def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
     if not mesh_shape:
         mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -181,6 +184,27 @@ def run(
             mesh_shape = _parse_mesh_shape(tp.get("mesh_device_shape"))
             if mesh_shape:
                 break
+
+    # Verify the device mesh can support the traced mesh shape.
+    # Without this guard, ShardTensor2dMesh would hit TT_FATAL on undersized devices.
+    if is_mesh_device and mesh_shape:
+        try:
+            dev_shape = device.shape
+            if callable(dev_shape):
+                dev_shape = dev_shape()
+            dev_rows, dev_cols = dev_shape[0], dev_shape[1]
+        except Exception:
+            dev_rows, dev_cols = 1, 1
+        if dev_rows < mesh_shape[0] or dev_cols < mesh_shape[1]:
+            return [
+                (
+                    False,
+                    f"Device mesh ({dev_rows}x{dev_cols}) too small for traced mesh shape "
+                    f"({mesh_shape[0]}x{mesh_shape[1]}). Set MESH_DEVICE_SHAPE or run on a larger device.",
+                ),
+                None,
+            ]
+
     is_2d_mesh = is_mesh_device and mesh_shape is not None and mesh_shape[0] > 1 and mesh_shape[1] > 1
 
     # Parse shard dims for arg1 (input tensor) from its traced placement.

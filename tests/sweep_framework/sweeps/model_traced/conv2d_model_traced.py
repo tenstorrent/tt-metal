@@ -11,6 +11,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -52,6 +53,8 @@ def mesh_device_fixture():
 
     if not mesh_shape:
         mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
 
     if mesh_shape:
         # Create mesh device based on env var

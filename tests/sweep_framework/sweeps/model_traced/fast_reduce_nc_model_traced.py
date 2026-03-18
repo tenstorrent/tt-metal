@@ -19,6 +19,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     infer_mesh_shape_from_params,
+    detect_mesh_shape_from_hardware,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -52,6 +53,8 @@ def mesh_device_fixture():
     mesh_shape = get_mesh_shape()
     if not mesh_shape:
         mesh_shape = infer_mesh_shape_from_params(model_traced_params)
+    if not mesh_shape:
+        mesh_shape = detect_mesh_shape_from_hardware()
     if mesh_shape:
         try:
             device = create_mesh_device(mesh_shape)
@@ -136,6 +139,24 @@ def run(
     if is_mesh_device and input_a_tensor_placement:
         mesh_shape = _parse_mesh_shape(input_a_tensor_placement.get("mesh_device_shape"))
         shard_dims = _parse_shard_dims_from_placement(input_a_tensor_placement)
+
+    if is_mesh_device and mesh_shape:
+        try:
+            dev_shape = device.shape
+            if callable(dev_shape):
+                dev_shape = dev_shape()
+            dev_rows, dev_cols = dev_shape[0], dev_shape[1]
+        except Exception:
+            dev_rows, dev_cols = 1, 1
+        if dev_rows < mesh_shape[0] or dev_cols < mesh_shape[1]:
+            return [
+                (
+                    False,
+                    f"Device mesh ({dev_rows}x{dev_cols}) too small for traced mesh shape "
+                    f"({mesh_shape[0]}x{mesh_shape[1]}). Set MESH_DEVICE_SHAPE or run on a larger device.",
+                ),
+                None,
+            ]
 
     if shard_dims is not None and mesh_shape is not None:
         global_shape = list(shape)

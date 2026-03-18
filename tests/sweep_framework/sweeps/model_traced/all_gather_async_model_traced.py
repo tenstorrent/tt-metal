@@ -428,10 +428,27 @@ def run(
 
     try:
         with device_context(mesh_shape, fabric_config) as (device, device_err):
-            assert tuple(device.shape) == mesh_shape
-
             if device_err is not None:
-                return False, device_err, None, None
+                return [(False, device_err), None]
+
+            # Mesh compatibility guard: prevent TT_FATAL from ShardTensor2dMesh
+            if mesh_shape:
+                try:
+                    dev_shape = device.shape
+                    if callable(dev_shape):
+                        dev_shape = dev_shape()
+                    dev_rows, dev_cols = dev_shape[0], dev_shape[1]
+                except Exception:
+                    dev_rows, dev_cols = 1, 1
+                if dev_rows < mesh_shape[0] or dev_cols < mesh_shape[1]:
+                    return [
+                        (
+                            False,
+                            f"Device mesh ({dev_rows}x{dev_cols}) too small for traced mesh shape "
+                            f"({mesh_shape[0]}x{mesh_shape[1]}). Set MESH_DEVICE_SHAPE or run on a larger device.",
+                        ),
+                        None,
+                    ]
 
             if is_model_traced:
                 if is_2d_mesh:

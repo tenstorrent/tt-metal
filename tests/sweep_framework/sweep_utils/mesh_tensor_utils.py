@@ -342,6 +342,34 @@ def infer_mesh_shape_from_params(params: Optional[dict]) -> Optional[Tuple[int, 
     return best
 
 
+def detect_mesh_shape_from_hardware() -> Optional[Tuple[int, int]]:
+    """Detect the best mesh shape from available hardware.
+
+    Queries the number of available TT devices and returns a mesh shape
+    that uses all of them.  Falls back to None for single-device setups.
+
+    Common mappings:
+        32 devices -> (4, 8)  Galaxy
+         8 devices -> (1, 8)
+         4 devices -> (1, 4)
+         2 devices -> (1, 2)  N300
+         1 device  -> None    N150
+    """
+    try:
+        num_devices = ttnn.GetNumAvailableDevices()
+    except Exception:
+        return None
+
+    if num_devices <= 1:
+        return None
+
+    well_known = {32: (4, 8), 8: (1, 8), 4: (1, 4), 2: (1, 2)}
+    if num_devices in well_known:
+        return well_known[num_devices]
+
+    return (1, num_devices)
+
+
 def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None) -> torch.Tensor:
     """
     Convert a TTNN tensor (mesh or single device) to torch tensor.
