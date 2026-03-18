@@ -49,8 +49,8 @@
 
 ### Testing
 
-- [ ] **TEST-01**: New tests in `test_tt_fabric` with VC option in sender config for VC2 non-Z router
-- [ ] **TEST-02**: New tests in `test_tt_fabric` for VC2 Z-router (sender-only, VC0 receiver forwarding)
+- [x] **TEST-01**: New tests in `test_tt_fabric` with VC option in sender config for VC2 non-Z router
+- [x] **TEST-02**: New tests in `test_tt_fabric` for VC2 Z-router (sender-only, VC0 receiver forwarding)
 - [ ] **TEST-03**: Existing regression tests pass after each phase (`test_fabric_ubench` + `test_fabric_sanity`)
 
 ## v2 Requirements
@@ -96,8 +96,8 @@
 | FLOW-03 | Phase 4 | Complete |
 | CONN-01 | Phase 5 | Complete |
 | CONN-02 | Phase 5 | Complete |
-| TEST-01 | Phase 5 | Pending |
-| TEST-02 | Phase 5 | Pending |
+| TEST-01 | Phase 5 | Complete |
+| TEST-02 | Phase 5 | Complete |
 | TEST-03 | Phase 5 | Pending |
 
 **Coverage:**

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 6 context gathered
-last_updated: "2026-03-18T20:47:28.570Z"
+stopped_at: Completed 06-01-PLAN.md
+last_updated: "2026-03-18T21:18:32.034Z"
 last_activity: 2026-03-18 -- Plan 05-01 executed
 progress:
   total_phases: 6
   completed_phases: 4
-  total_plans: 10
-  completed_plans: 9
+  total_plans: 12
+  completed_plans: 10
   percent: 90
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Third VC correctly wired into fabric infrastructure, invisible to existing VC0/VC1, only active under correct conditions
-**Current focus:** Phase 4 complete. Ready for Phase 5.
+**Current focus:** Phase 6 in progress. Plan 06-01 complete, ready for 06-02.
 
 ## Current Position
 
-Phase: 5 of 5 (Connection API & Testing)
+Phase: 6 of 6 (VC2 Sender Integration & End-to-End Verification)
 Plan: 1 of 2 in current phase
-Status: Plan 05-01 complete
-Last activity: 2026-03-18 -- Plan 05-01 executed
+Status: Plan 06-01 complete
+Last activity: 2026-03-18 -- Plan 06-01 executed
 
 Progress: [#########-] 90%
 
@@ -58,6 +58,7 @@ Progress: [#########-] 90%
 | Phase 04 P01 | 8min | 2 tasks | 4 files |
 | Phase 04 P02 | 5min | 2 tasks | 3 files |
 | Phase 05 P01 | 5min | 2 tasks | 5 files |
+| Phase 06 P01 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,9 @@ Recent decisions affecting current work:
 - [04-02] Firmware heuristic replaced with ACTUAL_VC*_SENDER_CHANNELS derivation -- no behavioral change for non-VC2 configs
 - [05-01] VC2 connection API kept private (fabric_vc2_connection.hpp/.cpp), not exposed in public fabric.hpp
 - [05-01] VC2 sender channel index = get_num_sender_channels(0) + get_num_sender_channels(1) (dynamic, not hardcoded)
+- [Phase 06]: VC2 receiver uses VC0 downstream array as dummy (forwarding always disabled)
+- [Phase 06]: vc_id=2 implies use_vc2=true in resolve step (single source of truth)
+- [Phase 06]: VC2 trid tracker added to teardown() for proper transaction ack drain
 
 ### Roadmap Evolution
 
@@ -99,6 +103,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-18T20:47:28.566Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-vc2-sender-integration-end-to-end-verification/06-CONTEXT.md
+Last session: 2026-03-18T21:18:32.030Z
+Stopped at: Completed 06-01-PLAN.md
+Resume file: None
