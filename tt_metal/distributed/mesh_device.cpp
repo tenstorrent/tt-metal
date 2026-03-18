@@ -633,6 +633,12 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         parent_mesh,
         context_id_);
 
+    TT_FATAL(
+        submesh->impl().get_context_id() == context_id_,
+        "Submesh context id {} does not match parent mesh context id {}.",
+        submesh->impl().get_context_id(),
+        context_id_);
+
     const auto& allocator_config = reference_device()->allocator_impl()->get_config();
     submesh->initialize(
         num_hw_cqs(),
