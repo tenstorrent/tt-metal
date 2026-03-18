@@ -45,9 +45,11 @@ class Linear:
             raise KeyError(f"Missing required parameter: {weight_key}")
 
         # Torch Linear weight is [out_features, in_features]. For ttnn.linear use [in_features, out_features].
-        wt = state_dict[weight_key].reshape(self.out_features, self.in_features).transpose(0, 1).contiguous()
+        transposed_weight = (
+            state_dict[weight_key].reshape(self.out_features, self.in_features).transpose(0, 1).contiguous()
+        )
         self.weight_tensor = ttnn.from_torch(
-            wt,
+            transposed_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.device,

@@ -81,7 +81,7 @@ def test_generator_nsf(device):
     )
 
     torch.manual_seed(1234)
-    tt_output = tt_generator(tt_x, tt_f0, g=tt_g)
+    tt_output = tt_generator(tt_x, tt_f0, conditioning=tt_g)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).permute(0, 2, 1)
 
     assert tuple(tt_output_torch.shape) == tuple(torch_output.shape)

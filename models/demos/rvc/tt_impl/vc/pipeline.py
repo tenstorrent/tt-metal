@@ -86,16 +86,18 @@ def _get_model_and_config_paths(version: str, num: str, if_f0: bool) -> tuple[st
     return path_mapping[key]
 
 
-def _change_rms(data1, sr1, data2, sr2, rate):
-    rms1 = librosa.feature.rms(y=data1, frame_length=sr1 // 2 * 2, hop_length=sr1 // 2)
-    rms2 = librosa.feature.rms(y=data2, frame_length=sr2 // 2 * 2, hop_length=sr2 // 2)
-    rms1 = torch.from_numpy(rms1)
-    rms1 = F.interpolate(rms1.unsqueeze(0), size=data2.shape[0], mode="linear").squeeze()
-    rms2 = torch.from_numpy(rms2)
-    rms2 = F.interpolate(rms2.unsqueeze(0), size=data2.shape[0], mode="linear").squeeze()
-    rms2 = torch.max(rms2, torch.zeros_like(rms2) + 1e-6)
-    data2 *= (torch.pow(rms1, torch.tensor(1 - rate)) * torch.pow(rms2, torch.tensor(rate - 1))).numpy()
-    return data2
+def _change_rms(source_audio, source_sr, target_audio, target_sr, rate):
+    source_rms = librosa.feature.rms(y=source_audio, frame_length=source_sr // 2 * 2, hop_length=source_sr // 2)
+    target_rms = librosa.feature.rms(y=target_audio, frame_length=target_sr // 2 * 2, hop_length=target_sr // 2)
+    source_rms = torch.from_numpy(source_rms)
+    source_rms = F.interpolate(source_rms.unsqueeze(0), size=target_audio.shape[0], mode="linear").squeeze()
+    target_rms = torch.from_numpy(target_rms)
+    target_rms = F.interpolate(target_rms.unsqueeze(0), size=target_audio.shape[0], mode="linear").squeeze()
+    target_rms = torch.max(target_rms, torch.zeros_like(target_rms) + 1e-6)
+    target_audio *= (
+        torch.pow(source_rms, torch.tensor(1 - rate)) * torch.pow(target_rms, torch.tensor(rate - 1))
+    ).numpy()
+    return target_audio
 
 
 def _load_synthesizer(
@@ -164,14 +166,14 @@ class Pipeline:
         self.t_max = self.sr * x_max
         self.device = config.device
 
-    def _get_f0(self, x, p_len, f0_up_key, f0_method):
+    def _get_f0(self, audio, num_frames, f0_up_key, f0_method):
         f0_min = 50
         f0_max = 1100
         f0_mel_min = 1127 * math.log(1 + f0_min / 700)
         f0_mel_max = 1127 * math.log(1 + f0_max / 700)
         if f0_method == "pm":
             f0 = (
-                parselmouth.Sound(x, self.sr)
+                parselmouth.Sound(audio, self.sr)
                 .to_pitch_ac(
                     time_step=self.window / self.sr,
                     voicing_threshold=0.6,
@@ -180,25 +182,25 @@ class Pipeline:
                 )
                 .selected_array["frequency"]
             )
-            pad_size = (p_len - len(f0) + 1) // 2
-            if pad_size > 0 or p_len - len(f0) - pad_size > 0:
-                f0 = np.pad(f0, [[pad_size, p_len - len(f0) - pad_size]], mode="constant")
+            pad_size = (num_frames - len(f0) + 1) // 2
+            if pad_size > 0 or num_frames - len(f0) - pad_size > 0:
+                f0 = np.pad(f0, [[pad_size, num_frames - len(f0) - pad_size]], mode="constant")
         else:
             raise ValueError("f0_method must be 'pm'.")
 
         f0 *= pow(2, f0_up_key / 12)
-        f0bak = f0.copy()
+        f0_continuous = f0.copy()
         f0_mel = 1127 * np.log(1 + f0 / 700)
         f0_mel[f0_mel > 0] = (f0_mel[f0_mel > 0] - f0_mel_min) * 254 / (f0_mel_max - f0_mel_min) + 1
         f0_mel[f0_mel <= 1] = 1
         f0_mel[f0_mel > 255] = 255
         f0_coarse = np.rint(f0_mel)
 
-        f0_coarse = f0_coarse[:p_len]
-        f0bak = f0bak[:p_len]
+        f0_coarse = f0_coarse[:num_frames]
+        f0_continuous = f0_continuous[:num_frames]
         f0_coarse = torch.tensor(f0_coarse, device=self.device).unsqueeze(0).long()
-        f0bak = torch.tensor(f0bak, device=self.device).unsqueeze(0).float()
-        return f0_coarse, f0bak
+        f0_continuous = torch.tensor(f0_continuous, device=self.device).unsqueeze(0).float()
+        return f0_coarse, f0_continuous
 
     def _vc(
         self,
@@ -232,30 +234,32 @@ class Pipeline:
         feats = ttnn.to_torch(feats).to(torch.float32)
 
         if protect < 0.5 and pitch is not None and pitchf is not None:
-            feats0 = feats.clone()
+            protected_features = feats.clone()
         if index is not None and big_npy is not None and index_rate != 0:
-            npy = feats[0].cpu().numpy()
-            score, ix = index.search(npy, k=8)
-            weight = np.square(1 / score)
-            weight /= weight.sum(axis=1, keepdims=True)
-            npy = np.sum(big_npy[ix] * np.expand_dims(weight, axis=2), axis=1)
-            feats = torch.from_numpy(npy).unsqueeze(0).to(self.device) * index_rate + (1 - index_rate) * feats
+            index_features = feats[0].cpu().numpy()
+            scores, indices = index.search(index_features, k=8)
+            weights = np.square(1 / scores)
+            weights /= weights.sum(axis=1, keepdims=True)
+            index_features = np.sum(big_npy[indices] * np.expand_dims(weights, axis=2), axis=1)
+            feats = (
+                torch.from_numpy(index_features).unsqueeze(0).to(self.device) * index_rate + (1 - index_rate) * feats
+            )
 
         feats = F.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
         if protect < 0.5 and pitch is not None and pitchf is not None:
-            feats0 = F.interpolate(feats0.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
+            protected_features = F.interpolate(protected_features.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
 
-        p_len = feats.shape[1]
+        num_frames = feats.shape[1]
         if pitch is not None and pitchf is not None:
-            pitch = pitch[:, :p_len]
-            pitchf = pitchf[:, :p_len]
+            pitch = pitch[:, :num_frames]
+            pitchf = pitchf[:, :num_frames]
         if protect < 0.5 and pitch is not None and pitchf is not None:
             pitchff = pitchf.clone()
             pitchff[pitchf > 0] = 1
             pitchff[pitchf < 1] = protect
             pitchff = pitchff.unsqueeze(-1)
-            feats = feats * pitchff + feats0 * (1 - pitchff)
-            feats = feats.to(feats0.dtype)
+            feats = feats * pitchff + protected_features * (1 - pitchff)
+            feats = feats.to(protected_features.dtype)
 
         with torch.no_grad():
             tt_feats = ttnn.from_torch(
@@ -323,17 +327,17 @@ class Pipeline:
 
         audio_output = []
         audio_padded = np.pad(audio, (self.t_pad, self.t_pad), mode="reflect")
-        p_len = audio_padded.shape[0] // self.window
+        num_frames = audio_padded.shape[0] // self.window
         s = 0
         idx_list = []
         for t in opt_ts:
             idx_list.append((s // self.window, (t + self.t_pad2) // self.window))
             s = t
-        idx_list.append((s // self.window, p_len))
+        idx_list.append((s // self.window, num_frames))
         speaker_id = torch.tensor(speaker_id, device=self.device).unsqueeze(0).long()
         pitch, pitchf = None, None
         if self.if_f0:
-            pitch, pitchf = self._get_f0(audio_padded, p_len, f0_up_key, f0_method)
+            pitch, pitchf = self._get_f0(audio_padded, num_frames, f0_up_key, f0_method)
 
         for idx_s, idx_e in idx_list:
             chunk_end = min(idx_e + self.t_pad2 // self.window, pitch.shape[1]) if pitch is not None else idx_e

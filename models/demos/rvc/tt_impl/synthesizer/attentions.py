@@ -91,10 +91,10 @@ class MultiHeadAttention:
                 device=self.device,
             )
 
-    def __call__(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, context: ttnn.Tensor) -> ttnn.Tensor:
         q = self._reshape_to_heads(self.linear_q(x))
-        k = self._reshape_to_heads(self.linear_k(c))
-        v = self._reshape_to_heads(self.linear_v(c))
+        k = self._reshape_to_heads(self.linear_k(context))
+        v = self._reshape_to_heads(self.linear_v(context))
         q_scaled = ttnn.mul(q, 1.0 / math.sqrt(self.features_per_head), output_tensor=q)
         scores = ttnn.matmul(q_scaled, k, transpose_b=True)
         _, _, target_length, source_length = scores.shape
@@ -109,23 +109,23 @@ class MultiHeadAttention:
             scores_local = self._relative_to_absolute_position(rel_logits)
             scores = ttnn.add(scores, scores_local, output_tensor=scores)
 
-        p_attn = ttnn.softmax_in_place(scores, dim=-1)
-        output = ttnn.matmul(p_attn, v)
+        attn_weights = ttnn.softmax_in_place(scores, dim=-1)
+        out = ttnn.matmul(attn_weights, v)
         if self.window_size is not None:
             assert self.emb_rel_v is not None
-            relative_weights = self._absolute_to_relative_position(p_attn)
+            relative_weights = self._absolute_to_relative_position(attn_weights)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
-            output = ttnn.add(output, ttnn.matmul(relative_weights, value_relative_embeddings), output_tensor=output)
-        output = ttnn.transformer.concatenate_heads(output)
+            out = ttnn.add(out, ttnn.matmul(relative_weights, value_relative_embeddings), output_tensor=out)
+        out = ttnn.transformer.concatenate_heads(out)
 
-        out_tt = self.linear_o(output)
-        return out_tt
+        out = self.linear_o(out)
+        return out
 
     def _reshape_to_heads(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch_size, length, channels = x.shape
         x = ttnn.reshape(x, (batch_size, length, self.num_heads, self.features_per_head))
-        x_p = ttnn.permute(x, (0, 2, 1, 3))
-        return x_p
+        x_heads = ttnn.permute(x, (0, 2, 1, 3))
+        return x_heads
 
     def _get_relative_embeddings(self, relative_embeddings: ttnn.Tensor, length: int) -> ttnn.Tensor:
         if self.window_size is None:
@@ -148,27 +148,29 @@ class MultiHeadAttention:
         )
         return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
 
-    def _get_rel_idx_tensor(self, length: int) -> ttnn.Tensor:
+    def _get_relative_position_index(self, length: int) -> ttnn.Tensor:
         if length in self.index_cache:
             return self.index_cache[length]
         idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.uint32, device=self.device), dim=1)
         idx_col = ttnn.unsqueeze(
             ttnn.arange(start=length - 1, end=2 * length - 1, dtype=ttnn.uint32, device=self.device), dim=0
         )
-        rel_idx = idx_col - idx_row
-        rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (1, 1, length, length))
-        self.index_cache[length] = rel_idx
-        return rel_idx
+        relative_position_index = idx_col - idx_row
+        relative_position_index = ttnn.expand(
+            ttnn.reshape(relative_position_index, shape=(1, 1, length, length)), (1, 1, length, length)
+        )
+        self.index_cache[length] = relative_position_index
+        return relative_position_index
 
     def _relative_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        rel_idx = self._get_rel_idx_tensor(length)
-        out = ttnn_gather_fallback(x, dim=3, index=rel_idx, device=self.device)
+        relative_position_index = self._get_relative_position_index(length)
+        out = ttnn_gather_fallback(x, dim=3, index=relative_position_index, device=self.device)
         return out
 
     def _absolute_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        rel_idx = self._get_rel_idx_tensor(length)
+        relative_position_index = self._get_relative_position_index(length)
         if length in self.relative_position_cache:
             out = self.relative_position_cache[length]
         else:
@@ -179,7 +181,7 @@ class MultiHeadAttention:
                 device=self.device,
             )
             self.relative_position_cache[length] = out
-        out = ttnn.scatter(out, dim=3, index=rel_idx, src=x)
+        out = ttnn.scatter(out, dim=3, index=relative_position_index, src=x)
         return out
 
 

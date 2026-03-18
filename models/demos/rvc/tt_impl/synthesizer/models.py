@@ -202,8 +202,8 @@ class TextEncoder:
             x = ttnn.add(x, self.emb_pitch(pitch), output_tensor=x)
         x = ttnn.multiply(x, math.sqrt(self.hidden_channels), output_tensor=x)
         x = ttnn.leaky_relu(x, negative_slope=0.1, output_tensor=x)
-        x_e = self.encoder(x)
-        stats = self.proj_linear(x_e)
+        encoded = self.encoder(x)
+        stats = self.proj_linear(encoded)
         m, logs = ttnn.chunk(stats, chunks=2, dim=-1)
         return m, logs
 
@@ -287,13 +287,13 @@ class Generator:
         resblock_cls = ResBlock1 if resblock == "1" else ResBlock2
         self.resblocks = []
         for i in range(len(self.ups)):
-            ch = upsample_initial_channel // (2 ** (i + 1))
+            channels = upsample_initial_channel // (2 ** (i + 1))
             for k, d in zip(resblock_kernel_sizes, resblock_dilation_sizes, strict=True):
-                self.resblocks.append(resblock_cls(device, ch, k, tuple(d)))
+                self.resblocks.append(resblock_cls(device, channels, k, tuple(d)))
 
         self.conv_post = Conv1d(
             device=device,
-            in_channels=ch,
+            in_channels=channels,
             out_channels=1,
             kernel_size=7,
             stride=1,
@@ -320,18 +320,20 @@ class Generator:
             rb.load_state_dict(state_dict, module_prefix=f"{module_prefix}resblocks.{i}.")
         self.conv_post.load_state_dict(state_dict, key="conv_post", module_prefix=module_prefix)
 
-    def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, conditioning: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x = self.conv_pre(x)
-        if g is not None and self.cond_linear is not None:
-            x = ttnn.add(x, self.cond_linear(g), output_tensor=x)
+        if conditioning is not None and self.cond_linear is not None:
+            x = ttnn.add(x, self.cond_linear(conditioning), output_tensor=x)
 
         for i in range(self.num_upsamples):
             x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE, output_tensor=x)
             x = self.ups[i](x)
-            xs = self.resblocks[i * self.num_kernels](x)
+            resblock_sum = self.resblocks[i * self.num_kernels](x)
             for j in range(1, self.num_kernels):
-                xs = ttnn.add(xs, self.resblocks[i * self.num_kernels + j](x), output_tensor=xs)
-            x = ttnn.multiply(xs, 1.0 / self.num_kernels, output_tensor=xs)
+                resblock_sum = ttnn.add(
+                    resblock_sum, self.resblocks[i * self.num_kernels + j](x), output_tensor=resblock_sum
+                )
+            x = ttnn.multiply(resblock_sum, 1.0 / self.num_kernels, output_tensor=resblock_sum)
 
         x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE, output_tensor=x)
         x = self.conv_post(x)
@@ -448,12 +450,12 @@ class GeneratorNSF:
         self.ups: list[ConvTranspose1d] = []
         self.noise_convs: list[Conv1d | Linear] = []
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes, strict=True)):
-            c_cur = upsample_initial_channel // (2 ** (i + 1))
+            current_channels = upsample_initial_channel // (2 ** (i + 1))
             self.ups.append(
                 ConvTranspose1d(
                     device=device,
                     in_channels=upsample_initial_channel // (2**i),
-                    out_channels=c_cur,
+                    out_channels=current_channels,
                     kernel_size=k,
                     stride=u,
                     padding=(k - u) // 2,
@@ -465,7 +467,7 @@ class GeneratorNSF:
                     Conv1d(
                         device=device,
                         in_channels=1,
-                        out_channels=c_cur,
+                        out_channels=current_channels,
                         kernel_size=stride_f0 * 2,
                         stride=stride_f0,
                         padding=stride_f0 // 2,
@@ -476,7 +478,7 @@ class GeneratorNSF:
                     Linear(
                         device=device,
                         in_features=1,
-                        out_features=c_cur,
+                        out_features=current_channels,
                     )
                 )
 
@@ -512,22 +514,22 @@ class GeneratorNSF:
             rb.load_state_dict(state_dict, module_prefix=f"{module_prefix}resblocks.{i}.")
         self.conv_post.load_state_dict(state_dict, key="conv_post", module_prefix=module_prefix)
 
-    def __call__(self, x: ttnn.Tensor, f0: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        har_source_tt = self.m_source(f0, self.upp)
+    def __call__(self, x: ttnn.Tensor, f0: ttnn.Tensor, conditioning: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        harmonic_source = self.m_source(f0, self.upp)
         x = self.conv_pre(x)
-        if g is not None:
-            x = ttnn.add(x, self.cond_linear(g), output_tensor=x)
+        if conditioning is not None:
+            x = ttnn.add(x, self.cond_linear(conditioning), output_tensor=x)
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope, output_tensor=x)
             x = ups(x)
             # the layout conversion happens inside noise_convs because doign it here causes oom for some reason
             # TODO: investigate the reasoning behind this
-            x_source = noise_convs(har_source_tt)
-            x = ttnn.add(x, x_source, output_tensor=x)
-            xs = self.resblocks[i * self.num_kernels](x)
+            source_features = noise_convs(harmonic_source)
+            x = ttnn.add(x, source_features, output_tensor=x)
+            resblock_sum = self.resblocks[i * self.num_kernels](x)
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):
-                xs = ttnn.add(xs, self.resblocks[j](x), output_tensor=xs)
-            x = ttnn.multiply(xs, 1.0 / self.num_kernels, output_tensor=xs)
+                resblock_sum = ttnn.add(resblock_sum, self.resblocks[j](x), output_tensor=resblock_sum)
+            x = ttnn.multiply(resblock_sum, 1.0 / self.num_kernels, output_tensor=resblock_sum)
 
         x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope, output_tensor=x)
         x = self.conv_post(x)
@@ -588,7 +590,7 @@ class SynthesizerTrnMsNSF:
             sr=sr,
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
-        self.emb_g = Embedding(device, spk_embed_dim, gin_channels)
+        self.embedding = Embedding(device, spk_embed_dim, gin_channels)
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -596,23 +598,23 @@ class SynthesizerTrnMsNSF:
         self.enc_p.load_state_dict(state_dict, module_prefix=f"{module_prefix}enc_p.")
         self.dec.load_state_dict(state_dict, module_prefix=f"{module_prefix}dec.")
         self.flow.load_state_dict(state_dict, module_prefix=f"{module_prefix}flow.")
-        self.emb_g.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_g.")
+        self.embedding.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_g.")
 
     def __call__(
-        self, phone: ttnn.Tensor, pitch: ttnn.Tensor, nsff0: ttnn.Tensor, speaker_id: ttnn.Tensor
+        self, phone: ttnn.Tensor, pitch: ttnn.Tensor, nsf_f0: ttnn.Tensor, speaker_id: ttnn.Tensor
     ) -> ttnn.Tensor:
-        g = self.emb_g(speaker_id)
-        g = ttnn.reshape(g, (g.shape[0], 1, g.shape[-1]))
-        m_p, logs_p = self.enc_p(phone, pitch)
-        z_p = (
-            m_p
-            + ttnn.exp(logs_p)
-            * ttnn_randn_fallback(tuple(m_p.shape), dtype=ttnn.bfloat16, device=self.device)
+        conditioning = self.embedding(speaker_id)
+        conditioning = ttnn.reshape(conditioning, (conditioning.shape[0], 1, conditioning.shape[-1]))
+        prior_mean, prior_log = self.enc_p(phone, pitch)
+        latent = (
+            prior_mean
+            + ttnn.exp(prior_log)
+            * ttnn_randn_fallback(tuple(prior_mean.shape), dtype=ttnn.bfloat16, device=self.device)
             * 0.66666
         )
-        z = self.flow(z_p, g=g)
-        o = self.dec(z, nsff0, g=g)
-        return o
+        latent_flow = self.flow(latent, conditioning)
+        out = self.dec(latent_flow, nsf_f0, conditioning)
+        return out
 
 
 class SynthesizerTrnMsNSF_nono:
@@ -660,7 +662,7 @@ class SynthesizerTrnMsNSF_nono:
             gin_channels=gin_channels,
         )
         self.flow = ResidualCouplingBlock(device, inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels)
-        self.emb_g = Embedding(device, spk_embed_dim, gin_channels)
+        self.embedding = Embedding(device, spk_embed_dim, gin_channels)
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], module_prefix: str | None = None) -> None:
         if module_prefix is None:
@@ -668,18 +670,18 @@ class SynthesizerTrnMsNSF_nono:
         self.enc_p.load_state_dict(state_dict, module_prefix=f"{module_prefix}enc_p.")
         self.dec.load_state_dict(state_dict, module_prefix=f"{module_prefix}dec.")
         self.flow.load_state_dict(state_dict, module_prefix=f"{module_prefix}flow.")
-        self.emb_g.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_g.")
+        self.embedding.load_state_dict(state_dict, module_prefix=f"{module_prefix}emb_g.")
 
     def __call__(self, phone: ttnn.Tensor, speaker_id: ttnn.Tensor) -> ttnn.Tensor:
-        g = self.emb_g(speaker_id)
-        g = ttnn.reshape(g, (g.shape[0], 1, g.shape[-1]))
-        m_p, logs_p = self.enc_p(phone, None)
-        z_p = (
-            m_p
-            + ttnn.exp(logs_p, output_tensor=logs_p)
+        conditioning = self.embedding(speaker_id)
+        conditioning = ttnn.reshape(g, (conditioning.shape[0], 1, conditioning.shape[-1]))
+        prior_mean, prior_log = self.enc_p(phone, None)
+        latent = (
+            prior_mean
+            + ttnn.exp(prior_log)
             * ttnn_randn_fallback(tuple(m_p.shape), dtype=ttnn.bfloat16, device=self.device)
             * 0.66666
         )
-        z = self.flow(z_p, g=g)
-        out = self.dec(z, g=g)
+        latent_flow = self.flow(latent, conditioning)
+        out = self.dec(latent_flow, conditioning)
         return out
