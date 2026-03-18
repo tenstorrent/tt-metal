@@ -5,7 +5,7 @@
 //
 // MPI-based cross-process loopback socket test.
 // Rank 0 (launcher): opens device, creates H2D+D2H sockets, launches loopback kernel.
-// Rank 1 (connector): connects to sockets via PCIeCoreWriter (no MetalContext), drives data.
+// Rank 1 (connector): connects to sockets via descriptors exported by the launcher, drives data.
 //
 // Run with: mpirun -np 2 ./multiproc_loopback_test
 //

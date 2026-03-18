@@ -32,28 +32,31 @@ enum class H2DMode : uint8_t {
  * H2DSocket provides a FIFO-based interface for transferring data from the host CPU
  * to a specific core on a Tenstorrent device. It supports two transfer modes:
  *
- * - **HOST_PUSH**: The host writes data directly to device L1 memory via TLB-mapped
- *   PCIe writes.
- *
+ * - **HOST_PUSH**: The host writes data directly to device L1 memory via PCIe writes.
  * - **DEVICE_PULL**: The host writes data to pinned host memory, and the device core
  *   pulls data via PCIe NOC reads.
- * Both Modes require vIOMMU to be enabled on the system, based on the current implementation.
+ *
+ * Both modes require vIOMMU to be enabled on the system.
  *
  * The socket uses a circular FIFO buffer with flow control. The host tracks `bytes_sent`
  * and the device kernel updates `bytes_acked` to indicate consumed data. The host blocks
  * on write() if the FIFO is full until the device acknowledges data.
  *
+ * Supports cross-process usage: the owner process creates the socket and exports a
+ * flatbuffer descriptor. A remote process connects via the descriptor using only UMD
+ * (no MetalContext required).
+ *
  * Usage:
  * @code
  *   // Owner process creates the socket and exports a descriptor
  *   auto socket = H2DSocket(mesh_device, recv_core, BufferType::L1, fifo_size, H2DMode::HOST_PUSH);
- *   auto desc_path = socket.export_descriptor("my_socket");
+ *   socket.export_descriptor("my_socket");
  *
- *   // Remote process connects via the descriptor
- *   auto socket = H2DSocket::connect(mesh_device, desc_path);
- *   socket->set_page_size(page_size);
- *   socket->write(data_ptr, num_pages);
- *   socket->barrier();
+ *   // Remote process connects via socket ID (no MetalContext needed)
+ *   auto remote = H2DSocket::connect("my_socket");
+ *   remote->set_page_size(page_size);
+ *   remote->write(data_ptr, num_pages);
+ *   remote->barrier();
  * @endcode
  */
 class H2DSocket {
@@ -67,7 +70,7 @@ public:
      *
      * @param mesh_device The mesh device containing the target core.
      * @param recv_core The target core coordinate (device + core) to receive data.
-     * @param buffer_type Memory type for the device-side FIFO buffer (L1 or DRAM).
+     * @param buffer_type Memory type for the device-side FIFO buffer (currently only L1).
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
      */
