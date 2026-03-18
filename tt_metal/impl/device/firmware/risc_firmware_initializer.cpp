@@ -13,6 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"
 #include "core_coord.hpp"
 #include "hal.hpp"
@@ -155,9 +156,9 @@ void RiscFirmwareInitializer::run_launch_phase(const std::set<tt::ChipId>& devic
     // Launch FW on each device sequentially, since a multithreaded launch leads to initialization hangs.
     // See https://github.com/tenstorrent/tt-metal/issues/35701
     ZoneScopedN("Resets and FW Launch");
-    for (tt::ChipId device_id : device_ids) {
-        if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
-            ClearNocData(device_id);
+    if (cluster_.get_target_device_type() != tt::TargetDevice::Mock) {
+        for (tt::ChipId device_id : device_ids) {
+            ClearNocData(descriptor_->env_impl(), device_id);
             reset_cores(device_id);
             initialize_and_launch_firmware(device_id);
         }
@@ -395,6 +396,8 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
     std::vector<uint16_t>& l1_bank_to_noc_xy) {
     BankMapping l1_bank_remap(descriptor_->l1_bank_remap().begin(), descriptor_->l1_bank_remap().end());
     auto config = L1BankingAllocator::generate_config(
+        descriptor_->metal_context().get_dispatch_core_manager(),
+        descriptor_->env_impl(),
         device_id,
         num_hw_cqs_,
         DEFAULT_L1_SMALL_SIZE,      // Not required for noc table gen
