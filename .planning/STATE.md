@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-stopped_at: Phase 03 complete
-last_updated: "2026-03-17T16:21:07.000Z"
-last_activity: 2026-03-17 -- Plan 03-02 executed
+status: completed
+stopped_at: Phase 4 context gathered
+last_updated: "2026-03-18T00:50:01.852Z"
+last_activity: 2026-03-18 -- Plan 04-01 executed
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  total_plans: 10
+  completed_plans: 7
+  percent: 70
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Third VC correctly wired into fabric infrastructure, invisible to existing VC0/VC1, only active under correct conditions
-**Current focus:** Phase 3 complete. Ready for Phase 4.
+**Current focus:** Phase 4 in progress. Plan 04-01 complete, ready for 04-02.
 
 ## Current Position
 
-Phase: 3 of 5 (Channel Mapping and Allocation) -- COMPLETE
-Plan: 2 of 2 in current phase (all done)
-Status: Phase 03 complete
-Last activity: 2026-03-17 -- Plan 03-02 executed
+Phase: 4 of 5 (Builder Wiring & Flow Control)
+Plan: 1 of 2 in current phase
+Status: Plan 04-01 complete, ready for 04-02
+Last activity: 2026-03-18 -- Plan 04-01 executed
 
-Progress: [##########] 100%
+Progress: [#######---] 70%
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [##########] 100%
 | Phase 02 P02 | 5min | 2 tasks | 3 files |
 | Phase 03 P01 | 15min | 2 tasks | 3 files |
 | Phase 03 P02 | 19min | 2 tasks | 1 files |
+| Phase 04 P01 | 8min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,8 @@ Recent decisions affecting current work:
 - [03-01] VC2 sender at last flat index after VC0+VC1; no changes needed in compute_max_channel_counts
 - [03-02] Fixed Z router VC0 sender count from 4 to 5 in existing tests (pre-existing mismatch after plan 03-01)
 - [03-02] VC2 test configs use IntermeshVCConfig::full_mesh() + requires_vc2=true (factory does not set VC2)
+- [04-01] Host-side arrays always sized to absolute max (10/3) even before VC2 conditional emission
+- [04-01] VC2 stream IDs dual-use: ID 30 shared with tensix_relay (UDM exclusive), ID 31 shared with multi_risc_teardown scratch
 
 ### Pending Todos
 
@@ -86,6 +89,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T16:21:07.000Z
-Stopped at: Completed 03-02-PLAN.md
-Resume file: .planning/phases/03-channel-mapping-allocation/03-02-SUMMARY.md
+Last session: 2026-03-18T03:04:30Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: .planning/phases/04-builder-wiring-flow-control/04-02-PLAN.md

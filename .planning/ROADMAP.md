@@ -13,8 +13,8 @@ This roadmap delivers a third virtual channel (VC2) for single-hop neighbour exc
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Overlay Register Cleanup** - Refactor stream register tracking into tagged lists and templatize WorkerConnectionAdapter on stream ID (completed 2026-03-17)
-- [ ] **Phase 2: Constants & Config Foundation** - Bump MAX_NUM_VCS to 3, extend data structures, add VC2 enable predicate
-- [ ] **Phase 3: Channel Mapping & Allocation** - Add VC2 channel mappings for non-Z and Z routers, allocate L1 buffer space
+- [x] **Phase 2: Constants & Config Foundation** - Bump MAX_NUM_VCS to 3, extend data structures, add VC2 enable predicate (completed 2026-03-17)
+- [x] **Phase 3: Channel Mapping & Allocation** - Add VC2 channel mappings for non-Z and Z routers, allocate L1 buffer space (completed 2026-03-17)
 - [ ] **Phase 4: Builder Wiring & Flow Control** - Wire VC2 channels through builder context, datamover builder, and stream register assignments
 - [ ] **Phase 5: Connection API & Testing** - Private VC2 connection API, VC2 adapter type alias, and end-to-end VC2 tests
 
@@ -48,7 +48,7 @@ Plans:
 
 Plans:
 - [x] 02-01-PLAN.md — Bump MAX_NUM_VCS to 3, fix {0,0} initializers, update legacy getters and print methods
-- [ ] 02-02-PLAN.md — Extend PerVcBufferSlots, split buffer tables, add VC2 enable predicate
+- [x] 02-02-PLAN.md — Extend PerVcBufferSlots, split buffer tables, add VC2 enable predicate
 
 ### Phase 3: Channel Mapping & Allocation
 **Goal**: VC2 channels are mapped and allocated in L1 for both non-Z routers (sender + receiver) and Z routers (sender-only at last flat index, forwarding to VC0's receiver)
@@ -62,8 +62,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 03-01-PLAN.md — Add VC2 constants, initialize_vc2_mappings(), update query methods and compute_max_channel_counts
-- [ ] 03-02-PLAN.md — Add VC2 unit tests and full test suite verification
+- [x] 03-01-PLAN.md — Add VC2 constants, initialize_vc2_mappings(), update query methods and compute_max_channel_counts
+- [x] 03-02-PLAN.md — Add VC2 unit tests and full test suite verification
 
 ### Phase 4: Builder Wiring & Flow Control
 **Goal**: VC2 channels are fully wired through the builder pipeline -- FabricBuilderContext computes VC2 counts, EriscDatamoverBuilder connects VC2 senders to receivers, stream IDs 30/31 are assigned for VC2 flow control, and CT args account for VC2
@@ -78,7 +78,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Bump host max channels to 10/3, add _without_vc2 variants, VC2 stream reg entries, extend firmware CT arg arrays
+- [x] 04-01-PLAN.md — Bump host max channels to 10/3, add _without_vc2 variants, VC2 stream reg entries, extend firmware CT arg arrays
 - [ ] 04-02-PLAN.md — Conditional CT arg emission, ACTUAL_VC2 CT arg, replace heuristic, VC2 stream IDs, runtime args
 
 ### Phase 5: Connection API & Testing
@@ -105,7 +105,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Overlay Register Cleanup | 2/2 | Complete   | 2026-03-17 |
-| 2. Constants & Config Foundation | 1/2 | In progress | - |
-| 3. Channel Mapping & Allocation | 0/2 | Not started | - |
-| 4. Builder Wiring & Flow Control | 0/2 | Not started | - |
+| 2. Constants & Config Foundation | 2/2 | Complete | 2026-03-17 |
+| 3. Channel Mapping & Allocation | 2/2 | Complete | 2026-03-17 |
+| 4. Builder Wiring & Flow Control | 1/2 | In progress | - |
 | 5. Connection API & Testing | 0/2 | Not started | - |
