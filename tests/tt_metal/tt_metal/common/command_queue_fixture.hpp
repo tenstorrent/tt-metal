@@ -108,6 +108,9 @@ protected:
         }
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
+        if (devices_.empty()) {
+            GTEST_SKIP() << "No local devices available for testing (all devices are remote-only)";
+        }
         init_max_cbs();
     }
 
@@ -151,7 +154,11 @@ protected:
             for (const auto& tunnel : tunnels) {
                 for (const auto chip_id : tunnel) {
                     if (reserved_devices_.contains(chip_id)) {
-                        devices_.push_back(reserved_devices_.at(chip_id));
+                        auto& device = reserved_devices_.at(chip_id);
+                        // Only add devices that have local resources (skip remote-only devices)
+                        if (!device->is_remote_only()) {
+                            devices_.push_back(device);
+                        }
                     }
                 }
                 break;
