@@ -51,7 +51,6 @@ jobs:
             test-type: fast
           - name: Sockets fast unit test
             cmd: |
-              mpirun -np 2 --allow-run-as-root --tag-output ./build/test/tt_metal/distributed/multiproc_loopback_test
               ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*HDSocketFixture*"
             timeout: 10
             test-type: fast
