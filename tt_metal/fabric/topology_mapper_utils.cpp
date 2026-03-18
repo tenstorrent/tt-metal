@@ -473,12 +473,18 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     const tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor) {
     using namespace ::tt::tt_fabric;
 
+    log_info(tt::LogFabric, "Building flat adjacency map from PSD");
+
     // Build flat adjacency map from PhysicalSystemDescriptor
     PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+
+    log_info(tt::LogFabric, "Getting valid groupings map from MGD and PGD");
 
     // Get valid groupings map from MGD and PGD
     auto valid_groupings_map =
         physical_grouping_descriptor.get_valid_groupings_for_mgd(mesh_graph_descriptor, physical_system_descriptor);
+
+    log_info(tt::LogFabric, "Got {} valid groupings map from MGD and PGD", valid_groupings_map.size());
 
     // Get groupings for mesh level mappings
     TT_ASSERT(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");

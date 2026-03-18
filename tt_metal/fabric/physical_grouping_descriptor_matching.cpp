@@ -679,6 +679,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 0: Convert MGD instances to GroupingInfo map (includes adjacency graphs and ASIC counts) =====
     // This step calculates required ASIC counts bottom-up and builds adjacency graphs
+    log_info(tt::LogFabric, "Building MGD to GroupingInfo map");
     std::unordered_map<std::string, std::unordered_map<std::string, GroupingInfo>> mgd_grouping_infos =
         PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(mesh_graph_descriptor);
 
@@ -686,6 +687,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     // Map from grouping name to vector of flattened GroupingInfo (supports multiple definitions with same name)
     std::unordered_map<std::string, std::vector<GroupingInfo>> mesh_flat_groupings;
     // Find MESH type groupings across all names
+    log_info(tt::LogFabric, "Finding MESH type groupings across all names");
     bool found_mesh = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto mesh_it = type_map.find("MESH");
@@ -705,6 +707,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // ===== PHASE 2: Match MESH mgd groupings to MESH groupings =====
     // For each MGD mesh instance, find all valid PGD mesh groupings that can contain it
+    log_info(tt::LogFabric, "Matching MESH mgd groupings to MESH groupings");
     for (const auto& [mgd_instance_key, mgd_mesh_grouping] : mgd_grouping_infos["MESH"]) {
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
@@ -715,6 +718,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
         // Group valid candidates by node difference (map is ordered by key ascending)
         // Store (name, index) pairs to handle multiple groupings with same name
+        log_info(tt::LogFabric, "Grouping valid candidates by node difference");
         std::map<size_t, std::vector<std::pair<std::string, size_t>>> candidates_by_diff;
         for (const auto& [name, grouping_infos] : mesh_flat_groupings) {
             for (size_t idx = 0; idx < grouping_infos.size(); ++idx) {
@@ -725,28 +729,46 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
             }
         }
+        log_info(tt::LogFabric, "Found {} valid candidates by node difference", candidates_by_diff.size());
 
         // Process difference levels from closest to farthest; stop at first level with any match
+        log_info(tt::LogFabric, "Processing difference levels from closest to farthest");
         std::vector<std::pair<std::string, size_t>> best_matches;
         for (const auto& [node_diff, name_idx_pairs] : candidates_by_diff) {
             (void)node_diff;
             for (const auto& [name, idx] : name_idx_pairs) {
                 const auto& grouping_info = mesh_flat_groupings.at(name)[idx];
                 // NOTE: If we ever want to support mixed type topologies, we need to add constraints to match the types
+                MappingConstraints<uint32_t, uint32_t> constraints;
+                constraints.add_required_constraint(0, 0);
+                log_info(tt::LogFabric, "Solving topology mapping for {} and {}", mgd_grouping_info.name, name);
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
                     mgd_grouping_info.adjacency_graph,
                     grouping_info.adjacency_graph,
-                    {},
+                    constraints,
                     ConnectionValidationMode::STRICT,
                     true);
                 if (mapping_result.success) {
+                    log_info(
+                        tt::LogFabric,
+                        "Successfully solved topology mapping for {} and {}",
+                        mgd_grouping_info.name,
+                        name);
                     best_matches.emplace_back(name, idx);
+                } else {
+                    log_info(
+                        tt::LogFabric,
+                        "Failed to solve topology mapping for {} and {}, with error: {}",
+                        mgd_grouping_info.name,
+                        name,
+                        mapping_result.error_message);
                 }
             }
             if (!best_matches.empty()) {
                 break;  // Found matches at this (best) level
             }
         }
+        log_info(tt::LogFabric, "Found {} best matches", best_matches.size());
 
         // Store all best matches (add all entries that are possible)
         if (best_matches.empty()) {
@@ -772,6 +794,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
     std::unordered_map<std::string, std::string> known_mappings;
     known_mappings["MESH"] = "MESH";
 
+    log_info(tt::LogFabric, "Matching higher-layer graph mgd groupings to higher-layer groupings");
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         if (mgd_type == "MESH") {
             continue;
@@ -796,6 +819,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
 
     // Ensure all types and instances from MGD have entries in result
     // Use MGD grouping info if no matches were found
+    log_info(tt::LogFabric, "Ensuring all types and instances from MGD have entries in result");
     for (const auto& [mgd_type, mgd_instances] : mgd_grouping_infos) {
         for (const auto& [instance_name, mgd_grouping_info] : mgd_instances) {
             // If not already present, use the MGD grouping info
@@ -805,6 +829,7 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         }
     }
 
+    log_info(tt::LogFabric, "Returning valid groupings map");
     return result;
 }
 
