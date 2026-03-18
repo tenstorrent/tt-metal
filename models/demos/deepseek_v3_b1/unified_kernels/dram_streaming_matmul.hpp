@@ -325,11 +325,11 @@ struct DRAMStreamingMatmul {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         if constexpr (CTArgs::tile_r_dim <= 4) {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2>(0, (int)VectorMode::R)));
+                            PACK((llk_math_eltwise_unary_sfpu_silu<true, CTArgs::fp32_dest_acc_en, 2>(0, (int)VectorMode::R)));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 4>(0, (int)VectorMode::R)));
+                            PACK((llk_math_eltwise_unary_sfpu_silu<true, CTArgs::fp32_dest_acc_en, 4>(0, (int)VectorMode::R)));
                         } else {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 8>(0, (int)VectorMode::R)));
+                            PACK((llk_math_eltwise_unary_sfpu_silu<true, CTArgs::fp32_dest_acc_en, 8>(0, (int)VectorMode::R)));
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

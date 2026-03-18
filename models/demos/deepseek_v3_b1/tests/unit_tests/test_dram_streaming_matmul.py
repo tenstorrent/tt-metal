@@ -113,10 +113,14 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
     return shuffled
 
 
-@pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
-@pytest.mark.parametrize("m", [1, 4, 8])
-@pytest.mark.parametrize("fused_activation", [None, "silu"])
-def test_dram_streaming_matmul(device, k, n, m, fused_activation):
+@pytest.mark.parametrize(
+    "k, n, fused_activation",
+    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None)],
+    ids=["up_proj", "gate_proj", "down_proj"],
+)
+@pytest.mark.parametrize("m", [1, 4, 8], ids=["m1", "m4", "m8"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [True, False], ids=["fp32_dest", "not_fp32"])
+def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_en):
     """Test simplified DRAM streaming matmul with optional fused activation.
 
     In the simplified version:
@@ -258,7 +262,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
             in0_t,
             in1_t,
             ttnn_output,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=fp32_dest_acc_en,
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             subblock_k=subblock_k,
@@ -283,6 +287,8 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
         expected_pcc = 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
     logger.info(output)
+    logger.info(f"tt_out: {tt_out}")
+    logger.info(f"pt_out: {pt_out}")
     assert passing, f"PCC check failed: {output}"
     logger.info(f"DRAM streaming matmul{activation_str} test passed!")
 
@@ -682,186 +688,7 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
 
 
 @pytest.mark.parametrize(
-    "k, n, fused_activation",
-    [(7168, 2048, None), (7168, 2048, "silu"), (2048, 7168, None)],
-    ids=["up_proj", "gate_proj", "down_proj"],
-)
-@pytest.mark.parametrize("m", [1, 4, 8], ids=["m1", "m4", "m8"])
-def test_dram_streaming_matmul(device, k, n, m, fused_activation):
-    """Test simplified DRAM streaming matmul with optional fused activation.
-
-    In the simplified version:
-    - Input A is REPLICATED on compute cores (each core has full [M, K])
-    - Input B is WIDTH_SHARDED [K, N] with per-shard tiles shuffled to column-major
-    - No multicast needed - each core has its own copy
-    - Output is WIDTH_SHARDED across N dimension
-
-    Args:
-        fused_activation: Optional activation to fuse (e.g., "silu", "gelu", "relu")
-    """
-
-    # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
-    num_loop_iters = 100 if m == 1 else 1
-
-    tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
-    tile_w = 32
-
-    # Create tile object for tiny tiles when m=1
-    in0_tile = ttnn.Tile([tile_h, tile_w])
-    out_tile = ttnn.Tile([tile_h, tile_w])
-
-    # Get compute cores from optimal DRAM bank assignment
-    # These are the cores that will do the compute (8 on BH, 12 on WH)
-    compute_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-    num_cores = len(compute_cores)
-
-    # Get number of DRAM banks (should match num_cores)
-    num_banks = device.dram_grid_size().x
-    assert num_cores == num_banks, f"num_cores ({num_cores}) must equal num_banks ({num_banks})"
-
-    logger.info(f"num_compute_cores={num_cores}, num_dram_banks={num_banks}")
-
-    n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_banks)
-    per_core_N = n_padded // num_banks
-
-    logger.info(f"n_padded={n_padded}, per_core_N={per_core_N}, Kt={k // tile_w}")
-
-    # Define shapes
-    in0_shape = [1, 1, m, k]
-    in1_shape = [1, 1, k, n_padded]  # Original shape for matmul reference
-
-    # Build CoreRangeSet for specific compute cores (not bounding box)
-    compute_core_grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in compute_cores]
-    )
-
-    # Create PyTorch tensors
-    torch.manual_seed(42)
-    in0 = torch.randn(in0_shape).bfloat16().float()
-    in1 = torch.randn(in1_shape).bfloat16().float()  # [1, 1, K, N] for reference
-
-    # ========== Input A - REPLICATED on compute cores ==========
-    # Replicate the tensor num_cores times along height, then HEIGHT_SHARD
-    in0_replicated = in0.repeat(1, 1, num_cores, 1)  # Shape: [1, 1, M * num_cores, K]
-    in0_shard_shape_full = [m, k]  # Each core gets [M, K]
-    in0_shard_spec = ttnn.ShardSpec(compute_core_grid, in0_shard_shape_full, ttnn.ShardOrientation.ROW_MAJOR)
-    in0_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec)
-    in0_t = ttnn.from_torch(
-        in0_replicated,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=in0_memory_config,
-        tile=in0_tile,
-    )
-
-    # ========== Input B - WIDTH_SHARDED in DRAM with per-shard tile reordering ==========
-    # Shuffle tiles so K tiles are contiguous per N column (for streaming)
-    in1_shuffled = shuffle_tensor_tiles(in1, tile_w, num_banks)
-
-    # WIDTH_SHARDED across N dimension, each bank gets [K, n // num_banks]
-    in1_shard_shape = [k, n_padded // num_banks]
-    in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
-    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
-    in1_t = ttnn.from_torch(
-        in1_shuffled,
-        dtype=ttnn.bfloat4_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=in1_memory_config,
-    )
-
-    # ========== Output tensor - WIDTH_SHARDED in L1 ==========
-    output_shard_width = n_padded // num_banks
-    output_shard_spec = ttnn.ShardSpec(compute_core_grid, (m, output_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
-    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-
-    torch_output_zeros = torch.zeros([1, 1, m, n_padded]).bfloat16().float()
-    ttnn_output = ttnn.from_torch(
-        torch_output_zeros,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=output_mem_config,
-        tile=out_tile,
-    )
-
-    if k == 7168:
-        subblock_k = k // tile_w // 4
-    else:
-        subblock_k = k // tile_w // 2
-
-    Kt = k // tile_w
-    num_subblocks_k = Kt // subblock_k
-
-    # ========== Working buffer for CB1 (needed for kernel-level looping) ==========
-    in1_tile = ttnn.Tile([tile_w, tile_w])  # in1 uses 32x32 tiles
-    in1_dtype = ttnn.bfloat4_b
-    num_in1_buffers = 3
-    in1_CB_tiles = subblock_k * num_in1_buffers
-    # Working buffer: WIDTH_SHARDED in L1, shard = [tile_w, in1_CB_tiles * tile_w]
-    working_buf_shard_shape = (tile_w, in1_CB_tiles * tile_w)
-    working_buf_total_width = in1_CB_tiles * tile_w * num_cores
-    working_buf_shard_spec = ttnn.ShardSpec(compute_core_grid, working_buf_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-    working_buf_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, working_buf_shard_spec
-    )
-    working_buf_torch = torch.zeros([1, 1, tile_w, working_buf_total_width]).bfloat16().float()
-    working_buf_t = ttnn.from_torch(
-        working_buf_torch,
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=working_buf_mem_config,
-        tile=in1_tile,
-    )
-
-    # Run DRAM streaming matmul
-    activation_str = f" + {fused_activation}" if fused_activation else ""
-    logger.info(
-        f"Running DRAM streaming matmul{activation_str}: m={m}, k={k}, n={n_padded}, "
-        f"num_cores={num_cores}, num_loop_iters={num_loop_iters}"
-    )
-    try:
-        ttnn_result = DRAMStreamingMatmul.op(
-            in0_t,
-            in1_t,
-            ttnn_output,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            subblock_k=subblock_k,
-            fused_activation=fused_activation,
-            num_loop_iters=num_loop_iters,
-            working_buf_tensor=working_buf_t,
-        )
-    except Exception as e:
-        logger.error(f"DRAM streaming matmul{activation_str} failed: {e}")
-        pytest.skip(f"Operation failed (may need API adjustments): {e}")
-
-    # Compute PyTorch reference
-    pt_out = DRAMStreamingMatmul.golden(in0, in1, fused_activation)
-
-    # Convert to torch for comparison
-    tt_out = ttnn.to_torch(ttnn_result)
-
-    # Verify results
-    if fused_activation != None:
-        expected_pcc = 0.98
-    else:
-        expected_pcc = 0.99
-    passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
-    logger.debug(f"tt_out: {tt_out}")
-    logger.debug(f"pt_out: {pt_out}")
-    logger.info(output)
-    assert passing, f"PCC check failed: {output}"
-    logger.info(f"DRAM streaming matmul{activation_str} test passed!")
-
-
-@pytest.mark.parametrize(
-    "k, n, fused_activation, seed", [(7168, 256, None, 520), (7168, 256, "silu", 2005)], ids=["up_proj", "gate_proj"]
+    "k, n, fused_activation, seed", [(7168, 256, None, 520), (7168, 256, "silu", 2005), (2048, 7168, None, 1000)], ids=["up_proj", "gate_proj", "down_proj"]
 )
 @pytest.mark.parametrize("m", [1])
 @pytest.mark.parametrize("num_experts", [256])
@@ -1077,7 +904,7 @@ def test_dram_streaming_matmul_with_all_experts(
 
     tt_out = ttnn.to_torch(ttnn_result)
 
-    expected_pcc = 0.98 if fused_activation else 0.99
+    expected_pcc = 0.99
     passing, output = comp_pcc(pt_out, tt_out, expected_pcc)
     logger.debug(f"tt_out: {tt_out}")
     logger.debug(f"pt_out: {pt_out}")

@@ -95,7 +95,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("dram_mm_subblock_w"),
         get_named_compile_time_arg_val("dram_mm_num_subblocks_k"),
         get_named_compile_time_arg_val("dram_mm_tile_r_dim"),
-        get_named_compile_time_arg_val("dram_mm_fuse_silu")>;
+        get_named_compile_time_arg_val("dram_mm_fuse_silu"),
+        get_named_compile_time_arg_val("dram_mm_fp32_dest_acc_en")>;
 
     constexpr uint32_t enable_mul = get_named_compile_time_arg_val("dram_mm_enable_mul");
 

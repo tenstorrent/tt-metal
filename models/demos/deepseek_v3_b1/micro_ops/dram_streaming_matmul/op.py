@@ -491,6 +491,7 @@ class DRAMStreamingMatmul:
             ("dram_mm_num_subblocks_k", num_subblocks_k),
             ("dram_mm_tile_r_dim", in0_tile_shape[0]),
             ("dram_mm_fuse_silu", fuse_silu),
+            ("dram_mm_fp32_dest_acc_en", 1 if fp32_dest_acc_en else 0),
             # Mul parameters (16x16 tiles)
             ("dram_mm_enable_mul", 1 if enable_mul else 0),
             ("dram_mm_cb_mul_in0", cb_id_mul_in0),
