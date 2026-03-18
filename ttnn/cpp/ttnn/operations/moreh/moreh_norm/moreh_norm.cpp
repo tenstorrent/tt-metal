@@ -8,8 +8,9 @@
 #include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
-namespace ttnn::operations::moreh::moreh_norm {
-Tensor MorehNorm::invoke(
+namespace ttnn {
+
+Tensor moreh_norm(
     const Tensor& input,
     float p,
     std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
@@ -70,4 +71,5 @@ Tensor MorehNorm::invoke(
     tmp_output = ttnn::moreh_sum(tmp_output, dims, keepdim, std::nullopt, memory_config, compute_kernel_config);
     return ttnn::moreh_abs_pow(tmp_output, 1.0f / p, output, memory_config, compute_kernel_config);
 }
-}  // namespace ttnn::operations::moreh::moreh_norm
+
+}  // namespace ttnn

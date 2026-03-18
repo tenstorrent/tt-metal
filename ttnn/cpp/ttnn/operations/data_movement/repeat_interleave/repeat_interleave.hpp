@@ -4,32 +4,18 @@
 
 #pragma once
 
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/data_movement/concat/concat.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-
-#include <ranges>
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 
-namespace operations::data_movement {
+// # This operation does not support the following cases:
+// #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
+// #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
 
-struct ExecuteRepeatInterleave {
-    // # This operation does not support the following cases:
-    // #   - Shape([2[32], 2[32]]) -> repeats = 2, dim = 0
-    // #   - Shape([2[32], 2[32]]) -> repeats = Tensor[1,2], dim = 1
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_a,
-        uint32_t repeats,
-        int32_t dim,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-};
-
-}  // namespace operations::data_movement
-
-constexpr auto repeat_interleave =
-    ttnn::register_operation<"ttnn::repeat_interleave", ttnn::operations::data_movement::ExecuteRepeatInterleave>();
+ttnn::Tensor repeat_interleave(
+    const ttnn::Tensor& input_a,
+    uint32_t repeats,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn

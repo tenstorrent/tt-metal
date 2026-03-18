@@ -12,15 +12,15 @@
 #include <nanobind/stl/vector.h>
 
 #include "moreh_group_norm.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm {
 void bind_moreh_group_norm_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_group_norm">(
         mod,
-        ttnn::moreh_group_norm,
         "Moreh Group Norm Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_group_norm,
             nb::arg("input"),
             nb::arg("num_groups"),
             nb::arg("eps") = 1e-5f,
@@ -34,8 +34,6 @@ void bind_moreh_group_norm_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("mean_memory_config") = nb::none(),
             nb::arg("rstd_memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()
-
-        });
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm

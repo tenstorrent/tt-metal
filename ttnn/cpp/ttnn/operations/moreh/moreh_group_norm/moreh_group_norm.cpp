@@ -8,8 +8,9 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::moreh::moreh_group_norm {
-std::vector<std::optional<Tensor>> MorehGroupNorm::invoke(
+namespace ttnn {
+
+std::vector<std::optional<Tensor>> moreh_group_norm(
     const Tensor& input,
     const uint32_t num_groups,
     const float eps,
@@ -39,4 +40,4 @@ std::vector<std::optional<Tensor>> MorehGroupNorm::invoke(
         compute_kernel_config);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_group_norm
+}  // namespace ttnn

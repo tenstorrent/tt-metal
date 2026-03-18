@@ -193,18 +193,21 @@ ttnn::Tensor transpose_impl(
     return typecast ? ttnn::typecast(output, DataType::BFLOAT8_B) : output;
 }
 
-ttnn::Tensor ExecuteTranspose::invoke(
+}  // namespace ttnn::operations::data_movement::transpose
+
+namespace ttnn {
+
+ttnn::Tensor transpose(
     const ttnn::Tensor& input_tensor,
     int64_t dim1,
     int64_t dim2,
     const std::optional<MemoryConfig>& memory_config,
     float pad_value) {
-
-    return transpose_impl(input_tensor, dim1, dim2, memory_config, pad_value);
+    return operations::data_movement::transpose::transpose_impl(input_tensor, dim1, dim2, memory_config, pad_value);
 }
 
-ttnn::Tensor ExecuteTranspose::invoke(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, float pad_value) {
-    return invoke(input_tensor, dim1, dim2, std::nullopt, pad_value);
+ttnn::Tensor transpose(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, float pad_value) {
+    return transpose(input_tensor, dim1, dim2, std::nullopt, pad_value);
 }
 
-}  // namespace ttnn::operations::data_movement::transpose
+}  // namespace ttnn

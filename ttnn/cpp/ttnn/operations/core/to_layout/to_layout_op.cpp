@@ -78,7 +78,7 @@ Tensor to_layout_impl(
             tensor_arg.dtype(), tt::tt_metal::PageConfig(Layout::TILE, tile), output_memory_config));
     auto padded_output_shape = tile_spec.padded_shape();
     auto original_rank = tensor_arg.logical_shape().rank();
-    auto original_shape = tensor_arg.logical_shape();
+    const auto& original_shape = tensor_arg.logical_shape();
 
     if (layout == ttnn::TILE_LAYOUT) {
         if (tensor.padded_shape().size() < 2) {

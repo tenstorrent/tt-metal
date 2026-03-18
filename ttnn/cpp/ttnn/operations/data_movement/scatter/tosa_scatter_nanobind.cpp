@@ -9,10 +9,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-
 #include "tosa_scatter.hpp"
 #include "ttnn/types.hpp"
+
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -50,24 +50,16 @@ void bind_tosa_scatter(nb::module_& mod) {
                 output = ttnn.tosa_scatter(input_ttnn, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::tosa_scatter);
-    bind_registered_operation(
+    ttnn::bind_function<"tosa_scatter">(
         mod,
-        ttnn::tosa_scatter,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& index_tensor,
-               const ttnn::Tensor& source_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config) -> Tensor {
-                return self(input_tensor, index_tensor, source_tensor, opt_out_memory_config);
-            },
+        ttnn::overload_t(
+            &ttnn::tosa_scatter,
             nb::arg("input").noconvert(),
             nb::arg("index").noconvert(),
             nb::arg("src").noconvert(),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

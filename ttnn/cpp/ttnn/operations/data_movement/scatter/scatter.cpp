@@ -260,12 +260,16 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
 // Writes all values from the tensor src into self at the indices specified in the index tensor.
 // For each value in src, its output index is specified by its index in src for dimension != dim and by the
 // corresponding value in index for dimension = dim. self, index and src (if it is a Tensor) should all have the same
 // number of dimensions. It is also required that index.size(d) <= src.size(d) for all dimensions d, and that
 // index.size(d) <= self.size(d) for all dimensions d != dim.Note that index and src do not broadcast.
-Tensor ScatterOperation::invoke(
+Tensor scatter(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -276,7 +280,7 @@ Tensor ScatterOperation::invoke(
     const ttnn::Shape& original_input_tensor_lshape = input_tensor.logical_shape();
     const auto input_tensor_rank = input_tensor.padded_shape().rank();
 
-    using namespace CMAKE_UNIQUE_NAMESPACE;
+    using namespace operations::data_movement::CMAKE_UNIQUE_NAMESPACE;
 
     check_support(input_tensor, index_tensor, source_tensor, dim);
     validate_inputs(input_tensor, index_tensor, source_tensor, dim, opt_reduction_string);
@@ -318,7 +322,7 @@ Tensor ScatterOperation::invoke(
         final_memory_config,
         reduction,
         sub_core_grid);
-    output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
+    output = post_scatter_transform_tensor(
         output,
         after_transpose_shape,
         dim,
@@ -328,15 +332,15 @@ Tensor ScatterOperation::invoke(
     return output;
 }
 
-Tensor ScatterAddOperation::invoke(
+Tensor scatter_add(
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
     const Tensor& source_tensor,
     const std::optional<MemoryConfig>& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    return ScatterOperation::invoke(
+    return scatter(
         input_tensor, dim, index_tensor, source_tensor, output_memory_config, std::make_optional("add"), sub_core_grid);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn
