@@ -177,6 +177,7 @@ def setup_harvesting_tools(venv_path):
 
     print("\nInstalling protobuf and tt-flash>=3.6.0...")
     run_command(f"{pip_path} install protobuf 'tt-flash>=3.6.0'")
+    run_command(f"{pip_path} install click")
 
     print("\nInstalling tt-update-tensix-disable-count tool...")
     tool_dir = "tt-system-firmware/scripts/tooling/tt_update_tensix_disable_count"
