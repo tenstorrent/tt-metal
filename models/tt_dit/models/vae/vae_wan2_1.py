@@ -1333,12 +1333,12 @@ class WanDecoder(Module):
     def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, use_cache: bool = True) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = z_BTHWC.shape
 
+        self.clear_cache()
         z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         if use_cache:
-            self.clear_cache()
             output_BCTHW = None
             for i in range(T):
                 # Process one frame at a time

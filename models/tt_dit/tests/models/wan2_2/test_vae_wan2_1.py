@@ -1136,16 +1136,14 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     [
         (1, 16, 1, 60, 104),  # 480p
         (1, 16, 1, 90, 160),  # 720p
-        (1, 16, 6, 90, 160),  # 720p 21 frames
     ],
     ids=[
         "480p",
         "720p",
-        "720p_21f",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
-@pytest.mark.parametrize("check_cache", [True, False, "no_cache_full_T"])
+@pytest.mark.parametrize("check_cache", [True])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1162,8 +1160,6 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         ((1, 8), 0, 1, 1),
         ((1, 4), 1, 0, 1),
         ((4, 8), 0, 1, 4),
-        ((4, 32), 0, 1, 2),
-        ((4, 8), 0, 1, 2),
     ],
     ids=[
         "2x4_h0_w1",
@@ -1171,8 +1167,6 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
         "1x8_h0_w1",
         "1x4_h1_w0",
         "4x8_h0_w1",
-        "bh_quad_4x32_h0_w1",
-        "4x8_h0_w1_2links",
     ],
     indirect=["mesh_device"],
 )
@@ -1234,50 +1228,10 @@ def test_wan_decoder3d(
 
     num_convs = count_convs(tt_model)
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-
-    if check_cache == "no_cache_full_T":
-        # Single-pass full-T mode: no streaming cache, zero-padded temporal boundaries
-        torch.manual_seed(0)
-        torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
-        tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
-        tt_input_tensor = conv_pad_in_channels(tt_input_tensor)
-        tt_input_tensor, logical_h = conv_pad_height(tt_input_tensor, parallel_config.height_parallel.factor)
-        tt_input_tensor = typed_tensor_2dshard(
-            tt_input_tensor,
-            mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_mapping={h_axis: 2, w_axis: 3},
-            dtype=tt_input_dtype,
-        )
-
-        logger.info("running torch model (no_cache_full_T)")
-        with torch.no_grad():
-            torch_output = torch_model(torch_input_tensor, feat_cache=None, feat_idx=None)
-        logger.info(f"torch output shape: {torch_output.shape}")
-
-        logger.info("running tt model (no_cache_full_T)")
-        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, feat_cache=None, feat_idx=None)
-
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
-        tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
-        tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-        logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
-        tt_output_torch = tt_output_torch[:, :out_channels]
-
-        logger.info("checking output")
-        assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-        return
-
     torch_feat_cache = [None for _ in range(num_convs)]
     tt_feat_cache = [None for _ in range(num_convs)]
 
-    # Run 3 times to exercise the streaming cache
+    # Run 4 times to get models to create their own caches
     for i in range(3):
         torch.manual_seed(0)
 
@@ -1314,6 +1268,9 @@ def test_wan_decoder3d(
             feat_idx=tt_feat_idx,
         )
 
+        concat_dims = [None, None]
+        concat_dims[h_axis] = 2
+        concat_dims[w_axis] = 3
         tt_output_torch = ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),

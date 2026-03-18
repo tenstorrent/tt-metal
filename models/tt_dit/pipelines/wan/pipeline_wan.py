@@ -136,11 +136,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp: bool = True,
         model_type: str = "t2v",
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
+        vae_use_cache: bool = True,
     ):
         super().__init__()
 
         self.checkpoint_name = checkpoint_name
         self.model_type = model_type
+        self.vae_use_cache = vae_use_cache
 
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
         self.text_encoder = UMT5EncoderModel.from_pretrained(
@@ -327,6 +329,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
+                "vae_use_cache": False,
             }
             config = device_configs[tuple(mesh_device.shape)]
         else:
@@ -383,6 +386,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
+            vae_use_cache=config.get("vae_use_cache", True),
         )
 
     def _prepare_text_encoder(self):
@@ -1002,7 +1006,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 dtype=self.tt_vae.dtype,
             )
             self._prepare_vae()
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=False)
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=self.vae_use_cache)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
