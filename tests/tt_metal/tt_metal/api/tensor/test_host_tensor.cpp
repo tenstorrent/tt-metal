@@ -131,6 +131,7 @@ TEST(HostTensorTest, CopyConstruction) {
     Shape shape{2, 64};
     auto tensor = create_simple_host_tensor(shape);
     const HostTensor copied_tensor(tensor);
+    (void)copied_tensor;
 
     EXPECT_EQ(copied_tensor.logical_shape(), shape);
     EXPECT_EQ(copied_tensor.dtype(), DataType::BFLOAT16);
@@ -152,7 +153,8 @@ TEST(HostTensorTest, CopyAssignment) {
 
 TEST(HostTensorTest, CopyConstructionFromDefaultConstructed) {
     HostTensor default_tensor;
-    [[maybe_unused]] HostTensor copied(default_tensor);
+    HostTensor copied(default_tensor);
+    (void)copied;
     // Both should be in default-constructed state (no assertions, just shouldn't crash)
 }
 
