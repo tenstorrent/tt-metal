@@ -59,6 +59,7 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID");
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID");
+constexpr uint32_t vc2_receiver_free_slots_stream_id = NAMED_CT_ARG("VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_0_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_1_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_2_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID");
@@ -67,6 +68,8 @@ constexpr uint32_t sender_channel_4_free_slots_stream_id = NAMED_CT_ARG("SENDER_
 constexpr uint32_t sender_channel_5_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_6_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_7_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID");
+constexpr uint32_t sender_channel_8_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID");
+constexpr uint32_t sender_channel_9_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t tensix_relay_local_free_slots_stream_id = NAMED_CT_ARG("TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = NAMED_CT_ARG("MULTI_RISC_TEARDOWN_SYNC_STREAM_ID");
 constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_LINK_SYNC_STREAM_ID");
@@ -77,12 +80,14 @@ constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_L
 constexpr size_t MAX_NUM_SENDER_CHANNELS = NAMED_CT_ARG("MAX_NUM_SENDER_CHANNELS");
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("MAX_NUM_RECEIVER_CHANNELS");
 constexpr size_t MAX_NUM_VCS = NAMED_CT_ARG("MAX_NUM_VCS");
-// VC0 and VC1 channel counts depend on router type:
-// Z_ROUTER: 5 VC0 + 4 VC1 = 9 total
-// MESH: 4 VC0 + 4 VC1 = 8 total (with some unused)
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 5 : 4;
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;
-constexpr size_t VC1_SENDER_CHANNEL_START = MAX_NUM_SENDER_CHANNELS_VC0;
+// VC0 and VC1 and VC2 channel counts derived from actual per-VC counts emitted by builder.
+// Z_ROUTER: typically 5 VC0 + 4 VC1 + 1 VC2 = 10 total (when VC2 active)
+// MESH:     typically 4 VC0 + 4 VC1 + 1 VC2 = 9 total (when VC2 active)
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = ACTUAL_VC0_SENDER_CHANNELS;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = ACTUAL_VC1_SENDER_CHANNELS;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC2 = ACTUAL_VC2_SENDER_CHANNELS;
+constexpr size_t VC1_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS;
+constexpr size_t VC2_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS;
 
 // ============================================================================
 // Downstream tensix connections
@@ -148,6 +153,7 @@ constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
 constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
 constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
+constexpr size_t ACTUAL_VC2_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC2_SENDER_CHANNELS");
 
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
