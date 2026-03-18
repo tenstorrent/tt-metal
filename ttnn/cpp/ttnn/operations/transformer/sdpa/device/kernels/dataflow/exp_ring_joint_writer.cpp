@@ -508,6 +508,9 @@ void kernel_main() {
         do_ag = true;
     }
 
+    const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size);
+    const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size);
+
     // Lambda: send all tiles for one local K or V tensor to the next device.
     // Reads from local input DRAM, writes to the gathered output tensor on the next device.
     auto send_local_slice = [&](const auto& input_acc, const auto& gathered_acc) {
@@ -855,14 +858,46 @@ void kernel_main() {
                         constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
                         constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
 
+                        const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
+
                         // Wait for reader to fill K, forward over MUX, then release
                         cb_wait_front(cb_k_writer_in, k_chunk_tiles);
-                        // TODO: forward K chunk over fabric
+                        if (!kv_chunk_is_joint) {
+                            const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
+                            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                                if (kv_slice.d2_start + row >= end_seq_tile) break;
+                                for (uint32_t col = 0; col < DHt; ++col) {
+                                    const uint32_t src_l1_addr = base_k_read_ptr
+                                        + (row + col * Sk_chunk_t) * ag_page_size;
+                                    const uint32_t dest_tile_id = bh_offset
+                                        + (kv_global_start_tile + row) * ag_output_Wt + col;
+                                    tt::tt_fabric::linear::to_noc_unicast_write(
+                                        ag_page_size, pkt_hdr_write, dest_tile_id, gathered_k_writer);
+                                    tt::tt_fabric::fabric_async_write(
+                                        mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                }
+                            }
+                        }
                         cb_pop_front(cb_k_writer_in, k_chunk_tiles);
 
                         // Wait for reader to fill V, forward over MUX, then release
                         cb_wait_front(cb_v_writer_in, v_chunk_tiles);
-                        // TODO: forward V chunk over fabric
+                        if (!kv_chunk_is_joint) {
+                            const uint32_t base_v_read_ptr = get_read_ptr(cb_v_writer_in);
+                            for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
+                                if (kv_slice.d2_start + row >= end_seq_tile) break;
+                                for (uint32_t col = 0; col < DHt; ++col) {
+                                    const uint32_t src_l1_addr = base_v_read_ptr
+                                        + (row * DHt + col) * ag_page_size;
+                                    const uint32_t dest_tile_id = bh_offset
+                                        + (kv_global_start_tile + row) * ag_output_Wt + col;
+                                    tt::tt_fabric::linear::to_noc_unicast_write(
+                                        ag_page_size, pkt_hdr_write, dest_tile_id, gathered_v_writer);
+                                    tt::tt_fabric::fabric_async_write(
+                                        mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                }
+                            }
+                        }
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
                     }
                     if (!is_last_ring_iter) {
