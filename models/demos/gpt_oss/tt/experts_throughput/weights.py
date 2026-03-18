@@ -823,6 +823,7 @@ def create_fused_moe_gpt_config(
     weight_dtype=ttnn.bfloat4_b,
     cluster_axis: int = 0,
     num_links: int = 4,
+    tensor_cache_path: str = None,
 ):
     """Create a FusedMoeGptConfig with pre-allocated resources for the fused decode flow.
 
@@ -942,13 +943,14 @@ def create_fused_moe_gpt_config(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    tt_w0_w1 = ttnn.from_torch(
+    tt_w0_w1 = ttnn.as_tensor(
         torch_w0_w1,
         dtype=weight_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w0_w1_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(ring_devices, mesh_cols)),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"fused_w0_w1_dtype{weight_dtype}"),
     )
 
     N_bias = N + 32  # N + 1 bias tile row (32 rows)
@@ -961,13 +963,14 @@ def create_fused_moe_gpt_config(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    tt_w2 = ttnn.from_torch(
+    tt_w2 = ttnn.as_tensor(
         torch_w2,
         dtype=weight_dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=w2_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(ring_devices, mesh_cols)),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"fused_w2_dtype{weight_dtype}"),
     )
     # --- Expert routing mapping: [total_devices, num_experts] uint16 ---
     # Uses global expert IDs (0..num_experts-1) with gen_expert_mapping logic.

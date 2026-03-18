@@ -62,6 +62,7 @@ class MLP:
                     config=throughput_expert_config,
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 )
 
             # Create TT experts module

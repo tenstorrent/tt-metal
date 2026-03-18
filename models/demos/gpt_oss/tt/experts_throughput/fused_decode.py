@@ -133,6 +133,7 @@ def fused_decode_forward(
         cross_device_semaphore=fused_config.dispatch_semaphore,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
     )
+
     ttnn.deallocate(hidden_states)
 
     tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -150,14 +151,13 @@ def fused_decode_forward(
         w2_tensor=fused_config.tt_w2,
         cluster_axis=cluster_axis,
     )
-    ttnn.deallocate(tt_sparse_l1)
-
     # ------------------------------------------------------------------
     # Step 3: selective_reduce_combine
     # With the K-indexed fix (upstream #38542), the combine writer uses the
     # token_activations metadata to look up each token's K-index, so the
     # output is [select_experts_k, M, H] instead of [experts_per_ring, M, H].
     # ------------------------------------------------------------------
+    fused_config.combine_preallocated = ttnn.mul(fused_config.combine_preallocated, 0)
     tt_combine_output = ttnn.experimental.selective_reduce_combine(
         moe_gpt_outputs[4],
         moe_gpt_outputs[1],
@@ -178,9 +178,6 @@ def fused_decode_forward(
         output_tensor=fused_config.combine_preallocated,
         optional_cross_device_semaphore=fused_config.combine_semaphore,
     )
-
-    for i in range(4):  # output[3] and [4] share a buffer; deallocating [3] frees both
-        ttnn.deallocate(moe_gpt_outputs[i])
 
     # ------------------------------------------------------------------
     # Post-processing: apply routing scores and reduce over K dimension.
@@ -213,7 +210,7 @@ def fused_decode_forward(
 
     tt_output = ttnn.all_reduce(
         tt_sum,
-        num_links=1,
+        num_links=4,
         topology=ttnn.Topology.Ring,
         cluster_axis=1,
         memory_config=ttnn.L1_MEMORY_CONFIG,
