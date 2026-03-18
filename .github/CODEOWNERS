@@ -39,7 +39,7 @@ tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/codeowner-bypass
 tt_stl/**/CMakeLists.txt @ayerofieiev-tt @akerteszTT @riverwuTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 # Scaleout Tools
-tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @tenstorrent/codeowner-bypass
+tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/codeowner-bypass
 
 # Scaleout
 tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-metal-distributed @tenstorrent/codeowner-bypass
@@ -67,6 +67,9 @@ tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicT
 tt_metal/hw/ckernels/**/llk_api/llk_sfpu @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @nmauriceTT @tenstorrent/codeowner-bypass
 tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/ @abhullar-tt @jbaumanTT @kstevensTT @nathan-TT @vvukomanovicTT @atatuzunerTT @ruizhangTT @arikTT @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/api/debug/device_print.h @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/hostdev/device_print_common.h @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
+tt_metal/hw/inc/hostdev/device_print_structures.h @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/internal/ethernet/ @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/internal/tt-1xx/wormhole/eth_l1_address_map.h @aliuTT @ubcheema @tenstorrent/codeowner-bypass
 tt_metal/hw/inc/**/tensor/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/codeowner-bypass
@@ -78,7 +81,7 @@ tt_metal/impl/buffers/ @abhullar-tt @jbaumanTT @cfjchu @TT-BrianLiu @tenstorrent
 tt_metal/impl/context/ @jbaumanTT @nhuang-tt @aliuTT @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/data_format/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT @lpremovicTT @ncvetkovicTT @fvranicTT @tenstorrent/codeowner-bypass
 tt_metal/impl/dataflow_buffer/ @abhullar-tt @arikTT @tenstorrent/codeowner-bypass
-tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @sidnadTT @tenstorrent/codeowner-bypass
+tt_metal/impl/debug/ @abhullar-tt @ruizhangTT @sidnadTT @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tt_metal/impl/debug/inspector/ @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/codeowner-bypass
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @tt-asaigal @tt-aho @tenstorrent/codeowner-bypass
@@ -147,6 +150,8 @@ tests/tt_metal/multihost/**/CMakeLists.txt @tenstorrent/metalium-developers-meta
 tests/tt_metal/tools/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
 tests/tt_metal/tools/**/CMakeLists.txt @mo-tenstorrent @nhuang-tt @tenstorrent/metalium-developers-infra
 tests/tt_metal/tt_metal/debug_tools/inspector @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/debug_tools/device_print @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
+tests/tt_metal/tt_metal/test_kernels/device_print @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 
 # misc tests
 tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/codeowner-bypass
@@ -194,6 +199,7 @@ ttnn/cpp/ttnn/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce 
 ttnn/cpp/ttnn/operations/kernel_helper_functions/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/kernel_helper_functions/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/kernel_lib/ @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass @jonathansuTT
@@ -405,8 +411,7 @@ tools/tt-triage.py @tenstorrent/metalium-developers-triage @tenstorrent/codeowne
 tools/triage/ @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 tools/tests/triage/ @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
 scripts/install_debugger.sh @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
-scripts/ttexalens_ref.txt @tenstorrent/metalium-developers-triage @tenstorrent/codeowner-bypass
-scripts/tt-test.sh @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
+scripts/run_safe_pytest.sh @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
