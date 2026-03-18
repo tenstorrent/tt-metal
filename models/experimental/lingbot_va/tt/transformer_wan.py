@@ -18,12 +18,11 @@ from loguru import logger
 
 import ttnn
 
-from diffusers.models.normalization import FP32LayerNorm
-
 from models.tt_dit.layers.embeddings import WanPatchEmbed, WanTimeTextImageEmbedding
 from models.tt_dit.layers.feedforward import ParallelFeedForward
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
+from models.tt_dit.layers.normalization import DistributedLayerNorm
 from models.tt_dit.parallel.config import DiTParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
@@ -33,56 +32,6 @@ from models.tt_dit.utils.tensor import bf16_tensor, float32_tensor, from_torch, 
 from models.experimental.lingbot_va.reference.transformer_wan import WanAttention as TorchWanAttention
 
 from .wan_rotary_pos_embed import WanRotaryPosEmbed
-
-
-def _apply_fp32_layernorm_tt(
-    x: ttnn.Tensor,
-    norm: FP32LayerNorm,
-    mesh_device: ttnn.MeshDevice,
-    ccl_manager: CCLManager | None,
-    mesh_axis: int,
-    dynamic_weight: ttnn.Tensor | None = None,
-    dynamic_bias: ttnn.Tensor | None = None,
-    scale_tt: ttnn.Tensor | None = None,
-    shift_tt: ttnn.Tensor | None = None,
-    dtype: ttnn.DataType = ttnn.bfloat16,
-) -> ttnn.Tensor:
-    """Run FP32LayerNorm on TT tensor (match reference numerics): tt -> torch.float -> norm -> tt.
-
-    Optional modulation (match reference .type_as flow):
-    - dynamic_weight/dynamic_bias: global scale/shift (single vector), applied in float32.
-    - scale_tt/shift_tt: per-token scale and shift (same shape as x), applied in float32.
-    """
-    assert (dynamic_weight is None) == (dynamic_bias is None)
-    assert (scale_tt is None) == (shift_tt is None)
-    assert not (dynamic_weight is not None and scale_tt is not None)
-    mesh_width = int(mesh_device.shape[mesh_axis])
-    if mesh_width > 1 and ccl_manager is not None:
-        x = ccl_manager.all_gather_persistent_buffer(x, dim=len(x.shape) - 1, mesh_axis=mesh_axis)
-    t = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()
-    out = norm(t)
-    if dynamic_weight is not None:
-        w = ttnn.to_torch(ttnn.get_device_tensors(dynamic_weight)[0]).float()
-        b = ttnn.to_torch(ttnn.get_device_tensors(dynamic_bias)[0]).float()
-        out = out * w + b
-    elif scale_tt is not None:
-        if mesh_width > 1 and ccl_manager is not None:
-            scale_tt = ccl_manager.all_gather_persistent_buffer(
-                scale_tt, dim=len(scale_tt.shape) - 1, mesh_axis=mesh_axis
-            )
-            shift_tt = ccl_manager.all_gather_persistent_buffer(
-                shift_tt, dim=len(shift_tt.shape) - 1, mesh_axis=mesh_axis
-            )
-        scale_t = ttnn.to_torch(ttnn.get_device_tensors(scale_tt)[0]).float()
-        shift_t = ttnn.to_torch(ttnn.get_device_tensors(shift_tt)[0]).float()
-        out = out * scale_t + shift_t
-    mesh_axes = [None] * (len(x.shape) - 1) + [mesh_axis] if mesh_width > 1 else None
-    return from_torch(
-        out.to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32),
-        device=mesh_device,
-        dtype=dtype,
-        mesh_axes=tuple(mesh_axes) if mesh_axes is not None else None,
-    )
 
 
 # Lingbot-VA config (from reference model.py)
@@ -132,7 +81,15 @@ class WanTransformerBlock(Module):
 
         fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
-        self.norm1 = FP32LayerNorm(dim, eps, elementwise_affine=False)
+        self.norm1 = DistributedLayerNorm(
+            dim,
+            norm_eps=eps,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
 
         self.attn1 = TorchWanAttention(
             dim=dim,
@@ -152,7 +109,18 @@ class WanTransformerBlock(Module):
             attn_mode="torch",
         )
 
-        self.norm2 = FP32LayerNorm(dim, eps, elementwise_affine=True) if cross_attention_norm else None
+        self.norm2 = (
+            DistributedLayerNorm(
+                dim,
+                norm_eps=eps,
+                norm_elementwise_affine=True,
+                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+            )
+            if cross_attention_norm
+            else None
+        )
 
         self.ffn = ParallelFeedForward(
             dim,
@@ -165,7 +133,15 @@ class WanTransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
-        self.norm3 = FP32LayerNorm(dim, eps, elementwise_affine=False)
+        self.norm3 = DistributedLayerNorm(
+            dim,
+            norm_eps=eps,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
 
         self.scale_shift_table = Parameter(
             total_shape=[1, 1, 6, dim],
@@ -180,30 +156,6 @@ class WanTransformerBlock(Module):
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
-        )
-
-    def _load_torch_state_dict_inner(
-        self,
-        state_dict,
-        *,
-        module_key_prefix: str,
-        missing_keys,
-        unexpected_keys,
-        on_host: bool,
-    ) -> None:
-        state_dict = dict(state_dict)
-        for name in ("norm1", "norm2", "norm3"):
-            norm = getattr(self, name, None)
-            if norm is not None:
-                sub = pop_substate(state_dict, name)
-                if sub:
-                    norm.load_state_dict(sub, strict=False)
-        super()._load_torch_state_dict_inner(
-            state_dict,
-            module_key_prefix=module_key_prefix,
-            missing_keys=missing_keys,
-            unexpected_keys=unexpected_keys,
-            on_host=on_host,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -293,17 +245,11 @@ class WanTransformerBlock(Module):
         # 1) Self-attention
         # Use explicit modulation for per-token conditioning and dynamic layernorm for global conditioning.
         per_token = T_dim != 6
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         if per_token:
-            spatial_normed_1BND = _apply_fp32_layernorm_tt(
-                spatial_1BND,
-                self.norm1,
-                self.mesh_device,
-                self.ccl_manager,
-                tp_axis,
-                scale_tt=ttnn.typecast(1.0 + scale_msa, ttnn.float32),
-                shift_tt=ttnn.typecast(shift_msa, ttnn.float32),
-            )
+            spatial_normed_1BND = self.norm1(spatial_1BND)
+            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
+                1.0 + scale_msa, spatial_normed_1BND.dtype
+            ) + ttnn.typecast(shift_msa, spatial_normed_1BND.dtype)
             spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
             rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
             attn_output = self.attn1(
@@ -317,15 +263,7 @@ class WanTransformerBlock(Module):
             attn_output = _torch_to_tt_1bnd(attn_output)
             spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
         else:
-            spatial_normed_1BND = _apply_fp32_layernorm_tt(
-                spatial_1BND,
-                self.norm1,
-                self.mesh_device,
-                self.ccl_manager,
-                tp_axis,
-                dynamic_weight=(1.0 + scale_msa),
-                dynamic_bias=shift_msa,
-            )
+            spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=(1.0 + scale_msa), dynamic_bias=shift_msa)
             spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
             rotary_emb_t = _rope_to_rotary_emb(rope_cos, rope_sin)
             attn_output = self.attn1(
@@ -340,12 +278,7 @@ class WanTransformerBlock(Module):
             spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
 
         # Cross attention on prompt
-        if self.norm2 is not None:
-            spatial_normed_1BND = _apply_fp32_layernorm_tt(
-                spatial_1BND, self.norm2, self.mesh_device, self.ccl_manager, tp_axis
-            )
-        else:
-            spatial_normed_1BND = spatial_1BND
+        spatial_normed_1BND = self.norm2(spatial_1BND) if self.norm2 is not None else spatial_1BND
 
         spatial_normed_t = _tt_to_torch_bnd(spatial_normed_1BND)
         prompt_t = _tt_to_torch_bnd(prompt_1BLP)
@@ -362,25 +295,12 @@ class WanTransformerBlock(Module):
 
         # 3) Feed Forward
         if per_token:
-            spatial_normed_1BND = _apply_fp32_layernorm_tt(
-                spatial_1BND,
-                self.norm3,
-                self.mesh_device,
-                self.ccl_manager,
-                tp_axis,
-                scale_tt=ttnn.typecast(1.0 + c_scale_msa, ttnn.float32),
-                shift_tt=ttnn.typecast(c_shift_msa, ttnn.float32),
-            )
+            spatial_normed_1BND = self.norm3(spatial_1BND)
+            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
+                1.0 + c_scale_msa, spatial_normed_1BND.dtype
+            ) + ttnn.typecast(c_shift_msa, spatial_normed_1BND.dtype)
         else:
-            spatial_normed_1BND = _apply_fp32_layernorm_tt(
-                spatial_1BND,
-                self.norm3,
-                self.mesh_device,
-                self.ccl_manager,
-                tp_axis,
-                dynamic_weight=(1.0 + c_scale_msa),
-                dynamic_bias=c_shift_msa,
-            )
+            spatial_normed_1BND = self.norm3(spatial_1BND, dynamic_weight=(1.0 + c_scale_msa), dynamic_bias=c_shift_msa)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
@@ -501,7 +421,15 @@ class WanTransformer3DModel(Module):
             for _ in range(num_layers)
         )
 
-        self.norm_out = FP32LayerNorm(dim, eps, elementwise_affine=False)
+        self.norm_out = DistributedLayerNorm(
+            dim,
+            norm_eps=eps,
+            norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+        )
 
         self.proj_out = Linear(
             dim,
@@ -1028,30 +956,17 @@ class WanTransformer3DModel(Module):
                         os.path.join(dump_dir, f"transformers_tt_{block_idx}{suffix}.pt"),
                     )
 
-        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
         if use_per_token:
             sst_shift, sst_scale = ttnn.chunk(self.scale_shift_table.data, 2, dim=-2)
             shift_norm = sst_shift + temb_1BND
             scale_norm = sst_scale + temb_1BND
-            spatial_norm_1BND = _apply_fp32_layernorm_tt(
-                spatial_1BND,
-                self.norm_out,
-                self.mesh_device,
-                self.ccl_manager,
-                tp_axis,
-                scale_tt=(1 + scale_norm),
-                shift_tt=shift_norm,
-                dtype=ttnn.float32,
-            )
+            spatial_norm_1BND = self.norm_out(spatial_1BND, dtype=ttnn.float32)
+            spatial_norm_1BND = spatial_norm_1BND * (1 + scale_norm) + shift_norm
         else:
             scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
             shift_norm, scale_norm = ttnn.chunk(scale_shift_1BSD, 2, -2)
-            spatial_norm_1BND = _apply_fp32_layernorm_tt(
+            spatial_norm_1BND = self.norm_out(
                 spatial_1BND,
-                self.norm_out,
-                self.mesh_device,
-                self.ccl_manager,
-                tp_axis,
                 dynamic_weight=(1 + scale_norm),
                 dynamic_bias=shift_norm,
                 dtype=ttnn.float32,
