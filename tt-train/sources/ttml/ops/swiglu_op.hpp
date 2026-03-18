@@ -16,7 +16,8 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob = 0.0F);
+    float dropout_prob = 0.0F,
+    bool use_per_device_seed = true);
 
 // Baseline composite SwiGLU path (matmul + silu + mul + matmul + dropout).
 // Keep this only as a benchmark/reference baseline for A/B measurements.
@@ -26,7 +27,8 @@ autograd::TensorPtr swiglu_composite(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob = 0.0F);
+    float dropout_prob = 0.0F,
+    bool use_per_device_seed = true);
 
 // Backward-compatible alias for in-flight branches.
 inline autograd::TensorPtr swiglu_optimized(
@@ -34,8 +36,9 @@ inline autograd::TensorPtr swiglu_optimized(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob = 0.0F) {
-    return swiglu(tensor, w1, w2, w3, dropout_prob);
+    float dropout_prob = 0.0F,
+    bool use_per_device_seed = true) {
+    return swiglu(tensor, w1, w2, w3, dropout_prob, use_per_device_seed);
 }
 
 }  // namespace ttml::ops

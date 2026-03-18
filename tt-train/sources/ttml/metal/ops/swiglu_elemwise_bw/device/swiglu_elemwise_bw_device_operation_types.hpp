@@ -8,9 +8,9 @@
 
 namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
-struct operation_attributes_t {};
+struct SwigluElemwiseBwParams {};
 
-struct tensor_args_t {
+struct SwigluElemwiseBwInputs {
     ttnn::Tensor linear1;
     ttnn::Tensor gate;
     ttnn::Tensor dL_dprod;
@@ -18,11 +18,17 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_dL_dgate = std::nullopt;
 };
 
-struct tensor_return_value_t {
+struct SwigluElemwiseBwResult {
     ttnn::Tensor dL_dlinear1;
     ttnn::Tensor dL_dgate;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+using SwigluElemwiseBwOutputSpecs = std::vector<ttnn::TensorSpec>;
+
+// Backward-compat aliases for in-flight branches.
+using operation_attributes_t = SwigluElemwiseBwParams;
+using tensor_args_t = SwigluElemwiseBwInputs;
+using tensor_return_value_t = SwigluElemwiseBwResult;
+using spec_return_value_t = SwigluElemwiseBwOutputSpecs;
 
 }  // namespace ttml::metal::ops::swiglu_elemwise_bw::device

@@ -58,10 +58,17 @@ DistributedLlamaMLP::DistributedLlamaMLP(
 }
 
 autograd::TensorPtr DistributedLlamaMLP::operator()(const autograd::TensorPtr& input) {
+    const float dropout_prob = (get_run_mode() == RunMode::EVAL) ? 0.0F : m_dropout_prob;
     // Fused path is available only for non-TP where local LinearLayer weights exist.
     if (m_w1_linear && m_w2_linear && m_w3_linear) {
+        // Keep distributed MLP RNG behavior aligned with DropoutLayer(use_per_device_seed=false).
         return ops::swiglu(
-            input, m_w1_linear->get_weight(), m_w2_linear->get_weight(), m_w3_linear->get_weight(), m_dropout_prob);
+            input,
+            m_w1_linear->get_weight(),
+            m_w2_linear->get_weight(),
+            m_w3_linear->get_weight(),
+            dropout_prob,
+            false);
     }
 
     auto swished = ops::silu((*m_w1)(input));

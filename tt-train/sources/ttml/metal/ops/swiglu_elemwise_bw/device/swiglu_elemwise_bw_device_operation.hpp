@@ -13,10 +13,10 @@
 namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
 struct SwigluElemwiseBwDeviceOperation {
-    using operation_attributes_t = ttml::metal::ops::swiglu_elemwise_bw::device::operation_attributes_t;
-    using tensor_args_t = ttml::metal::ops::swiglu_elemwise_bw::device::tensor_args_t;
-    using spec_return_value_t = ttml::metal::ops::swiglu_elemwise_bw::device::spec_return_value_t;
-    using tensor_return_value_t = ttml::metal::ops::swiglu_elemwise_bw::device::tensor_return_value_t;
+    using operation_attributes_t = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwParams;
+    using tensor_args_t = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwInputs;
+    using spec_return_value_t = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwOutputSpecs;
+    using tensor_return_value_t = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwResult;
     using program_factory_t = std::variant<SwigluElemwiseBwProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

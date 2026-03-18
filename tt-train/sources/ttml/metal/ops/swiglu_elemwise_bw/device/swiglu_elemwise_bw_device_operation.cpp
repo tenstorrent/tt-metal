@@ -40,11 +40,57 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
     check_tensor(tensor_args.linear1, "linear1");
     check_tensor(tensor_args.gate, "gate");
     check_tensor(tensor_args.dL_dprod, "dL_dprod");
+
+    const auto& expected_logical_shape = tensor_args.linear1.logical_shape();
+    const auto& expected_padded_shape = tensor_args.linear1.padded_shape();
+    TT_FATAL(
+        tensor_args.gate.logical_shape() == expected_logical_shape,
+        "SwigluElemwiseBw: gate logical shape {} does not match linear1 logical shape {}",
+        tensor_args.gate.logical_shape(),
+        expected_logical_shape);
+    TT_FATAL(
+        tensor_args.dL_dprod.logical_shape() == expected_logical_shape,
+        "SwigluElemwiseBw: dL_dprod logical shape {} does not match linear1 logical shape {}",
+        tensor_args.dL_dprod.logical_shape(),
+        expected_logical_shape);
+    TT_FATAL(
+        tensor_args.gate.padded_shape() == expected_padded_shape,
+        "SwigluElemwiseBw: gate padded shape {} does not match linear1 padded shape {}",
+        tensor_args.gate.padded_shape(),
+        expected_padded_shape);
+    TT_FATAL(
+        tensor_args.dL_dprod.padded_shape() == expected_padded_shape,
+        "SwigluElemwiseBw: dL_dprod padded shape {} does not match linear1 padded shape {}",
+        tensor_args.dL_dprod.padded_shape(),
+        expected_padded_shape);
+
     if (tensor_args.preallocated_dL_dlinear1.has_value()) {
         check_tensor(tensor_args.preallocated_dL_dlinear1.value(), "preallocated_dL_dlinear1");
+        const auto& prealloc = tensor_args.preallocated_dL_dlinear1.value();
+        TT_FATAL(
+            prealloc.logical_shape() == expected_logical_shape,
+            "SwigluElemwiseBw: preallocated_dL_dlinear1 logical shape {} does not match expected shape {}",
+            prealloc.logical_shape(),
+            expected_logical_shape);
+        TT_FATAL(
+            prealloc.padded_shape() == expected_padded_shape,
+            "SwigluElemwiseBw: preallocated_dL_dlinear1 padded shape {} does not match expected shape {}",
+            prealloc.padded_shape(),
+            expected_padded_shape);
     }
     if (tensor_args.preallocated_dL_dgate.has_value()) {
         check_tensor(tensor_args.preallocated_dL_dgate.value(), "preallocated_dL_dgate");
+        const auto& prealloc = tensor_args.preallocated_dL_dgate.value();
+        TT_FATAL(
+            prealloc.logical_shape() == expected_logical_shape,
+            "SwigluElemwiseBw: preallocated_dL_dgate logical shape {} does not match expected shape {}",
+            prealloc.logical_shape(),
+            expected_logical_shape);
+        TT_FATAL(
+            prealloc.padded_shape() == expected_padded_shape,
+            "SwigluElemwiseBw: preallocated_dL_dgate padded shape {} does not match expected shape {}",
+            prealloc.padded_shape(),
+            expected_padded_shape);
     }
 }
 
@@ -78,8 +124,26 @@ tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t SwigluElemwiseBwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& dL_dlinear1_memcfg = tensor_args.preallocated_dL_dlinear1.has_value()
+                                         ? tensor_args.preallocated_dL_dlinear1->memory_config()
+                                         : tensor_args.linear1.memory_config();
+    const auto& dL_dgate_memcfg = tensor_args.preallocated_dL_dgate.has_value()
+                                      ? tensor_args.preallocated_dL_dgate->memory_config()
+                                      : tensor_args.linear1.memory_config();
+
     return tt::tt_metal::operation::hash_operation<SwigluElemwiseBwDeviceOperation>(
-        args, tensor_args.linear1.dtype(), tensor_args.linear1.logical_shape());
+        args,
+        tensor_args.linear1.dtype(),
+        tensor_args.linear1.logical_shape(),
+        tensor_args.linear1.padded_shape(),
+        tensor_args.gate.dtype(),
+        tensor_args.gate.logical_shape(),
+        tensor_args.gate.padded_shape(),
+        tensor_args.dL_dprod.dtype(),
+        tensor_args.dL_dprod.logical_shape(),
+        tensor_args.dL_dprod.padded_shape(),
+        dL_dlinear1_memcfg,
+        dL_dgate_memcfg);
 }
 
 }  // namespace ttml::metal::ops::swiglu_elemwise_bw::device

@@ -37,9 +37,12 @@ void kernel_main() {
             read_tiles_by_row<false>(
                 cb_linear1_idx, linear1_gen, row_tile_idx, current_block_size, tile_bytes, block_size);
             read_tiles_by_row<false>(cb_gate_idx, gate_gen, row_tile_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row(cb_dL_dprod_idx, dL_dprod_gen, row_tile_idx, current_block_size, tile_bytes, block_size);
+            read_tiles_by_row<false>(
+                cb_dL_dprod_idx, dL_dprod_gen, row_tile_idx, current_block_size, tile_bytes, block_size);
+            noc_async_read_barrier();
             cb_push_back(cb_linear1_idx, block_size);
             cb_push_back(cb_gate_idx, block_size);
+            cb_push_back(cb_dL_dprod_idx, block_size);
         }
     }
 }

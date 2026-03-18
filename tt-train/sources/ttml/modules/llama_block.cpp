@@ -32,7 +32,8 @@ LlamaMLP::LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate
 }
 
 autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
-    return ops::swiglu(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), m_dropout_prob);
+    const float dropout_prob = (get_run_mode() == RunMode::EVAL) ? 0.0F : m_dropout_prob;
+    return ops::swiglu(input, m_w1->get_weight(), m_w2->get_weight(), m_w3->get_weight(), dropout_prob);
 }
 
 LlamaBlock::LlamaBlock(

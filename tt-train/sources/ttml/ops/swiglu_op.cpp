@@ -37,13 +37,14 @@ autograd::TensorPtr swiglu_composite(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob) {
+    float dropout_prob,
+    bool use_per_device_seed) {
     // Baseline-only reference used by the isolated benchmark A/B table.
     // Keep model/runtime paths on fused swiglu().
     const auto swished = ops::silu(ops::linear_op(tensor, w1, nullptr));
     const auto gate = ops::linear_op(tensor, w3, nullptr);
     const auto x = ops::linear_op(ops::mul(swished, gate), w2, nullptr);
-    return ops::dropout(x, dropout_prob);
+    return ops::dropout(x, dropout_prob, use_per_device_seed);
 }
 
 autograd::TensorPtr swiglu(
@@ -51,7 +52,8 @@ autograd::TensorPtr swiglu(
     const autograd::TensorPtr& w1,
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
-    float dropout_prob) {
+    float dropout_prob,
+    bool use_per_device_seed) {
     // Composite forward: weights are [out, in] (LinearLayer convention)
     // Save linear1 and gate for backward (2 tensors vs autograd's 4+).
     // Fuse silu into multiply: silu(linear1) * gate in one kernel, no separate silu alloc.
@@ -96,7 +98,13 @@ autograd::TensorPtr swiglu(
         dropout_seed = static_cast<uint32_t>(autograd::ctx().get_generator()());
         dropout_scaler = 1.0F / (1.0F - dropout_prob);
         ttnn::experimental::dropout(
-            swiglu_result, dropout_prob, dropout_scaler, dropout_seed, true, std::nullopt, swiglu_result);
+            swiglu_result,
+            dropout_prob,
+            dropout_scaler,
+            dropout_seed,
+            use_per_device_seed,
+            std::nullopt,
+            swiglu_result);
     }
     auto out = autograd::create_tensor(swiglu_result);
 
@@ -109,12 +117,14 @@ autograd::TensorPtr swiglu(
                                    saved_gate = std::move(saved_gate),
                                    saved_gated = std::move(saved_gated),
                                    dropout_prob,
+                                   use_per_device_seed,
                                    dropout_seed,
                                    dropout_scaler]() mutable {
         auto dL_dout = out->get_grad();
 
         if (dropout_prob > 0.0F) {
-            dL_dout = ttnn::experimental::dropout(dL_dout, dropout_prob, dropout_scaler, dropout_seed);
+            dL_dout =
+                ttnn::experimental::dropout(dL_dout, dropout_prob, dropout_scaler, dropout_seed, use_per_device_seed);
         }
 
         auto linear1 = std::move(saved_linear1);

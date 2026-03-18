@@ -107,7 +107,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
             auto w3 = ttml::autograd::create_tensor(w3_value, /*requires_grad=*/true);
 
             auto t0 = std::chrono::high_resolution_clock::now();
-            auto out = (*op)(x, w1, w2, w3, /*dropout_prob=*/0.0F);
+            auto out = (*op)(x, w1, w2, w3, /*dropout_prob=*/0.0F, /*use_per_device_seed=*/true);
             tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
             auto t1 = std::chrono::high_resolution_clock::now();
 

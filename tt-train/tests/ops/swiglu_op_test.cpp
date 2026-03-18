@@ -370,7 +370,7 @@ TEST_F(SwiGLUForwardTest, UnbalancedWorkload_57x1x32x32) {
 }
 
 // Shape validation tests.
-TEST_F(SwiGLUForwardTest, ShapeMismatch_W1WrongLayout) {
+TEST_F(SwiGLUForwardTest, ShapeMismatch_W1WrongTrailingDims) {
     using namespace ttml;
 
     const size_t embed_dim = 64;
