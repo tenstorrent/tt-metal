@@ -89,6 +89,79 @@ jobs:
     steps:
       - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
 
+  # LLK Docker image build - only when there are LLK-related changes
+  llk-build-images:
+    needs: find-changes
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-engine-changed == 'true' ||
+         needs.find-changes.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changes.outputs.llk-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-perf-changed == 'true' ||
+         needs.find-changes.outputs.llk-ci-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-build-images.yaml
+    secrets: inherit
+
+  # LLK Functional Unit Tests on Wormhole (required for merge)
+  llk-test-wormhole:
+    needs: [ llk-build-images, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-engine-changed == 'true' ||
+         needs.find-changes.outputs.llk-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-perf-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.llk-build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  # LLK Functional Unit Tests on Blackhole (required for merge)
+  llk-test-blackhole:
+    needs: [ llk-build-images, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-engine-changed == 'true' ||
+         needs.find-changes.outputs.llk-tests-changed == 'true' ||
+         needs.find-changes.outputs.llk-perf-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.llk-build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  # LLK Quasar Build Check (compile-only, no hardware needed)
+  llk-build-quasar:
+    needs: [ llk-build-images, find-changes ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' ||
+         needs.find-changes.outputs.llk-quasar-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-build-quasar.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.llk-build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-xlarge-stable
+      test_splits: 1
+      pytest_markers: "quasar"
+
   find-changes:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -100,9 +173,15 @@ jobs:
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
+      # LLK-specific outputs
+      llk-engine-changed: ${{ steps.find-changes.outputs.llk-engine-changed }}
+      llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
+      llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
+      llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
   build:
     if: ${{ github.ref_name == 'main' ||
@@ -411,14 +490,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
+    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-build-images, llk-test-wormhole, llk-test-blackhole, llk-build-quasar]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-build-images, llk-test-wormhole, llk-test-blackhole, llk-build-quasar"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

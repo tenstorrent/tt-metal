@@ -24,6 +24,13 @@ MODEL_CHARTS_CHANGED=false
 MODELS_CHANGED=false
 BUILD_WORKFLOWS_CHANGED=false
 
+# LLK-specific change detection
+LLK_ENGINE_CHANGED=false
+LLK_QUASAR_CHANGED=false
+LLK_TESTS_CHANGED=false
+LLK_PERF_CHANGED=false
+LLK_CI_CHANGED=false
+
 while IFS= read -r FILE; do
     case "$FILE" in
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
@@ -83,6 +90,25 @@ while IFS= read -r FILE; do
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
+        # LLK-specific change detection (detailed patterns before generic submodule)
+        tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/**|tt_metal/third_party/tt_llk/tt_llk_blackhole/**|tt_metal/third_party/tt_llk/common/**)
+            LLK_ENGINE_CHANGED=true
+            ;;
+        tt_metal/third_party/tt_llk/tt_llk_quasar/**)
+            LLK_QUASAR_CHANGED=true
+            ;;
+        # Perf pattern must come BEFORE generic tests pattern since perf files are under tests/
+        tt_metal/third_party/tt_llk/tests/**/perf/**|tt_metal/third_party/tt_llk/tests/**/*perf*)
+            LLK_PERF_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            ;;
+        tt_metal/third_party/tt_llk/tests/**)
+            LLK_TESTS_CHANGED=true
+            ;;
+        # LLK CI/infrastructure changes
+        .github/workflows/llk-*.yaml|.github/scripts/llk-*.sh)
+            LLK_CI_CHANGED=true
+            ;;
     esac
 done <<< "$CHANGED_FILES"
 
@@ -90,6 +116,10 @@ done <<< "$CHANGED_FILES"
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
+    # Skip LLK submodule - it has its own fine-grained change detection above
+    if [[ "$submodule_path" == "tt_metal/third_party/tt_llk" ]]; then
+        continue
+    fi
     if echo "$CHANGED_FILES" | grep -q "^$submodule_path"; then
         SUBMODULE_CHANGED=true
         break
@@ -108,6 +138,17 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     ANY_CODE_CHANGED=true
     # Issue: https://github.com/tenstorrent/tt-metal/issues/31344
     CMAKE_CHANGED=true
+fi
+
+# LLK engine changes should also trigger metal tests since LLK headers are used in metal
+if [[ "$LLK_ENGINE_CHANGED" = true ]]; then
+    TTMETALIUM_CHANGED=true
+    ANY_CODE_CHANGED=true
+fi
+
+# LLK CI/infrastructure changes should trigger LLK tests
+if [[ "$LLK_CI_CHANGED" = true ]]; then
+    LLK_TESTS_CHANGED=true
 fi
 
 # Derive combined tests-changed flag from isolated flags
@@ -133,6 +174,11 @@ declare -A changes=(
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED
     [build-workflows-changed]=$BUILD_WORKFLOWS_CHANGED
+    [llk-engine-changed]=$LLK_ENGINE_CHANGED
+    [llk-quasar-changed]=$LLK_QUASAR_CHANGED
+    [llk-tests-changed]=$LLK_TESTS_CHANGED
+    [llk-perf-changed]=$LLK_PERF_CHANGED
+    [llk-ci-changed]=$LLK_CI_CHANGED
 )
 
 for var in "${!changes[@]}"; do

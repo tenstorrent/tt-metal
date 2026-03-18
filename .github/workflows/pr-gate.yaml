@@ -137,9 +137,88 @@ jobs:
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
+      # LLK-specific outputs
+      llk-engine-changed: ${{ steps.find-changes.outputs.llk-engine-changed }}
+      llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
+      llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
+      llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
+
+  # LLK Docker image build - only when there are LLK-related changes
+  llk-build-images:
+    needs: find-changed-files
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-ci-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-build-images.yaml
+    secrets: inherit
+
+  # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
+  llk-test-wormhole:
+    needs: [ llk-build-images, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.llk-build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  # LLK Functional Unit Tests on Blackhole (PR gate - runs when LLK engine, tests, or perf code changed)
+  llk-test-blackhole:
+    needs: [ llk-build-images, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.llk-build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  # LLK Quasar Build Check (compile-only, no hardware needed)
+  llk-build-quasar:
+    needs: [ llk-build-images, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-build-quasar.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.llk-build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-xlarge-stable
+      test_splits: 1
+      pytest_markers: "quasar"
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -441,6 +520,10 @@ jobs:
       - clang-tidy-light
       - model-charts-sync
       - build-docs
+      - llk-build-images
+      - llk-test-wormhole
+      - llk-test-blackhole
+      - llk-build-quasar
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -449,6 +532,7 @@ jobs:
           required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
-            ttsim-integration-tests, model-charts-sync, build-docs
+            ttsim-integration-tests, model-charts-sync, build-docs,
+            llk-build-images, llk-test-wormhole, llk-test-blackhole, llk-build-quasar
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

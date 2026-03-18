@@ -1,0 +1,83 @@
+name: 🌙 LLK Nightly Performance Tests
+
+on:
+  schedule:
+    # Run every night at 3AM UTC (1 hour after metal's nightly)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      pytest_markers:
+        description: "Pytest mark expression for testing (e.g., 'perf')"
+        required: false
+        default: "perf"
+        type: string
+
+permissions:
+  checks: write
+  contents: read
+  packages: write
+  pull-requests: write
+
+jobs:
+  build-images:
+    name: "🐳️ LLK Docker setup"
+    uses: ./.github/workflows/llk-build-images.yaml
+
+  perf-test-wormhole:
+    name: "🌀 LLK Performance Tests (Wormhole)"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 5
+      pytest_markers: ${{ inputs.pytest_markers || 'perf' }}
+      timeout_minutes: 240
+      use_durations: true
+
+  perf-test-blackhole:
+    name: "🕳️ LLK Performance Tests (Blackhole)"
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    needs: build-images
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 5
+      pytest_markers: ${{ inputs.pytest_markers || 'perf' }}
+      timeout_minutes: 240
+      use_durations: true
+
+  check-all-green:
+    name: "✅ Check all green"
+    if: always()
+    needs:
+      - build-images
+      - perf-test-wormhole
+      - perf-test-blackhole
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if the required jobs succeeded or failed
+        uses: re-actors/alls-green@release/v1
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: perf-test-wormhole, perf-test-blackhole
+
+  report-status:
+    name: "🔔 Report status"
+    runs-on: ubuntu-latest
+    if: always()
+    needs: check-all-green
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Report status
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "LLK Nightly Performance Tests"
+          slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
+          status: ${{ needs.check-all-green.result }}
