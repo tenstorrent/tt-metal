@@ -161,27 +161,6 @@ struct InplaceLogicalBinary {
 };
 
 template <BinaryOpType binary_op_type>
-struct InplaceBinaryOperation {
-    static Tensor invoke(
-        const Tensor& lhs,
-        const Tensor& rhs,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& lhs,
-        float rhs,
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
 struct InplaceBinaryOperationWithFastApprox {
     static Tensor invoke(
         const Tensor& lhs,
