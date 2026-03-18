@@ -44,6 +44,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
         bank_offsets,
         dram_bank_size,
         config_->dram_alignment,
+        config_->dram_alignment,
         config_->dram_unreserved_base,
         config_->disable_interleaved);
     for (uint32_t bank_id = 0; bank_id < config_->num_dram_channels; bank_id++) {
@@ -58,6 +59,7 @@ void AllocatorImpl::init_one_bank_per_channel() {
         BufferType::TRACE,
         bank_offsets,
         config_->trace_region_size,
+        config_->dram_alignment,
         config_->dram_alignment,
         dram_bank_size + config_->dram_unreserved_base,
         config_->disable_interleaved);
@@ -80,6 +82,7 @@ void AllocatorImpl::init_one_bank_per_l1() {
         bank_offsets,
         l1_bank_size,
         config_->l1_alignment,
+        config_->dram_alignment,
         config_->l1_unreserved_base,
         config_->disable_interleaved);
 

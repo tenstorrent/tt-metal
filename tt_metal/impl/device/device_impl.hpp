@@ -12,6 +12,8 @@
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
+#include "context/metal_context.hpp"
+#include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -38,6 +40,8 @@ class Device : public IDevice {
 public:
     Device() = delete;
     Device(
+        MetalEnv* env,
+        MetalContext* context,
         ChipId device_id,
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
@@ -57,6 +61,8 @@ public:
     // Move constructor/assignment deleted due to active_programs_mutex_ (std::mutex is not movable)
     Device(Device&& other) noexcept = delete;
     Device& operator=(Device&& other) noexcept = delete;
+
+    ContextId get_context_id() const { return context_->get_context_id(); }
 
     tt::ARCH arch() const override;
 
@@ -222,6 +228,9 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
+    // TODO: Remove this member in favor of passing in dependencies directly
+    MetalContext* context_ = nullptr;  // Runtime state
+    MetalEnv* env_;                    // Lower level state
     ChipId id_;
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 

@@ -181,7 +181,7 @@ struct FlashMLADecode {
     // ========================================================================
     // Op - templated on CTArgs (compile-time args) and IsActiveCore
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool IsKVCacheUpdateCore>
+    template <typename CTArgs, bool IsActiveCore>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -233,7 +233,12 @@ struct FlashMLADecode {
                 cur_pos, args.cur_batch, args.core_num_in_reduce, args.num_cores_per_head, args.k_chunk_size);
             (void)k_num_chunks;
 
+            volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
+
             if (k_chunk_start == k_chunk_end) {
+                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
+                noc_semaphore_set(kv_cache_cur_pos_ready_semaphore_ptr, 0);
                 return;
             }
 
@@ -271,15 +276,8 @@ struct FlashMLADecode {
                 noc_async_read_one_packet_set_state<true>(k_src_noc_addr, args.k_page_size, args.vc, READ_NOC_INDEX);
             }
 
-            volatile tt_l1_ptr uint32_t* kv_cache_cur_pos_ready_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
-
             // Wait for KV cache cur pos ready
-            if constexpr (IsKVCacheUpdateCore) {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value - 1);
-            } else {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-            }
+            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
@@ -374,6 +372,7 @@ struct FlashMLADecode {
 
             const bool is_mcast_sender = args.is_mcast_sender == 1;
             const bool is_output_core = args.is_output_core == 1;
+            noc_async_write_set_trid(0, WRITE_NOC_INDEX);
 
             {
                 DeviceZoneScopedN("reader-q-read");
@@ -571,6 +570,7 @@ struct FlashMLADecode {
                         cb_push_back(args.cb_out_in, out_chunk_tiles);
                     }
                 }
+                noc_semaphore_set(in0_receiver_semaphore_addr_ptr, 0);
             }
 
 // ====================================================================
@@ -608,8 +608,6 @@ struct FlashMLADecode {
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
 
-            MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
-            PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);

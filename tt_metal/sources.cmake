@@ -17,6 +17,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/core_coord.hpp
     api/tt-metalium/data_types.hpp
     api/tt-metalium/device.hpp
+    api/tt-metalium/device_types.hpp
     api/tt-metalium/dispatch_core_common.hpp
     api/tt-metalium/distributed.hpp
     api/tt-metalium/distributed_context.hpp
@@ -88,8 +89,10 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/fabric/fabric_telemetry_reader.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/tensor/host_tensor.hpp
-    api/tt-metalium/experimental/tensor/device_tensor.hpp
+    api/tt-metalium/experimental/tensor/mesh_tensor.hpp
     api/tt-metalium/experimental/tensor/tensor_types.hpp
+    api/tt-metalium/experimental/tensor/tensor_apis.hpp
+    api/tt-metalium/experimental/tensor/tensor_utils.hpp
     api/tt-metalium/experimental/tensor/spec/tensor_spec.hpp
     api/tt-metalium/experimental/tensor/spec/layout/alignment.hpp
     api/tt-metalium/experimental/tensor/spec/layout/layout.hpp
@@ -106,6 +109,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_semaphore.hpp
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
+    api/tt-metalium/experimental/context/metal_env.hpp
 )
 
 set(TT_METAL_SOURCES

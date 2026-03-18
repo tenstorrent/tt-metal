@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
-import models.experimental.ops.descriptors.composite as composite
 import ttnn
 from models.common.utility_functions import nearest_y
 from models.demos.deepseek_v3.tt.ccl import CCL
@@ -32,7 +32,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
-    dequantize,
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
@@ -48,6 +47,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -189,7 +189,6 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         num_shards = mesh_device.shape[0]
-        weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
         dim = hf_config.hidden_size
         num_heads = hf_config.num_attention_heads
@@ -199,6 +198,12 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        def _load_weight(weight_name: str, shape: tuple[int, ...]) -> torch.Tensor:
+            """
+            Load an already-dequantized weight tensor (bfloat16) from the HF state dict.
+            """
+            return get_state_dicts(state_dicts, weight_name, shape=shape, dtype=torch.bfloat16)
 
         # Norm weights
         norm_weight_configs = {
@@ -245,19 +250,10 @@ class MLA1D(AbstractModule):
         )
 
         # Regular non-split weights with DRAM sharded configs
-        wq_b_weight = dequantize(
-            get_state_dicts(
-                state_dicts, "q_b_proj.weight", (num_heads * q_head_dim, q_lora_rank), dtype=torch.float8_e4m3fn
-            ),
-            get_state_dicts(state_dicts, "q_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wo_weight = dequantize(
-            get_state_dicts(state_dicts, "o_proj.weight", (dim, num_heads * v_head_dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "o_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_b_weight = _load_weight("q_b_proj.weight", (num_heads * q_head_dim, q_lora_rank))
+        wo_weight = _load_weight("o_proj.weight", (dim, num_heads * v_head_dim))
 
+        # Regular non-split weights
         linear_weight_configs = {
             "wq_b": {
                 "input_tensor_b": cls._convert_weight(
@@ -283,21 +279,8 @@ class MLA1D(AbstractModule):
 
         # Fused wq_a and wkv_a weights: concatenated along output dimension
         # Output order: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        wq_a_weight = dequantize(
-            get_state_dicts(state_dicts, "q_a_proj.weight", (q_lora_rank, dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "q_a_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wkv_a_weight = dequantize(
-            get_state_dicts(
-                state_dicts,
-                "kv_a_proj_with_mqa.weight",
-                (kv_lora_rank + qk_rope_head_dim, dim),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, "kv_a_proj_with_mqa.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_a_weight = _load_weight("q_a_proj.weight", (q_lora_rank, dim))
+        wkv_a_weight = _load_weight("kv_a_proj_with_mqa.weight", (kv_lora_rank + qk_rope_head_dim, dim))
         # Concatenate: [num_shards, q_lora_rank + kv_lora_rank + qk_rope_head_dim, dim]
         wq_kv_a_weight = torch.cat([wq_a_weight, wkv_a_weight], dim=-2)
 
@@ -331,15 +314,9 @@ class MLA1D(AbstractModule):
         }
 
         # wkv_b (Needs Special handling!!)
-        torch_weights = dequantize(
-            get_state_dicts(
-                state_dicts,
-                f"kv_b_proj.weight",
-                shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, f"kv_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
+        torch_weights = _load_weight(
+            "kv_b_proj.weight",
+            shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
         torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(
@@ -1054,7 +1031,6 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_workers_per_link=1,
-            use_broadcast=True,
         )
         wq_kv_a_r_config = {
             "dims": [1],
@@ -1086,7 +1062,7 @@ class MLA1D(AbstractModule):
 
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
         # Q and KV nope use non-overlapping core grids so they can run parallel norms
-        # via composite.launch (which requires non-overlapping core ranges).
+        # via Parallel (which requires non-overlapping core ranges).
         num_q_cores = 16
         num_kv_nope_cores = 16
         shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
@@ -1247,8 +1223,7 @@ class MLA1D(AbstractModule):
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
         assert page_table.numel() == paged_config.max_num_blocks
-
-        return ttnn.from_torch(
+        page_table_tt = ttnn.from_torch(
             page_table,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1256,6 +1231,123 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        return page_table_tt
+
+    @staticmethod
+    def _compute_alias_mask_from_host(page_table_host: torch.Tensor) -> torch.Tensor:
+        if page_table_host.dim() != 2:
+            raise RuntimeError(f"Unexpected page table rank for alias mask: {tuple(page_table_host.shape)}")
+        num_rows = int(page_table_host.shape[0])
+        alias_mask = torch.zeros((num_rows,), dtype=torch.bool)
+        seen: dict[tuple[int, ...], int] = {}
+        for i in range(num_rows):
+            row = tuple(int(v) for v in page_table_host[i].tolist())
+            if row in seen:
+                alias_mask[i] = True
+            else:
+                seen[row] = i
+        return alias_mask
+
+    @classmethod
+    def update_page_table_alias_mask(
+        cls,
+        cfg: RunDecodeConfig,
+        page_table_host: torch.Tensor | None,
+    ) -> None:
+        cfg["mtp_alias_mask"] = None if page_table_host is None else cls._compute_alias_mask_from_host(page_table_host)
+
+    @classmethod
+    def release_page_table_alias_runtime_cache(cls, cfg: RunDecodeConfig | None) -> None:
+        if cfg is None:
+            return
+
+        runtime_cache = cfg.get("mtp_alias_runtime_cache")
+        if not runtime_cache:
+            return
+        for state in runtime_cache.values():
+            for tensor in state.values():
+                ttnn.deallocate(tensor)
+        runtime_cache.clear()
+
+    @classmethod
+    def _get_or_create_alias_split_state(
+        cls,
+        cfg: RunDecodeConfig,
+        position_idxs: ttnn.Tensor,
+        logical_shape: tuple[int, ...],
+        is_sharded: bool,
+        num_devices_eff: int,
+        per_shard: int,
+        prompt_row: torch.Tensor,
+        spec_row: torch.Tensor,
+    ) -> dict[str, ttnn.Tensor]:
+        mesh_device = position_idxs.device()
+        if mesh_device is None:
+            raise RuntimeError("Position tensor is missing mesh device for alias split state.")
+
+        state_key = (
+            tuple(int(dim) for dim in logical_shape),
+            bool(is_sharded),
+            int(num_devices_eff),
+            int(per_shard),
+            tuple(int(v) for v in spec_row.tolist()),
+        )
+        runtime_cache = cfg.setdefault("mtp_alias_runtime_cache", {})
+        state = runtime_cache.get(state_key)
+        if state is not None:
+            return state
+
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        per_shard_padded = total_elems // num_devices_eff
+
+        prompt_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+        spec_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+        for d in range(num_devices_eff):
+            start = d * per_shard_padded
+            prompt_mask_host[start : start + per_shard] = prompt_row
+            spec_mask_host[start : start + per_shard] = spec_row
+
+        mask_shape = tuple(int(dim) for dim in logical_shape)
+        prompt_mask_host = prompt_mask_host.reshape(mask_shape)
+        spec_mask_host = spec_mask_host.reshape(mask_shape)
+        inv_prompt_mask_host = torch.ones(mask_shape, dtype=torch.int32) - prompt_mask_host
+        inv_spec_mask_host = torch.ones(mask_shape, dtype=torch.int32) - spec_mask_host
+
+        mask_mesh_mapper = (
+            ttnn.ShardTensorToMesh(mesh_device, dim=0) if is_sharded else ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
+        state = {
+            "prompt_mask": ttnn.from_torch(
+                prompt_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "spec_mask": ttnn.from_torch(
+                spec_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "inv_prompt_mask": ttnn.from_torch(
+                inv_prompt_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "inv_spec_mask": ttnn.from_torch(
+                inv_spec_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "neg_one": ttnn.full_like(position_idxs, fill_value=-1),
+        }
+        runtime_cache[state_key] = state
+        return state
 
     @classmethod
     def create_state(
@@ -1285,6 +1377,8 @@ class MLA1D(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
             "kvpe_cache": cls._convert_cache(caches, cache_shape, mesh_device),
+            "mtp_alias_mask": None,
+            "mtp_alias_runtime_cache": {},
             "ccl": ccl,
         }
 
@@ -1371,7 +1465,7 @@ class MLA1D(AbstractModule):
 
         # Paged Update Cache
 
-        cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx)
+        cls._fwd_decode_paged_update_cache(kvpe_cache, tt_kvpe, position_idxs, page_table, mesh_shape, row_idx, cfg)
 
         # Q Rope + Nope
 
@@ -1774,9 +1868,9 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        results = composite.launch([q_norm_desc, kv_norm_desc])
-        tt_q = results[0][0]
-        tt_kv_nope = results[1][0]
+        Parallel(q_norm_desc, kv_norm_desc).build(tt_q.device()).launch()
+        tt_q = q_norm_desc.output_tensors[0]
+        tt_kv_nope = kv_norm_desc.output_tensors[0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
@@ -1817,16 +1911,97 @@ class MLA1D(AbstractModule):
         page_table: ttnn.Tensor,
         mesh_shape: tuple[int, int],
         row_idx: int | None,
+        cfg: RunDecodeConfig,
     ) -> None:
-        # Update KVPE Cache
-        # 1,4,1(32),576 height sharded 1x4 [32,576]
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache,
-            tt_kvpe,
-            update_idxs_tensor=position_idxs,
-            page_table=page_table,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+        mesh_device = kvpe_cache.device()
+        if mesh_device is None:
+            raise RuntimeError("Paged update cache requires a valid mesh device.")
+
+        # Split KVPE cache updates into prompt and speculation lanes to avoid aliasing races.
+        alias_mask = cfg.get("mtp_alias_mask")
+        alias_mask_any = alias_mask is not None and bool(alias_mask.any().item())
+        per_shard = int(alias_mask.numel()) if alias_mask is not None else 0
+        num_devices = mesh_shape[1] if row_idx is not None else (mesh_shape[0] * mesh_shape[1])
+        logical_shape = (
+            position_idxs.logical_shape() if hasattr(position_idxs, "logical_shape") else position_idxs.shape
         )
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        is_sharded = position_idxs.is_sharded() if hasattr(position_idxs, "is_sharded") else False
+        num_devices_eff = num_devices
+        if not is_sharded and per_shard > 0 and total_elems % per_shard == 0:
+            candidate = total_elems // per_shard
+            if candidate > 0 and candidate <= num_devices:
+                num_devices_eff = candidate
+
+        if not alias_mask_any:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        elif per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        else:
+            per_shard_padded = total_elems // num_devices_eff
+            if per_shard_padded < per_shard:
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=position_idxs,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+            else:
+                prompt_row = (~alias_mask).to(torch.int32)
+                spec_row = alias_mask.to(torch.int32)
+                split_state = cls._get_or_create_alias_split_state(
+                    cfg=cfg,
+                    position_idxs=position_idxs,
+                    logical_shape=tuple(int(dim) for dim in logical_shape),
+                    is_sharded=is_sharded,
+                    num_devices_eff=num_devices_eff,
+                    per_shard=per_shard,
+                    prompt_row=prompt_row,
+                    spec_row=spec_row,
+                )
+
+                tt_prompt_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, split_state["prompt_mask"]),
+                    ttnn.multiply(split_state["neg_one"], split_state["inv_prompt_mask"]),
+                )
+                tt_spec_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, split_state["spec_mask"]),
+                    ttnn.multiply(split_state["neg_one"], split_state["inv_spec_mask"]),
+                )
+
+                # Update KVPE Cache (prompt lanes first, spec lanes second)
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_prompt_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_spec_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+
+                ttnn.deallocate(tt_prompt_pos)
+                ttnn.deallocate(tt_spec_pos)
 
     @classmethod
     def _fwd_decode_q_rope_nope(

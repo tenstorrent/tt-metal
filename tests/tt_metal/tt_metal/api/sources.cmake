@@ -42,6 +42,7 @@ set(UNIT_TESTS_API_SOURCES
     test_shape_base.cpp
     test_sharded_l1_buffer.cpp
     test_simple_dram_buffer.cpp
+    test_tensor_accessor_default_page_size.cpp
     test_simple_l1_buffer.cpp
     test_soc_descriptor.cpp
     test_stream_scratch_register.cpp

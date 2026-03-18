@@ -86,6 +86,33 @@ inline uint8_t get_relative_logical_y() {
     return my_relative_y_;
 }
 
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/kernel_thread_globals.h"
+// clang-format off
+/**
+ * Returns the number of threads (processors) in the kernel that this processor belongs to.
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Number of kernel threads (num_processors_per_cluster for this kernel).
+ */
+// clang-format on
+inline uint32_t get_num_threads() {
+    return num_sw_threads;
+}
+
+// clang-format off
+/**
+ * Returns this processor's thread ID within its kernel (0 to get_num_threads() - 1).
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Thread ID for this processor.
+ */
+// clang-format on
+inline uint32_t get_my_thread_id() {
+    return my_thread_id;
+}
+#endif
+
 // clang-format off
 /**
  * Helper function to check if an address is in L1 memory space (not register space).
@@ -1057,10 +1084,12 @@ FORCE_INLINE void noc_async_read_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1112,7 +1141,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(
-        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false, noc);
+        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.get_aligned_page_size(), -1, false, noc);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1230,10 +1259,12 @@ FORCE_INLINE void noc_async_write_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1354,12 +1385,12 @@ FORCE_INLINE void noc_async_write_tile(
         id,
         addrgen,
         0 /* offset */,
-        addrgen.page_size,
+        addrgen.get_aligned_page_size(),
         NOC_UNICAST_WRITE_VC,
         false,
         noc);
     noc_async_write_page<TensorAccessor<DSpec>, false>(
-        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+        id, addrgen, src_local_l1_addr, addrgen.get_aligned_page_size(), 0 /* offset */, noc);
 }
 
 // clang-format off
@@ -1425,12 +1456,12 @@ FORCE_INLINE void noc_async_read_shard(
         NocEventType::READ,
         dst_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
+        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
@@ -1459,19 +1490,19 @@ FORCE_INLINE void noc_async_write_shard(
         NocEventType::WRITE_,
         src_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
+        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
 /**
  * Returns the local address of the semaphore with the given id.
  *
- * Return value: Local address of the semaphore (uint32_t)
+ * Return value: Local address of the semaphore (uintptr_t)
  *
  * | Argument                  | Description                | Type                     | Valid Range              | Required |
  * |---------------------------|----------------------------|--------------------------|--------------------------|----------|
@@ -1480,8 +1511,8 @@ FORCE_INLINE void noc_async_write_shard(
  */
 // clang-format on
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
-FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
-    return (uint32_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
+FORCE_INLINE uintptr_t get_semaphore(uint32_t semaphore_id) {
+    return (uintptr_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
 }
 
 // clang-format off
@@ -2046,6 +2077,77 @@ FORCE_INLINE void noc_inline_dw_write(
         false,   // mcast
         posted,  // posted
         customized_src_addr);
+    WAYPOINT("NWID");
+}
+// clang-format off
+
+/**
+ * Initiates an asynchronous multicast write of a 32-bit value to a rectangular grid of NOC destinations.
+ * This is the multicast variant of \a noc_inline_dw_write. The destinations are specified using a uint64_t
+ * encoding referencing an on-chip grid of nodes located at NOC coordinate range (x_start,y_start,x_end,y_end)
+ * and a local address created using \a get_noc_multicast_addr function.
+ *
+ * The destination nodes can only be Tensix cores + L1 memory address. The destination L1 memory address must be
+ * the same on all destination nodes. This API does not support DRAM addresses.
+ *
+ * Return value: None
+ *
+ * | Argument                                 | Description                                                | Type     | Valid Range                                | Required |
+ * |------------------------------------------|------------------------------------------------------------|----------|--------------------------------------------|----------|
+ * | addr                                     | Encoding of the destination rectangle (x,y,x,y)+address    | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
+ * | val                                      | The value to be written                                    | uint32_t | Any uint32_t value                         | True     |
+ * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                                    | False    |
+ * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                                     | False    |
+ * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Multicast VCs)                        | False    |
+ * | customized_src_addr                      | Custom source address for storing the value to be written  | uint32_t | Any uint32_t value                         | False    |
+ * |                                          | (required when `flush` is false)                           |          |                                            |          |
+ * | num_dest                                 | Number of destinations in the multicast rectangle          | uint32_t | 1..(number of cores - 1)                   | False    |
+ * | dst_type            (template parameter) | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst | DEFAULT, L1, REG                 | False    |
+ * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                              | False    |
+ * | flush               (template parameter) | Whether to flush the NOC transaction before issuing the    | bool     | true or false                              | False    |
+ * |                                          | write (`false` callers must prevent races on the caller    |          |                                            |          |
+ * |                                          | side)                                                      |          |                                            |          |
+ *
+ * When `flush` is disabled the caller is responsible for providing a valid `customized_src_addr` scratch location and
+ * ensuring no outstanding inline write uses that address before issuing another write.
+ */
+// clang-format on
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
+FORCE_INLINE void noc_inline_mcast_dw_write(
+    uint64_t addr,
+    uint32_t val,
+    uint8_t be = 0xF,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_MULTICAST_WRITE_VC,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dest = 1) {
+    WAYPOINT("NWIW");
+    DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
+    DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
+#if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
+    if constexpr (dst_type == InlineWriteDst::L1) {
+        if constexpr (!flush) {
+            ASSERT(customized_src_addr != 0);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
+        } else {
+            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+        }
+    }
+#endif
+
+    noc_fast_write_dw_inline_multicast<noc_mode, dst_type, flush>(
+        noc,
+        write_at_cmd_buf,
+        val,
+        addr,
+        be,  // byte-enable
+        vc,
+        true,    // mcast
+        posted,  // posted
+        customized_src_addr,
+        num_dest);
+
     WAYPOINT("NWID");
 }
 
