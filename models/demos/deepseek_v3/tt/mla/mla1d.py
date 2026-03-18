@@ -1651,6 +1651,10 @@ class MLA1D(AbstractModule):
         )
 
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
+        trace = cfg.get("debug_trace")
+        layer_idx = cfg.get("layer_idx")
+        if trace is not None and layer_idx is not None:
+            trace.capture_compressed_kv(layer_idx, tt_kvpe)
 
         ttnn.deallocate(tt_kv_nope)
         ttnn.deallocate(tt_kv_rope)

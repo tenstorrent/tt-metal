@@ -86,6 +86,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        trace = cfg.get("debug_trace")
+        layer_idx = cfg.get("layer_idx")
+
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
@@ -96,9 +99,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         # MLA Residual
         x += mla_out
         ttnn.deallocate(mla_out)
+        if trace is not None and layer_idx is not None:
+            trace.capture_hidden("post_mla_residual", layer_idx, x)
 
         # MLP norm
         mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
+        if trace is not None and layer_idx is not None:
+            trace.capture_hidden("post_attn_norm", layer_idx, mlp_norm_out)
 
         # MLP
         mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
@@ -107,6 +114,8 @@ class DecoderBlock2DBase(DecoderBlockBase):
         # MLP Residual
         x += mlp_out
         ttnn.deallocate(mlp_out)
+        if trace is not None and layer_idx is not None:
+            trace.capture_hidden("decoder_output", layer_idx, x)
 
         return x
 

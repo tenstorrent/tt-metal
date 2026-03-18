@@ -171,6 +171,7 @@ class Embedding1D(AbstractModule):
     @classmethod
     def _forward(cls, x, cfg):
         assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
+        keep_padded_output = bool(cfg.get("keep_padded_output", False))
 
         # TODO: remove this padding once all gather async supports subtile gathering
         # Add padding so that the batch dimension is divisible by TILE_SIZE
@@ -195,6 +196,8 @@ class Embedding1D(AbstractModule):
 
         assert len(embeddings_ag.shape) == 4
         if embeddings_ag.shape[-2] == original_seq_len:
+            return embeddings_ag
+        if keep_padded_output:
             return embeddings_ag
 
         assert embeddings_ag.shape[-2] > original_seq_len

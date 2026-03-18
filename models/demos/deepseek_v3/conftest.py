@@ -32,6 +32,57 @@ def pytest_addoption(parser):
         action="store_true",
         help="Reset weight configs for tests",
     )
+    parser.addoption(
+        "--bitsculpt-trace",
+        action="store_true",
+        help="Enable the manual BitSculpt-compatible DeepSeek trace harness test.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-prompt",
+        action="store",
+        default="why is aho so sus",
+        help="Raw prompt text for the BitSculpt trace harness.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-run-tag",
+        action="store",
+        default="tt_moconnor",
+        help="Run tag subdirectory for the BitSculpt trace harness output.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-output-dir",
+        action="store",
+        default=str(
+            Path(__file__).resolve().parents[3].parent / "bit_sculpt" / "results" / "deepseek-r1-0528" / "debug_trace"
+        ),
+        help="Base output directory for the BitSculpt trace harness.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-model-id",
+        action="store",
+        default="deepseek-ai/DeepSeek-R1-0528",
+        help="Model ID recorded into BitSculpt trace metadata.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-tokenizer",
+        action="store",
+        default=None,
+        help="Optional tokenizer path or repo ID for the BitSculpt trace harness.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-save-dtype",
+        action="store",
+        default="bfloat16",
+        choices=("bfloat16", "float32"),
+        help="Save dtype for the BitSculpt trace harness.",
+    )
+    parser.addoption(
+        "--bitsculpt-trace-max-tokens",
+        action="store",
+        type=int,
+        default=200,
+        help="Maximum allowed prompt token count for the BitSculpt trace harness.",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -418,6 +469,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         _maybe_extend_demo_timeout_for_weight_recalculation(config, item)
         _maybe_extend_test_timeout_for_multihost_weight_cache(current_device, item)
+
+        if item.nodeid.endswith("models/demos/deepseek_v3/tests/test_bitsculpt_trace.py::test_bitsculpt_trace"):
+            if not config.getoption("bitsculpt_trace"):
+                item.add_marker(
+                    pytest.mark.skip(reason="BitSculpt trace harness is manual-only; pass --bitsculpt-trace to run it.")
+                )
+                continue
 
         marker = item.get_closest_marker("requires_device")
         if marker:

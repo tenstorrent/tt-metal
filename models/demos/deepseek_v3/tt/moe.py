@@ -334,7 +334,14 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return MoEGate.forward(x, cfg["moe_gate"])
+        topk_experts_weights, topk_experts_indices = MoEGate.forward(x, cfg["moe_gate"])
+
+        trace = cfg.get("debug_trace")
+        layer_idx = cfg.get("layer_idx")
+        if trace is not None and layer_idx is not None:
+            trace.capture_routing(layer_idx, topk_experts_weights, topk_experts_indices)
+
+        return topk_experts_weights, topk_experts_indices
 
     @classmethod
     def _fwd_repeat_permute_expert_weights(
