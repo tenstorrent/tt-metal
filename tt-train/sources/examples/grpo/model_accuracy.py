@@ -23,9 +23,8 @@ from batched_inference import (
 from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from llama_overrides import LlamaCompositeKV
-
-correct_answers = 0
-wrong_answers = 0
+from typing import Iterator, Sequence
+from string import Template
 
 
 def setup(yaml_config_path, hf_model_id, load_pretrained) -> InferenceCtx:
@@ -105,7 +104,7 @@ def setup(yaml_config_path, hf_model_id, load_pretrained) -> InferenceCtx:
     return ctx
 
 
-def extract_answer(text: str) -> float | None:
+def extract_hash_answer(text: str) -> float | None:
     if "####" not in text:
         return None
     s = text.split("####")[1].strip()
@@ -123,7 +122,7 @@ def extract_answer(text: str) -> float | None:
     return float(s.replace(",", ""))
 
 
-def get_gsm8k(ctx: InferenceCtx, system_prompt, split="train") -> Tuple[List[str], List[str]]:
+def get_gsm8k(ctx: InferenceCtx, system_prompt, user_prompt_template_str, split="train") -> Tuple[List[str], List[str]]:
     data = load_dataset("openai/gsm8k", "main")[split]
     dataset = data.map(
         lambda x: {
@@ -131,18 +130,23 @@ def get_gsm8k(ctx: InferenceCtx, system_prompt, split="train") -> Tuple[List[str
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": x["question"]},
             ],
-            "answer": extract_answer(x["answer"]),
+            "answer": extract_hash_answer(x["answer"]),
         }
     )
 
     questions = [ex["question"] for ex in dataset]
     answers = [ex["answer"] for ex in dataset]
 
+    t = Template(user_prompt_template_str)
+
     prompts = [
         ctx.tokenizer.apply_chat_template(
             [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": q},
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {"role": "user", "content": t.substitute(question=q)},
             ],
             tokenize=False,
             add_generation_prompt=True,
@@ -153,74 +157,103 @@ def get_gsm8k(ctx: InferenceCtx, system_prompt, split="train") -> Tuple[List[str
     return prompts, answers
 
 
-def compare_numeric_answers(completion, golden_answer) -> None:
+def iter_generated_completions(
+    ctx: InferenceCtx,
+    prompts: Sequence[str],
+    batch_size: int = 32,
+) -> Iterator[tuple[int, str, str]]:
+    """
+    Yields aligned results one-by-one:
+      i, prompts[i], completions[i]
+    """
+    for start in range(0, len(prompts), batch_size):
+        end = min(start + batch_size, len(prompts))
+        prompt_batch = list(prompts[start:end])
+
+        batch_completions = generate_answers_multiple_prompts(ctx, prompt_batch)
+
+        if ctx.group_size != 1:
+            raise ValueError(f"Expected group_size=1 for 1:1 mapping, got {ctx.group_size}. ")
+
+        for offset, completion in enumerate(batch_completions):
+            i = start + offset
+            yield i, prompts[i], completion
+
+
+def compare_numeric_answers(completion, golden_answer) -> bool:
     global correct_answers, wrong_answers
 
-    completion_answer_num = float(extract_answer(completion) or "nan")
+    completion_answer_num = float(extract_hash_answer(completion) or "nan")
     golden_answer_num = float(golden_answer or "nan")
 
     if abs(completion_answer_num - golden_answer_num) < 0.001:
         print(f"Completion answer is correct. {completion_answer_num=}, {golden_answer_num=}")
-        correct_answers += 1
+        correct = True
     else:
         print(f"Completion answer is wrong. {completion_answer_num=}, {golden_answer_num=}")
-        wrong_answers += 1
+        correct = False
 
     print(f"{completion=}")
-    print(f"{extract_answer(completion)=}")
+    print(f"{extract_hash_answer(completion)=}")
     print(f"{golden_answer=}")
+
+    return correct
 
 
 if __name__ == "__main__":
     start_time = time.perf_counter()
 
     ctx: InferenceCtx = setup(
-        yaml_config_path="training_grpo_unsloth_llama_3_2_1b_instruct.yaml",
+        yaml_config_path="training_grpo_accuracy_unsloth_llama_3_2_1b_instruct.yaml",
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
         load_pretrained=True,
     )
 
-    system_prompt = """You are a careful math tutor solving grade-school word problems.
-    Show your reasoning step by step.
-    End with exactly one final line in this format:
-    #### <number>
-    Do not output any text after the #### line. Only use digits to write the number.
-    You can put a dash before the digits to indicate a negative number."""
-
     split = "test"
     print(f"{split=}")
-    prompts, answers = get_gsm8k(ctx, system_prompt, split=split)
+
+    system_prompt = "You are a helpful math tutor. Show your reasoning step by step and end with exactly one final line in this format: #### <number>"
+    user_prompt_template_str = """Question: There are 48 trees in the grove. Grove workers will plant trees in the grove today. After they are done, there will be 64 trees. How many trees did the grove workers plant today?
+Answer: There are 48 trees originally.
+Then there were 64 trees after some more were planted.
+So there must have been 64 - 48 = 16.
+#### 16
+
+Question: If there are 13 cars in the parking lot and 2 more cars arrive, how many cars are in the parking lot?
+Answer: There are originally 13 cars.
+2 more cars arrive.
+13 + 2 = 15.
+#### 15
+
+Question: $question
+Answer:
+"""
+    prompts, answers = get_gsm8k(ctx, system_prompt, user_prompt_template_str, split=split)
 
     for a in answers:
         assert a is not None
 
     start_time = time.perf_counter()
 
-    prompts_to_test = 1
+    prompts_to_test = len(prompts)
     print(f"{prompts_to_test=}")
     print(f"{ctx.group_size=}")
 
-    prompt_stride = 1
-    for i in range(0, prompts_to_test, prompt_stride):
-        completions = generate_answers_multiple_prompts(ctx, prompts[i : i + prompt_stride])
-        for j in range(prompt_stride):
-            print(f"Completions for prompt {j=}")
-            for k in range(j * ctx.group_size, (j + 1) * ctx.group_size):
-                print(
-                    f"Completion {k - j*ctx.group_size + 1}.\n======\n",
-                    completions[k],
-                    "\n======\n",
-                )
+    correct_answers = 0
+    wrong_answers = 0
 
-    # for i in range(prompts_to_test):
-    #     completions = generate_answers_one_prompt(ctx, prompts[i])
+    for i, prompt, completion in iter_generated_completions(
+        ctx,
+        prompts[:prompts_to_test],
+        batch_size=32,
+    ):
+        print(f"{i=}")
+        correct: bool = compare_numeric_answers(completion, answers[i])
+        if correct:
+            correct_answers += 1
+        else:
+            wrong_answers += 1
 
-    #     for k in range(len(completions)):
-    #         print(
-    #             f"Completion {k}.\n======\n",
-    #             completions[k],
-    #             "\n======\n",
-    #         )
-
+    print(f"{correct_answers=}, {wrong_answers=}, total_answers={correct_answers + wrong_answers}")
     end_time = time.perf_counter()
     print(f"Completions done. Took {end_time - start_time} s to complete")
