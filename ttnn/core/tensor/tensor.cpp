@@ -113,7 +113,6 @@ Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology ten
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
     if (device_storage().is_allocated()) {
-        const auto& buffer = device_storage().get_mesh_buffer();
         mesh_device_ = device_storage().get_device();
     }
 }
