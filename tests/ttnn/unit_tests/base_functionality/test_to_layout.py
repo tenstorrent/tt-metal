@@ -135,8 +135,7 @@ def test_to_layout_wide_tensor(device, shape, on_device, from_layout, to_layout)
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("use_multicore", [False, True])
-@pytest.mark.parametrize("use_pack_untilize", [False, True])
-def test_untilize_with_unpadding_W_16(device, in_dtype, use_multicore, use_pack_untilize):
+def test_untilize_with_unpadding_W_16(device, in_dtype, use_multicore):
     tile_height = 32
     core_count = 56
     tiles_per_core = 4
@@ -156,9 +155,7 @@ def test_untilize_with_unpadding_W_16(device, in_dtype, use_multicore, use_pack_
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
     ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
 
-    output_tt = ttnn.untilize_with_unpadding(
-        ttnn_input, [0, 0, H - 1, W - 1], use_multicore=use_multicore, use_pack_untilize=use_pack_untilize
-    )
+    output_tt = ttnn.untilize_with_unpadding(ttnn_input, [0, 0, H - 1, W - 1], use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
