@@ -1701,7 +1701,8 @@ void kernel_main() {
             using GateMMCTArgs = deepseek_b1_ops::Matmul::ComputeCTArgs<
                 get_named_compile_time_arg_val("gate_mm_out_w"),
                 false,  // transpose
-                get_named_compile_time_arg_val("gate_mm_fused_activation")>;
+                get_named_compile_time_arg_val("gate_mm_fused_activation"),
+                get_named_compile_time_arg_val("gate_mm_fused_activation_approx_mode")>;
             deepseek_b1_ops::Matmul::ComputeArgs gate_mm_args{
                 get_named_compile_time_arg_val("gate_mm_in0"),
                 get_named_compile_time_arg_val("gate_mm_in1"),

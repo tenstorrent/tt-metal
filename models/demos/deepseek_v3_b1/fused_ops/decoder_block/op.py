@@ -554,8 +554,6 @@ class DecoderBlock:
                 ccl_receiver_group = kernel_result.get_group_by_arg("is_ccl_receiver_core", 1)
 
                 sender_brisc_kernel_idx = ccl_sender_group.brisc_kernel_index
-                sender_ncrisc_kernel_idx = ccl_sender_group.ncrisc_kernel_index
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
 
                 ccl_sender_ncrisc_rt_args_ref = program.kernels[ccl_sender_group.ncrisc_kernel_index].runtime_args[
                     ccl_sender_core.x
@@ -585,11 +583,6 @@ class DecoderBlock:
                     ccl_sender_core,
                 )
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
-
-                receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
-                receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
-                    gather_core.y
-                ]
 
             # MoE fabric connections (reduce-to-one)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)

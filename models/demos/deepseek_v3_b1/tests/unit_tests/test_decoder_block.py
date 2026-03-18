@@ -862,8 +862,6 @@ def test_decoder(
     get_reference_model_state_dict,
 ):
     """Test TTNN decoder fused operation with CCL broadcast, kv cache, mla, reduce, residual add"""
-    if not use_hardcoded_expert_index:
-        pytest.skip("Full routing is not supported for now")
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     logger.info(f"Number of devices: {num_devices}")

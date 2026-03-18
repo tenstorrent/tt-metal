@@ -1044,6 +1044,7 @@ class MoeRoutedExpertOp:
                 weights_overlapped=gate_mm_weights_tensor,
                 k_num_tiles=num_tiles_k,
                 fused_activation=MoeRoutedExpertOp.ACTIVATION_SIGMOID,
+                fused_activation_approx_mode=False,
             )
 
             # Gate MM Gather
@@ -1748,6 +1749,10 @@ class MoeRoutedExpertOp:
             ("gate_mm_k_num_tiles", ctx.gate_mm_params["k_num_tiles"] if ctx.enable_routing else 0),
             ("gate_mm_out_w", ctx.gate_mm_params["out_w"] if ctx.enable_routing else 0),
             ("gate_mm_fused_activation", ctx.gate_mm_params["fused_activation"] if ctx.enable_routing else 0),
+            (
+                "gate_mm_fused_activation_approx_mode",
+                ctx.gate_mm_params["fused_activation_approx_mode"] if ctx.enable_routing else 0,
+            ),
             # Gate compute (routing only)
             ("gate_input_cb", ctx.gate_params["input_cb"] if ctx.enable_routing else 0),
             ("gate_bias_cb", ctx.gate_params["bias_cb"] if ctx.enable_routing else 0),
@@ -3009,6 +3014,7 @@ class MoeOp:
         output_tensor=None,
         k_num_tiles=0,
         fused_activation=0,
+        fused_activation_approx_mode=True,
         weights_core_ranges_override=None,
     ):
         """
@@ -3026,7 +3032,7 @@ class MoeOp:
                            will be created by the overlap function.
             k_num_tiles: K dimension in tiles
             fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
-
+            fused_activation_approx_mode: Whether to use approximate activation (default False)
         Returns:
             Dictionary with matmul parameters and CB descriptors
         """
@@ -3059,6 +3065,7 @@ class MoeOp:
             "k_num_tiles": k_num_tiles,
             "out_w": out_w,
             "fused_activation": fused_activation,
+            "fused_activation_approx_mode": fused_activation_approx_mode,
             "core_grid": core_grid,
             "num_cores": core_grid.num_cores(),
             "weights_cb_descriptor": weights_cb_descriptor,
