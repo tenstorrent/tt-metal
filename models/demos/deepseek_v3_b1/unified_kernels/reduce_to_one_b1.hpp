@@ -376,7 +376,8 @@ struct ReduceToOneB1 {
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
                     } else if (args.agg_sem_l1_addr != 0) {
-                        if (args.persistent_enable != 0) {
+                        // TODO: Use a separate flag to indicate the aggregator
+                        if (args.shard_idx == 0) {
                             // No socket: aggregator waits for all workers before signaling.
                             volatile tt_l1_ptr uint32_t* agg_sem_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);

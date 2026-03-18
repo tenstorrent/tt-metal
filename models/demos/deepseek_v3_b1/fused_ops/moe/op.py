@@ -2102,6 +2102,9 @@ class MoeSharedExpertOp:
         mcast_src_num_pages = 1
         reduce_tile_size = face_tile_size
 
+        if cb_group1_index == cb_group2_index:
+            assert kernel_k_num_tiles == 1, "kernel_k_num_tiles must be 1 if cb_group1_index == cb_group2_index"
+
         cb_group1_descriptor = None
         if group1_tensor is not None:
             cb_group1_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_group1_index, group1_tensor)
@@ -2345,7 +2348,7 @@ class MoeSharedExpertOp:
             shared_down_weights_tensor.dtype, ttnn.TileDescriptor(shared_down_weights_tensor.get_tile())
         )
         shared_gu_weights_cb = shared_down_matmul_in1_cb
-        shared_weights_core_ranges = shared_gate_up_weights_tensor.memory_config().shard_spec.grid.merge(
+        shared_weights_core_ranges = shared_down_weights_tensor.memory_config().shard_spec.grid.merge(
             shared_gate_up_weights_tensor.memory_config().shard_spec.grid
         )
 
@@ -4543,8 +4546,6 @@ class MoeOp:
         self,
         chip_id,
         num_iterations,
-        # persistent_mode,
-        # persistent_next_iter_sem_addr,
         ncrisc_args,
         brisc_args,
         trisc_args,
