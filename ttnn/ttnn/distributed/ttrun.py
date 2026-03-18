@@ -90,12 +90,37 @@ def build_rankfile_args(syntax: RankfileSyntax, rankfile: Path) -> List[str]:
         raise ValueError(f"Unknown rankfile syntax: {syntax}")
 
 
+def get_mpi_version(mpi_launcher: str, subprocess_run=subprocess.run) -> Optional[tuple[int, int]]:
+    """Get MPI version (major, minor) from launcher.
+
+    Tries mpirun --version (OpenMPI 5+) and ompi_info. Returns None if unparseable.
+
+    Args:
+        mpi_launcher: Path or name of MPI launcher
+        subprocess_run: Subprocess run function (injectable for testing)
+
+    Returns:
+        (major, minor) e.g. (5, 0) or (4, 1), or None
+    """
+    for cmd in [[mpi_launcher, "--version"], ["ompi_info", "--version"]]:
+        try:
+            result = subprocess_run(cmd, capture_output=True, text=True, timeout=5)
+            text = (result.stdout or "") + (result.stderr or "")
+            # Match "Open MPI) 4.1.5" or "Open MPI) 5.0.0" or "5.0.0"
+            match = re.search(r"(?:Open MPI\)\s*)?(\d+)\.(\d+)(?:\.\d+)?", text)
+            if match:
+                return (int(match.group(1)), int(match.group(2)))
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            continue
+    return None
+
+
 def detect_rankfile_syntax(mpi_launcher: str, subprocess_run=subprocess.run) -> RankfileSyntax:
     """Detect which rankfile syntax variant the MPI launcher supports.
 
-    Runs `{mpi_launcher} --help` and parses the output to determine which rankfile
-    syntax is supported. Prefers `--map-by rankfile:file=` (OpenMPI 5.x), then
-    `--rankfile` (older OpenMPI), then falls back to MCA parameter.
+    Uses MPI version when available: OpenMPI 5.x uses --map-by rankfile:file=,
+    older versions use --rankfile. Falls back to --help parsing if version
+    cannot be determined.
 
     Args:
         mpi_launcher: Path or name of MPI launcher (e.g., "mpirun", "mpirun-ulfm")
@@ -104,6 +129,14 @@ def detect_rankfile_syntax(mpi_launcher: str, subprocess_run=subprocess.run) -> 
     Returns:
         RankfileSyntax enum indicating which syntax to use
     """
+    version = get_mpi_version(mpi_launcher, subprocess_run)
+    if version is not None:
+        major, _ = version
+        if major >= 5:
+            return RankfileSyntax.MAP_BY_RANKFILE_FILE
+        return RankfileSyntax.RANKFILE
+
+    # Fallback: parse --help when version unavailable
     try:
         result = subprocess_run(
             [mpi_launcher, "--help"],
@@ -112,20 +145,9 @@ def detect_rankfile_syntax(mpi_launcher: str, subprocess_run=subprocess.run) -> 
             timeout=5,
         )
         help_text = result.stdout + result.stderr
-
-        # Check for --map-by rankfile:file= syntax (OpenMPI 5.x / PRRTE)
-        if "--map-by" in help_text and "rankfile" in help_text.lower():
-            # Look for rankfile:file= pattern in help text
-            if "rankfile:file" in help_text or "rankfile:file=" in help_text:
-                return RankfileSyntax.MAP_BY_RANKFILE_FILE
-
-        # Check for --rankfile option (older OpenMPI)
         if "--rankfile" in help_text:
             return RankfileSyntax.RANKFILE
-
-        # Fallback to MCA parameter
         return RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
-
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         logger.warning(
             f"{TT_RUN_PREFIX} Failed to detect rankfile syntax from {mpi_launcher}: {e}. "
@@ -140,6 +162,7 @@ def inject_rankfile_mpi_args(
     mpi_launcher: str,
     detect_fn=detect_rankfile_syntax,
     add_host_slots: bool = False,
+    force_rankfile_syntax: Optional[RankfileSyntax] = None,
 ) -> List[str]:
     """Inject rankfile MPI arguments into base MPI args.
 
@@ -154,6 +177,8 @@ def inject_rankfile_mpi_args(
         add_host_slots: If True, prepend --host host1:N,host2:N and -np total
             derived from the rankfile (for Phase 2 real cluster). Skip if user
             already provided --host in base_mpi_args.
+        force_rankfile_syntax: If set, use this syntax instead of auto-detection
+            (e.g. RankfileSyntax.RANKFILE for suggested re-run commands).
 
     Returns:
         New list with rankfile args prepended: [--host, -np?, rankfile_args..., ...base_mpi_args]
@@ -168,7 +193,7 @@ def inject_rankfile_mpi_args(
             if host_str and total_ranks > 0:
                 result.extend(["--host", host_str, "-np", str(total_ranks)])
 
-    syntax = detect_fn(mpi_launcher)
+    syntax = force_rankfile_syntax if force_rankfile_syntax is not None else detect_fn(mpi_launcher)
     rankfile_args = build_rankfile_args(syntax, rankfile)
     result.extend(rankfile_args)
     result.extend(base_mpi_args or [])
@@ -245,9 +270,8 @@ def parse_rankfile(rankfile_path: Path) -> Dict[int, str]:
             # Skip comments and empty lines
             if not line or line.startswith("#"):
                 continue
-            # Parse format: rank N=hostname slot=X
-            # Match: rank <number>=<hostname> slot=<number>
-            match = re.match(r"rank\s+(\d+)=([^\s]+)\s+slot=\d+", line)
+            # Parse format: rank N=hostname slot(s)=X (OpenMPI accepts both slot= and slots=)
+            match = re.match(r"rank\s+(\d+)=([^\s]+)\s+slots?=[\d\-]+", line)
             if match:
                 rank = int(match.group(1))
                 hostname = match.group(2)
@@ -1511,10 +1535,16 @@ def new_mode_flow(
     if phase2_mock_binding_path:
         phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
     mpi_launcher = get_mpi_launcher()
-    # Include --host host1:N,host2:N and -np for real clusters (not mock)
-    add_host_slots = phase2_mock_binding_path is None
-    rankfile_args = inject_rankfile_mpi_args(rankfile_path, mpi_args or [], mpi_launcher, add_host_slots=add_host_slots)
-    if rankfile_needs_oversubscribe(rankfile_path) and "--oversubscribe" not in (mpi_args or []):
+    # Use version-based rankfile syntax (--map-by rankfile:file= for OpenMPI 5+, --rankfile for older)
+    rankfile_args = inject_rankfile_mpi_args(
+        rankfile_path,
+        mpi_args or [],
+        mpi_launcher,
+        add_host_slots=False,  # Do not add --host; rankfile alone specifies placement
+    )
+    # Ensure Phase 2 re-run command includes --oversubscribe when applicable
+    resolved_rankfile = rankfile_path.resolve()
+    if rankfile_needs_oversubscribe(resolved_rankfile) and "--oversubscribe" not in rankfile_args:
         rankfile_args = ["--oversubscribe"] + rankfile_args
     mpi_args_str = " ".join(shlex.quote(a) for a in rankfile_args)
     phase2_parts.extend(["--mpi-args", shlex.quote(mpi_args_str)])

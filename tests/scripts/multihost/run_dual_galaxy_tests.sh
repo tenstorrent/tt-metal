@@ -17,25 +17,38 @@ run_dual_galaxy_unit_tests() {
   # tt-run --tcp-interface handles the extra mpi_run args
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="cnx1"
-  local mpi_args="--host g10glx03,g10glx04 $mpi_args_base"
-  local mpi_args_reversed="--host g10glx04,g10glx03 $mpi_args_base"
+  local hosts="g10glx03,g10glx04"
+  local hosts_reversed="g10glx04,g10glx03"
+  local mpi_args="--host $hosts $mpi_args_base"
+  local mpi_args_reversed="--host $hosts_reversed $mpi_args_base"
+  # For tt-run --mesh-graph-descriptor: tt-run adds rankfile, so only pass extra args (no --host/--map-by)
+  local tt_run_mpi_args="--tag-output"
+  local tt_run_mpi_args_reversed="$tt_run_mpi_args"
 
   local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
-  local mpirun_args="--host g10glx03,g10glx04 $mpirun_args_base"
-  local rank_binding="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
+  local mpirun_args="--host $hosts $mpirun_args_base"
+  local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  # Physical discovery with launcher NOT in hosts (OpenMPI #11830 - would hang without P2P workaround)
+  # Use hostfile from /etc/mpirun if available; galaxy dual has hardcoded hosts so create temp hostfile
+  if [[ -f /etc/mpirun/hostfile ]]; then
+    HOSTFILE=/etc/mpirun/hostfile ./tests/scripts/multihost/test_physical_discovery_launcher_not_in_hosts.sh ; fail+=$?
+  else
+    echo "g10glx03" > /tmp/hostfile_galaxy ; echo "g10glx04" >> /tmp/hostfile_galaxy
+    HOSTFILE=/tmp/hostfile_galaxy ./tests/scripts/multihost/test_physical_discovery_launcher_not_in_hosts.sh ; fail+=$?
+  fi
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_fabric_2d_sanity.yaml ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_2d]" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-num_links_1-2-sparse-s2-7168-8-256-32-axis_1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_big_mesh" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async_big_mesh" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --rank-binding "$rank_binding" --mpi-args "$mpi_args_reversed" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_dual_galaxy_mesh_device_trace" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "$tt_run_mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_fabric_2d_sanity.yaml ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts_reversed" --mpi-args "$tt_run_mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_2d]" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts_reversed" --mpi-args "$tt_run_mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts_reversed" --mpi-args "$tt_run_mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-num_links_1-2-sparse-s2-7168-8-256-32-axis_1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts_reversed" --mpi-args "$tt_run_mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_big_mesh" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts_reversed" --mpi-args "$tt_run_mpi_args_reversed" pytest -svv "tests/nightly/tg/ccl/test_minimal_all_gather_async.py::test_all_gather_async_big_mesh" ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts_reversed" --mpi-args "$tt_run_mpi_args_reversed" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_dual_galaxy_mesh_device_trace" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
