@@ -40,9 +40,10 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (operation_attributes.sub_core_grids.has_value()) {
         return false;
     }
-    if (operation_attributes.output_padded_shape[-1] == operation_attributes.output_mem_config.shard_spec()->shape[1]) {
-        return false;
-    }
+    // if (operation_attributes.output_padded_shape[-1] ==
+    // operation_attributes.output_mem_config.shard_spec()->shape[1]) {
+    //     return false;
+    // }
     if (operation_attributes.output_mem_config.shard_spec().value().shape[0] <
         input_tensor.shard_spec().value().shape[0]) {
         // Note this case causes the sharded optimized PadRmShardedWidthOnlyProgramFactory{} to hang.
