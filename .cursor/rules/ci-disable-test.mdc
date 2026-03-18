@@ -1,0 +1,87 @@
+---
+description: Create a draft PR that temporarily disables the smallest failing CI test/job scope from a run URL and/or issue, while preserving traceability.
+alwaysApply: false
+---
+
+# Disable Failing CI Test/Job with Draft PR
+
+Use this rule when asked to disable a failing CI job/test in `tenstorrent/tt-metal` based on a workflow run URL, an issue, or both.
+
+## Goal
+
+Ship a minimal, reversible disable change in a **draft PR** that references tracking context without auto-closing the issue.
+
+## Required Inputs
+
+- At least one of:
+  - GitHub Actions job URL (`.../actions/runs/<run-id>/job/<job-id>`)
+  - `tenstorrent/tt-metal` issue URL or issue number
+
+## GitHub API Preference
+
+- Assume GitHub CLI auth is already configured and valid.
+- Prefer `gh api` for most GitHub interactions (issue reads, comment reads, workflow/job metadata, and PR metadata updates).
+- Use non-API `gh` commands only when they are significantly simpler or required (for example `gh run view ... --log-failed` as a log-download fallback).
+
+## Required Flow
+
+0. **Clean workspace first**
+   - Create `build_ci/disabling` if missing.
+   - Delete all pre-existing files under `build_ci/disabling` before analysis.
+   - Do not consume stale artifacts from earlier runs.
+
+1. **Collect evidence sources**
+   - If issue is provided:
+     - Read issue body and comments.
+     - Extract linked run/job URLs from both body and comments.
+     - Treat linked runs as candidate evidence.
+   - If job URL is provided:
+     - Use it directly as candidate evidence.
+
+2. **Download logs to the required location**
+   - Download candidate job logs into `build_ci/disabling` (not under `build_ci/ci_ticketing`).
+   - Use `gh api` by default, with direct `gh` commands as needed for log retrieval ergonomics.
+   - Read logs yourself; do not rely on generic assumptions from issue text alone.
+
+3. **Choose smallest disable scope**
+   - Disable the narrowest failing target that unblocks CI:
+     - exact test case/selector first,
+     - then single test file,
+     - then one matrix leaf,
+     - and only then a full job disable.
+   - Prefer CI-only gating over broad source changes.
+   - Include a TODO or inline note with tracking reference near the disable.
+
+4. **Draft PR behavior**
+   - Create a branch from updated `main`.
+   - Open a **draft** PR.
+   - If issue exists, reference with non-closing language (for example `Refs #39820`).
+   - Never use issue-closing keywords (`Closes`, `Fixes`, `Resolves`) in title/body/commit text.
+   - PR body must state:
+     - evidence URLs used,
+     - exact disabled scope,
+     - why this scope was chosen,
+     - re-enable condition.
+
+5. **Delete transient logs**
+   - Delete downloaded logs from `build_ci/disabling` after they are no longer needed.
+   - Old logs must not persist across command runs.
+
+## Decision Rules
+
+### If issue and run evidence disagree
+
+- Prefer the most recent downloaded log evidence.
+- Mention discrepancy in PR body and cite the run URL used for final decision.
+
+### If disable target cannot be isolated confidently
+
+- Do not guess a broad disable.
+- Document uncertainty and recommend owner handoff in PR notes.
+
+## Non-Negotiables
+
+- Use `build_ci/disabling` for log downloads.
+- Do not store these logs under `build_ci/ci_ticketing`.
+- Clean `build_ci/disabling` at start and remove transient logs at end.
+- Keep PR draft unless user asks otherwise.
