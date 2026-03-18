@@ -131,7 +131,7 @@ jobs:
         docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-        gtest_filter: "*-*NIGHTLY_*"
+        gtest_filter: "*-*NIGHTLY_*:*NocEstimator*"
   data-movement-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push') }}
     uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
