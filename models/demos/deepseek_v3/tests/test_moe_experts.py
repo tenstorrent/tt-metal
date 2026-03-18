@@ -16,7 +16,14 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import (
+    USERS_PER_ROW,
+    even_int_div,
+    get_fabric_config,
+    is_quad_mesh,
+    is_ring_fabric,
+    sub_state_dict,
+)
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 
@@ -68,6 +75,10 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
+@pytest.mark.skipif(
+    (is_ring_fabric(get_fabric_config()) and is_quad_mesh()),
+    reason=f"Optimized quad ring MoE implementation embeds expert matmuls inside fused CCL ops",
+)
 @pytest.mark.parametrize(
     "mode, batch_size_per_row, seq_len",
     [
