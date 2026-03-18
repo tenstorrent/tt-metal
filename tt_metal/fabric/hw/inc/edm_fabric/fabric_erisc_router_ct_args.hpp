@@ -76,6 +76,7 @@ constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_L
 // ============================================================================
 constexpr size_t MAX_NUM_SENDER_CHANNELS = NAMED_CT_ARG("MAX_NUM_SENDER_CHANNELS");
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("MAX_NUM_RECEIVER_CHANNELS");
+constexpr size_t MAX_NUM_VCS = NAMED_CT_ARG("MAX_NUM_VCS");
 // VC0 and VC1 channel counts depend on router type:
 // Z_ROUTER: 5 VC0 + 4 VC1 = 9 total
 // MESH: 4 VC0 + 4 VC1 = 8 total (with some unused)
@@ -643,7 +644,7 @@ constexpr size_t RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS =
 using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
     ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE,
     RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS,
-    MAX_NUM_RECEIVER_CHANNELS,
+    MAX_NUM_VCS,
     MAX_NUM_SENDER_CHANNELS>;
 constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};
 
