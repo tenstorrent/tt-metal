@@ -7,12 +7,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "offset_cumsum.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum::detail {
 void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
-    const auto* doc =
+    ttnn::bind_function<"offset_cumsum", "ttnn.experimental.deepseek_prefill.">(
+        mod,
         R"doc(
             Computes shifted cumulative sum of per-device expert histograms gathered across a cluster axis.
 
@@ -32,25 +33,13 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
                 * :attr:`num_links`: Number of links for all_gather.
                 * :attr:`memory_config`: Memory configuration for intermediate and output tensors.
 
-        )doc";
-
-    using OperationType = decltype(ttnn::offset_cumsum);
-    bind_registered_operation(
-        mod,
-        ttnn::offset_cumsum,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               uint32_t cluster_axis,
-               uint32_t num_links,
-               const ttnn::MemoryConfig& memory_config) {
-                return self(input_tensor, cluster_axis, num_links, memory_config);
-            },
+        )doc",
+        ttnn::overload_t(
+            &offset_cumsum,
             nb::arg("input_tensor").noconvert(),
             nb::arg("cluster_axis"),
             nb::arg("num_links"),
-            nb::arg("memory_config")});
+            nb::arg("memory_config")));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum::detail

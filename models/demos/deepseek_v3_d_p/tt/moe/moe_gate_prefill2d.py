@@ -156,11 +156,11 @@ class MoEGatePrefill(LightweightModule):
             ttnn_top_k_experts_indices, self.expert_index_sharded_mem_config
         )
 
-        expert_histograms = ttnn.masked_bincount(
+        expert_histograms = ttnn.experimental.deepseek_prefill.masked_bincount(
             ttnn_top_k_experts_indices, self.experts_in_dispatch_row, self.n_routed_experts
         )
 
-        dispatch_offsets, total_counts_per_expert = ttnn.offset_cumsum(
+        dispatch_offsets, total_counts_per_expert = ttnn.experimental.deepseek_prefill.offset_cumsum(
             expert_histograms,
             cluster_axis=self.ccl_config["DISPATCH_AXIS"],
             num_links=self.ccl_config["NUM_LINKS"],

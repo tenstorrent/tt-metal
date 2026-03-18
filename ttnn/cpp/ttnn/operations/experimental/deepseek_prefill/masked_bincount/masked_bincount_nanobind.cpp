@@ -6,12 +6,13 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "masked_bincount.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail {
 void bind_experimental_masked_bincount_operation(nb::module_& mod) {
-    const auto* doc =
+    ttnn::bind_function<"masked_bincount", "ttnn.experimental.deepseek_prefill.">(
+        mod,
         R"doc(
             Counts occurrences of each expert index in a height-sharded input tensor (bincount / histogram),
             masked by a per-expert presence vector.
@@ -31,21 +32,12 @@ void bind_experimental_masked_bincount_operation(nb::module_& mod) {
                 * :attr:`expert_mask`: 1D UINT32 tensor of shape [n_routed_experts] (0 = skip, nonzero = count).
                 * :attr:`n_routed_experts`: Number of routed experts (output dimension size).
 
-        )doc";
-
-    using OperationType = decltype(ttnn::masked_bincount);
-    bind_registered_operation(
-        mod,
-        ttnn::masked_bincount,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_mask,
-               uint32_t n_routed_experts) { return self(input_tensor, expert_mask, n_routed_experts); },
+        )doc",
+        ttnn::overload_t(
+            &masked_bincount,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_mask").noconvert(),
-            nb::arg("n_routed_experts")});
+            nb::arg("n_routed_experts")));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount::detail

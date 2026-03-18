@@ -4,20 +4,16 @@
 
 #pragma once
 
-#include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
+
+namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount {
+
+ttnn::Tensor masked_bincount(
+    const ttnn::Tensor& input_tensor, const ttnn::Tensor& expert_mask, uint32_t n_routed_experts);
+
+}  // namespace ttnn::operations::experimental::deepseek_prefill::masked_bincount
 
 namespace ttnn {
-namespace operations::experimental {
-
-struct MaskedBincountOperation {
-    static ttnn::Tensor invoke(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts);
-};
-
-}  // namespace operations::experimental
-
-constexpr auto masked_bincount =
-    ttnn::register_operation<"ttnn::masked_bincount", ttnn::operations::experimental::MaskedBincountOperation>();
-
+using operations::experimental::deepseek_prefill::masked_bincount::masked_bincount;
 }  // namespace ttnn

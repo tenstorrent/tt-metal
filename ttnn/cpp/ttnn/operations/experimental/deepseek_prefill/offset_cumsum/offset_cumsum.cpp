@@ -1,18 +1,21 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "offset_cumsum.hpp"
 #include "device/offset_cumsum_device_operation.hpp"
-#include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum {
 
-std::array<ttnn::Tensor, 2> OffsetCumsumOperation::invoke(
-    const Tensor& input_tensor, uint32_t cluster_axis, uint32_t num_links, const ttnn::MemoryConfig& memory_config) {
+std::array<ttnn::Tensor, 2> offset_cumsum(
+    const ttnn::Tensor& input_tensor,
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    const ttnn::MemoryConfig& memory_config) {
     const auto& shape = input_tensor.logical_shape();
     uint32_t n_routed_experts = shape[-1];
 
@@ -32,4 +35,4 @@ std::array<ttnn::Tensor, 2> OffsetCumsumOperation::invoke(
     return ttnn::prim::offset_cumsum(row_major);
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum
