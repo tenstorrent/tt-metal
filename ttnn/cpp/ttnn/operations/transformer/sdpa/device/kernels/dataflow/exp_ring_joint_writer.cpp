@@ -327,6 +327,7 @@ void kernel_main() {
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_base + 3);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_base + 4);
 
+
     // All-gather CT args (following 5 MUX CT args)
     constexpr uint32_t ag_ct_base = mux_ct_base + 5;
     constexpr uint32_t ag_device_index = get_compile_time_arg_val(ag_ct_base + 0);
@@ -383,6 +384,7 @@ void kernel_main() {
     const uint32_t local_buffer_index_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint8_t termination_master_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
     const uint8_t termination_master_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+
 
     // Build connection object at outer scope (lifetime spans the ring loop and teardown).
     auto mux_conn = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -632,6 +634,8 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
     constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
+    constexpr uint32_t cb_k_writer_in = tt::CBIndex::c_14;
+    constexpr uint32_t cb_v_writer_in = tt::CBIndex::c_15;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t stats_tile_bytes = get_tile_size(cb_max_in);
 
@@ -813,6 +817,7 @@ void kernel_main() {
 
 #ifdef USE_MUX
                 if (mux_connection_valid) {
+                    uint32_t KV_chunks_processed_in_iter = 0;
                     for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                         const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
                         const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
@@ -822,7 +827,7 @@ void kernel_main() {
                         if (kv_chunk_is_beyond_logical_n) {
                             continue;
                         }
-
+                        KV_chunks_processed_in_iter++;
                         Slice kv_slice;
                         uint32_t end_seq_tile;
 
@@ -847,8 +852,18 @@ void kernel_main() {
                             }
                         }
 
-                        // TODO: Read K chunk here
-                        // TODO: Read V chunk here
+                        constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+                        constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
+
+                        // Wait for reader to fill K, forward over MUX, then release
+                        cb_wait_front(cb_k_writer_in, k_chunk_tiles);
+                        // TODO: forward K chunk over fabric
+                        cb_pop_front(cb_k_writer_in, k_chunk_tiles);
+
+                        // Wait for reader to fill V, forward over MUX, then release
+                        cb_wait_front(cb_v_writer_in, v_chunk_tiles);
+                        // TODO: forward V chunk over fabric
+                        cb_pop_front(cb_v_writer_in, v_chunk_tiles);
                     }
                     if (!is_last_ring_iter) {
                         tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
@@ -936,17 +951,21 @@ void kernel_main() {
 
 #ifdef USE_MUX
     if (mux_connection_valid) {
+        DPRINT << "Disconnecting from mux" << ENDL();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
         if (is_termination_master) {
+            DPRINT << "Waiting for termination sync" << ENDL();
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_sem_addr);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
+            DPRINT << "Sending termination signal" << ENDL();
             uint64_t dest_addr =
                 get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_sem_addr);
             noc_semaphore_inc(dest_addr, 1);
             noc_async_atomic_barrier();
         }
     }
+    DPRINT << "Mux done" << ENDL();
 #endif
 }
