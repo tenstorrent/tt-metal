@@ -236,14 +236,33 @@ def test_matmul_2d_interleaved_sharded_dimension_sweep(device, batch, seq_len, k
     ],
 )
 @pytest.mark.timeout(120)
-def test_matmul_2d_interleaved_sharded_dtype_sweep(
+def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
     device, batch, seq_len, k, n, num_dram_banks, in0_dtype, in1_dtype, out_dtype, has_bias, bias_dtype
 ):
     """
     Sweep test for 2D matmul with DRAM interleaved in0 and DRAM sharded in1
-    across various data type combinations for inputs, outputs, and bias.
+    across various data type combinations for inputs, outputs, and bias,
+    restricted to batch == 1 so that ttnn.Linear() can be used with bias.
     """
     expected_pcc = 0.99
+
+    if has_bias and batch == 1:
+        # Low PCC (in0, in1, bias) dtype combos: ttnn.linear runs but gives very low PCC. See issue #40167.
+        skip_configs = {
+            (ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32),
+            (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.float32),
+            (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16),
+            (ttnn.float32, ttnn.bfloat16, ttnn.float32),
+            (ttnn.float32, ttnn.bfloat8_b, ttnn.float32),
+            (ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat16),
+            (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32),
+        }
+        if (in0_dtype, in1_dtype, bias_dtype) in skip_configs:
+            pytest.skip(
+                f"Issue #40167: Low PCC dtype combination for ttnn.Linear "
+                f"(in0={in0_dtype}, in1={in1_dtype}, bias={bias_dtype})"
+            )
+
     _run_matmul_2d_interleaved_in0_sharded_in1(
         device=device,
         batch=batch,

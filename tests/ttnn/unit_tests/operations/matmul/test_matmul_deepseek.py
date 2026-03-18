@@ -288,7 +288,11 @@ def _run_matmul_2d_interleaved_in0_sharded_in1(
         packer_l1_acc=True,
     )
 
-    if has_bias and batch == 1:
+    assert not (
+        has_bias and batch != 1
+    ), "Batched matmul with bias not supported in _run_matmul_2d_interleaved_in0_sharded_in1; use batch == 1 or disable bias."
+
+    if has_bias:
         output_t = ttnn.linear(
             in0_t,
             in1_t,
