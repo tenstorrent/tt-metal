@@ -38,7 +38,6 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None, "Expected a state dict for DecoderBlock."
-        breakpoint()
         return {
             "mla_norm": DistributedRMSNorm.convert_weights(
                 hf_config,
