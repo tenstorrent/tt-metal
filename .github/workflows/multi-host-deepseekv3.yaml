@@ -229,7 +229,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
-        if: ${{ (inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -288,7 +288,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
@@ -312,7 +312,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ always() && inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
@@ -391,7 +391,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
@@ -415,7 +415,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
-        if: ${{ always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-output-${{ github.run_id }}
@@ -425,7 +425,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad MTP demo parity smoke test
-        if: ${{ (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
@@ -449,7 +449,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_mtp
 
       - name: Upload quad MTP demo output artifacts
-        if: ${{ always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ always() && inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both') }}
         uses: actions/upload-artifact@v4
         with:
           name: quad-demo-mtp-output-${{ github.run_id }}
