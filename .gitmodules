@@ -12,5 +12,5 @@
 	branch = main
 [submodule "tt_metal/third_party/tt_llk"]
 	path = tt_metal/third_party/tt_llk
-	url = https://github.com/polymage-labs/tt-llk.git
+	url = git@github.com:polymage-labs/tt-llk.git
 	branch = polymage/main
