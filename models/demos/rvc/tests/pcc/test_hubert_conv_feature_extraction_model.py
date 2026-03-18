@@ -36,7 +36,7 @@ def test_hubert_conv_feature_extraction_model(device, mode):
     )
 
     parameters = {f"fe.{k}": v for k, v in torch_model.state_dict().items()}
-    tt_model.load_parameters(parameters=parameters, prefix="fe.")
+    tt_model.load_state_dict(parameters=parameters, module_prefix="fe.")
 
     torch_x = torch.randn(batch_size, input_length, dtype=torch.float32)
     torch_output = torch_model(torch_x)

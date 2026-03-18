@@ -31,14 +31,14 @@ class Encoder(nn.Module):
         self,
         hidden_channels,
         filter_channels,
-        n_heads,
-        n_layers,
+        num_heads,
+        num_layers,
         kernel_size=1,
         window_size=10,
     ):
         super().__init__()
-        self.n_heads = n_heads
-        self.n_layers = int(n_layers)
+        self.num_heads = num_heads
+        self.num_layers = int(num_layers)
         self.kernel_size = kernel_size
         self.window_size = window_size
 
@@ -46,12 +46,12 @@ class Encoder(nn.Module):
         self.norm_layers_1 = nn.ModuleList()
         self.ffn_layers = nn.ModuleList()
         self.norm_layers_2 = nn.ModuleList()
-        for _ in range(self.n_layers):
+        for _ in range(self.num_layers):
             self.attn_layers.append(
                 MultiHeadAttention(
                     hidden_channels,
                     hidden_channels,
-                    n_heads,
+                    num_heads,
                     window_size=window_size,
                 )
             )
@@ -80,28 +80,32 @@ class Encoder(nn.Module):
 class MultiHeadAttention(nn.Module):
     def __init__(
         self,
-        channels,
-        out_channels,
-        n_heads,
+        in_features,
+        out_features,
+        num_heads,
         window_size=None,
     ):
         super().__init__()
-        assert channels % n_heads == 0
+        assert in_features % num_heads == 0
 
-        self.n_heads = n_heads
+        self.num_heads = num_heads
         self.window_size = window_size
 
-        self.k_channels = channels // n_heads
-        self.linear_q = nn.Linear(channels, channels)
-        self.linear_k = nn.Linear(channels, channels)
-        self.linear_v = nn.Linear(channels, channels)
-        self.linear_o = nn.Linear(channels, out_channels)
+        self.features_per_head = in_features // num_heads
+        self.linear_q = nn.Linear(in_features, in_features)
+        self.linear_k = nn.Linear(in_features, in_features)
+        self.linear_v = nn.Linear(in_features, in_features)
+        self.linear_o = nn.Linear(in_features, out_features)
 
         if window_size is not None:
-            n_heads_rel = 1
-            rel_stddev = self.k_channels**-0.5
-            self.emb_rel_k = nn.Parameter(torch.randn(n_heads_rel, window_size * 2 + 1, self.k_channels) * rel_stddev)
-            self.emb_rel_v = nn.Parameter(torch.randn(n_heads_rel, window_size * 2 + 1, self.k_channels) * rel_stddev)
+            num_heads_rel = 1
+            rel_stddev = self.features_per_head**-0.5
+            self.emb_rel_k = nn.Parameter(
+                torch.randn(num_heads_rel, window_size * 2 + 1, self.features_per_head) * rel_stddev
+            )
+            self.emb_rel_v = nn.Parameter(
+                torch.randn(num_heads_rel, window_size * 2 + 1, self.features_per_head) * rel_stddev
+            )
 
     def forward(self, x: torch.Tensor, c: torch.Tensor):
         q = linear_channel_first(x, self.linear_q)
@@ -122,15 +126,17 @@ class MultiHeadAttention(nn.Module):
         # reshape [b, d, t] -> [b, n_h, t, d_k]
         b, d, t_s = key.size()
         t_t = query.size(2)
-        query = query.view(b, self.n_heads, self.k_channels, t_t).transpose(2, 3)
-        key = key.view(b, self.n_heads, self.k_channels, t_s)
-        value = value.view(b, self.n_heads, self.k_channels, t_s).transpose(2, 3)
+        query = query.view(b, self.num_heads, self.features_per_head, t_t).transpose(2, 3)
+        key = key.view(b, self.num_heads, self.features_per_head, t_s)
+        value = value.view(b, self.num_heads, self.features_per_head, t_s).transpose(2, 3)
 
-        scores = torch.matmul(query / math.sqrt(self.k_channels), key)
+        scores = torch.matmul(query / math.sqrt(self.features_per_head), key)
         if self.window_size is not None:
             assert t_s == t_t, "Relative attention is only available for self-attention."
             key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, t_s)
-            rel_logits = self._matmul_with_relative_keys(query / math.sqrt(self.k_channels), key_relative_embeddings)
+            rel_logits = self._matmul_with_relative_keys(
+                query / math.sqrt(self.features_per_head), key_relative_embeddings
+            )
             scores_local = self._relative_position_to_absolute_position(rel_logits)
             scores = scores + scores_local
         p_attn = F.softmax(scores, dim=-1)  # [b, n_h, t_t, t_s]

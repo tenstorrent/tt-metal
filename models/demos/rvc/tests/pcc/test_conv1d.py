@@ -80,7 +80,7 @@ def test_conv1d(device, kernel_size, padding, activation):
         dtype=ttnn.bfloat16,
         activation=activation,
     )
-    tt_conv.load_parameters(
+    tt_conv.load_state_dict(
         {
             "conv.weight": torch_conv.weight.detach().cpu(),
             "conv.bias": torch_conv.bias.detach().cpu(),

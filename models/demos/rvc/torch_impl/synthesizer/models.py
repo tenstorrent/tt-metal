@@ -20,8 +20,8 @@ class TextEncoder(nn.Module):
         out_channels,
         hidden_channels,
         filter_channels,
-        n_heads,
-        n_layers,
+        num_heads,
+        num_layers,
         kernel_size,
         f0=True,
     ):
@@ -35,8 +35,8 @@ class TextEncoder(nn.Module):
         self.encoder = attentions.Encoder(
             hidden_channels,
             filter_channels,
-            n_heads,
-            n_layers,
+            num_heads,
+            num_layers,
             kernel_size,
         )
         self.proj_linear = nn.Linear(hidden_channels, out_channels * 2)
@@ -63,7 +63,7 @@ class ResidualCouplingBlock(nn.Module):
         hidden_channels,
         kernel_size,
         dilation_rate,
-        n_layers,
+        num_layers,
         n_flows=4,
         gin_channels=0,
     ):
@@ -77,7 +77,7 @@ class ResidualCouplingBlock(nn.Module):
                     hidden_channels,
                     kernel_size,
                     dilation_rate,
-                    n_layers,
+                    num_layers,
                     gin_channels=gin_channels,
                 )
             )
@@ -339,8 +339,8 @@ class SynthesizerTrnMsNSF(nn.Module):
         inter_channels,
         hidden_channels,
         filter_channels,
-        n_heads,
-        n_layers,
+        num_heads,
+        num_layers,
         kernel_size,
         resblock,
         resblock_kernel_sizes,
@@ -360,8 +360,8 @@ class SynthesizerTrnMsNSF(nn.Module):
             inter_channels,
             hidden_channels,
             filter_channels,
-            n_heads,
-            n_layers,
+            num_heads,
+            num_layers,
             kernel_size,
         )
         self.dec = GeneratorNSF(
@@ -405,8 +405,8 @@ class SynthesizerTrnMsNSF_nono(nn.Module):
         inter_channels,
         hidden_channels,
         filter_channels,
-        n_heads,
-        n_layers,
+        num_heads,
+        num_layers,
         kernel_size,
         resblock,
         resblock_kernel_sizes,
@@ -424,8 +424,8 @@ class SynthesizerTrnMsNSF_nono(nn.Module):
             inter_channels,
             hidden_channels,
             filter_channels,
-            n_heads,
-            n_layers,
+            num_heads,
+            num_layers,
             kernel_size,
             f0=False,
         )

@@ -36,7 +36,7 @@ def test_hubert_transformer_encoder(device, layer_norm_first):
     tt_encoder = TTTransformerEncoder(device=device, args=args)
 
     parameters = {f"encoder.{k}": v for k, v in torch_encoder.state_dict().items()}
-    tt_encoder.load_parameters(parameters=parameters, prefix="encoder.")
+    tt_encoder.load_state_dict(parameters=parameters, module_prefix="encoder.")
 
     torch_x = torch.randn(batch_size, seq_len, args["encoder_embed_dim"], dtype=torch.float32)
     torch_output = torch_encoder(torch_x, tgt_layer=tgt_layer)

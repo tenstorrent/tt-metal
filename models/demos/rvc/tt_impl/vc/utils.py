@@ -22,7 +22,7 @@ def load_model_ensemble_and_task(
     model = HubertModel.build_model(cfg["model"], task, device=tt_device)
     hubert_state_safetensors = load_file(model_path)
 
-    model.load_parameters(hubert_state_safetensors)
+    model.load_state_dict(hubert_state_safetensors)
     return model
 
 

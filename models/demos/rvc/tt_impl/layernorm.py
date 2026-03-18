@@ -12,6 +12,8 @@ import ttnn
 class LayerNorm:
     """Stateful LayerNorm wrapper around `ttnn.layer_norm` for last-dim normalization."""
 
+    total_layernorm_time = 0.0
+
     def __init__(
         self,
         device: ttnn.MeshDevice,
@@ -30,8 +32,8 @@ class LayerNorm:
         self.dtype = dtype
         self.memory_config = memory_config
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], key: str, prefix: str = "") -> None:
-        base_key = f"{prefix}{key}" if prefix else key
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+        base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 
@@ -54,9 +56,6 @@ class LayerNorm:
         )
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        if self.weight is None or self.bias is None:
-            raise ValueError("LayerNorm parameters are not set. Provide them in __init__ or call load_parameters().")
-
         self.weight = ttnn.to_memory_config(self.weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         out = ttnn.layer_norm(

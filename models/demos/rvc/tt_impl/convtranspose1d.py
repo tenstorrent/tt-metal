@@ -221,8 +221,8 @@ class ConvTranspose1d:
         self.compute_config = compute_config
         self.memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], key: str, prefix: str = "") -> None:
-        base_key = f"{prefix}{key}" if prefix else key
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+        base_key = f"{module_prefix}{key}" if module_prefix else key
         bias_key = f"{base_key}.bias"
         wt_torch = parameters[f"{base_key}.weight"]
         wt = wt_torch.reshape(
@@ -244,9 +244,6 @@ class ConvTranspose1d:
             )
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        if self.weight_tensor is None:
-            raise ValueError("weight_tensor is not set. Provide it in __init__ or call load_parameters().")
-
         input_2d = input1d_to_2d(input_tensor)
         batch_size = input_2d.shape[0]
         input_length = input_2d.shape[2]

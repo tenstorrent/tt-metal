@@ -57,7 +57,7 @@ def test_convtranspose1d(device):
         "decoder.deconv.weight": torch_deconv.weight,
         "decoder.deconv.bias": torch_deconv.bias,
     }
-    tt_deconv.load_parameters(parameters=parameters, key="deconv", prefix="decoder.")
+    tt_deconv.load_state_dict(parameters=parameters, key="deconv", module_prefix="decoder.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16).permute(0, 2, 1),

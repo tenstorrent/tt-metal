@@ -209,9 +209,9 @@ def get_conv_configs(
     slice_num, act_block_h_override = get_conv2d_config_values(
         output_length, conv1d_config.in_channels, conv1d_config.out_channels, conv1d_config.kernel_size
     )
-    slice_config = ttnn.Conv2dSliceConfig(
-        num_slices=slice_num, slice_type=ttnn.Op2DDRAMSliceWidth
-    )  # if slice_num > 1 else None
+    slice_config = (
+        ttnn.Conv2dSliceConfig(num_slices=slice_num, slice_type=ttnn.Op2DDRAMSliceWidth) if slice_num > 1 else None
+    )
 
     act_block_w_div = 1
     return (
@@ -300,13 +300,13 @@ class Conv1d:
         self.configuration = configuration
         self.memory_config = ttnn.L1_MEMORY_CONFIG
 
-    def load_parameters(
+    def load_state_dict(
         self,
         parameters: dict[str, torch.Tensor],
         key: str,
-        prefix: str = "",
+        module_prefix: str = "",
     ) -> None:
-        base_key = f"{prefix}{key}" if prefix else key
+        base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 
@@ -360,14 +360,13 @@ class Conv1d:
         )
         output_shape = conv_result.shape
         x = ttnn.reshape(conv_result, (batch_size, output_shape[2], output_shape[3]))
-        # self._check_against_torch(input_tensor, x)
         return x
 
     def _check_against_torch(self, input_tensor: ttnn.Tensor, tt_output: ttnn.Tensor) -> None:
         # Compare TT Conv1d output against torch.nn.functional.conv1d reference.
         torch_input = ttnn.to_torch(ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)).to(torch.float32)
         if not hasattr(self, "torch_weight"):
-            raise ValueError("Conv1d torch reference weight is not initialized. Call load_parameters first.")
+            raise ValueError("Conv1d torch reference weight is not initialized. Call load_state_dict first.")
         torch_weight = self.torch_weight
         torch_bias = self.torch_bias
 
