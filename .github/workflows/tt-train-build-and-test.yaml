@@ -122,7 +122,7 @@ jobs:
       - name: tt-train tests
         run: |
           cd /work/build/tt-train
-          ctest --no-tests=error --output-on-failure
+          ctest -E NIGHTLY --no-tests=error --output-on-failure
 
       - name: Cleanup workspace
         if: always()
