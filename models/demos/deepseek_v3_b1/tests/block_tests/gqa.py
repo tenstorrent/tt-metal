@@ -6,18 +6,20 @@
 
 import torch
 import torch.nn.functional as F
-
-from helpers import repeat_kv, apply_rotary_pos_emb, apply_rotary_pos_emb_glm4
-
+from helpers import apply_rotary_pos_emb, apply_rotary_pos_emb_glm4, repeat_kv, rms_norm
 
 # ---------------------------------------------------------------------------
 # GQA — reference implementation
 # ---------------------------------------------------------------------------
 
+
 def gqa_attention_torch(
     hidden_states,
     *,
-    wq, wk, wv, wo,
+    wq,
+    wk,
+    wv,
+    wo,
     num_q_heads,
     num_kv_heads,
     position_embeddings=None,
@@ -25,6 +27,8 @@ def gqa_attention_torch(
     attention_mask=None,
     past_key_value=None,
     use_cache=False,
+    qk_norm_weights=None,
+    qk_norm_eps=1e-6,
 ):
     """
     Grouped Query Attention.
@@ -38,15 +42,24 @@ def gqa_attention_torch(
     rope_variant: "standard" (Llama/Qwen) or "glm4" (interleaved, partial)
     attention_mask: None or additive [b,1,q,kv]
     past_key_value: None or (past_k, past_v) each [b, kv_heads, past_seq, hd]
+    qk_norm_weights: None or (q_norm_gamma, k_norm_gamma) for per-head RMSNorm
+        Used by GLM-4.7, Qwen3-235B, Llama4-Scout, OLMoE, MiniMax-M25
+    qk_norm_eps: epsilon for QK RMSNorm
 
     Returns (attn_out [b, seq, hidden], present_kv or None)
     """
     b, q_seq, h = hidden_states.shape
     head_dim = wq.shape[0] // num_q_heads
+    scale = head_dim**-0.5
 
     q = F.linear(hidden_states, wq).view(b, q_seq, num_q_heads, head_dim).transpose(1, 2)
     k = F.linear(hidden_states, wk).view(b, q_seq, num_kv_heads, head_dim).transpose(1, 2)
     v = F.linear(hidden_states, wv).view(b, q_seq, num_kv_heads, head_dim).transpose(1, 2)
+
+    if qk_norm_weights is not None:
+        q_norm_w, k_norm_w = qk_norm_weights
+        q = rms_norm(q, q_norm_w, eps=qk_norm_eps)
+        k = rms_norm(k, k_norm_w, eps=qk_norm_eps)
 
     if position_embeddings is not None:
         cos, sin = position_embeddings
@@ -66,7 +79,7 @@ def gqa_attention_torch(
     k_exp = repeat_kv(k, n_rep)
     v_exp = repeat_kv(v, n_rep)
 
-    scores = torch.matmul(q, k_exp.transpose(-2, -1)) * (head_dim ** -0.5)
+    scores = torch.matmul(q, k_exp.transpose(-2, -1)) * scale
 
     if attention_mask is not None:
         scores = scores + attention_mask
