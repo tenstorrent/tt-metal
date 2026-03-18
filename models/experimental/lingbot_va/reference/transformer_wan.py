@@ -5,6 +5,7 @@
 """WanTransformer3DModel and its components (attention, blocks, embeddings, RoPE)."""
 
 import math
+import os
 from copy import deepcopy
 
 import torch
@@ -540,7 +541,14 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         temb, timestep_proj = current_condition_embedder(latent_time_steps, dtype=latent_hidden_states.dtype)
         timestep_proj = timestep_proj.unflatten(2, (6, -1))  # B L 6 C
 
-        for block in self.blocks:
+        dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
+        os.makedirs(dump_dir, exist_ok=True)
+        torch.save(
+            latent_hidden_states.detach().cpu(),
+            os.path.join(dump_dir, "input_torch.pt"),
+        )
+
+        for block_idx, block in enumerate(self.blocks, start=1):
             latent_hidden_states = block(
                 latent_hidden_states,
                 text_hidden_states,
@@ -549,6 +557,11 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
                 update_cache=update_cache,
                 cache_name=cache_name,
             )
+            if block_idx <= 5:
+                torch.save(
+                    latent_hidden_states.detach().cpu(),
+                    os.path.join(dump_dir, f"transformer_torch_{block_idx}.pt"),
+                )
         temb_scale_shift_table = self.scale_shift_table[None] + temb[:, :, None, ...]
         shift, scale = rearrange(temb_scale_shift_table, "b l n c -> b n l c").chunk(2, dim=1)
         shift = shift.to(latent_hidden_states.device).squeeze(1)

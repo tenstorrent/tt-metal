@@ -13,6 +13,7 @@ action_proj_out, and dual forward paths (video + action).
 from __future__ import annotations
 
 import torch
+import os
 from loguru import logger
 
 import ttnn
@@ -184,7 +185,7 @@ class WanTransformerBlock(Module):
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
-        temb_1BTD: replicated on SP, fractured D on TP
+        temb_1BTD: [1, B, 6, D] global conditioning OR [1, B, N_padded, 6*D] per-token conditioning
         N: logical sequence length of the spatial input
         rope_cos_BANH: fractured N on SP, A (num_heads) on TP
         rope_sin_BANH: fractured N on SP, A (num_heads) on TP
@@ -194,37 +195,62 @@ class WanTransformerBlock(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
-        assert temb_1BTD.shape[2] == 6, "wan expects 6 chunks in timestep embedding"
-
-        shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
-        shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
-            shifted_temb_1BTD, 6, dim=2
-        )
-        # addcmul gate in bfloat16 for numerical accuracy
-        gate_msa_1B1D = ttnn.typecast(gate_msa_1B1D, dtype=ttnn.bfloat16)
-        c_gate_msa_1B1D = ttnn.typecast(c_gate_msa_1B1D, dtype=ttnn.bfloat16)
-
-        spatial_normed_1BND = self.norm1(
-            spatial_1BND, dynamic_weight=(1.0 + scale_msa_1B1D), dynamic_bias=shift_msa_1B1D
-        )
-
-        # Self attention on spatial with fused residual addcmul
-        attn1_out = self.attn1(
-            spatial_1BND=spatial_normed_1BND,
-            N=N,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=trans_mat,
-            addcmul_residual=spatial_1BND,
-            addcmul_gate=gate_msa_1B1D,
-            cached_k=cached_k,
-            cached_v=cached_v,
-            return_kv=return_kv,
-        )
-        if return_kv:
-            spatial_1BND, k_cur, v_cur = attn1_out
+        T_dim = temb_1BTD.shape[2]
+        if T_dim == 6:
+            shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(
+                shifted_temb_1BTD, 6, dim=2
+            )
         else:
-            spatial_1BND = attn1_out
+            sst = self.scale_shift_table.data
+            sst_flat = ttnn.reshape(sst, (1, 1, 1, sst.shape[-2] * sst.shape[-1]))
+            shifted = temb_1BTD + sst_flat
+            shift_msa, scale_msa, gate_msa, c_shift_msa, c_scale_msa, c_gate_msa = ttnn.chunk(shifted, 6, dim=-1)
+
+        gate_msa = ttnn.typecast(gate_msa, dtype=ttnn.bfloat16)
+        c_gate_msa = ttnn.typecast(c_gate_msa, dtype=ttnn.bfloat16)
+
+        per_token = T_dim != 6
+        if per_token:
+            spatial_normed_1BND = self.norm1(spatial_1BND)
+            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
+                1.0 + scale_msa, spatial_normed_1BND.dtype
+            ) + ttnn.typecast(shift_msa, spatial_normed_1BND.dtype)
+        else:
+            spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=(1.0 + scale_msa), dynamic_bias=shift_msa)
+        if per_token:
+            attn1_out = self.attn1(
+                spatial_1BND=spatial_normed_1BND,
+                N=N,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                cached_k=cached_k,
+                cached_v=cached_v,
+                return_kv=return_kv,
+            )
+            if return_kv:
+                attn_output, k_cur, v_cur = attn1_out
+            else:
+                attn_output = attn1_out
+            spatial_1BND = ttnn.addcmul(spatial_1BND, attn_output, gate_msa)
+        else:
+            attn1_out = self.attn1(
+                spatial_1BND=spatial_normed_1BND,
+                N=N,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                addcmul_residual=spatial_1BND,
+                addcmul_gate=gate_msa,
+                cached_k=cached_k,
+                cached_v=cached_v,
+                return_kv=return_kv,
+            )
+            if return_kv:
+                spatial_1BND, k_cur, v_cur = attn1_out
+            else:
+                spatial_1BND = attn1_out
 
         # Cross attention on prompt
         spatial_normed_1BND = self.norm2(spatial_1BND)
@@ -237,9 +263,13 @@ class WanTransformerBlock(Module):
         spatial_1BND = spatial_1BND + attn_output_1BND
 
         # Feed Forward
-        spatial_normed_1BND = self.norm3(
-            spatial_1BND, dynamic_weight=(1.0 + c_scale_msa_1B1D), dynamic_bias=c_shift_msa_1B1D
-        )
+        if per_token:
+            spatial_normed_1BND = self.norm3(spatial_1BND)
+            spatial_normed_1BND = spatial_normed_1BND * ttnn.typecast(
+                1.0 + c_scale_msa, spatial_normed_1BND.dtype
+            ) + ttnn.typecast(c_shift_msa, spatial_normed_1BND.dtype)
+        else:
+            spatial_normed_1BND = self.norm3(spatial_1BND, dynamic_weight=(1.0 + c_scale_msa), dynamic_bias=c_shift_msa)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_normed_1BND = self.ccl_manager.all_gather_persistent_buffer(
@@ -248,7 +278,7 @@ class WanTransformerBlock(Module):
 
         spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
-        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
+        spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa)
 
         if return_kv:
             return (spatial_1BND, k_cur, v_cur)
@@ -562,6 +592,66 @@ class WanTransformer3DModel(Module):
         tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
         return tt_temb_11BD, tt_timestep_proj_1BTD
 
+    def prepare_per_token_conditioning(
+        self,
+        timestep_per_frame: torch.Tensor,
+        encoder_hidden_states: torch.Tensor,
+        action_mode: bool = False,
+        patches_per_frame: int = 1,
+        N_padded: int | None = None,
+    ):
+        """Build per-token timestep conditioning from per-frame timesteps.
+
+        Args:
+            timestep_per_frame: [B, F] per-frame timestep values.
+            encoder_hidden_states: text prompt tensor.
+            action_mode: use action condition embedder.
+            patches_per_frame: H_patches * W_patches (spatial patches per frame).
+            N_padded: padded sequence length (for SP); defaults to F * patches_per_frame.
+
+        Returns:
+            temb_1BND: per-token temb [1, B, N_padded, D] for final norm.
+            timestep_proj_1BN6D: per-token conditioning [1, B, N_padded, 6*D_frac] for blocks.
+            prompt_1BLP: text conditioning.
+        """
+        B, F_frames = timestep_per_frame.shape
+        N = F_frames * patches_per_frame
+        if N_padded is None:
+            N_padded = N
+
+        unique_ts = torch.unique(timestep_per_frame)
+        ts_to_proj: dict[float, tuple] = {}
+        for t_val in unique_ts:
+            temb_i, proj_i = self.prepare_timestep_conditioning(t_val.unsqueeze(0), action_mode)
+            temb_host = ttnn.to_torch(ttnn.get_device_tensors(temb_i)[0])
+            proj_host = ttnn.to_torch(ttnn.get_device_tensors(proj_i)[0])
+            ts_to_proj[t_val.item()] = (temb_host, proj_host)
+
+        temb_sample = next(iter(ts_to_proj.values()))
+        D_temb = temb_sample[0].shape[-1]
+        D_proj6 = temb_sample[1].shape[-2] * temb_sample[1].shape[-1]
+
+        per_token_temb = torch.zeros(1, B, N_padded, D_temb, dtype=torch.float32)
+        per_token_proj = torch.zeros(1, B, N_padded, D_proj6, dtype=torch.float32)
+
+        for b_idx in range(B):
+            patch_offset = 0
+            for f_idx in range(F_frames):
+                t_val = timestep_per_frame[b_idx, f_idx].item()
+                temb_host, proj_host = ts_to_proj[t_val]
+                temb_vec = temb_host.squeeze()[:D_temb]
+                proj_vec = proj_host.reshape(-1)[:D_proj6]
+                start = patch_offset
+                end = patch_offset + patches_per_frame
+                per_token_temb[0, b_idx, start:end, :] = temb_vec.unsqueeze(0).expand(patches_per_frame, -1)
+                per_token_proj[0, b_idx, start:end, :] = proj_vec.unsqueeze(0).expand(patches_per_frame, -1)
+                patch_offset += patches_per_frame
+
+        tt_per_token_temb = float32_tensor(per_token_temb, device=self.mesh_device)
+        tt_per_token_proj = float32_tensor(per_token_proj, device=self.mesh_device)
+        tt_prompt_1BLP = self.prepare_text_conditioning(encoder_hidden_states, action_mode=action_mode)
+        return tt_per_token_temb, tt_per_token_proj, tt_prompt_1BLP
+
     def prepare_conditioning(
         self,
         timestep: torch.Tensor,
@@ -633,7 +723,7 @@ class WanTransformer3DModel(Module):
             spatial_1BND, dim=2, mesh_axis=self.parallel_config.sequence_parallel.mesh_axis
         )
         spatial_1BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0])
-        return self.postprocess_spatial_output_host(spatial_1BND, F, H, W, N)
+        return self.postprocess_spatial_output_host(spatial_1BND, F, H, W, N).float()
 
     def postprocess_action_output(self, spatial_1BND: ttnn.Tensor, N: int) -> torch.Tensor:
         """Gather SP and return (B, N, action_dim)."""
@@ -642,7 +732,7 @@ class WanTransformer3DModel(Module):
         )
         out = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0])
         out = out[0, :, :N, :]  # (1, B, N, action_dim) -> (B, N, action_dim)
-        return out
+        return out.float()
 
     def forward(
         self,
@@ -653,6 +743,7 @@ class WanTransformer3DModel(Module):
         action_mode: bool = False,
         update_cache: int = 0,
         cache_name: str = "pos",
+        timestep_per_frame: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass.
@@ -660,21 +751,38 @@ class WanTransformer3DModel(Module):
         Args:
             spatial: Video path (B, in_channels, F, H, W) or action path (B, action_dim, F, H, W).
             prompt: Encoder hidden states (text).
-            timestep: 1D timestep tensor.
+            timestep: 1D timestep tensor (used when timestep_per_frame is None).
             action_mode: If True, use action embedder and action_proj_out.
+            timestep_per_frame: Optional [B, F] per-frame timesteps for per-token conditioning.
 
         Returns:
             Video path: (B, out_channels, F, H, W). Action path: (B, N, action_dim).
         """
         B, C, F, H, W = spatial.shape
         pF, pH, pW = self.patch_size
-        patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
+        if action_mode:
+            patch_F, patch_H, patch_W = F, H, W
+        else:
+            patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
 
         rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(grid_id)
-        temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(
-            timestep, prompt, action_mode=action_mode
-        )
+
+        use_per_token = timestep_per_frame is not None
+        if use_per_token:
+            patches_per_frame = patch_H * patch_W
+            N_padded = get_padded_vision_seq_len(N, self.parallel_config.sequence_parallel.factor)
+            temb_1BND, timestep_proj_1BN6D, prompt_1BLP = self.prepare_per_token_conditioning(
+                timestep_per_frame,
+                prompt,
+                action_mode=action_mode,
+                patches_per_frame=patches_per_frame,
+                N_padded=N_padded,
+            )
+        else:
+            temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(
+                timestep, prompt, action_mode=action_mode
+            )
 
         if action_mode:
             spatial_1BNI, N = self.preprocess_action_input(spatial)
@@ -694,6 +802,18 @@ class WanTransformer3DModel(Module):
             and self.parallel_config.tensor_parallel.factor == 1
         )
         caches = self._attn_caches.get(cache_name) if use_cache else None
+
+        block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
+        dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
+        os.makedirs(dump_dir, exist_ok=True)
+
+        def _to_torch_cpu(tt_tensor: ttnn.Tensor) -> torch.Tensor:
+            return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).detach().cpu()
+
+        torch.save(
+            _to_torch_cpu(spatial_1BND),
+            os.path.join(dump_dir, "input_tt.pt"),
+        )
 
         for block_idx, block in enumerate(self.blocks):
             cached_k_tt = None
@@ -720,7 +840,7 @@ class WanTransformer3DModel(Module):
                 attn1_out = block(
                     spatial_1BND=spatial_1BND,
                     prompt_1BLP=prompt_1BLP,
-                    temb_1BTD=timestep_proj_1BTD,
+                    temb_1BTD=block_temb,
                     N=N,
                     rope_cos=rope_cos_1HND,
                     rope_sin=rope_sin_1HND,
@@ -744,25 +864,46 @@ class WanTransformer3DModel(Module):
                 slots = self._cache_update(cache, k_t, v_t, is_pred=(update_cache == 1))
                 if update_cache == 0:
                     self._cache_restore(cache, slots)
+                if block_idx < 5:
+                    torch.save(
+                        (
+                            _to_torch_cpu(attn1_out[0]),
+                            _to_torch_cpu(attn1_out[1]),
+                            _to_torch_cpu(attn1_out[2]),
+                        ),
+                        os.path.join(dump_dir, f"transformers_tt_{block_idx + 1}.pt"),
+                    )
             else:
                 spatial_1BND = block(
                     spatial_1BND=spatial_1BND,
                     prompt_1BLP=prompt_1BLP,
-                    temb_1BTD=timestep_proj_1BTD,
+                    temb_1BTD=block_temb,
                     N=N,
                     rope_cos=rope_cos_1HND,
                     rope_sin=rope_sin_1HND,
                     trans_mat=trans_mat,
                 )
+                if block_idx < 5:
+                    torch.save(
+                        _to_torch_cpu(spatial_1BND),
+                        os.path.join(dump_dir, f"transformers_tt_{block_idx + 1}.pt"),
+                    )
 
-        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
-        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
-        spatial_norm_1BND = self.norm_out(
-            spatial_1BND,
-            dynamic_weight=(1 + scale_11BD),
-            dynamic_bias=shift_11BD,
-            dtype=ttnn.float32,
-        )
+        if use_per_token:
+            sst_shift, sst_scale = ttnn.chunk(self.scale_shift_table.data, 2, dim=-2)
+            shift_norm = sst_shift + temb_1BND
+            scale_norm = sst_scale + temb_1BND
+            spatial_norm_1BND = self.norm_out(spatial_1BND, dtype=ttnn.float32)
+            spatial_norm_1BND = spatial_norm_1BND * (1 + scale_norm) + shift_norm
+        else:
+            scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
+            shift_norm, scale_norm = ttnn.chunk(scale_shift_1BSD, 2, -2)
+            spatial_norm_1BND = self.norm_out(
+                spatial_1BND,
+                dynamic_weight=(1 + scale_norm),
+                dynamic_bias=shift_norm,
+                dtype=ttnn.float32,
+            )
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial_norm_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 spatial_norm_1BND,
