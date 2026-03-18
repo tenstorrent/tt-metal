@@ -184,6 +184,8 @@ class ResBlock(Module):
             if in_channels in (768, 512, 256)
             else mesh_device.core_grid.y
         )
+        max_grid_y = 7 if grid_size_x > 8 else mesh_device.core_grid.y
+        grid_size_y = min(grid_size_y, max_grid_y)
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
 
         self.norm1 = GroupNorm(
