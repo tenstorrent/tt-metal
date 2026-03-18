@@ -111,6 +111,21 @@ def mesh_device_fixture():
         del device
 
 
+def _is_valid_placement(placement):
+    """Check if a tensor placement dict has a valid mesh_device_shape."""
+    if not placement or not isinstance(placement, dict):
+        return False
+    mesh_shape = placement.get("mesh_device_shape", "")
+    if isinstance(mesh_shape, str):
+        mesh_shape = mesh_shape.strip()
+        if not mesh_shape or mesh_shape == "[]":
+            return False
+    elif isinstance(mesh_shape, list):
+        if len(mesh_shape) < 2:
+            return False
+    return True
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -132,9 +147,12 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
-    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
+    raw_placement_a = kwargs.get("input_a_tensor_placement", None)
+    input_a_tensor_placement = raw_placement_a if _is_valid_placement(raw_placement_a) else None
+    raw_placement_b = kwargs.get("input_b_tensor_placement", None)
+    input_b_tensor_placement = raw_placement_b if _is_valid_placement(raw_placement_b) else None
+    raw_placement_c = kwargs.get("input_c_tensor_placement", None)
+    input_c_tensor_placement = raw_placement_c if _is_valid_placement(raw_placement_c) else None
     is_mesh_device = hasattr(device, "get_num_devices")
     is_causal = kwargs.get("is_causal", False)
     if is_causal is None:
@@ -178,20 +196,31 @@ def run(
             shape_v = shape_k
     else:
         shape_q = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
-        shape_k = tuple(input_b_shape) if input_b_shape is not None else shape_q
-        shape_v = tuple(input_c_shape) if input_c_shape is not None else shape_k
+        shape_k = (
+            tuple(input_b_shape)
+            if input_b_shape is not None and input_b_shape != "__ABSENT__" and isinstance(input_b_shape, (tuple, list))
+            else shape_q
+        )
+        shape_v = (
+            tuple(input_c_shape)
+            if input_c_shape is not None and input_c_shape != "__ABSENT__" and isinstance(input_c_shape, (tuple, list))
+            else shape_k
+        )
+
+    def _or_default(val, default):
+        return val if val is not None and val != "__ABSENT__" else default
 
     dtype_q = input_a_dtype
-    dtype_k = input_b_dtype
-    dtype_v = input_c_dtype
+    dtype_k = _or_default(input_b_dtype, dtype_q)
+    dtype_v = _or_default(input_c_dtype, dtype_k)
 
     layout_q = input_a_layout
-    layout_k = input_b_layout
-    layout_v = input_c_layout
+    layout_k = _or_default(input_b_layout, layout_q)
+    layout_v = _or_default(input_c_layout, layout_k)
 
     mem_config_q = input_a_memory_config
-    mem_config_k = input_b_memory_config
-    mem_config_v = input_c_memory_config
+    mem_config_k = _or_default(input_b_memory_config, mem_config_q)
+    mem_config_v = _or_default(input_c_memory_config, mem_config_k)
 
     batch_size, num_heads_q, seq_len, head_dim = shape_q
     _, num_heads_k, _, _ = shape_k
@@ -219,15 +248,29 @@ def run(
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
-    torch_q = ttnn.to_torch(
-        ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    )
-    torch_k = ttnn.to_torch(
-        ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    )
-    torch_v = ttnn.to_torch(
-        ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    )
+    # On mesh devices, use ReplicateTensorToMesh for the round-trip; then extract
+    # device 0's copy via get_device_tensors to get a clean single-device torch tensor.
+    def _quantize_roundtrip(torch_tensor, dtype, layout):
+        if is_mesh_device:
+            t = ttnn.from_torch(
+                torch_tensor,
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+        else:
+            return ttnn.to_torch(
+                ttnn.from_torch(
+                    torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+            )
+
+    torch_q = _quantize_roundtrip(torch_q, dtype_q, layout_q)
+    torch_k = _quantize_roundtrip(torch_k, dtype_k, layout_k)
+    torch_v = _quantize_roundtrip(torch_v, dtype_v, layout_v)
 
     # Ensure all tensors have the same dtype for PyTorch SDPA
     torch_q = torch_q.to(torch.float32)
@@ -257,11 +300,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     # Quantize PyTorch output to match TTNN output dtype for fair comparison
-    torch_output_tensor = ttnn.to_torch(
-        ttnn.from_torch(
-            torch_output_golden, dtype=dtype_q, layout=layout_q, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-    )
+    torch_output_tensor = _quantize_roundtrip(torch_output_golden, dtype_q, layout_q)
 
     # Check with PCC (threshold 0.99 for low-precision dtypes)
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)

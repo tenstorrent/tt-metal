@@ -61,6 +61,25 @@ def mesh_device_fixture():
         del device
 
 
+def _is_valid_placement(placement):
+    """Check if a tensor placement dict has a valid mesh_device_shape.
+
+    Placements with empty mesh_device_shape (e.g., from HOST-only tensors) cannot
+    be used with create_tensor_on_mesh and should be treated as no placement.
+    """
+    if not placement or not isinstance(placement, dict):
+        return False
+    mesh_shape = placement.get("mesh_device_shape", "")
+    if isinstance(mesh_shape, str):
+        mesh_shape = mesh_shape.strip()
+        if not mesh_shape or mesh_shape == "[]":
+            return False
+    elif isinstance(mesh_shape, list):
+        if len(mesh_shape) < 2:
+            return False
+    return True
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -76,13 +95,19 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    raw_placement = kwargs.get("input_a_tensor_placement", None)
+    input_a_tensor_placement = raw_placement if _is_valid_placement(raw_placement) else None
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
 
     # v2 tracer puts target shape in arg1 or shape; arg2 may hold a
-    # secondary shape (e.g. padded output shape) used by some internal paths
-    tgt_shape = target_shape or shape or kwargs.get("arg1", None)
+    # secondary shape (e.g. padded output shape) used by some internal paths.
+    # Filter out "__ABSENT__" sentinel values from the V2 loader.
+    def _clean_absent(val):
+        """Return None if val is the __ABSENT__ sentinel."""
+        return None if val == "__ABSENT__" else val
+
+    tgt_shape = _clean_absent(target_shape) or _clean_absent(shape) or _clean_absent(kwargs.get("arg1", None))
     if tgt_shape is None:
         tgt_shape = (1, 32, 1, 32)  # fallback for sample
 
@@ -94,17 +119,37 @@ def run(
         m = re.search(r"\[([0-9, ]+)\]", str(tgt_shape["value"]))
         if m:
             tgt_shape = tuple(int(x) for x in m.group(1).split(","))
+    elif isinstance(tgt_shape, dict):
+        # Unrecognized dict format -- try to extract shape from any string repr
+        import re
+
+        m = re.search(r"\[([0-9, ]+)\]", str(tgt_shape))
+        if m:
+            tgt_shape = tuple(int(x) for x in m.group(1).split(","))
 
     # arg2 may be a padded output shape; extract if present
-    arg2 = kwargs.get("arg2", None)
+    arg2 = _clean_absent(kwargs.get("arg2", None))
     if arg2 is not None and isinstance(arg2, dict) and "value" in arg2:
         import re
 
         m = re.search(r"\[([0-9, ]+)\]", str(arg2["value"]))
         if m:
             arg2 = tuple(int(x) for x in m.group(1).split(","))
+        else:
+            arg2 = None  # Could not parse dict-style arg2
+    elif arg2 is not None and isinstance(arg2, dict):
+        import re
+
+        m = re.search(r"\[([0-9, ]+)\]", str(arg2))
+        if m:
+            arg2 = tuple(int(x) for x in m.group(1).split(","))
+        else:
+            arg2 = None  # Could not parse dict-style arg2
     if isinstance(arg2, list):
         arg2 = tuple(arg2)
+    # Final guard: arg2 must be a tuple of ints if present
+    if arg2 is not None and not isinstance(arg2, tuple):
+        arg2 = None
 
     in_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 

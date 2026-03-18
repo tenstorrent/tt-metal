@@ -65,6 +65,21 @@ def mesh_device_fixture():
         del device
 
 
+def _is_valid_placement(placement):
+    """Check if a tensor placement dict has a valid mesh_device_shape."""
+    if not placement or not isinstance(placement, dict):
+        return False
+    mesh_shape = placement.get("mesh_device_shape", "")
+    if isinstance(mesh_shape, str):
+        mesh_shape = mesh_shape.strip()
+        if not mesh_shape or mesh_shape == "[]":
+            return False
+    elif isinstance(mesh_shape, list):
+        if len(mesh_shape) < 2:
+            return False
+    return True
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -78,7 +93,8 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    raw_placement = kwargs.get("input_a_tensor_placement", None)
+    input_a_tensor_placement = raw_placement if _is_valid_placement(raw_placement) else None
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
@@ -89,7 +105,18 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    torch_output_tensor = torch.max(torch_input_tensor_a)
+    # Build PyTorch reference matching the traced op's dim/keepdim parameters.
+    # The traced configs pass dim and keepdim to ttnn.max, so the PyTorch reference
+    # must use the same parameters to produce matching output shapes.
+    reduce_dim = op_kwargs.get("dim", None)
+    keepdim = op_kwargs.get("keepdim", False)
+    if reduce_dim is not None:
+        torch_output_tensor = torch.max(torch_input_tensor_a, dim=reduce_dim, keepdim=keepdim)
+        # torch.max with dim returns (values, indices); we only need values
+        if isinstance(torch_output_tensor, tuple):
+            torch_output_tensor = torch_output_tensor[0]
+    else:
+        torch_output_tensor = torch.max(torch_input_tensor_a)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)

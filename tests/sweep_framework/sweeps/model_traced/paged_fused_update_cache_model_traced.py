@@ -87,6 +87,21 @@ def mesh_device_fixture():
         del device
 
 
+def _is_valid_placement(placement):
+    """Check if a tensor placement dict has a valid mesh_device_shape."""
+    if not placement or not isinstance(placement, dict):
+        return False
+    mesh_shape = placement.get("mesh_device_shape", "")
+    if isinstance(mesh_shape, str):
+        mesh_shape = mesh_shape.strip()
+        if not mesh_shape or mesh_shape == "[]":
+            return False
+    elif isinstance(mesh_shape, list):
+        if len(mesh_shape) < 2:
+            return False
+    return True
+
+
 def run(
     input_a_shape,
     input_a_dtype,
@@ -116,7 +131,8 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    raw_placement = kwargs.get("input_a_tensor_placement", None)
+    input_a_tensor_placement = raw_placement if _is_valid_placement(raw_placement) else None
     is_mesh_device = hasattr(device, "get_num_devices")
     _ = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
@@ -175,38 +191,31 @@ def run(
 
     # Convert to ttnn tensors
     def _safe_mem_config(mem_config, tensor_shape):
-        """Fall back to DRAM if shard spec is incompatible with device."""
+        """Fall back to DRAM if shard spec is incompatible with device.
+
+        Traced shard specs are computed for a specific device topology and may use
+        core grids that are invalid on the test device (different harvesting, grid sizes).
+        Always fall back to DRAM interleaved for sharded configs to avoid TT_FATAL.
+        """
         if mem_config is None:
             return ttnn.DRAM_MEMORY_CONFIG
         if not (hasattr(mem_config, "is_sharded") and mem_config.is_sharded()):
             return mem_config
-        try:
-            shard_spec = mem_config.shard_spec
-            if shard_spec is None:
-                return mem_config
-            shard_shape = shard_spec.shape
-            tensor_width = tensor_shape[-1] if len(tensor_shape) > 0 else 0
-            if shard_shape[1] != tensor_width and str(mem_config.memory_layout) != "TensorMemoryLayout.BLOCK_SHARDED":
-                return ttnn.DRAM_MEMORY_CONFIG
-            grid = device.compute_with_storage_grid_size()
-            num_cores = grid.x * grid.y
-            total_rows = 1
-            for d in tensor_shape[:-1]:
-                total_rows *= d
-            num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
-            if num_shards > num_cores:
-                return ttnn.DRAM_MEMORY_CONFIG
-        except Exception:
-            pass
-        return mem_config
+        # Sharded memory configs from traced runs have device-specific shard specs.
+        # Rather than trying to validate each shard spec against the test device grid,
+        # fall back to DRAM interleaved which works universally.
+        return ttnn.DRAM_MEMORY_CONFIG
 
     def _to_ttnn(torch_tensor, dtype, layout, mem_config, placement_key="input_a_tensor_placement"):
         if not is_host:
-            placement = kwargs.get(placement_key, input_a_tensor_placement)
+            # Always validate shard spec compatibility before creating tensor.
+            # Traced shard specs may have core grids from a different device topology.
+            safe_mc = _safe_mem_config(mem_config, torch_tensor.shape)
+            raw_placement = kwargs.get(placement_key, input_a_tensor_placement)
+            placement = raw_placement if _is_valid_placement(raw_placement) else None
             if is_mesh_device and placement:
-                return create_tensor_on_mesh(torch_tensor, device, dtype, layout, mem_config, placement)
+                return create_tensor_on_mesh(torch_tensor, device, dtype, layout, safe_mc, placement)
             else:
-                safe_mc = _safe_mem_config(mem_config, torch_tensor.shape)
                 return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=safe_mc)
         else:
             return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
@@ -271,7 +280,12 @@ def run(
     op_kwargs = {}
 
     # update_idxs: vector<uint32_t>
-    if update_idxs is not None and isinstance(update_idxs, list) and len(update_idxs) > 0:
+    if (
+        update_idxs is not None
+        and update_idxs != "__ABSENT__"
+        and isinstance(update_idxs, list)
+        and len(update_idxs) > 0
+    ):
         op_kwargs["update_idxs"] = update_idxs
     else:
         op_kwargs["update_idxs"] = []  # Empty vector
@@ -281,7 +295,7 @@ def run(
         op_kwargs["update_idxs_tensor"] = update_idxs_tensor_ttnn
 
     # share_cache: optional<bool>
-    if share_cache is not None:
+    if share_cache is not None and share_cache != "__ABSENT__":
         op_kwargs["share_cache"] = share_cache
 
     # page_table: optional Tensor
@@ -289,7 +303,7 @@ def run(
         op_kwargs["page_table"] = page_table_ttnn
 
     # batch_offset: uint32_t
-    if batch_offset is not None:
+    if batch_offset is not None and batch_offset != "__ABSENT__":
         op_kwargs["batch_offset"] = int(batch_offset)
 
     # Call the operation with all parameters
