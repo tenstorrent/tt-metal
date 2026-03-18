@@ -408,7 +408,7 @@ def get_sharded_dense_input(
     ]
 
     tt_dense_contribs = ttnn.reshape(tt_dense_contribs, shape1)
-    tt_dense_contribs = ttnn.permute(tt_dense_contribs, [3, 1, 0, 2, 4])
+    tt_dense_contribs = ttnn.permute(tt_dense_contribs, [1, 3, 0, 2, 4])
 
     shard_shape = (local_experts * num_tokens // token_parallel_core_dim, hidden // data_parallel_core_dim)
     shard_spec = ttnn.ShardSpec(core_range, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
@@ -717,15 +717,13 @@ def test_decode(
 @pytest.mark.parametrize("mesh_device", [(1, 16)], indirect=True)
 @pytest.mark.parametrize("batch", [512])
 @pytest.mark.parametrize("experts", [32])
-@pytest.mark.parametrize("select_experts_k", [2])
+@pytest.mark.parametrize("select_experts_k", [1, 2])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("seq", [1])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("worker_core_range", [((0, 0), (3, 3))])
 @pytest.mark.parametrize("token_parallel_core_dim", [4])
 @pytest.mark.parametrize("data_parallel_core_dim", [4])
 @pytest.mark.parametrize("num_links", [4])
-@pytest.mark.parametrize("mux_core_range", [((4, 0), (5, 7))])
 @pytest.mark.parametrize("num_outer_test_iters", [1])
 @pytest.mark.parametrize("num_test_iters", [40])
 @pytest.mark.parametrize("scheme", ["sequential", "best_congestion"])
@@ -737,17 +735,17 @@ def test_deepseek_perf(
     hidden_size,
     seq,
     cluster_axis,
-    worker_core_range,
     token_parallel_core_dim,
     data_parallel_core_dim,
     num_links,
-    mux_core_range,
     num_outer_test_iters,
     num_test_iters,
     scheme,
 ):
-    worker_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in worker_core_range])])
-    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(*[ttnn.CoreCoord(c) for c in mux_core_range])])
+    worker_cores = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(c, c) for c in ttnn.experimental.get_moe_combine_cores(mesh_device)]
+    )
+    mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
 
     assert worker_cores.num_cores() >= token_parallel_core_dim * data_parallel_core_dim
     assert mux_cores.num_cores() >= num_links * 2
