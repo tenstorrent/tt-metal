@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include "tt_metal/impl/context/context_types.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
@@ -20,6 +21,7 @@ class ControlPlane;
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal::distributed {
+class MeshDevice;
 class SystemMesh;
 }  // namespace tt::tt_metal::distributed
 
@@ -92,6 +94,27 @@ public:
     // Returns true if set_fabric_config changed state requiring a reinit.
     bool consume_force_reinit();
 
+    // Lazily creates a root MeshDevice covering all system devices.
+    // Subsequent calls with the same parameters are a no-op.
+    // The root is used internally to derive user-facing submesh MeshDevices.
+    void ensure_root_mesh_device(
+        MetalEnv& env,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t num_command_queues,
+        size_t worker_l1_size,
+        const DispatchCoreConfig& dispatch_core_config,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap);
+
+    // Returns the root mesh device, or nullptr if not yet initialized.
+    std::shared_ptr<distributed::MeshDevice> get_root_mesh_device() const;
+
+    // Returns the context id for the root mesh device.
+    ContextId get_root_mesh_device_context_id() const;
+
+    // Close the root mesh device and destroy the associated MetalContext.
+    void close_root_mesh_device();
+
 private:
     MetalEnvDescriptor descriptor_;
 
@@ -119,6 +142,13 @@ private:
     std::mutex control_plane_mutex_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     std::unique_ptr<distributed::SystemMesh> system_mesh_;
+
+    // --- Root mesh device (for multi-MeshDevice support) ---
+    // All user-facing MeshDevices created via create_mesh_device are submeshes of this root.
+    // The root covers all system devices and is initialized once (lazily).
+    ContextId get_root_mesh_device_context_id_{};
+    bool context_initialized_ = false;
+    std::shared_ptr<distributed::MeshDevice> root_mesh_device_;
 
     // --- Distributed context ---
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

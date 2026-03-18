@@ -507,11 +507,58 @@ void MetalEnvImpl::teardown_fabric_objects() {
     compute_only_distributed_context_.reset();
 }
 
+// ─── Root mesh device ─────────────────────────────────────────────────────────
+
+void MetalEnvImpl::ensure_root_mesh_device(
+    MetalEnv& env,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    size_t worker_l1_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    if (root_mesh_device_) {
+        return;
+    }
+
+    get_root_mesh_device_context_id_ = MetalContext::create_instance(env);
+    context_initialized_ = true;
+
+    distributed::MeshDeviceConfig full_system_config(std::nullopt);
+    root_mesh_device_ = distributed::MeshDeviceImpl::create(
+        get_root_mesh_device_context_id_,
+        full_system_config,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config,
+        l1_bank_remap,
+        worker_l1_size);
+}
+
+std::shared_ptr<distributed::MeshDevice> MetalEnvImpl::get_root_mesh_device() const { return root_mesh_device_; }
+
+ContextId MetalEnvImpl::get_root_mesh_device_context_id() const { return get_root_mesh_device_context_id_; }
+
+void MetalEnvImpl::close_root_mesh_device() {
+    if (root_mesh_device_) {
+        root_mesh_device_->close();
+        root_mesh_device_.reset();
+    }
+    if (context_initialized_) {
+        MetalContext::destroy_instance(false, get_root_mesh_device_context_id_);
+        context_initialized_ = false;
+    }
+}
+
 // ─── MetalEnv public forwarding ───────────────────────────────────────────────
 
 MetalEnv::MetalEnv(MetalEnvDescriptor descriptor) : impl_(std::make_unique<MetalEnvImpl>(std::move(descriptor))) {}
 
-MetalEnv::~MetalEnv() { this->impl_.reset(); }
+MetalEnv::~MetalEnv() {
+    impl_->close_root_mesh_device();
+    this->impl_.reset();
+}
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
@@ -535,5 +582,111 @@ float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
 tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() { return impl_->get_control_plane(); }
 distributed::SystemMesh& MetalEnv::get_system_mesh() { return impl_->get_system_mesh(); }
+<<<<<<< HEAD
+=======
+std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
+    const distributed::MeshDeviceConfig& config,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
+    impl_->ensure_root_mesh_device(
+        *this,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        worker_l1_size,
+        dispatch_core_config,
+        l1_bank_remap);
+
+    auto root = impl_->get_root_mesh_device();
+    const auto& root_shape = root->shape();
+    const auto requested_shape = config.mesh_shape().value_or(root_shape);
+
+    if (!config.physical_device_ids().empty()) {
+        // Resolve physical device IDs to the bounding offset in the root mesh.
+        // Find the minimum coordinate across all requested devices to use as the submesh offset.
+        const auto& ids = config.physical_device_ids();
+        tt::stl::SmallVector<uint32_t> min_coords(root_shape.dims(), std::numeric_limits<uint32_t>::max());
+        for (int phys_id : ids) {
+            bool found = false;
+            for (const auto& coord : distributed::MeshCoordinateRange(root_shape)) {
+                auto* device = root->impl().get_device(coord);
+                if (device && device->id() == phys_id) {
+                    for (size_t d = 0; d < root_shape.dims(); d++) {
+                        min_coords[d] = std::min(min_coords[d], coord[d]);
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            TT_FATAL(found, "Physical device ID {} not found in the system mesh", phys_id);
+        }
+        return root->create_submesh(requested_shape, distributed::MeshCoordinate(min_coords));
+    }
+
+    return root->create_submesh(requested_shape, config.offset());
+}
+
+std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
+    int device_id,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
+    impl_->ensure_root_mesh_device(
+        *this,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        worker_l1_size,
+        dispatch_core_config,
+        l1_bank_remap);
+
+    auto root = impl_->get_root_mesh_device();
+    const auto& root_shape = root->shape();
+
+    // Find the coordinate of device_id in the root mesh and return a unit submesh at that position.
+    for (const auto& coord : distributed::MeshCoordinateRange(root_shape)) {
+        auto* device = root->impl().get_device(coord);
+        if (device && device->id() == device_id) {
+            distributed::MeshShape unit_shape(tt::stl::SmallVector<uint32_t>(root_shape.dims(), 1));
+            return root->create_submesh(unit_shape, coord);
+        }
+    }
+    TT_THROW("Physical device ID {} not found in the system mesh", device_id);
+}
+
+std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
+    const std::vector<int>& device_ids,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
+    std::map<int, std::shared_ptr<distributed::MeshDevice>> result;
+    for (int device_id : device_ids) {
+        result[device_id] = create_unit_mesh_device(
+            device_id,
+            l1_small_size,
+            trace_region_size,
+            num_command_queues,
+            dispatch_core_config,
+            l1_bank_remap,
+            worker_l1_size);
+    }
+    return result;
+}
+
+SubDevice MetalEnv::create_sub_device(tt::stl::Span<const CoreRangeSet> cores) {
+    // Use SubDevice constructor marked as internal
+    return SubDevice(SubDeviceImpl(&MetalEnvAccessor(*this).impl(), cores));
+}
+>>>>>>> c2ba4f00da (try making create_mesh_device return a submeshdevice)
 
 }  // namespace tt::tt_metal

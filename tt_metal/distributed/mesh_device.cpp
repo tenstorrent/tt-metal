@@ -793,6 +793,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         }
     }
 
+<<<<<<< HEAD
     mesh_command_queues_.clear();
     sub_device_manager_tracker_.reset();
     scoped_devices_.reset();
@@ -800,6 +801,13 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
     is_internal_state_initialized = false;
     if (distributed_context_) {
         distributed_context_.reset();
+=======
+    // For the MetalEnv path, MetalContext lifetime is managed by MetalEnv::close_root_mesh_device.
+    // This flag is only set for the legacy (non-MetalEnv) code path.
+    if (destroy_metal_context_instance_on_close_) {
+        MetalContext::destroy_instance(false, context_id_);
+        destroy_metal_context_instance_on_close_ = false;
+>>>>>>> c2ba4f00da (try making create_mesh_device return a submeshdevice)
     }
 
     return true;

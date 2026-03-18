@@ -7,6 +7,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <memory>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -27,6 +28,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
+#include <api/tt-metalium/experimental/context/metal_env.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -206,6 +208,124 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->impl().get_device(coord)->id()),
             fabric_node_id);
     }
+}
+
+// Splits the system mesh along the first dimension >= 2, producing two half-shapes and their offsets.
+// Returns std::nullopt if no splittable dimension exists.
+struct MeshSplit {
+    MeshShape submesh_shape;
+    MeshCoordinate offset_a;
+    MeshCoordinate offset_b;
+};
+
+std::optional<MeshSplit> split_system_mesh(const MeshShape& system_shape) {
+    tt::stl::SmallVector<uint32_t> submesh_dims;
+    tt::stl::SmallVector<uint32_t> offset_a_coords;
+    tt::stl::SmallVector<uint32_t> offset_b_coords;
+    bool split_found = false;
+    for (size_t dim = 0; dim < system_shape.dims(); dim++) {
+        if (!split_found && system_shape[dim] >= 2) {
+            uint32_t half = system_shape[dim] / 2;
+            submesh_dims.push_back(half);
+            offset_a_coords.push_back(0);
+            offset_b_coords.push_back(half);
+            split_found = true;
+        } else {
+            submesh_dims.push_back(system_shape[dim]);
+            offset_a_coords.push_back(0);
+            offset_b_coords.push_back(0);
+        }
+    }
+    if (!split_found) {
+        return std::nullopt;
+    }
+    return MeshSplit{
+        MeshShape(submesh_dims),
+        MeshCoordinate(offset_a_coords),
+        MeshCoordinate(offset_b_coords),
+    };
+}
+
+void verify_disjoint_devices(
+    const std::shared_ptr<MeshDevice>& mesh_a,
+    const std::shared_ptr<MeshDevice>& mesh_b,
+    const MeshShape& expected_shape) {
+    EXPECT_EQ(mesh_a->shape(), expected_shape);
+    EXPECT_EQ(mesh_b->shape(), expected_shape);
+    EXPECT_THAT(mesh_a->get_devices(), SizeIs(expected_shape.mesh_size()));
+    EXPECT_THAT(mesh_b->get_devices(), SizeIs(expected_shape.mesh_size()));
+
+    std::set<int> ids_a, ids_b;
+    for (auto* dev : mesh_a->get_devices()) {
+        ids_a.insert(dev->id());
+    }
+    for (auto* dev : mesh_b->get_devices()) {
+        ids_b.insert(dev->id());
+    }
+    for (int id : ids_a) {
+        EXPECT_EQ(ids_b.count(id), 0) << "Device ID " << id << " appears in both meshes";
+    }
+}
+
+// Create multiple mesh devices on the same system mesh using offsets.
+TEST(MeshDeviceInitTest, InitMultipleMeshDevicesWithOffset) {
+    // This test binary has static init which calls MetalContext.
+    // Destroy MetalContext for this test so we can use MetalEnv instead.
+    if (MetalContext::instance_exists()) {
+        MetalContext::destroy_all_instances();
+    }
+
+    MetalEnv env;
+    const auto& system_shape = env.get_system_mesh().shape();
+    if (system_shape.mesh_size() < 2) {
+        GTEST_SKIP() << "Need at least 2 devices";
+    }
+    auto split = split_system_mesh(system_shape);
+    if (!split.has_value()) {
+        GTEST_SKIP() << "Could not find a dimension >= 2 to split";
+    }
+
+    auto mesh_a = env.create_mesh_device(MeshDeviceConfig(split->submesh_shape, split->offset_a));
+    auto mesh_b = env.create_mesh_device(MeshDeviceConfig(split->submesh_shape, split->offset_b));
+
+    verify_disjoint_devices(mesh_a, mesh_b, split->submesh_shape);
+
+    mesh_a->close();
+    mesh_b->close();
+}
+
+// Same as above but using physical_device_ids instead of offsets.
+TEST(MeshDeviceInitTest, InitMultipleMeshDevicesWithDeviceId) {
+    if (MetalContext::instance_exists()) {
+        MetalContext::destroy_all_instances(false);
+    }
+
+    MetalEnv env;
+    const auto& system_shape = env.get_system_mesh().shape();
+    if (system_shape.mesh_size() < 4) {
+        GTEST_SKIP() << "Need at least 4 devices";
+    }
+    auto split = split_system_mesh(system_shape);
+    if (!split.has_value()) {
+        GTEST_SKIP() << "Could not find a dimension >= 2 to split";
+    }
+
+    // Discover physical device ID layout from a full-system mesh.
+    auto full_mesh = env.create_mesh_device(MeshDeviceConfig(std::nullopt));
+    auto all_ids = full_mesh->get_device_ids();
+    full_mesh->close();
+
+    size_t half = all_ids.size() / 2;
+    std::vector<int> ids_a(all_ids.begin(), all_ids.begin() + half);
+    std::vector<int> ids_b(all_ids.begin() + half, all_ids.begin() + half * 2);
+
+    auto mesh_a = env.create_mesh_device(MeshDeviceConfig(split->submesh_shape, std::nullopt, ids_a));
+    auto mesh_b = env.create_mesh_device(MeshDeviceConfig(split->submesh_shape, std::nullopt, ids_b));
+
+    verify_disjoint_devices(mesh_a, mesh_b, split->submesh_shape);
+
+    mesh_a->close();
+    mesh_b->close();
 }
 
 }  // namespace
