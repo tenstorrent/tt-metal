@@ -21,6 +21,7 @@
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
 #include "models/mlp.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "modules/multi_layer_perceptron.hpp"
 #include "nb_export_enum.hpp"
