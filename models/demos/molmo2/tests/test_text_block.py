@@ -54,14 +54,14 @@ class ReferenceRMSNorm(nn.Module):
 
 
 def rotate_half(x):
-    """Rotates half the hidden dims."""
+    """Rotates half the hidden dims (half-span pairing)."""
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
 
 
 def apply_rotary_pos_emb(q, k, cos, sin):
-    """Apply rotary position embedding."""
+    """Apply rotary position embedding (half-span). Matches ttnn.experimental.rotary_embedding."""
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -73,7 +73,7 @@ class ReferenceTextBlock(nn.Module):
     def __init__(
         self,
         hidden_dim=4096,
-        intermediate_dim=11008,
+        intermediate_dim=12288,
         num_heads=32,
         num_kv_heads=8,
         head_dim=128,
@@ -262,7 +262,7 @@ def _run_text_block_test(device, layer_num: int):
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
         head_dim=head_dim,
-        dtype=ttnn.bfloat16,  # Use bfloat16 for weights to match test_pcc_all_layers.py
+        dtype=ttnn.bfloat16,
     )
 
     # Convert input to TTNN
