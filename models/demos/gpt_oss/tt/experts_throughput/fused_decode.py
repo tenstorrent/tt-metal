@@ -87,25 +87,33 @@ def fused_decode_forward(
     # Format conversion: router outputs [M, K] TILE DRAM, dispatch needs
     # [M, 1, 1, K] ROW_MAJOR. All done on-device (no host round-trip),
     # following the DeepSeek pattern (moe.py lines 393-395). This enables trace capture.
-    # Note: dispatch accepts DRAM interleaved ROW_MAJOR inputs — no L1 sharding needed.
 
     # Save a copy of scores in DRAM for post-combine weighting before we deallocate.
     # Convert TILE -> ROW_MAJOR and reshape [M, K] -> [M, 1, 1, K] on-device.
-    scores_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
+    if topk_expert_scores.layout != ttnn.ROW_MAJOR_LAYOUT:
+        scores_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
+    else:
+        scores_rm = topk_expert_scores
     tt_scores_copy = ttnn.reshape(scores_rm, (tokens_per_device, 1, 1, K_sel))
-    # Note: do NOT deallocate scores_rm - reshape may alias it (same as indices_rm fix)
 
-    # Reshape indices for dispatch: [M, K] TILE -> [M, 1, 1, K] ROW_MAJOR DRAM
-    indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(topk_expert_indices)
+    # Reshape indices for dispatch: [M, K] TILE -> [M, 1, 1, K] ROW_MAJOR L1
+    # IMPORTANT: output to L1 to match dispatch output alignment (16B vs DRAM 32B)
+    if topk_expert_indices.layout != ttnn.ROW_MAJOR_LAYOUT:
+        indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(topk_expert_indices)
+    else:
+        indices_rm = topk_expert_indices
     topk_expert_indices = ttnn.reshape(indices_rm, (tokens_per_device, 1, 1, K_sel))
-    # Note: do NOT deallocate indices_rm - reshape may alias it
 
     # Reshape scores for dispatch: same transformation
-    scores_dispatch_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(topk_expert_scores)
+    if topk_expert_scores.layout != ttnn.ROW_MAJOR_LAYOUT:
+        scores_dispatch_rm = ttnn.to_layout(
+            topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(topk_expert_scores)
+    else:
+        scores_dispatch_rm = topk_expert_scores
     topk_expert_scores = ttnn.reshape(scores_dispatch_rm, (tokens_per_device, 1, 1, K_sel))
-    # Note: do NOT deallocate scores_dispatch_rm - reshape may alias it
 
     # ------------------------------------------------------------------
     # Step 1: all_to_all_dispatch_metadata
