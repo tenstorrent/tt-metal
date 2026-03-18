@@ -16,7 +16,7 @@ Weight layout:
 - att_proj: fused QKV projection [hidden_dim, (num_heads + 2*num_kv_heads) * head_dim]
 - attn_out: output projection [num_heads * head_dim, hidden_dim]
 
-Uses ttnn.experimental.rotary_embedding_llama for efficient device-side RoPE.
+Uses ttnn.experimental.rotary_embedding (half-span RoPE) for device-side RoPE.
 """
 
 import math
@@ -250,7 +250,7 @@ class TextAttention(LightweightModule):
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -275,8 +275,7 @@ class TextAttention(LightweightModule):
 
         Args:
             x: Input tensor of shape [1, 1, seq_len, hidden_dim]
-            rot_mats: List of [cos, sin] rotation matrices
-            transformation_mats: Dict with 'decode' and 'prefill' transformation matrices
+            rot_mats: List of [cos, sin] rotation matrices (half-span RoPE; transformation_mats unused)
             attn_mask: Optional causal mask
             start_pos: Starting position for KV cache
             kv_cache: Optional (k_cache, v_cache) tuple - tensor parallel sharded
@@ -324,27 +323,34 @@ class TextAttention(LightweightModule):
         q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
         k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=1e-5)
 
-        # Apply RoPE using TTNN-native op (prefill mode)
-        # Ensure bfloat16 for rotary_embedding_llama
+        # Apply RoPE using TTNN half-span op (prefill mode)
         if q.dtype != ttnn.bfloat16:
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        q = ttnn.experimental.rotary_embedding_llama(
+        q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            transformation_mats["prefill"],
-            is_decode_mode=False,
         )
 
-        k = ttnn.experimental.rotary_embedding_llama(
+        k = ttnn.experimental.rotary_embedding(
             k,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            transformation_mats["prefill"],
-            is_decode_mode=False,
+        )
+
+        # rotary_embedding pads the sequence dim to TILE_HEIGHT; slice back to seq_len so Q,K match V for SDPA
+        q = ttnn.slice(
+            q,
+            (0, 0, 0, 0),
+            (1, self.num_heads_per_device, seq_len, self.head_dim),
+        )
+        k = ttnn.slice(
+            k,
+            (0, 0, 0, 0),
+            (1, self.num_kv_heads_per_device, seq_len, self.head_dim),
         )
 
         # Update KV cache using fill_cache for prefill
@@ -423,8 +429,7 @@ class TextAttention(LightweightModule):
 
         Args:
             x: Input tensor of shape [1, 1, 1, hidden_dim] (single token)
-            rot_mats: List of [cos, sin] rotation matrices (HEIGHT_SHARDED)
-            transformation_mat: RoPE transformation matrix
+            rot_mats: List of [cos, sin] for current position (interleaved; half-span RoPE)
             kv_cache: Tuple of (k_cache, v_cache) pre-allocated tensors
                       Shape per device: [batch, num_kv_heads_per_device, max_seq_len, head_dim]
             current_pos: Current decode position tensor [batch]
@@ -462,7 +467,7 @@ class TextAttention(LightweightModule):
         q = ttnn.rms_norm(q, weight=self.q_norm_weight, epsilon=1e-5)
         k = ttnn.rms_norm(k, weight=self.k_norm_weight, epsilon=1e-5)
 
-        # Ensure bfloat16 for rotary_embedding_llama
+        # Ensure bfloat16 for rotary_embedding
         if q.dtype != ttnn.bfloat16:
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
@@ -472,7 +477,6 @@ class TextAttention(LightweightModule):
         # No transpose needed!
 
         # Convert Q and K to HEIGHT_SHARDED for decode RoPE
-        # Using per-device head counts
         core_grid = ttnn.CoreCoord(8, 8)
         q_shard_grid = ttnn.num_cores_to_corerangeset(self.num_heads_per_device, core_grid, row_wise=True)
         k_shard_grid = ttnn.num_cores_to_corerangeset(self.num_kv_heads_per_device, core_grid, row_wise=True)
@@ -495,21 +499,17 @@ class TextAttention(LightweightModule):
         q = ttnn.to_memory_config(q, q_shard_config)
         k = ttnn.to_memory_config(k, k_shard_config)
 
-        # Apply RoPE using TTNN-native op (decode mode)
-        q = ttnn.experimental.rotary_embedding_llama(
+        # Apply RoPE using TTNN half-span op (decode mode; rot_mats are interleaved [1,1,1,head_dim])
+        q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            transformation_mat,
-            is_decode_mode=True,
         )
 
-        k = ttnn.experimental.rotary_embedding_llama(
+        k = ttnn.experimental.rotary_embedding(
             k,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            transformation_mat,
-            is_decode_mode=True,
         )
 
         # V also needs to be sharded for paged_update_cache

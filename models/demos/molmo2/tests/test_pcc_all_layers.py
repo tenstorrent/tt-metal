@@ -147,13 +147,13 @@ def ref_block_forward(
     ff_normed = ff_norm(after_attn)
 
     # Step 11: MLP (SwiGLU)
-    # HuggingFace order: first half is UP, second half is GATE
+    # HuggingFace order: first half is GATE, second half is UP
     ff_proj = state_dict[f"{prefix}.mlp.ff_proj.weight"]
     ff_out = state_dict[f"{prefix}.mlp.ff_out.weight"]
 
     ff_proj_out = F.linear(ff_normed, ff_proj)
-    up = ff_proj_out[..., :intermediate_dim]
-    gate = ff_proj_out[..., intermediate_dim:]
+    gate = ff_proj_out[..., :intermediate_dim]
+    up = ff_proj_out[..., intermediate_dim:]
     swiglu = F.silu(gate) * up
     mlp_out = F.linear(swiglu, ff_out)
 
