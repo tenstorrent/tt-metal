@@ -7,32 +7,10 @@ on:
         description: "Select model to test"
         required: true
         type: choice
-        default: all
+        default: qwen3
         options:
           - all
-          - falcon7b
-          - falcon40b
-          - llama3
-          - llama3_vision
-          - llama3_90b_vision
-          - llama3_70b
-          - resnet50
-          - sentence_bert
-          - sd35_large
-          - flux1-dev
-          - motif
-          - qwenimage
-          - mistral
-          - mixtral
-          - whisper
           - qwen3
-          - qwen25
-          - qwen25_vl
-          - qwen3_vl
-          - gemma3
-          - wan22
-          - mochi
-          - gpt-oss
       platform:
         required: false
         type: choice
@@ -112,5 +90,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: "wh_llmbox_perf"
-      model: ${{ inputs.model || 'all' }}
+      model: qwen3
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

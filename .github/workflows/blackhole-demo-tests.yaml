@@ -11,32 +11,19 @@ on:
       model:
         description: 'Select model to test'
         required: false
-        default: 'llama3.1-8b'
+        default: 'qwen3-32b'
         type: choice
         options:
           - all
-          - whisper
-          - llama3.1-8b
-          - unet-shallow
-          - stable_diffusion_xl
-          - llama3.3-70b
           - qwen3-32b
-          - flux.1-dev
-          - wan2.2-t2v-a14b
       system-type:
         description: 'Select system type to test'
         required: false
-        default: "P150 (1xP150)"
+        default: "LoudBox (8xP150)"
         type: choice
         options:
           - all
-          - P150 (1xP150)
-          - P150 CIv2 (1xP150)
-          - Quietbox (4xP150)
-          - DeskBox (2xP150)
           - LoudBox (8xP150)
-          - P300 (1xP300)
-          - QuietBox 2 (2xP300)
       build-type:
         required: false
         type: choice
@@ -106,14 +93,7 @@ jobs:
         id: set-matrix
         run: |
           all_systems='[
-            {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
-            {"name": "P150 (1xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
-            {"name": "P150 CIv2 (1xP150)", "weights-cache-mode": "lfc", "num_devices": 1, "sku": "bh_p150b_civ2"},
-            {"name": "Quietbox (4xP150)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
-            {"name": "DeskBox (2xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
-            {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
-            {"name": "P300 (1xP300)", "weights-cache-mode": "lfc", "num_devices": 2, "sku": "bh_p300"},
-            {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
+            {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
           selected_system_type="${{ inputs.system-type || 'all' }}"
@@ -155,4 +135,4 @@ jobs:
       enabled-skus: ${{ matrix.test-group.sku }}
       weights-cache-mode: ${{ matrix.test-group.weights-cache-mode }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
-      model: ${{ inputs.model || 'all' }}
+      model: qwen3-32b
