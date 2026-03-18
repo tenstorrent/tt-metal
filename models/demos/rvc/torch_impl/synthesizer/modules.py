@@ -27,22 +27,22 @@ class WN(nn.Module):
         hidden_channels,
         kernel_size,
         dilation_rate,
-        n_layers,
+        num_layers,
         gin_channels=0,
     ):
         super().__init__()
 
         assert kernel_size % 2 == 1
         self.hidden_channels = hidden_channels
-        self.n_layers = n_layers
+        self.num_layers = num_layers
 
         self.in_layers = nn.ModuleList()
         self.res_skip_layers = nn.ModuleList()
 
         if gin_channels != 0:
-            self.cond_layer = nn.Linear(gin_channels, 2 * hidden_channels * n_layers)
+            self.cond_layer = nn.Linear(gin_channels, 2 * hidden_channels * num_layers)
 
-        for i in range(n_layers):
+        for i in range(num_layers):
             dilation = dilation_rate**i
             in_layer = torch.nn.Conv1d(
                 hidden_channels,
@@ -54,7 +54,7 @@ class WN(nn.Module):
             self.in_layers.append(in_layer)
 
             # last one is not necessary
-            if i < n_layers - 1:
+            if i < num_layers - 1:
                 res_skip_channels = 2 * hidden_channels
             else:
                 res_skip_channels = hidden_channels
@@ -78,7 +78,7 @@ class WN(nn.Module):
 
             acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, self.hidden_channels)
             res_skip_acts = linear_channel_first(acts, res_skip_linear)
-            if i < self.n_layers - 1:
+            if i < self.num_layers - 1:
                 res_acts = res_skip_acts[:, : self.hidden_channels, :]
                 x = x + res_acts
                 output = output + res_skip_acts[:, self.hidden_channels :, :]
@@ -148,7 +148,7 @@ class ResidualCouplingLayer(nn.Module):
         hidden_channels,
         kernel_size,
         dilation_rate,
-        n_layers,
+        num_layers,
         gin_channels=0,
     ):
         assert channels % 2 == 0, "channels should be divisible by 2"
@@ -160,7 +160,7 @@ class ResidualCouplingLayer(nn.Module):
             hidden_channels,
             kernel_size,
             dilation_rate,
-            n_layers,
+            num_layers,
             gin_channels=gin_channels,
         )
         self.post_linear = nn.Linear(hidden_channels, self.half_channels)

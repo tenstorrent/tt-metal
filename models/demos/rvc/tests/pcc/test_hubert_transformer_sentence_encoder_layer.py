@@ -42,7 +42,7 @@ def test_hubert_transformer_sentence_encoder_layer(device, layer_norm_first):
     )
 
     parameters = {f"layer.{k}": v for k, v in torch_layer.state_dict().items()}
-    tt_layer.load_parameters(parameters=parameters, prefix="layer.")
+    tt_layer.load_state_dict(parameters=parameters, module_prefix="layer.")
 
     torch_x = torch.randn(t, b, embed_dim, dtype=torch.float32)
     torch_output = torch_layer(torch_x)

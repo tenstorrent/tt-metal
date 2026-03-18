@@ -21,9 +21,9 @@ class LayerNorm:
         self.gamma: ttnn.Tensor | None = None
         self.beta: ttnn.Tensor | None = None
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        gamma_key = f"{prefix}gamma" if prefix else "gamma"
-        beta_key = f"{prefix}beta" if prefix else "beta"
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        gamma_key = f"{module_prefix}gamma" if module_prefix else "gamma"
+        beta_key = f"{module_prefix}beta" if module_prefix else "beta"
         if gamma_key not in parameters:
             raise KeyError(f"Missing required parameter: {gamma_key}")
         if beta_key not in parameters:
@@ -52,16 +52,14 @@ class WN:
         hidden_channels: int,
         kernel_size: int,
         dilation_rate: int,
-        n_layers: int,
+        num_layers: int,
         gin_channels: int = 0,
-        conv_config: ttnn.Conv1dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         if kernel_size % 2 != 1:
             raise ValueError("kernel_size must be odd")
         self.device = device
         self.hidden_channels = hidden_channels
-        self.n_layers = n_layers
+        self.num_layers = num_layers
         self.gin_channels = gin_channels
         self.in_layers: list[Conv1d] = []
         self.res_skip_layers: list[Linear] = []
@@ -71,10 +69,10 @@ class WN:
             self.cond_layer = Linear(
                 device=device,
                 in_features=gin_channels,
-                out_features=2 * hidden_channels * n_layers,
+                out_features=2 * hidden_channels * num_layers,
             )
 
-        for i in range(n_layers):
+        for i in range(num_layers):
             dilation = dilation_rate**i
             self.in_layers.append(
                 Conv1d(
@@ -87,7 +85,7 @@ class WN:
                 )
             )
 
-            res_skip_channels = 2 * hidden_channels if i < n_layers - 1 else hidden_channels
+            res_skip_channels = 2 * hidden_channels if i < num_layers - 1 else hidden_channels
             self.res_skip_layers.append(
                 Linear(
                     device=device,
@@ -96,13 +94,13 @@ class WN:
                 )
             )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         if self.cond_layer is not None:
-            self.cond_layer.load_parameters(parameters, key="cond_layer", prefix=prefix)
+            self.cond_layer.load_state_dict(parameters, key="cond_layer", module_prefix=module_prefix)
         for i, layer in enumerate(self.in_layers):
-            layer.load_parameters(parameters, key=f"in_layers.{i}", prefix=prefix)
+            layer.load_state_dict(parameters, key=f"in_layers.{i}", module_prefix=module_prefix)
         for i, layer in enumerate(self.res_skip_layers):
-            layer.load_parameters(parameters, key=f"res_skip_layers.{i}", prefix=prefix)
+            layer.load_state_dict(parameters, key=f"res_skip_layers.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         output = ttnn.zeros_like(x)
@@ -131,7 +129,7 @@ class WN:
             )
 
             res_skip_acts = res_skip_layer(acts)
-            if i < self.n_layers - 1:
+            if i < self.num_layers - 1:
                 res_acts, skip_acts = ttnn.chunk(res_skip_acts, 2, dim=-1)
                 x = ttnn.add(x, res_acts, output_tensor=x)
                 output = ttnn.add(output, skip_acts, output_tensor=output)
@@ -148,8 +146,6 @@ class ResBlock1:
         channels: int,
         kernel_size: int = 3,
         dilation: tuple[int, int, int] = (1, 3, 5),
-        conv_config: ttnn.Conv1dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         self.convs1: list[Conv1d] = []
         self.convs2: list[Conv1d] = []
@@ -179,11 +175,11 @@ class ResBlock1:
                 )
             )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i, conv in enumerate(self.convs1):
-            conv.load_parameters(parameters, key=f"convs1.{i}", prefix=prefix)
+            conv.load_state_dict(parameters, key=f"convs1.{i}", module_prefix=module_prefix)
         for i, conv in enumerate(self.convs2):
-            conv.load_parameters(parameters, key=f"convs2.{i}", prefix=prefix)
+            conv.load_state_dict(parameters, key=f"convs2.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
@@ -203,8 +199,6 @@ class ResBlock2:
         channels: int,
         kernel_size: int = 3,
         dilation: tuple[int, int] = (1, 3),
-        conv_config: ttnn.Conv1dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         self.convs: list[Conv1d] = []
         self.lrelu_slope = LRELU_SLOPE
@@ -221,9 +215,9 @@ class ResBlock2:
                 )
             )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i, conv in enumerate(self.convs):
-            conv.load_parameters(parameters, key=f"convs.{i}", prefix=prefix)
+            conv.load_state_dict(parameters, key=f"convs.{i}", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
@@ -243,10 +237,8 @@ class ResidualCouplingLayer:
         hidden_channels: int,
         kernel_size: int,
         dilation_rate: int,
-        n_layers: int,
+        num_layers: int,
         gin_channels: int = 0,
-        conv_config: ttnn.Conv1dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         if channels % 2 != 0:
             raise ValueError("channels should be divisible by 2")
@@ -261,10 +253,8 @@ class ResidualCouplingLayer:
             hidden_channels=hidden_channels,
             kernel_size=kernel_size,
             dilation_rate=dilation_rate,
-            n_layers=n_layers,
+            num_layers=num_layers,
             gin_channels=gin_channels,
-            conv_config=conv_config,
-            compute_config=compute_config,
         )
         self.post_linear = Linear(
             device=device,
@@ -272,19 +262,21 @@ class ResidualCouplingLayer:
             out_features=self.half_channels,
         )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        enc_prefix = f"{prefix}enc." if prefix else "enc."
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        enc_module_prefix = f"{module_prefix}enc." if module_prefix else "enc."
         pre_key = (
-            "pre_linear" if (f"{prefix}pre_linear.weight" if prefix else "pre_linear.weight") in parameters else "pre"
+            "pre_linear"
+            if (f"{module_prefix}pre_linear.weight" if module_prefix else "pre_linear.weight") in parameters
+            else "pre"
         )
         post_key = (
             "post_linear"
-            if (f"{prefix}post_linear.weight" if prefix else "post_linear.weight") in parameters
+            if (f"{module_prefix}post_linear.weight" if module_prefix else "post_linear.weight") in parameters
             else "post"
         )
-        self.pre_linear.load_parameters(parameters, key=pre_key, prefix=prefix)
-        self.enc.load_parameters(parameters, prefix=enc_prefix)
-        self.post_linear.load_parameters(parameters, key=post_key, prefix=prefix)
+        self.pre_linear.load_state_dict(parameters, key=pre_key, module_prefix=module_prefix)
+        self.enc.load_state_dict(parameters, module_prefix=enc_module_prefix)
+        self.post_linear.load_state_dict(parameters, key=post_key, module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x0, x1 = ttnn.chunk(x, 2, dim=-1)

@@ -33,7 +33,7 @@ def test_hubert_multihead_attention(device):
     )
 
     parameters = {f"attn.{k}": v for k, v in torch_attn.state_dict().items()}
-    tt_attn.load_parameters(parameters=parameters, prefix="attn.")
+    tt_attn.load_state_dict(parameters=parameters, module_prefix="attn.")
 
     torch_query = torch.randn(t, b, embed_dim, dtype=torch.float32)
 

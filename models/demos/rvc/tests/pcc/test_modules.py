@@ -22,14 +22,14 @@ def test_residual_coupling_layer(device):
     input_length = 64
     kernel_size = 3
     dilation_rate = 1
-    n_layers = 2
+    num_layers = 2
 
     torch_layer = TorchResidualCouplingLayer(
         channels=channels,
         hidden_channels=hidden_channels,
         kernel_size=kernel_size,
         dilation_rate=dilation_rate,
-        n_layers=n_layers,
+        num_layers=num_layers,
         gin_channels=gin_channels,
     ).eval()
 
@@ -43,12 +43,12 @@ def test_residual_coupling_layer(device):
         hidden_channels=hidden_channels,
         kernel_size=kernel_size,
         dilation_rate=dilation_rate,
-        n_layers=n_layers,
+        num_layers=num_layers,
         gin_channels=gin_channels,
     )
 
     parameters = {f"flow.{k}": v for k, v in torch_layer.state_dict().items()}
-    tt_layer.load_parameters(parameters=parameters, prefix="flow.")
+    tt_layer.load_state_dict(parameters=parameters, module_prefix="flow.")
 
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16).permute(0, 2, 1),

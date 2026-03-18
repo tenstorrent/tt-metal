@@ -48,7 +48,7 @@ def test_groupnorm(device, batch_size, input_length, channels, num_groups):
         "norm.groupnorm.weight": torch_groupnorm.weight,
         "norm.groupnorm.bias": torch_groupnorm.bias,
     }
-    tt_groupnorm.load_parameters(parameters=parameters, key="groupnorm", prefix="norm.")
+    tt_groupnorm.load_state_dict(parameters=parameters, key="groupnorm", module_prefix="norm.")
 
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16),

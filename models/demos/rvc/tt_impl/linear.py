@@ -34,8 +34,8 @@ class Linear:
         self.compute_config = compute_config
         self.activation = activation
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], key: str, prefix: str = "") -> None:
-        base_key = f"{prefix}{key}" if prefix else key
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], key: str, module_prefix: str = "") -> None:
+        base_key = f"{module_prefix}{key}" if module_prefix else key
         weight_key = f"{base_key}.weight"
         bias_key = f"{base_key}.bias"
 

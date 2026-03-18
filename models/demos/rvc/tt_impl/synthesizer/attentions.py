@@ -26,67 +26,80 @@ def ttnn_gather_fallback(x: ttnn.Tensor, dim: int, index: ttnn.Tensor, device) -
 class MultiHeadAttention:
     def __init__(
         self,
-        *,
         device: ttnn.MeshDevice,
-        channels: int,
-        out_channels: int,
-        n_heads: int,
+        in_features: int,
+        out_features: int,
+        num_heads: int,
         window_size: int | None = None,
-        conv_config: ttnn.Conv1dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
-        if channels % n_heads != 0:
-            raise ValueError("channels must be divisible by n_heads")
+        if in_features % num_heads != 0:
+            raise ValueError("in_features must be divisible by num_heads")
 
         self.device = device
-        self.n_heads = n_heads
+        self.num_heads = num_heads
         self.window_size = window_size
-        self.k_channels = channels // n_heads
+        self.features_per_head = in_features // num_heads
 
         self.linear_q = Linear(
             device=device,
-            in_features=channels,
-            out_features=channels,
+            in_features=in_features,
+            out_features=in_features,
         )
         self.linear_k = Linear(
             device=device,
-            in_features=channels,
-            out_features=channels,
+            in_features=in_features,
+            out_features=in_features,
         )
         self.linear_v = Linear(
             device=device,
-            in_features=channels,
-            out_features=channels,
+            in_features=in_features,
+            out_features=in_features,
         )
         self.linear_o = Linear(
             device=device,
-            in_features=channels,
-            out_features=out_channels,
+            in_features=in_features,
+            out_features=out_features,
         )
         self.emb_rel_k: ttnn.Tensor | None = None
         self.emb_rel_v: ttnn.Tensor | None = None
         self.relative_position_cache: dict[int : ttnn.Tensor] = {}
         self.index_cache: dict[int : ttnn.Tensor] = {}
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        q_key = "linear_q" if (f"{prefix}linear_q.weight" if prefix else "linear_q.weight") in parameters else "conv_q"
-        k_key = "linear_k" if (f"{prefix}linear_k.weight" if prefix else "linear_k.weight") in parameters else "conv_k"
-        v_key = "linear_v" if (f"{prefix}linear_v.weight" if prefix else "linear_v.weight") in parameters else "conv_v"
-        o_key = "linear_o" if (f"{prefix}linear_o.weight" if prefix else "linear_o.weight") in parameters else "conv_o"
-        self.linear_q.load_parameters(parameters=parameters, key=q_key, prefix=prefix)
-        self.linear_k.load_parameters(parameters=parameters, key=k_key, prefix=prefix)
-        self.linear_v.load_parameters(parameters=parameters, key=v_key, prefix=prefix)
-        self.linear_o.load_parameters(parameters=parameters, key=o_key, prefix=prefix)
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        q_key = (
+            "linear_q"
+            if (f"{module_prefix}linear_q.weight" if module_prefix else "linear_q.weight") in parameters
+            else "conv_q"
+        )
+        k_key = (
+            "linear_k"
+            if (f"{module_prefix}linear_k.weight" if module_prefix else "linear_k.weight") in parameters
+            else "conv_k"
+        )
+        v_key = (
+            "linear_v"
+            if (f"{module_prefix}linear_v.weight" if module_prefix else "linear_v.weight") in parameters
+            else "conv_v"
+        )
+        o_key = (
+            "linear_o"
+            if (f"{module_prefix}linear_o.weight" if module_prefix else "linear_o.weight") in parameters
+            else "conv_o"
+        )
+        self.linear_q.load_state_dict(parameters=parameters, key=q_key, module_prefix=module_prefix)
+        self.linear_k.load_state_dict(parameters=parameters, key=k_key, module_prefix=module_prefix)
+        self.linear_v.load_state_dict(parameters=parameters, key=v_key, module_prefix=module_prefix)
+        self.linear_o.load_state_dict(parameters=parameters, key=o_key, module_prefix=module_prefix)
         if self.window_size is not None:
-            key_emb_rel_k = f"{prefix}emb_rel_k" if prefix else "emb_rel_k"
-            key_emb_rel_v = f"{prefix}emb_rel_v" if prefix else "emb_rel_v"
+            key_emb_rel_k = f"{module_prefix}emb_rel_k" if module_prefix else "emb_rel_k"
+            key_emb_rel_v = f"{module_prefix}emb_rel_v" if module_prefix else "emb_rel_v"
             if key_emb_rel_k not in parameters:
                 raise KeyError(f"Missing required parameter: {key_emb_rel_k}")
             if key_emb_rel_v not in parameters:
                 raise KeyError(f"Missing required parameter: {key_emb_rel_v}")
 
-            emb_rel_k = parameters[key_emb_rel_k].detach().reshape(1, 1, -1, self.k_channels)
-            emb_rel_v = parameters[key_emb_rel_v].detach().reshape(1, 1, -1, self.k_channels)
+            emb_rel_k = parameters[key_emb_rel_k].reshape(1, 1, -1, self.features_per_head)
+            emb_rel_v = parameters[key_emb_rel_v].reshape(1, 1, -1, self.features_per_head)
             self.emb_rel_k = ttnn.from_torch(
                 emb_rel_k,
                 dtype=ttnn.bfloat16,
@@ -101,10 +114,10 @@ class MultiHeadAttention:
             )
 
     def __call__(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
-        q = self._project_qkv(self.linear_q(x))
-        k = self._project_qkv(self.linear_k(c))
-        v = self._project_qkv(self.linear_v(c))
-        q_scaled = ttnn.mul(q, 1.0 / math.sqrt(self.k_channels), output_tensor=q)
+        q = self._reshape_to_heads(self.linear_q(x))
+        k = self._reshape_to_heads(self.linear_k(c))
+        v = self._reshape_to_heads(self.linear_v(c))
+        q_scaled = ttnn.mul(q, 1.0 / math.sqrt(self.features_per_head), output_tensor=q)
         scores = ttnn.matmul(q_scaled, k, transpose_b=True)
         _, _, target_length, source_length = scores.shape
         if self.window_size is not None:
@@ -115,25 +128,24 @@ class MultiHeadAttention:
 
             key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, source_length)
             rel_logits = ttnn.matmul(q_scaled, key_relative_embeddings, transpose_b=True)
-            scores_local = self._relative_position_to_absolute_position(rel_logits)
+            scores_local = self._relative_to_absolute_position(rel_logits)
             scores = ttnn.add(scores, scores_local, output_tensor=scores)
 
         p_attn = ttnn.softmax_in_place(scores, dim=-1)
         output = ttnn.matmul(p_attn, v)
         if self.window_size is not None:
             assert self.emb_rel_v is not None
-            relative_weights = self._absolute_position_to_relative_position(p_attn)
+            relative_weights = self._absolute_to_relative_position(p_attn)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
             output = ttnn.add(output, ttnn.matmul(relative_weights, value_relative_embeddings), output_tensor=output)
-
         output = ttnn.transformer.concatenate_heads(output)
 
         out_tt = self.linear_o(output)
         return out_tt
 
-    def _project_qkv(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _reshape_to_heads(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch_size, length, channels = x.shape
-        x = ttnn.reshape(x, (batch_size, length, self.n_heads, self.k_channels))
+        x = ttnn.reshape(x, (batch_size, length, self.num_heads, self.features_per_head))
         x_p = ttnn.permute(x, (0, 2, 1, 3))
         return x_p
 
@@ -154,7 +166,7 @@ class MultiHeadAttention:
         embeddings = ttnn.slice(
             embeddings,
             (0, 0, slice_start_position, 0),
-            (1, 1, slice_end_position, self.k_channels),
+            (1, 1, slice_end_position, self.features_per_head),
         )
         return ttnn.to_layout(embeddings, ttnn.TILE_LAYOUT)
 
@@ -170,13 +182,13 @@ class MultiHeadAttention:
         self.index_cache[length] = rel_idx
         return rel_idx
 
-    def _relative_position_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _relative_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
         rel_idx = self._get_rel_idx_tensor(length)
         out = ttnn_gather_fallback(x, dim=3, index=rel_idx, device=self.device)
         return out
 
-    def _absolute_position_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _absolute_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
         rel_idx = self._get_rel_idx_tensor(length)
         if length in self.relative_position_cache:
@@ -185,25 +197,22 @@ class MultiHeadAttention:
             out = ttnn.zeros(
                 (batch, heads, length, 2 * length - 1),
                 dtype=x.dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             self.relative_position_cache[length] = out
         out = ttnn.scatter(out, dim=3, index=rel_idx, src=x)
-        return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        return out
 
 
 class FFN:
     def __init__(
         self,
-        *,
         device: ttnn.MeshDevice,
         in_channels: int,
         out_channels: int,
         filter_channels: int,
         kernel_size: int,
-        conv_config: ttnn.Conv1dConfig | None = None,
-        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         self.conv_1 = Conv1d(
             device=device,
@@ -221,11 +230,11 @@ class FFN:
             padding="same",
         )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.conv_1.load_parameters(parameters=parameters, key="conv_1", prefix=prefix)
-        self.conv_2.load_parameters(parameters=parameters, key="conv_2", prefix=prefix)
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.conv_1.load_state_dict(parameters=parameters, key="conv_1", module_prefix=module_prefix)
+        self.conv_2.load_state_dict(parameters=parameters, key="conv_2", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.conv_1(x)
-        x = self.conv_2(x)
-        return x
+        out = self.conv_2(x)
+        return out

@@ -30,24 +30,24 @@ class MultiheadSelfAttention:
     def __init__(self, device: ttnn.MeshDevice, embed_dim: int, num_heads: int, self_attention: bool = False) -> None:
         self.device = device
         self.embed_dim = embed_dim
-        self.kdim = embed_dim
-        self.vdim = embed_dim
+        self.k_dim = embed_dim
+        self.v_dim = embed_dim
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
         if self.head_dim * num_heads != self.embed_dim:
             raise ValueError("embed_dim must be divisible by num_heads")
         self.self_attention = self_attention
 
-        self.k_proj = Linear(device=device, in_features=self.kdim, out_features=embed_dim, dtype=ttnn.bfloat16)
-        self.v_proj = Linear(device=device, in_features=self.vdim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.k_proj = Linear(device=device, in_features=self.k_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
+        self.v_proj = Linear(device=device, in_features=self.v_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
         self.q_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
         self.out_proj = Linear(device=device, in_features=embed_dim, out_features=embed_dim, dtype=ttnn.bfloat16)
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.k_proj.load_parameters(parameters=parameters, key="k_proj", prefix=prefix)
-        self.v_proj.load_parameters(parameters=parameters, key="v_proj", prefix=prefix)
-        self.q_proj.load_parameters(parameters=parameters, key="q_proj", prefix=prefix)
-        self.out_proj.load_parameters(parameters=parameters, key="out_proj", prefix=prefix)
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.k_proj.load_state_dict(parameters=parameters, key="k_proj", module_prefix=module_prefix)
+        self.v_proj.load_state_dict(parameters=parameters, key="v_proj", module_prefix=module_prefix)
+        self.q_proj.load_state_dict(parameters=parameters, key="q_proj", module_prefix=module_prefix)
+        self.out_proj.load_state_dict(parameters=parameters, key="out_proj", module_prefix=module_prefix)
 
     def __call__(self, query: ttnn.Tensor) -> ttnn.Tensor:
         tgt_len, bsz, embed_dim = query.shape
@@ -126,17 +126,17 @@ class TransformerSentenceEncoderLayer:
         self.final_layer_norm_weight: ttnn.Tensor | None = None
         self.final_layer_norm_bias: ttnn.Tensor | None = None
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.self_attn.load_parameters(parameters, prefix=f"{prefix}self_attn.")
-        self.fc1.load_parameters(parameters=parameters, key="fc1", prefix=prefix)
-        self.fc2.load_parameters(parameters=parameters, key="fc2", prefix=prefix)
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.self_attn.load_state_dict(parameters, module_prefix=f"{module_prefix}self_attn.")
+        self.fc1.load_state_dict(parameters=parameters, key="fc1", module_prefix=module_prefix)
+        self.fc2.load_state_dict(parameters=parameters, key="fc2", module_prefix=module_prefix)
 
         for key_name, attr_w, attr_b in [
             ("self_attn_layer_norm", "self_attn_layer_norm_weight", "self_attn_layer_norm_bias"),
             ("final_layer_norm", "final_layer_norm_weight", "final_layer_norm_bias"),
         ]:
-            w_key = f"{prefix}{key_name}.weight" if prefix else f"{key_name}.weight"
-            b_key = f"{prefix}{key_name}.bias" if prefix else f"{key_name}.bias"
+            w_key = f"{module_prefix}{key_name}.weight" if module_prefix else f"{key_name}.weight"
+            b_key = f"{module_prefix}{key_name}.bias" if module_prefix else f"{key_name}.bias"
             if w_key not in parameters:
                 raise KeyError(f"Missing required parameter: {w_key}")
             if b_key not in parameters:
@@ -241,13 +241,13 @@ class ConvFeatureExtractionModel:
                 device=device, num_channels=conv_layers[0][0], num_groups=conv_layers[0][0]
             )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
         for i, conv in enumerate(self.conv_layers):
-            conv.load_parameters(parameters=parameters, key=f"conv_layers.{i}.0", prefix=prefix)
+            conv.load_state_dict(parameters=parameters, key=f"conv_layers.{i}.0", module_prefix=module_prefix)
 
             if self.mode == "layer_norm":
-                w_key = f"{prefix}conv_layers.{i}.1.1.weight" if prefix else f"conv_layers.{i}.1.1.weight"
-                b_key = f"{prefix}conv_layers.{i}.1.1.bias" if prefix else f"conv_layers.{i}.1.1.bias"
+                w_key = f"{module_prefix}conv_layers.{i}.1.1.weight" if module_prefix else f"conv_layers.{i}.1.1.weight"
+                b_key = f"{module_prefix}conv_layers.{i}.1.1.bias" if module_prefix else f"conv_layers.{i}.1.1.bias"
                 if w_key not in parameters:
                     raise KeyError(f"Missing required parameter: {w_key}")
                 if b_key not in parameters:
@@ -270,7 +270,7 @@ class ConvFeatureExtractionModel:
                 group_norm = self.group_norms[i]
                 if group_norm is None:
                     raise ValueError("GroupNorm module is not initialized.")
-                group_norm.load_parameters(parameters=parameters, key=f"conv_layers.{i}.1", prefix=prefix)
+                group_norm.load_state_dict(parameters=parameters, key=f"conv_layers.{i}.1", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Torch path takes BxT and does unsqueeze(1). TT conv expects BxLxC.
@@ -300,7 +300,7 @@ class ConvFeatureExtractionModel:
                     raise ValueError("GroupNorm parameters are not loaded.")
                 x = group_norm.gp_slice(x)
             x = ttnn.gelu(x, output_tensor=x)
-        # Match Torch output shape: B x C x T
+
         return x
 
     def deallocate(self) -> None:
@@ -329,8 +329,8 @@ class PositionalConvEmbedding:
         )
         self.remove = 1 if kernel_size % 2 == 0 else 0
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.conv.load_parameters(parameters=parameters, key="0", prefix=prefix)
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.conv.load_state_dict(parameters=parameters, key="0", module_prefix=module_prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch_size = x.shape[0]
@@ -368,11 +368,11 @@ class TransformerEncoder:
             layer_norm_first=args["layer_norm_first"],
         )
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor], prefix: str = "") -> None:
-        self.pos_conv.load_parameters(parameters=parameters, prefix=f"{prefix}pos_conv.")
-        self.layer_norm.load_parameters(parameters=parameters, key="layer_norm", prefix=prefix)
+    def load_state_dict(self, parameters: dict[str, torch.Tensor], module_prefix: str = "") -> None:
+        self.pos_conv.load_state_dict(parameters=parameters, module_prefix=f"{module_prefix}pos_conv.")
+        self.layer_norm.load_state_dict(parameters=parameters, key="layer_norm", module_prefix=module_prefix)
         for i, layer in enumerate(self.layers):
-            layer.load_parameters(parameters=parameters, prefix=f"{prefix}layers.{i}.")
+            layer.load_state_dict(parameters=parameters, module_prefix=f"{module_prefix}layers.{i}.")
 
     def __call__(self, x: ttnn.Tensor, tgt_layer: int) -> ttnn.Tensor:
         x = ttnn.add(x, self.pos_conv(x))
@@ -443,13 +443,13 @@ class HubertModel:
     def build_model(cls, cfg, task, device: ttnn.MeshDevice):
         return cls(device=device, cfg=cfg, task_cfg=task.cfg)
 
-    def load_parameters(self, parameters: dict[str, torch.Tensor]) -> None:
-        self.feature_extractor.load_parameters(parameters=parameters, prefix="feature_extractor.")
-        self.layer_norm.load_parameters(parameters=parameters, key="layer_norm")
+    def load_state_dict(self, parameters: dict[str, torch.Tensor]) -> None:
+        self.feature_extractor.load_state_dict(parameters=parameters, module_prefix="feature_extractor.")
+        self.layer_norm.load_state_dict(parameters=parameters, key="layer_norm")
         if self.post_extract_proj is not None:
-            self.post_extract_proj.load_parameters(parameters=parameters, key="post_extract_proj")
-        self.encoder.load_parameters(parameters=parameters, prefix="encoder.")
-        self.final_proj_linear.load_parameters(parameters=parameters, key="final_proj")
+            self.post_extract_proj.load_state_dict(parameters=parameters, key="post_extract_proj")
+        self.encoder.load_state_dict(parameters=parameters, module_prefix="encoder.")
+        self.final_proj_linear.load_state_dict(parameters=parameters, key="final_proj")
 
     def __call__(self, source: ttnn.Tensor, output_layer: int) -> ttnn.Tensor:
         x = self.feature_extractor(source)

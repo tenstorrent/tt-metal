@@ -581,7 +581,7 @@ class TransformerEncoder(nn.Module):
             num_layers = args["pos_conv_depth"]
             k = max(3, args["conv_pos"] // num_layers)
 
-            def make_conv_block(e, k, g, n_layers):
+            def make_conv_block(e, k, g, num_layers):
                 return nn.Sequential(
                     *[
                         nn.Sequential(
@@ -597,7 +597,7 @@ class TransformerEncoder(nn.Module):
                             TransposeLast(),
                             nn.GELU(),
                         )
-                        for _ in range(n_layers)
+                        for _ in range(num_layers)
                     ]
                 )
 

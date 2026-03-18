@@ -21,8 +21,8 @@ def test_synthesizer_trn_ms_nsf(device):
     inter_channels = 8
     hidden_channels = 64
     filter_channels = 32
-    n_heads = 2
-    n_layers = 1
+    num_heads = 2
+    num_layers = 1
     kernel_size = 3
     resblock = "2"
     resblock_kernel_sizes = [3]
@@ -39,8 +39,8 @@ def test_synthesizer_trn_ms_nsf(device):
         inter_channels=inter_channels,
         hidden_channels=hidden_channels,
         filter_channels=filter_channels,
-        n_heads=n_heads,
-        n_layers=n_layers,
+        num_heads=num_heads,
+        num_layers=num_layers,
         kernel_size=kernel_size,
         resblock=resblock,
         resblock_kernel_sizes=resblock_kernel_sizes,
@@ -59,8 +59,8 @@ def test_synthesizer_trn_ms_nsf(device):
         inter_channels=inter_channels,
         hidden_channels=hidden_channels,
         filter_channels=filter_channels,
-        n_heads=n_heads,
-        n_layers=n_layers,
+        num_heads=num_heads,
+        num_layers=num_layers,
         kernel_size=kernel_size,
         resblock=resblock,
         resblock_kernel_sizes=list(resblock_kernel_sizes),
@@ -73,7 +73,7 @@ def test_synthesizer_trn_ms_nsf(device):
         sr=sr,
     )
     parameters = {f"net_g.{k}": v for k, v in torch_model.state_dict().items()}
-    tt_model.load_parameters(parameters, prefix="net_g.")
+    tt_model.load_state_dict(parameters, module_prefix="net_g.")
 
     torch_phone = torch.randn(batch_size, seq_len, embedding_dims, dtype=torch.float32)
     torch_pitch = torch.randint(0, 255, (batch_size, seq_len), dtype=torch.int64)
