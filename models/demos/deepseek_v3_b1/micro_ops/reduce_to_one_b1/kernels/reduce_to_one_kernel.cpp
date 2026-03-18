@@ -40,7 +40,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("local_cb"),
         get_named_compile_time_arg_val("scratch_cb"),
         get_named_compile_time_arg_val("packet_cb"),
-        get_named_compile_time_arg_val("packet_header_cb"),
         get_named_compile_time_arg_val("num_hops"),
         get_named_compile_time_arg_val("dst_fabric_node_chip_id"),
         get_named_compile_time_arg_val("dst_fabric_node_mesh_id"),

@@ -139,6 +139,7 @@ class _MoeRoutedExpertContext:
     sender_core: Any
     input_core_grid: Any
     mcast_grid: Any
+    mcast_worker_grid: Any
     gate_proj_core_ranges: Any
     num_gate_proj_cores: int
 
@@ -255,13 +256,11 @@ class _MoeRoutedExpertContext:
     reduce_output_cb: int = 0
     reduce_scratch_cb: int = 0
     reduce_packet_cb: int = 0
-    reduce_packet_header_cb: int = 0
     reduce_params: dict = None
     # Pre-built CB descriptors for reduce (set by _overlap_cbs_with_sdpa_buffer)
     reduce_received_cb_descriptors: list = None  # CB for received (3-page) + output
     reduce_scratch_cb_descriptor: Any = None
     reduce_packet_cb_descriptor: Any = None
-    reduce_packet_header_cb_descriptor: Any = None
 
     # Broadcast
     enable_bcast: bool = False
@@ -798,6 +797,12 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Extract global semaphore addresses
         # ==================================================================
+        enable_bcast = (
+            bcast_input_tensor is not None
+            and bcast_intermediate_tensor is not None
+            and bcast_semaphores is not None
+            and bcast_sender_coord is not None
+        )
         assert semaphores is not None, "semaphores must be provided (use MoeOp.create_semaphores())"
         sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         mcast_data_sender_semaphore_addr = sem_addrs[MoeSem.MCAST_SENDER]
@@ -830,6 +835,8 @@ class MoeRoutedExpertOp:
         gate_proj_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
         gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
         mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
+        sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+        mcast_worker_grid = mcast_grid.subtract(sender_core_grid)
         num_gate_proj_cores = gate_proj_core_ranges.num_cores()
 
         # Worker core grid: default to full device grid unless caller overrides.
@@ -918,8 +925,10 @@ class MoeRoutedExpertOp:
         reduce_output_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_scratch_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
         reduce_packet_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
-        reduce_packet_header_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
-        bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
+        if enable_bcast:
+            bcast_pkt_cb = cb_id_context.get_cb_id(data_format, TD_32x32)
+        else:
+            bcast_pkt_cb = None
 
         # ==================================================================
         # RMSNorm tile reinterpretation (compute kernel needs 32x32 or 16x32 tiles)
@@ -1319,13 +1328,6 @@ class MoeRoutedExpertOp:
         # ==================================================================
         # Broadcast (CCL broadcast into CB 25)
         # ==================================================================
-        enable_bcast = (
-            bcast_input_tensor is not None
-            and bcast_intermediate_tensor is not None
-            and bcast_semaphores is not None
-            and bcast_sender_coord is not None
-        )
-
         bcast_params = None
         if enable_bcast:
             from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -1395,6 +1397,7 @@ class MoeRoutedExpertOp:
             sender_core=sender_core,
             input_core_grid=input_core_grid,
             mcast_grid=mcast_grid,
+            mcast_worker_grid=mcast_worker_grid,
             gate_proj_core_ranges=gate_proj_core_ranges,
             num_gate_proj_cores=num_gate_proj_cores,
             # Data format & tiles
@@ -1493,11 +1496,10 @@ class MoeRoutedExpertOp:
             reduce_output_cb=reduce_output_cb,
             reduce_scratch_cb=reduce_scratch_cb,
             reduce_packet_cb=reduce_packet_cb,
-            reduce_packet_header_cb=reduce_packet_header_cb,
             reduce_params=reduce_params if enable_reduce_to_one else None,
             # Broadcast
             enable_bcast=enable_bcast,
-            bcast_pkt_cb=bcast_pkt_cb,
+            bcast_pkt_cb=bcast_pkt_cb if enable_bcast else None,
             bcast_pkt_cb_descriptor=bcast_pkt_cb_descriptor if enable_bcast else None,
             bcast_params=bcast_params,
         )
@@ -1626,7 +1628,7 @@ class MoeRoutedExpertOp:
             ("reduce_received_cb", ctx.reduce_received_cb),
             ("reduce_ncrisc_common_rt_arg_base", 0),
             # Broadcast (base CT args, always present)
-            ("bcast_pkt_cb", ctx.bcast_pkt_cb),
+            ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
             ("bcast_ncrisc_common_rt_arg_base", 0),
         ]
 
@@ -1727,7 +1729,7 @@ class MoeRoutedExpertOp:
             ("reduce_brisc_fabric_rt_arg_base", 0),
             ("reduce_persistent_fabric_rt_arg_base", 18),
             # Broadcast (base CT args, always present)
-            ("bcast_pkt_cb", ctx.bcast_pkt_cb),
+            ("bcast_pkt_cb", ctx.bcast_pkt_cb if ctx.enable_bcast else 0),
         ]
 
         trisc_named_compile_time_args = [
@@ -1878,7 +1880,6 @@ class MoeRoutedExpertOp:
             descriptors += ctx.reduce_received_cb_descriptors
             descriptors.append(ctx.reduce_scratch_cb_descriptor)
             descriptors.append(ctx.reduce_packet_cb_descriptor)
-            descriptors.append(ctx.reduce_packet_header_cb_descriptor)
 
         # Bcast CB (46)
         if ctx.enable_bcast and ctx.bcast_pkt_cb_descriptor is not None:
@@ -1898,7 +1899,7 @@ class MoeRoutedExpertOp:
             ),
             UnifiedCompileTimeCoreDescriptor(
                 named_compile_time_arg="is_mcast_grid_core",
-                core_range=ctx.mcast_grid,
+                core_range=ctx.mcast_worker_grid,
                 value=1,
                 other_value=0,
             ),
@@ -2029,13 +2030,12 @@ class MoeSharedExpertOp:
         act_total_tiles = num_tiles_k
         weights_num_pages = k_per_core
 
-        cb_weights_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_weights_index, weights_tensor)
-
         return {
             "k_per_core": k_per_core,
             "act_total_tiles": act_total_tiles,
             "weights_num_pages": weights_num_pages,
-            "cb_weights_descriptor": cb_weights_descriptor,
+            "cb_weights_descriptor": None,
+            "weights_cb_addr": weights_tensor.buffer_address(),
             "cb_out_descriptor": None,
         }
 
@@ -2101,6 +2101,9 @@ class MoeSharedExpertOp:
         kernel_k_num_tiles = 1
         mcast_src_num_pages = 1
         reduce_tile_size = face_tile_size
+
+        if cb_group1_index == cb_group2_index:
+            assert kernel_k_num_tiles == 1, "kernel_k_num_tiles must be 1 if cb_group1_index == cb_group2_index"
 
         cb_group1_descriptor = None
         if group1_tensor is not None:
@@ -2327,7 +2330,7 @@ class MoeSharedExpertOp:
 
         # 16x16, bfloat16
         shared_group1_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
-        shared_group2_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
+        shared_group2_cb = shared_group1_cb
         shared_intermed_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
         shared_mcast_src_cb = cb_id_context.get_cb_id(data_format, TD_16x16)
 
@@ -2341,11 +2344,12 @@ class MoeSharedExpertOp:
 
         # Tensor-backed CBs (format from weight tensors)
         shared_gate_up_weights_tensor = shared_gate_weights_overlapped.fused_tensor
-        shared_gu_weights_cb = cb_id_context.get_cb_id(
-            shared_gate_up_weights_tensor.dtype, ttnn.TileDescriptor(shared_gate_up_weights_tensor.get_tile())
-        )
         shared_down_matmul_in1_cb = cb_id_context.get_cb_id(
             shared_down_weights_tensor.dtype, ttnn.TileDescriptor(shared_down_weights_tensor.get_tile())
+        )
+        shared_gu_weights_cb = shared_down_matmul_in1_cb
+        shared_weights_core_ranges = shared_down_weights_tensor.memory_config().shard_spec.grid.merge(
+            shared_gate_up_weights_tensor.memory_config().shard_spec.grid
         )
 
         # ==================================================================
@@ -2459,6 +2463,7 @@ class MoeSharedExpertOp:
             out_cb=shared_down_matmul_out_cb,
             weights_overlapped=shared_down_weights_tensor,
             k_num_tiles=n_parallel,
+            weights_core_ranges_override=shared_weights_core_ranges,
         )
 
         # ==================================================================
@@ -2659,6 +2664,7 @@ class MoeSharedExpertOp:
             # Gate/Up matmul
             ("shared_gu_act_cb", rmsnorm_mcast_dst_cb),
             ("shared_gu_weights_cb", shared_ctx.gu_weights_cb),
+            ("shared_gu_weights_cb_addr", shared_ctx.gu_matmul_params["weights_cb_addr"]),
             ("shared_gu_out_cb", shared_ctx.gu_out_cb),
             ("shared_gu_k_per_core", shared_ctx.gu_matmul_params["k_per_core"]),
             ("shared_gu_act_total_tiles", shared_ctx.gu_matmul_params["act_total_tiles"]),
@@ -2675,6 +2681,7 @@ class MoeSharedExpertOp:
             ("shared_down_matmul_out", shared_ctx.down_matmul_params["out_cb"]),
             ("shared_down_matmul_k_num_tiles", shared_ctx.down_matmul_params["k_num_tiles"]),
             ("shared_down_matmul_out_w_per_core", shared_ctx.down_matmul_params["out_w"]),
+            ("shared_down_matmul_weights_cb_addr", shared_ctx.down_matmul_params["weights_cb_addr"]),
             # Residual add
             ("shared_residual_add_in0", shared_ctx.down_matmul_params["out_cb"]),  # matmul output
             ("shared_residual_add_in1", shared_ctx.residual_cb),  # residual (pre-loaded bias)
@@ -2688,10 +2695,8 @@ class MoeSharedExpertOp:
     def _build_cb_descriptors(shared_ctx):
         """Build CB descriptors for shared expert."""
         return [
-            shared_ctx.gu_matmul_params["cb_weights_descriptor"],
             shared_ctx.gu_matmul_params["cb_out_descriptor"],
             shared_ctx.gated_reduce_params["cb_group1_descriptor"],
-            shared_ctx.gated_reduce_params["cb_group2_descriptor"],
             shared_ctx.gated_reduce_params["cb_intermed_descriptor"],
             shared_ctx.gated_reduce_params["cb_out_descriptor"],
             shared_ctx.down_mcast_params["dst_cb_descriptor"],
@@ -3004,6 +3009,7 @@ class MoeOp:
         output_tensor=None,
         k_num_tiles=0,
         fused_activation=0,
+        weights_core_ranges_override=None,
     ):
         """
         Set up parameters for an SRAM matmul operation.
@@ -3031,6 +3037,8 @@ class MoeOp:
             weights_cb_descriptor = cb_descriptor_from_overlapped_tensor(
                 in1_cb, weights_overlapped, fused_tensor_device0
             )
+            if weights_core_ranges_override is not None:
+                weights_cb_descriptor.core_ranges = weights_core_ranges_override
         else:
             weights_device0 = ttnn.get_device_tensors(weights_overlapped)[0]
             tile = weights_device0.get_tile()
@@ -3038,7 +3046,8 @@ class MoeOp:
             out_w = shard_shape[1] // tile.tile_shape[1]
             core_grid = weights_overlapped.memory_config().shard_spec.grid
             weights_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(in1_cb, weights_device0)
-
+            if weights_core_ranges_override is not None:
+                weights_cb_descriptor.core_ranges = weights_core_ranges_override
         output_cb_descriptor = None
         if output_tensor is not None:
             output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(out_cb, output_tensor)
@@ -3053,6 +3062,7 @@ class MoeOp:
             "core_grid": core_grid,
             "num_cores": core_grid.num_cores(),
             "weights_cb_descriptor": weights_cb_descriptor,
+            "weights_cb_addr": ttnn.get_cb_address(weights_cb_descriptor),
             "output_cb_descriptor": output_cb_descriptor,
         }
 
@@ -3695,7 +3705,7 @@ class MoeOp:
 
         # CB 30: shared_group1 (ag gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
         cb30_cb_id = shared_ctx.group1_cb
-        cb30_total_size = 4096
+        cb30_total_size = 4096 * 2
         cb30_desc = ttnn.cb_descriptor_from_sharded_tensor(
             cb30_cb_id,
             out_buf,
@@ -3713,25 +3723,7 @@ class MoeOp:
         shared_ctx.ag_receiver_data_addr = out_addr + out_offset
         out_offset += cb30_total_size
 
-        # CB 31: shared_group2 (bg gather dst) (total_size=4096, page_size=512, face tile 16x16, bfloat16)
-        cb31_cb_id = shared_ctx.group2_cb
-        cb31_total_size = 4096
-        cb31_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb31_cb_id,
-            out_buf,
-            address_offset=out_offset,
-            total_size=cb31_total_size,
-        )
-        cb31_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb31_cb_id,
-            data_format=ttnn.bfloat16,
-            page_size=512,
-            tile=ttnn.TileDescriptor(ttnn.Tile([16, 16])),
-        )
-        cb31_desc.format_descriptors = [cb31_fmt]
-        shared_ctx.gated_reduce_params["cb_group2_descriptor"] = cb31_desc
-        shared_ctx.bg_receiver_data_addr = out_addr + out_offset
-        out_offset += cb31_total_size
+        shared_ctx.bg_receiver_data_addr = shared_ctx.ag_receiver_data_addr + 4096
 
         # CB 38: shared_output_gather_dst (total_size=14336, page_size=64, tile=1x32, bfloat16)
         cb38_offset = out_offset
@@ -3823,25 +3815,6 @@ class MoeOp:
             ]
             routed_ctx.reduce_packet_cb_descriptor = reduce_cb_packet_desc
             reduce_offset += reduce_packet_size
-
-            # CB 45: reduce_packet_header_cb (96 bytes)
-            reduce_packet_header_size = 96
-            reduce_cb_header_desc = ttnn.cb_descriptor_from_sharded_tensor(
-                routed_ctx.reduce_packet_header_cb,
-                out_buf,
-                address_offset=reduce_offset,
-                total_size=reduce_packet_header_size,
-            )
-            reduce_cb_header_desc.core_ranges = reduce_all_cores_set
-            reduce_cb_header_desc.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=routed_ctx.reduce_packet_header_cb,
-                    data_format=ttnn.bfloat16,
-                    page_size=reduce_packet_header_size,
-                )
-            ]
-            routed_ctx.reduce_packet_header_cb_descriptor = reduce_cb_header_desc
-
             # reduce received CB: single 3-page CB backed by intermediate tensor
             reduce_payload = routed_ctx.reduce_params["payload_size_bytes"]
             routed_ctx.reduce_received_cb_descriptors = []
@@ -3942,7 +3915,6 @@ class MoeOp:
                 ("reduce_total_num_workers", reduce_params["num_workers"]),
                 ("reduce_agg_output_size_bytes", routed_ctx.num_tiles_k * 32 * 2 if self.downstream_socket else 0),
                 ("reduce_packet_cb", routed_ctx.reduce_packet_cb),
-                ("reduce_packet_header_cb", routed_ctx.reduce_packet_header_cb),
             ]
         )
         self.trisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
@@ -3997,16 +3969,14 @@ class MoeOp:
         agg_sem_addr = self.sem_addrs[MoeSem.REDUCE_AGG_SYNC]
         agg_core_noc_x = 0
         agg_core_noc_y = 0
-        if device_role == MESH_ROOT1 and self.downstream_socket is not None:
+        if device_role == MESH_ROOT1:
             agg_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["worker_cores_list"][0])
             agg_core_noc_x = agg_core_phys.x
             agg_core_noc_y = agg_core_phys.y
 
         # Persistent signal: on ROOT1, aggregator worker signals a fabric core via local NOC,
         # then the fabric core sends a fabric atomic inc to the bcast sender on the entry device.
-        persistent_enable_root1 = (
-            device_role == MESH_ROOT1 and self.downstream_socket is not None and self.persistent_next_iter_sem_addr != 0
-        )
+        persistent_enable_root1 = device_role == MESH_ROOT1 and self.persistent_next_iter_sem_addr != 0
         persistent_dst_noc_x = 0
         persistent_dst_noc_y = 0
         persistent_dst_sem_addr = 0
@@ -4052,11 +4022,11 @@ class MoeOp:
             worker_agg_noc_x = 0
             worker_agg_noc_y = 0
 
-            if device_role == MESH_ROOT1 and self.downstream_socket is not None:
+            if device_role == MESH_ROOT1:
                 worker_agg_sem_addr = agg_sem_addr
                 worker_agg_noc_x = agg_core_noc_x
                 worker_agg_noc_y = agg_core_noc_y
-                if shard_idx == 0:
+                if shard_idx == 0 and self.downstream_socket is not None:
                     socket_config_addr = self.downstream_socket.get_config_buffer_address()
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
@@ -4366,9 +4336,12 @@ class MoeOp:
         reconfig_moe_cbs=False,
         semaphores=None,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        cb_id_context=None,
         worker_core_grid=None,
         is_torus=False,
         downstream_socket=None,
+        persistent_next_iter_semaphore=None,
+        persistent_mode=False,
     ):
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
@@ -4378,9 +4351,18 @@ class MoeOp:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
         self.sem_addrs = [ttnn.get_global_semaphore_address(s) for s in semaphores]
         sem_addrs = self.sem_addrs
+        self.persistent_mode = persistent_mode
+        self.persistent_next_iter_sem_addr = (
+            int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
+            if persistent_next_iter_semaphore is not None
+            else 0
+        )
 
-        self.cb_id_manager = CircularBufferIdManager()
-        cb_id_context = self.cb_id_manager.create_context()
+        if cb_id_context is None:
+            self.cb_id_manager = CircularBufferIdManager()
+            cb_id_context = self.cb_id_manager.create_context()
+        else:
+            self.cb_id_manager = cb_id_context._manager
 
         routed_ctx = MoeRoutedExpertOp._setup_dimensions(
             shared_residual_mcast_src_tensor,
@@ -4564,8 +4546,6 @@ class MoeOp:
         self,
         chip_id,
         num_iterations,
-        persistent_mode,
-        persistent_next_iter_sem_addr,
         ncrisc_args,
         brisc_args,
         trisc_args,
@@ -4589,12 +4569,12 @@ class MoeOp:
         ncrisc_args += [("num_iterations", num_iterations)]
         brisc_args += [("num_iterations", num_iterations)]
         trisc_args += [("num_iterations", num_iterations)]
-        ncrisc_args += [("persistent_mode", persistent_mode)]
-        brisc_args += [("persistent_mode", persistent_mode)]
-        trisc_args += [("persistent_mode", persistent_mode)]
-        ncrisc_args += [("persistent_next_iter_sem_addr", persistent_next_iter_sem_addr)]
-        brisc_args += [("persistent_next_iter_sem_addr", persistent_next_iter_sem_addr)]
-        trisc_args += [("persistent_next_iter_sem_addr", persistent_next_iter_sem_addr)]
+        ncrisc_args += [("persistent_mode", self.persistent_mode)]
+        brisc_args += [("persistent_mode", self.persistent_mode)]
+        trisc_args += [("persistent_mode", self.persistent_mode)]
+        ncrisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
+        brisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
+        trisc_args += [("persistent_next_iter_sem_addr", self.persistent_next_iter_sem_addr)]
 
     def _build_semaphore_descriptors(self):
         """Build semaphore descriptors — empty, global semaphores are used instead."""
@@ -4671,15 +4651,12 @@ class MoeOp:
         self,
         chip_id,
         num_iterations,
-        persistent_mode,
-        persistent_next_iter_sem_addr,
         reduce_root_coord,
         coord,
         row,
         col,
     ):
         """Build all per-device state: compile-time args, descriptor copies, and reduce modifications."""
-        self.persistent_next_iter_sem_addr = persistent_next_iter_sem_addr
         self._persistent_fabric_core = None
         self._persistent_target_node = None
         # Start from shared descriptors
@@ -4689,8 +4666,6 @@ class MoeOp:
         self._append_compile_time_args(
             chip_id,
             num_iterations,
-            persistent_mode,
-            persistent_next_iter_sem_addr,
             self.ncrisc_args,
             self.brisc_args,
             self.trisc_args,
@@ -4773,6 +4748,7 @@ class MoeOp:
         is_torus=False,
         # Downstream socket for reduce aggregator to send reduced output
         downstream_socket=None,
+        cb_id_context=None,
     ):
         """
         Execute the full fused MoE operation (routed + shared expert).
@@ -4844,6 +4820,8 @@ class MoeOp:
             worker_core_grid=worker_core_grid,
             is_torus=is_torus,
             downstream_socket=downstream_socket,
+            cb_id_context=cb_id_context,
+            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         )
 
         # ==================================================================
@@ -4856,13 +4834,6 @@ class MoeOp:
         # ==================================================================
         ctx = moe.ctx
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
-
-        persistent_next_iter_sem_addr = (
-            int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore))
-            if persistent_next_iter_semaphore is not None
-            else 0
-        )
-
         for row in range(ctx.mesh_rows):
             for col in range(ctx.mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
@@ -4871,8 +4842,6 @@ class MoeOp:
                 moe._setup_per_device_args(
                     chip_id,
                     num_iterations,
-                    persistent_mode,
-                    persistent_next_iter_sem_addr,
                     reduce_root_coord,
                     coord,
                     row,
