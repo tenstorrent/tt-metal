@@ -215,7 +215,7 @@
     pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
     pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
     pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference -k "paged_attention-quick or default_attention-quick"
+    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy"
     pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference"
   model: mixtral-8x7b
   skus:
