@@ -31,4 +31,9 @@ Tensor abs(
 
 Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config);
 
+Tensor neg(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
 }  // namespace ttnn

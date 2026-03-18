@@ -1928,7 +1928,7 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation<"neg", &ttnn::neg>(
+    bind_unary_operation_3param<"neg", &ttnn::neg>(
         mod,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc",
         "",

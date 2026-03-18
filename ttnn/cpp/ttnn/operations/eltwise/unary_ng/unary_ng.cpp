@@ -72,4 +72,13 @@ Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_con
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
+Tensor neg(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    using namespace operations::unary;
+    return operations::unary_ng::detail::unary_ng_impl(
+        input_tensor, {UnaryWithParam{UnaryOpType::NEG}}, memory_config, optional_output_tensor);
+}
+
 }  // namespace ttnn

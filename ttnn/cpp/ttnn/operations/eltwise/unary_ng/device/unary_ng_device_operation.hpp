@@ -27,7 +27,6 @@ struct UnaryNgDeviceOperation {
         bool fp32_dest_acc_en = false;
         bool preserve_fp32_precision = false;
         bool bfp8_pack_precise = false;
-        /** From get_worker_grid(); ProgramFactory uses this only (sub_core_grids folded in when set). */
         const CoreRangeSet worker_grid;
         std::optional<CoreRangeSet> sub_core_grids;
 
@@ -44,7 +43,8 @@ struct UnaryNgDeviceOperation {
             tt::tt_metal::KernelHandle reader_kernel_id{};
             tt::tt_metal::KernelHandle writer_kernel_id{};
             tt::tt_metal::KernelHandle compute_kernel_id{};
-            std::vector<tt::tt_metal::CoreCoord> cores_with_runtime_args;
+            tt::tt_metal::CBHandle cb_src{};
+            tt::tt_metal::CBHandle cb_out{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

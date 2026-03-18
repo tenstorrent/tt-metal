@@ -20,6 +20,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
     switch (op_type) {
         case UnaryOpType::ABS:
         case UnaryOpType::ABS_INT32: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
+        case UnaryOpType::NEG: return "SFPU_OP_NEG_INCLUDE";
         default:
             TT_FATAL(
                 false,
@@ -34,6 +35,11 @@ std::pair<std::string, std::string> get_op_init_and_func(
     switch (op_type) {
         case UnaryOpType::ABS: return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
         case UnaryOpType::ABS_INT32: return {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
+        case UnaryOpType::NEG:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::INT32) {
+                return {"negative_tile_init();", fmt::format("negative_tile_int32({});", idst)};
+            }
+            return {"negative_tile_init();", fmt::format("negative_tile({});", idst)};
         default:
             TT_FATAL(
                 false,

@@ -67,8 +67,6 @@ void UnaryNgDeviceOperation::validate_on_program_cache_miss(
             computed_output_shape,
             preallocated_output_shape);
 
-        // Phase 3.1: Explicit format validation – when both input and output are provided, format (tile vs row-major)
-        // must match.
         TT_FATAL(
             output_tensor->layout() == input_tensor.layout(),
             "UnaryNg: Output format (tile/row-major) must match input when preallocated. Output: {}, Input: {}",
@@ -140,30 +138,21 @@ tt::stl::hash::hash_t UnaryNgDeviceOperation::compute_program_hash(
         "UnaryNg: Unexpected tensor type {}",
         input_tensor.storage_type());
 
-    const auto& input_shape = input_tensor.padded_shape();
-    constexpr size_t program_factory_index = 0;  // single variant: ProgramFactory
-    operation::Hash hash;
-    if (input_tensor.layout() == Layout::TILE) {
-        hash = operation::hash_operation<UnaryNgDeviceOperation>(
-            attributes,
-            attributes.sub_core_grids,
-            program_factory_index,
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape.volume(),
-            input_tensor.layout());
-    } else {
-        hash = operation::hash_operation<UnaryNgDeviceOperation>(
-            attributes,
-            attributes.sub_core_grids,
-            program_factory_index,
-            input_tensor.dtype(),
-            input_tensor.memory_config(),
-            input_shape,
-            input_tensor.layout());
+    const auto output_spec = compute_output_specs(attributes, tensor_args);
+    const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
+    std::optional<uint32_t> src_shard_vol = std::nullopt;
+    std::optional<uint32_t> dst_shard_vol = std::nullopt;
+    if (shard_specs.has_value()) {
+        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+        if (input_tensor.is_sharded()) {
+            src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
+        }
+        const auto out_tile_hw = output_spec.tile().get_tile_hw();
+        dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    return hash;
+    return operation::hash_operation<UnaryNgDeviceOperation>(
+        attributes, input_tensor.dtype(), input_tensor.memory_config(), src_shard_vol, dst_shard_vol);
 }
 
 bool UnaryNgDeviceOperation::skip_launch(
