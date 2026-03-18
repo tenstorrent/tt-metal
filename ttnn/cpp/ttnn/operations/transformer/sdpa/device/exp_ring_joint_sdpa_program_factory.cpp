@@ -1490,6 +1490,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 }
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.x));
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.y));
+                writer_args.push_back(args.num_links);   // num_muxes_in_direction
+                writer_args.push_back(link);              // my_mux_index
 
                 // Direction: top half of rows = backward (0), bottom half = forward (1).
                 const uint32_t ag_direction = is_backward ? 0 : 1;
@@ -1665,10 +1667,10 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
                 if (shared_vars.writer_fabric_ag_rt_offset > 0 &&
                     writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = out_ready_sem_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 11] = k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 12] = v_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 13] = gathered_k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 14] = gathered_v_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 13] = k_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 14] = v_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 15] = gathered_k_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 16] = gathered_v_addr;
                 }
             } else {
                 auto& writer_args = writer_args_by_core[core.x][core.y];
