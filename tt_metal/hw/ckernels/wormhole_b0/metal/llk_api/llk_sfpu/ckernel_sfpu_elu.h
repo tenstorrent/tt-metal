@@ -40,13 +40,17 @@ constexpr std::array<float, 53> ELU_LUT = {{
     0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f
 }};
 
+// Boundary clamping: elu(x) → -alpha as x→-∞, elu(x) = x for x≥0
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
     sfpi::vFloat alpha = Converter::as_float(slope);
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = piecewise_polynomial_eval<ELU_NUM_DEGREE, ELU_NUM_SEGMENTS, ELU_LUT_SIZE>(ELU_LUT, x);
-        v_if(x < 0.0f) { result = alpha * result; }
+        sfpi::vFloat result = alpha * piecewise_polynomial_eval<ELU_NUM_DEGREE, ELU_NUM_SEGMENTS, ELU_LUT_SIZE>(ELU_LUT, x);
+        v_if(x >= 0.0f) { result = x; }
+        v_endif;
+        v_if(x < -10.0f) { result = -alpha; }
         v_endif;
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
