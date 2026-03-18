@@ -8,6 +8,7 @@ import json
 import os
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import torch
@@ -24,12 +25,13 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 import transformers
 from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.moe import TTNNMoE
+from models.experimental.tt_symbiote.modules.moe import TTNNGlm4MoeMLP, TTNNMoE
 from models.experimental.tt_symbiote.modules.attention import (
     TTNNGlm4MoeLiteAttention,
     PagedAttentionConfig,
     TTNNPagedAttentionKVCache,
 )
+from models.experimental.tt_symbiote.modules.embedding import TTNNEmbedding
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 assert transformers.__version__.startswith(
@@ -98,6 +100,7 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash", use_fast=True)
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
+    print(model)
 
     if model.config.hidden_size == params["hidden_size"]:
         assert model.config.n_routed_experts == params["num_experts"]
@@ -105,12 +108,14 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
         assert model.config.moe_intermediate_size == params["moe_intermediate_size"]
 
     nn_to_ttnn = {
+        model.model.embed_tokens.__class__: TTNNEmbedding,
         model.model.layers[0].self_attn.__class__: TTNNGlm4MoeLiteAttention,
+        model.model.layers[0].mlp.__class__: TTNNGlm4MoeMLP,
         model.model.layers[1].mlp.__class__: TTNNMoE,
         model.model.layers[0].input_layernorm.__class__: TTNNDistributedRMSNorm,
     }
     nn_to_ttnn2 = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,
+        nn.Linear: TTNNLinearIColShardedWRowSharded,  # sharded linears (exclude lm_head - needs all-gather for logits)
     }
 
     messages = [
@@ -119,15 +124,22 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
             "content": "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?",
         },
     ]
+    model_device = next(model.parameters()).device
+    # HuggingFace generate() (line 2502) requires model.device.type and input_ids.device.type.
+    # PreTrainedModel.device is read-only; patch it for the generate call.
+    if not isinstance(model_device, torch.device):
+        model_device = torch.device("cpu")
     inputs = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
         tokenize=True,
         return_dict=True,
         return_tensors="pt",
-    ).to(model.device)
+    ).to(model_device)
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
+    # Exclude lm_head: TTNNLinearIColShardedWRowSharded would output sharded logits;
+    # generation needs full logits for argmax
+    modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None, exclude_replacement={"lm_head"})
     set_device(model, mesh_device)
     all_modules = {**modules1, **modules2}
     print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
@@ -142,7 +154,9 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
     if use_paged_attention:
         cache_kwargs["past_key_values"] = create_paged_kv_cache(model.config, mesh_device)
 
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, **cache_kwargs)
+    # Patch the class device property so generate()'s device check passes
+    with patch.object(type(model), "device", property(lambda self: model_device)):
+        outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, **cache_kwargs)
     DispatchManager.clear_timings()
 
     cache_kwargs = {}

@@ -85,9 +85,10 @@ class DistributedConfig:
                 or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
-                print(
-                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
-                )
+                if NormalRun.verbose:
+                    print(
+                        f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
+                    )
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     mesh_composer=ttnn.create_mesh_composer(
@@ -1105,8 +1106,9 @@ class TracedRun(LightweightRun):
             DispatchManager.record_timing(
                 "TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin
             )
+            result = post_process_ttnn_module_output(self, result)
             DispatchManager.set_current_module_name(None)
-            return post_process_ttnn_module_output(self, result)
+            return result
 
         # Traced execution path
         cache_key = TracedRun._make_cache_key(self.module_name, func_args, func_kwargs)
@@ -1138,12 +1140,13 @@ class TracedRun(LightweightRun):
             _TRACE_RUNNING = False
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
+        result = post_process_ttnn_module_output(self, result)
         DispatchManager.set_current_module_name(None)
         end_full = time.time()
         DispatchManager.record_timing(
             "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
         )
-        return post_process_ttnn_module_output(self, result)
+        return result
 
 
 def disable_trace(fn):
