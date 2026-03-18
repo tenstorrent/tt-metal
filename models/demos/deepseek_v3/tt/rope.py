@@ -249,7 +249,8 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
+        # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
+        # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
         cos_matrix_prefill_shape = ttnn.to_memory_config(
             cos, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
@@ -318,7 +319,8 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # [1, 1, batch, dim] HEIGHT_SHARDED for rotary_embedding_llama with input_transpose=HC
+        # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
+        # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
         cos_matrix_prefill_shape = ttnn.to_memory_config(
             cos, memory_config=mem_config
         )  # ttnn.interleaved_to_sharded(cos, mem_config)
