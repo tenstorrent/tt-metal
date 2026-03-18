@@ -27,11 +27,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 
-# Maximum number of experts per device that can fit comfortably in L1 during decode.
-# T3K has 32 experts/device (exceeds limit → DRAM), TG has 8 experts/device (within limit → L1).
-# Update this value when hardware L1 budgets or model configurations change.
-MAX_EXPERTS_PER_DEVICE_L1_DECODE = 16
-
 
 class Experts(AbstractModule):
     """Experts layer for Mixture-of-Experts (MoE) module."""
@@ -111,10 +106,8 @@ class Experts(AbstractModule):
         hidden_size = hf_config.hidden_size
         moe_intermediate_size = hf_config.moe_intermediate_size
 
-        # Calculate input and output memory configurations.
-        # For decode, prefer L1 but fall back to DRAM when too many experts per device
-        # would exceed L1 capacity (e.g. T3K has 32 experts/device vs TG's 8).
-        if mode == "decode" and num_experts_per_device <= MAX_EXPERTS_PER_DEVICE_L1_DECODE:
+        # Calculate input and output memory configurations
+        if mode == "decode":
             input_memory_config = ttnn.L1_MEMORY_CONFIG
             output_memory_config = ttnn.L1_MEMORY_CONFIG
         else:
