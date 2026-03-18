@@ -172,17 +172,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests \
-            --ignore=models/demos/deepseek_v3/tests/unit \
-            --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
-            --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
-            --ignore=models/demos/deepseek_v3/tests/test_moe_gate.py \
-            --ignore=models/demos/deepseek_v3/tests/test_moe_experts.py \
-            --ignore=models/demos/deepseek_v3/tests/test_mlp.py \
-            --ignore=models/demos/deepseek_v3/tests/test_get_weight_config.py \
-            --ignore=models/demos/deepseek_v3/tests/test_lazy_state_dict.py \
-            --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py \
-            --timeout 600 --durations=0
+          pytest models/demos/deepseek_v3/tests -x --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}

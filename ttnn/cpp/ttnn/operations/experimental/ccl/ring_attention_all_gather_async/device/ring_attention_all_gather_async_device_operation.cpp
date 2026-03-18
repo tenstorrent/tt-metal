@@ -22,7 +22,6 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& first_input_tensor = input_tensors[0];
     const auto& dtype = first_input_tensor.dtype();
     const auto& memory_config = first_input_tensor.memory_config();
-    const auto& input_shape = first_input_tensor.logical_shape();
 
     // Validate all input tensors
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -42,11 +41,6 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.memory_config() == memory_config,
             "All input tensors must have the same memory config. Input tensor {} has different memory config",
-            i);
-
-        TT_FATAL(
-            input_tensor.logical_shape() == input_shape,
-            "All input tensors must have the same shape. Input tensor {} has different shape",
             i);
     }
 
@@ -89,7 +83,7 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
 
                 // Check output tensor shape
                 auto output_shape = output_tensor.logical_shape();
-                auto expected_output_shape = input_shape;
+                auto expected_output_shape = input_tensors[i].logical_shape();
                 expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
 
                 TT_FATAL(
@@ -109,10 +103,11 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensors = tensor_args.input_tensor;
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
-    shape[operation_attributes.dim] *= operation_attributes.ring_size;
     std::vector<ttnn::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
-    for (uint32_t i = 0; i < input_tensors.size(); i++) {
+    for (const auto& input_item : input_tensors) {
+        auto shape = input_item.logical_shape();
+        shape[operation_attributes.dim] *= operation_attributes.ring_size;
         output_specs.push_back(TensorSpec(
             shape,
             TensorLayout(
