@@ -67,6 +67,7 @@ public:
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
+    const std::string& get_gpp() const { return gpp_; }
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
@@ -170,6 +171,24 @@ public:
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
+
+    // TODO(jit-server-refactor): These accessors were added for the remote-compile PoC.
+    // Replace with a narrower API that emits a transport-ready build recipe so callers
+    // (e.g. ProgramImpl) do not depend directly on JitBuildState internals.
+    const JitBuildEnv& get_env() const { return env_; }
+    const std::string& get_cflags() const { return cflags_; }
+    const std::string& get_defines() const { return defines_; }
+    const std::string& get_includes() const { return includes_; }
+    const std::string& get_lflags() const { return lflags_; }
+    const std::string& get_linker_script() const { return linker_script_; }
+    const std::string& get_extra_link_objs() const { return extra_link_objs_; }
+    const std::string& get_weakened_firmware_name() const { return weakened_firmware_name_; }
+    bool get_firmware_is_kernel_object() const { return firmware_is_kernel_object_; }
+    bool get_process_defines_at_compile() const { return process_defines_at_compile_; }
+    const std::string& get_default_compile_opt_level() const { return default_compile_opt_level_; }
+    const std::string& get_default_linker_opt_level() const { return default_linker_opt_level_; }
+    const auto& get_srcs() const { return srcs_; }
+    const auto& get_objs() const { return objs_; }
 };
 
 // Extracts a slice of builds from JitBuildStates

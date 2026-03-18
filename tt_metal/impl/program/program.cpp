@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -49,6 +51,7 @@
 #include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
+#include "jit_build/jit_build_utils.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -69,6 +72,7 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
+#include "tt_metal/impl/jit_server/jit_compile_rpc_client.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
@@ -141,6 +145,8 @@ namespace tt::tt_metal {
 
 using detail::ProgramImpl;
 
+namespace fs = std::filesystem;
+
 namespace {
 
 void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
@@ -153,6 +159,182 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
         kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+    }
+}
+
+// TODO(jit-server-refactor): BuildCompileRequest currently pulls many fields
+// from JitBuildState via PoC-only getters. Move this to a dedicated builder API
+// owned by jit_build so ProgramImpl does not encode JitBuildState layout details.
+jit_server::CompileRequest BuildCompileRequest(
+    const JitBuildState& build_state, const std::shared_ptr<Kernel>& kernel, const std::string& kernel_path_suffix) {
+    jit_server::CompileRequest request;
+    request.build_key = build_state.get_env().get_build_key();
+    request.kernel_name = kernel_path_suffix;
+    request.target_name = build_state.get_target_name();
+    request.gpp = build_state.get_env().get_gpp();
+    request.cflags = build_state.get_cflags();
+    request.includes = build_state.get_includes();
+    request.compiler_opt_level = std::string(kernel->get_compiler_opt_level());
+    request.linker_opt_level = std::string(kernel->get_linker_opt_level());
+
+    std::string defines = build_state.get_defines();
+    if (build_state.get_process_defines_at_compile()) {
+        kernel->process_defines([&defines](const std::string& define, const std::string& value) {
+            defines += "-D" + define + "='" + value + "' ";
+        });
+    }
+    kernel->process_compile_time_args([&defines](const std::vector<uint32_t>& values) {
+        if (!values.empty()) {
+            defines += "-DKERNEL_COMPILE_TIME_ARGS=";
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) {
+                    defines += ",";
+                }
+                defines += std::to_string(values[i]);
+            }
+            defines += " ";
+        }
+    });
+    kernel->process_named_compile_time_args([&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
+        if (!named_args.empty()) {
+            defines += "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
+            for (const auto& [name, value] : named_args) {
+                defines += "{\\\"" + name + "\\\"," + std::to_string(value) + "}, ";
+            }
+            defines += "\" ";
+        }
+    });
+    request.defines = std::move(defines);
+
+    std::string includes = request.includes;
+    kernel->process_include_paths([&includes](const std::string& path) { includes += "-I" + path + " "; });
+    request.includes = std::move(includes);
+
+    for (const auto& src : build_state.get_srcs()) {
+        request.srcs.push_back(src);
+    }
+    for (const auto& obj : build_state.get_objs()) {
+        request.objs.push_back(obj);
+    }
+
+    request.lflags = build_state.get_lflags();
+    request.extra_link_objs = build_state.get_extra_link_objs();
+    request.linker_script = build_state.get_linker_script();
+    request.weakened_firmware_name = build_state.get_weakened_firmware_name();
+    request.firmware_is_kernel_object = build_state.get_firmware_is_kernel_object();
+    return request;
+}
+
+std::vector<std::uint8_t> read_file_content(const std::string& path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return {};
+    }
+    auto size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    std::vector<std::uint8_t> data(static_cast<size_t>(size));
+    file.read(reinterpret_cast<char*>(data.data()), size);
+    return data;
+}
+
+void SendGenfilesToServer(
+    jit_server::JitCompileRpcClient& rpc_client,
+    std::uint64_t build_key,
+    const std::string& kernel_name,
+    const std::string& genfiles_dir,
+    const std::shared_ptr<Kernel>& kernel) {
+    jit_server::PrepareGenfilesRequest request;
+    request.build_key = build_key;
+    request.kernel_name = kernel_name;
+
+    auto add_file = [&](const std::string& name) {
+        auto content = read_file_content(genfiles_dir + name);
+        if (!content.empty()) {
+            request.files.push_back(jit_server::GeneratedFile{name, std::move(content)});
+        }
+    };
+
+    add_file("chlkc_descriptors.h");
+    if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        add_file("chlkc_unpack.cpp");
+        add_file("chlkc_math.cpp");
+        add_file("chlkc_pack.cpp");
+        add_file("chlkc_isolate_sfpu.cpp");
+        add_file("defines_generated.h");
+    } else {
+        add_file("kernel_includes.hpp");
+    }
+
+    auto response = rpc_client.prepareGenfiles(request);
+    TT_FATAL(
+        response.success, "Remote prepareGenfiles failed for kernel {}: {}", kernel->name(), response.error_message);
+}
+
+void RemoteJitCompileKernel(
+    const std::string& endpoint,
+    IDevice* device,
+    const std::shared_ptr<Kernel>& kernel,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env) {
+    try {
+        jit_build_genfiles_descriptors(build_env.build_env, build_options);
+
+        const std::string& kernel_path_suffix = build_options.name;
+        uint32_t core_type_idx = MetalContext::instance().hal().get_programmable_core_type_index(
+            kernel->get_kernel_programmable_core_type());
+        uint32_t proc_class_idx = enchantum::to_underlying(kernel->get_kernel_processor_class());
+
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+            jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
+        } else {
+            jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
+        }
+
+        jit_server::JitCompileRpcClient rpc_client(endpoint);
+
+        std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
+        SendGenfilesToServer(rpc_client, build_env.build_key(), kernel_path_suffix, genfiles_dir, kernel);
+        std::vector<std::string> elf_paths;
+
+        for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
+            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
+
+            auto request = BuildCompileRequest(build_state, kernel, kernel_path_suffix);
+            auto response = rpc_client.compile(request);
+
+            TT_FATAL(
+                response.success,
+                "Remote JIT compile failed for kernel {} target {}: {}",
+                kernel->name(),
+                build_state.get_target_name(),
+                response.error_message);
+            TT_FATAL(
+                response.elf_blobs.size() == 1,
+                "Expected 1 ELF blob but got {} for kernel {} target {}",
+                response.elf_blobs.size(),
+                kernel->name(),
+                build_state.get_target_name());
+
+            // TODO(jit-server-refactor): load ELF blob directly into ll_api::memory
+            // via a from-bytes constructor + set_binaries, avoiding the file round-trip.
+            // Blocked on ll_api::memory only supporting file-path construction (mmap).
+            std::string elf_path = build_state.get_target_out_path(kernel_path_suffix);
+            fs::create_directories(fs::path(elf_path).parent_path());
+            {
+                tt::jit_build::utils::FileRenamer tmp(elf_path);
+                std::ofstream elf_file(tmp.path(), std::ios::binary);
+                TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
+                elf_file.write(
+                    reinterpret_cast<const char*>(response.elf_blobs[0].data.data()),
+                    static_cast<std::streamsize>(response.elf_blobs[0].data.size()));
+            }
+            elf_paths.push_back(std::move(elf_path));
+        }
+
+        kernel->set_elf_paths(build_env.build_key(), std::move(elf_paths));
+    } catch (std::runtime_error& ex) {
+        TT_THROW("Remote JIT compile failed for {} {}", kernel->name(), ex.what());
     }
 }
 
@@ -1512,6 +1694,12 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->get_id());
 
     std::vector<std::shared_future<void>> events;
+    const bool remote_jit_compile_enabled = jit_server::JitCompileRpcClient::enabled();
+    const std::string remote_jit_compile_endpoint =
+        remote_jit_compile_enabled ? jit_server::JitCompileRpcClient::endpoint_from_env() : std::string{};
+    TT_FATAL(
+        !remote_jit_compile_enabled || !remote_jit_compile_endpoint.empty(),
+        "Remote JIT compile is enabled via TT_METAL_JIT_SERVER_ENABLE=1, but TT_METAL_JIT_SERVER_ENDPOINT is not set");
 
     std::random_device rd;
     std::mt19937 rng(rd());
@@ -1526,7 +1714,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             auto& kernel = kernels.at(id);
             validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
-                [kernel, device, this, &build_env] {
+                [kernel, device, this, &build_env, remote_jit_compile_enabled, remote_jit_compile_endpoint] {
                     JitBuildOptions build_options(build_env.build_env);
                     kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
@@ -1551,15 +1739,19 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
                                    tt::TargetDevice::Mock;
 
-                    jit_build_once(kernel_hash, [&] {
-                        if (!is_mock) {
-                            GenerateBinaries(device, build_options, kernel);
-                        } else {
-                            // Create empty stub binaries for mock devices
-                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
-                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
-                        }
-                    });
+                    if (!is_mock) {
+                        jit_build_once(kernel_hash, [&] {
+                            if (remote_jit_compile_enabled) {
+                                RemoteJitCompileKernel(
+                                    remote_jit_compile_endpoint, device, kernel, build_options, build_env);
+                            } else {
+                                GenerateBinaries(device, build_options, kernel);
+                            }
+                        });
+                    } else {
+                        std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                        kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
+                    }
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
