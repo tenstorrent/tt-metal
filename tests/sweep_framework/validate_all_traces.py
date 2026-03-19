@@ -61,9 +61,41 @@ def _is_set_with_mesh_coordinate(obj: Any) -> bool:
     return "MeshCoordinate" in str(value) if value else False
 
 
+def _is_nonsharded_memory_config(obj: Any) -> bool:
+    """True when *obj* is a non-sharded (INTERLEAVED) memory_config dict.
+
+    The C++ graph tracer never captures the output ``memory_config`` kwarg,
+    so any non-sharded variant (DRAM or L1) at the kwarg level is noise.
+    """
+    if not isinstance(obj, dict):
+        return False
+    if obj.get("is_sharded"):
+        return False
+    return "INTERLEAVED" in str(obj.get("memory_layout", ""))
+
+
+def _shape_dict_to_list(obj: Any) -> list | None:
+    """Convert ``{"type": "Shape", "value": "Shape([1, 1, 32, 1])"}`` → ``[1, 1, 32, 1]``."""
+    if not (isinstance(obj, dict) and obj.get("type") == "Shape"):
+        return None
+    val_str = str(obj.get("value", ""))
+    start = val_str.find("[")
+    end = val_str.rfind("]")
+    if start >= 0 and end > start:
+        try:
+            return json.loads(val_str[start : end + 1])
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return None
+
+
 def normalize_for_comparison(obj: Any, *, _parent_key: str = "") -> Any:
     """Strip ignored keys for argument comparison per validate-sweep-trace rule."""
     if isinstance(obj, dict):
+        as_list = _shape_dict_to_list(obj)
+        if as_list is not None:
+            return as_list
+
         result = {}
         for k, v in obj.items():
             if k in ("config_hash", "config_id", "executions"):
@@ -72,11 +104,28 @@ def normalize_for_comparison(obj: Any, *, _parent_key: str = "") -> Any:
                 continue
             if k == "device_ids":
                 continue
+            if k == "mesh_device":
+                continue
             if k == "hash" and isinstance(v, (int, float)):
                 continue
             if k == "value" and _is_global_semaphore(obj):
                 continue
             if k == "value" and _is_set_with_mesh_coordinate(obj):
+                continue
+            if k == "sub_core_grids" and v is None:
+                continue
+            if k == "memory_config" and _is_nonsharded_memory_config(v) and obj.get("type") != "ttnn.Tensor":
+                continue
+            if (
+                k == "output_tile"
+                and isinstance(v, dict)
+                and v.get("type") == "Tile"
+                and "[32, 32]" in str(v.get("value", ""))
+            ):
+                continue
+            if k == "grid" and _parent_key == "shard_spec":
+                continue
+            if k == "mesh_coords" and _is_set_with_mesh_coordinate(v):
                 continue
             normalized_v = normalize_for_comparison(v, _parent_key=k)
             if k == "shard_spec" and normalized_v == "None":
@@ -354,19 +403,41 @@ def _extract_mesh(config: dict) -> dict | None:
 
 
 def _normalize_for_hash(obj: Any) -> Any:
-    """Mirror the tracer's _normalize_for_hash: strip excluded arg keys,
-    memory_config.hash, and canonicalize shard_spec None → "None" so diffs
-    only show TRUE hash-affecting differences."""
+    """Mirror the tracer's _normalize_for_hash so diffs only show TRUE
+    hash-affecting differences."""
     if isinstance(obj, dict):
+        as_list = _shape_dict_to_list(obj)
+        if as_list is not None:
+            return as_list
+
         result = {}
         for k, v in obj.items():
             if k in EXCLUDED_ARG_KEYS:
                 continue
             if k == "hash" and isinstance(v, (int, float)):
                 continue
+            if k == "device_ids":
+                continue
+            if k == "mesh_device":
+                continue
+            if k == "sub_core_grids" and v is None:
+                continue
+            if k == "memory_config" and _is_nonsharded_memory_config(v) and obj.get("type") != "ttnn.Tensor":
+                continue
+            if (
+                k == "output_tile"
+                and isinstance(v, dict)
+                and v.get("type") == "Tile"
+                and "[32, 32]" in str(v.get("value", ""))
+            ):
+                continue
+            if k == "mesh_coords" and _is_set_with_mesh_coordinate(v):
+                continue
             nv = _normalize_for_hash(v)
             if k == "shard_spec" and nv is None:
                 nv = "None"
+            if k == "shard_spec" and isinstance(nv, dict):
+                nv.pop("grid", None)
             result[k] = nv
         return result
     elif isinstance(obj, list):

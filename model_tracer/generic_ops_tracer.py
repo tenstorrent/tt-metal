@@ -443,6 +443,14 @@ def _normalize_for_hash(obj):
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
 
+        # output_tile: strip when it's the default Tile [32, 32].
+        # The C++ graph tracer does not capture output_tile in kwargs, so
+        # sweep traces never contain it.  Model traces may include the
+        # explicit default; stripping it prevents a spurious hash mismatch.
+        ot = obj.get("output_tile")
+        if isinstance(ot, dict) and ot.get("type") == "Tile" and "[32, 32]" in str(ot.get("value", "")):
+            del obj["output_tile"]
+
         for k in list(obj.keys()):
             v = obj[k]
             if isinstance(v, str):
