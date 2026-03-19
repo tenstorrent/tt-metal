@@ -104,11 +104,6 @@ def run_adaptive_pool2d(
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if pool_type == "avg":
         rtol = 0.01  # Relaxed rtol for avg pool due to bfloat16 scalar precision limitations
-        pcc_threshold = 0.985
-    else:  # max
-        pcc_threshold = 1
-        if dtype == ttnn.bfloat8_b:
-            pcc_threshold = 0.99
 
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
