@@ -22,12 +22,14 @@ from ....utils.test import line_params, ring_params
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -78,6 +80,7 @@ def test_pipeline_inference(
 
     seed = 42
     # Run inference
+    seed = 42
     with torch.no_grad():
         result = pipeline(
             prompt=prompt,
@@ -110,7 +113,10 @@ def test_pipeline_inference(
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
-        print("✓ Saved video to: wan_output_video.mp4")
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            export_to_video(frames, "wan_output_video.mp4", fps=16)
+            print("✓ Saved video to: wan_output_video.mp4")
+        else:
+            print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         print(f"AttributeError: {e}")

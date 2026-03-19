@@ -33,7 +33,7 @@ from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, Paralle
 from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
-from ...utils.tensor import typed_tensor_2dshard
+from ...utils.tensor import local_device_to_torch, typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
     Examples:
@@ -321,6 +321,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": False,
             }
             device_configs[(4, 8)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
+                "num_links": 2,
+                "dynamic_load": False,
+                "topology": ttnn.Topology.Ring,
+                "is_fsdp": False,
+            }
+            device_configs[(4, 32)] = {
                 "sp_axis": 1,
                 "tp_axis": 0,
                 "num_links": 2,
@@ -950,7 +958,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     )
 
                 # Move result to host for scheduler step
-                permuted_noise_pred = current_model.device_to_host(permuted_noise_pred_tt)
+                permuted_noise_pred = local_device_to_torch(permuted_noise_pred_tt)
 
                 # compute the previous noisy sample x_t -> x_t-1
                 permuted_latent = self.scheduler.step(permuted_noise_pred, t, permuted_latent, return_dict=False)[0]
@@ -968,18 +976,17 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-        if profiler:
-            profiler.end("denoising", profiler_iteration)
-
-        self._current_timestep = None
-
-        if profiler:
-            profiler.start("vae", profiler_iteration)
 
         # Postprocess spatial output
         latents = current_model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
         )
+
+        if profiler:
+            profiler.end("denoising", profiler_iteration)
+            profiler.start("vae", profiler_iteration)
+
+        self._current_timestep = None
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)

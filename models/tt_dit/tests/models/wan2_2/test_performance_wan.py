@@ -68,6 +68,23 @@ def t2v_metrics(mesh_device, height):
             "vae": 60.0,
             "total": 760.0,
         }
+    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
+        assert is_blackhole(), "1x8 is only supported for blackhole"
+        expected_metrics = {
+            "encoder": 0.08,
+            "denoising": 426.6,
+            "vae": 10.0,
+            "total": 449.3,
+        }
+    elif tuple(mesh_device.shape) == (4, 32):
+        assert is_blackhole(), "4x32 is only supported for blackhole"
+        assert height == 720, "4x32 is only supported for 720p"
+        expected_metrics = {
+            "encoder": 115.0,
+            "denoising": 120.0,
+            "vae": 20.0,
+            "total": 255.0,
+        }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
     return expected_metrics
@@ -103,6 +120,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -110,6 +128,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -220,6 +239,9 @@ def test_pipeline_performance(
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
@@ -236,6 +258,7 @@ def test_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
+                    seed=42,
                 )
 
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -260,8 +283,11 @@ def test_pipeline_performance(
     frames = frames[0]
     try:
         if not is_ci_env:
-            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            if int(ttnn.distributed_context_get_rank()) == 0:
+                export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            else:
+                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
 
