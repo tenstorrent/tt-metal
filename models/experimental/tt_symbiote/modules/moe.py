@@ -13,7 +13,7 @@ from torch.nn import functional as F
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearSilu,
@@ -697,43 +697,21 @@ class Glm4MoeNaiveMoeHybrid(nn.Module):
 
 class TTNNGlm4MoeNaiveMoe(TTNNModule):
     def preprocess_weights_impl(self):
-        self.tt_gate_up_proj = preprocess_linear_weight(
-            self.torch_layer.gate_up_proj, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
-        self.tt_down_proj = preprocess_linear_weight(
-            self.torch_layer.down_proj, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-        )
+        # Keep experts on torch to avoid mesh_composer issues during grouped_mm_experts_forward
+        # and to sidestep large TTNN expert weight allocations.
+        pass
 
     def move_weights_to_device_impl(self):
-        self.tt_gate_up_proj = ttnn.to_device(self.tt_gate_up_proj, self.device)
-        self.tt_down_proj = ttnn.to_device(self.tt_down_proj, self.device)
-        self.num_experts_per_device = even_int_div(self.torch_layer.num_experts, self.device.get_num_devices())
-        self.expert_mapping_tensors = ttnn.from_torch(
-            torch.eye(self.device.get_num_devices(), dtype=torch.int32)
-            .repeat_interleave(self.num_experts_per_device, dim=0)
-            .unsqueeze(0)
-            .unsqueeze(0),
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            dtype=ttnn.uint16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.remap_topk_mask = ttnn.from_torch(
-            torch.ones((1, self.device.shape[0], 1, self.torch_layer.num_experts), dtype=torch.bfloat16),
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+        # No-op for torch-only experts.
+        pass
 
     def forward(self, x, topk_experts_indices, topk_experts_weights):
-        return self.torch_layer(
-            TorchTTNNTensor(x),
-            TorchTTNNTensor(topk_experts_indices, dtype=torch.int64),
-            TorchTTNNTensor(topk_experts_weights),
-        ).to_ttnn
+        # HF grouped_mm_experts_forward must run on plain torch tensors. Wrapping these in
+        # TorchTTNNTensor triggers mesh_composer paths that can fail for 2D tensors.
+        x = _to_torch_any(x)
+        topk_experts_indices = _to_torch_any(topk_experts_indices).to(torch.int64)
+        topk_experts_weights = _to_torch_any(topk_experts_weights)
+        return self.torch_layer(x, topk_experts_indices, topk_experts_weights)
 
 
 class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
@@ -2126,3 +2104,225 @@ class TTNNQwen3TalkerMoE(TTNNQwen3MoE):
         # Use Talker experts with fitted sparse matmul configs for this architecture
         module.experts = Qwen3OmniMoeTalkerTextExpertsTTNN.from_torch(consolidated, cfg)
         return module
+
+
+def _thinker_experts_adapter(thinker_mlp):
+    """Adapt HF thinker experts for TTNNExperts (needs config + gate_up/down tensors)."""
+    hf_experts = thinker_mlp.experts
+    cfg = getattr(hf_experts, "config", None)
+    if cfg is None:
+        cfg = type("ThinkerExpertsConfig", (), {})()
+    cfg.hidden_size = getattr(cfg, "hidden_size", hf_experts.gate_up_proj.shape[2])
+    cfg.moe_intermediate_size = getattr(cfg, "moe_intermediate_size", hf_experts.gate_up_proj.shape[1] // 2)
+    cfg.n_routed_experts = getattr(cfg, "n_routed_experts", hf_experts.gate_up_proj.shape[0])
+    cfg.num_experts_per_tok = getattr(cfg, "num_experts_per_tok", None) or getattr(thinker_mlp.gate, "top_k", 8)
+
+    adapter = type("ThinkerExpertsAdapter", (), {})()
+    adapter.gate_up_proj = hf_experts.gate_up_proj
+    adapter.down_proj = hf_experts.down_proj
+    adapter.config = cfg
+    return adapter
+
+
+class TTNNQwen3OmniMoeThinkerTextSparseMoeBlock(TTNNModule):
+    """
+    TTNN MoE for Qwen3-Omni thinker text sparse MoE block.
+
+    Wraps thinker.model.layers[i].mlp: gate (routing) stays on torch; experts run via
+    TT implementation Glm4MoeNaiveMoe (TTNNGlm4MoeNaiveMoe). Compatible with
+    Qwen3OmniMoeThinkerTextSparseMoeBlock from HuggingFace.
+    """
+
+    @classmethod
+    def from_torch(cls, thinker_mlp):
+        """Create from a PyTorch thinker mlp (Qwen3OmniMoeThinkerTextSparseMoeBlock)."""
+        module = cls()
+        module._fallback_torch_layer = thinker_mlp
+        module.gate = thinker_mlp.gate
+        experts_for_tt = _thinker_experts_adapter(thinker_mlp)
+        module.experts = TTNNExperts.from_torch(experts_for_tt)
+        return module
+
+    def preprocess_weights_impl(self):
+        self.experts.preprocess_weights()
+
+    def move_weights_to_device_impl(self):
+        self.experts.move_weights_to_device()
+
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _maybe_all_gather(self, tensor):
+        if not self._is_distributed:
+            return tensor
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, hidden_states):
+        """Run gate on torch, experts on TT; return torch tensor for downstream layers."""
+        hidden_states_torch = _to_torch_any(hidden_states)
+        x_flat = hidden_states_torch.reshape(-1, hidden_states_torch.shape[-1])
+        with torch.no_grad():
+            _, routing_weights, selected_experts = self.gate(x_flat)
+        hidden_states_tt = _to_ttnn_raw(hidden_states)
+        hidden_states_tt = self._maybe_all_gather(hidden_states_tt)
+        if len(hidden_states_tt.shape) == 3:
+            b, s, h = (int(hidden_states_tt.shape[0]), int(hidden_states_tt.shape[1]), int(hidden_states_tt.shape[2]))
+            hidden_states_tt = ttnn.reshape(hidden_states_tt, ttnn.Shape((b, 1, s, h)))
+        else:
+            b, s, h = (
+                int(hidden_states_tt.shape[0]),
+                int(hidden_states_tt.shape[2]),
+                int(hidden_states_tt.shape[3]),
+            )
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        topk_idx_tt = ttnn.from_torch(
+            selected_experts.to(torch.int64),
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        topk_w_tt = ttnn.from_torch(
+            routing_weights.to(torch.bfloat16),
+            device=self.device,
+            mesh_mapper=mesh_mapper,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        # Call forward directly to avoid wrapping outputs into TorchTTNNTensor.
+        expert_out = self.experts.forward(hidden_states_tt, topk_idx_tt, topk_w_tt)
+        # Be defensive: forward may still return TorchTTNNTensor depending on internal ops.
+        try:
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if isinstance(expert_out, TorchTTNNTensor):
+                expert_out = expert_out.to_ttnn
+        except Exception:
+            pass
+        expert_out = _to_ttnn_raw(expert_out)
+        return ttnn.reshape(expert_out, ttnn.Shape((b, s, h)))
+
+
+class TTNNQwen3OmniThinkerNaiveMoE(TTNNModule):
+    """
+    TTNN MoE for Qwen3-Omni thinker with per-expert computation on TT device.
+
+    Gate (softmax routing) runs on torch.  Each expert's gate/up/down projections
+    are stored as raw ttnn weight tensors and executed via ``ttnn.linear`` /
+    ``ttnn.silu`` / ``ttnn.mul`` on the accelerator.  Uses a naive per-expert
+    loop so input/output shapes are preserved (no all-gather / reduce-scatter).
+    """
+
+    @classmethod
+    def from_torch(cls, thinker_mlp):
+        module = cls()
+        module._fallback_torch_layer = thinker_mlp
+        module.gate = thinker_mlp.gate
+        hf_experts = thinker_mlp.experts
+        E, two_I, H = hf_experts.gate_up_proj.shape
+        I = two_I // 2
+        module.num_experts = E
+        module.intermediate_size = I
+        module._gate_w_torch = [hf_experts.gate_up_proj.data[i, :I, :] for i in range(E)]
+        module._up_w_torch = [hf_experts.gate_up_proj.data[i, I:, :] for i in range(E)]
+        module._down_w_torch = [hf_experts.down_proj.data[i] for i in range(E)]
+        return module
+
+    def preprocess_weights_impl(self):
+        self._gate_tt_host = [
+            preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in self._gate_w_torch
+        ]
+        self._up_tt_host = [
+            preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in self._up_w_torch
+        ]
+        self._down_tt_host = [
+            preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in self._down_w_torch
+        ]
+        del self._gate_w_torch
+        del self._up_w_torch
+        del self._down_w_torch
+
+    def move_weights_to_device_impl(self):
+        self._gate_tt = [ttnn.to_device(w, self.device) for w in self._gate_tt_host]
+        self._up_tt = [ttnn.to_device(w, self.device) for w in self._up_tt_host]
+        self._down_tt = [ttnn.to_device(w, self.device) for w in self._down_tt_host]
+
+    def deallocate_weights_impl(self):
+        for w in self._gate_tt:
+            ttnn.deallocate(w)
+        for w in self._up_tt:
+            ttnn.deallocate(w)
+        for w in self._down_tt:
+            ttnn.deallocate(w)
+        self._weights_on_device = False
+
+    @deallocate_weights_after
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, hidden_states):
+        hidden_states_torch = _to_torch_any(hidden_states)
+        orig_shape = hidden_states_torch.shape
+        x_flat = hidden_states_torch.reshape(-1, hidden_states_torch.shape[-1])
+
+        with torch.no_grad():
+            _, routing_weights, selected_experts = self.gate(x_flat)
+
+        num_tokens = x_flat.shape[0]
+        final_hidden_states = torch.zeros_like(x_flat)
+        expert_mask = F.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+        expert_hit = (expert_mask.sum(dim=(-1, -2)) > 0).nonzero()
+
+        is_mesh = self.device.get_num_devices() > 1
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
+        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if is_mesh else None
+
+        for eidx in expert_hit:
+            eidx = eidx[0].item()
+            if eidx == self.num_experts:
+                continue
+            top_k_pos, token_idx = torch.where(expert_mask[eidx])
+            current_state = x_flat[token_idx]
+            n_tok = current_state.shape[0]
+
+            x_tt = ttnn.from_torch(
+                current_state.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=mesh_mapper,
+            )
+
+            gate_tt = ttnn.linear(x_tt, self._gate_tt[eidx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            gate_tt = ttnn.silu(gate_tt)
+            up_tt = ttnn.linear(x_tt, self._up_tt[eidx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_tt)
+
+            hidden_tt = ttnn.mul(gate_tt, up_tt)
+            ttnn.deallocate(gate_tt)
+            ttnn.deallocate(up_tt)
+
+            out_tt = ttnn.linear(hidden_tt, self._down_tt[eidx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(hidden_tt)
+
+            out_torch = ttnn.to_torch(out_tt, mesh_composer=mesh_composer).to(torch.float32)
+            ttnn.deallocate(out_tt)
+            out_torch = out_torch.view(-1, out_torch.shape[-1])[:n_tok]
+
+            current_hidden_states = out_torch * routing_weights[token_idx, top_k_pos, None]
+            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
+
+        return final_hidden_states.view(*orig_shape)
