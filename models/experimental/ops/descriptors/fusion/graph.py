@@ -228,7 +228,8 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     """Merge multiple _BuildResults into one.
 
     Combines ProgramDescriptors, deduplicates input tensors (by identity),
-    concatenates output tensors, and unions semaphore refs.
+    concatenates output tensors, unions semaphore refs, and merges source maps
+    with CB index offsets.
     """
     if len(results) == 1:
         return results[0]
@@ -257,6 +258,23 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
     # Concatenate kernel_phase_map (order matches merge_program_descriptors)
     all_kpm = tuple(entry for r in results for entry in r.kernel_phase_map)
 
+    # Merge source maps with CB index offsets.
+    # merge_program_descriptors concatenates CBs, so later results' CB
+    # indices need to be offset by the cumulative count from prior results.
+    cb_offset = 0
+    all_cb_src: List = []
+    all_gcb_src: List = []
+    all_rebind_src: List = []
+    all_output_src: List = []
+    for r in results:
+        for merged_idx, op, orig_idx in r.cb_source_map:
+            all_cb_src.append((merged_idx + cb_offset, op, orig_idx))
+        for merged_idx, op, orig_idx in r.global_cb_source_map:
+            all_gcb_src.append((merged_idx + cb_offset, op, orig_idx))
+        all_rebind_src.extend(r.rebind_source_map)
+        all_output_src.extend(r.output_source_map)
+        cb_offset += len(r.descriptor.cbs)
+
     return _BuildResult(
         descriptor=merged_desc,
         input_tensors=all_inputs,
@@ -264,6 +282,10 @@ def _merge_build_results(results: List[_BuildResult]) -> _BuildResult:
         semaphores=all_semaphores,
         kernel_labels=all_labels,
         kernel_phase_map=all_kpm,
+        cb_source_map=all_cb_src,
+        rebind_source_map=all_rebind_src,
+        global_cb_source_map=all_gcb_src,
+        output_source_map=all_output_src,
     )
 
 
