@@ -749,6 +749,15 @@ jobs:
             model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json \
             ttnn_ops_v2_5
 
+      - name: Generate JSON from database (V3 - DeepSeek V3 traces)
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          # Reconstruct from ttnn_ops_v3 schema (V3 format with DeepSeek V3 traces)
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-lead \
+            model_tracer/traced_operations/ttnn_operations_master_v3_reconstructed.json \
+            ttnn_ops_v3
+
       - name: Upload master JSON artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -756,6 +765,7 @@ jobs:
           path: |
             model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
             model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json
+            model_tracer/traced_operations/ttnn_operations_master_v3_reconstructed.json
           retention-days: 1
   ttnn-generate-sweeps:
     # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
