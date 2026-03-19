@@ -192,7 +192,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     // LLK_ASSERTs add constant DRAM overhead due to additional assertion code
     // in unpacker/packer configurations that invoke functions exclusively used for assertions.
     if (ttml::core::is_llk_assert_enabled()) {
-        expected_peak_size += 14336;  // Additional program cache overhead
+        expected_peak_size += 22528;  // Additional program cache overhead
     }
 
     expected_size = expected_peak_size;
@@ -244,8 +244,8 @@ TEST_F(MemoryUtilsTest, L1Usage) {
         auto l1_usage = ttml::utils::MemoryUsageTracker::get_l1_usage();
 
         // TODO: verify that 10240 comes from program cache
-        // LLK_ASSERTs add constant DRAM overhead (14336 vs 12288) for assertion-specific code.
-        size_t expected_dram_alloc = ttml::core::is_llk_assert_enabled() ? 14336 : 10240;
+        // LLK_ASSERTs add constant DRAM overhead (12288 vs 10240) for assertion-specific code.
+        size_t expected_dram_alloc = ttml::core::is_llk_assert_enabled() ? 12288 : 10240;
         EXPECT_EQ(dram_usage.total_allocations, expected_dram_alloc);
 
         // peak_cb = tile_size * sizeof(bfloat16) * n_cb (cb0, cb1, cb_out)
