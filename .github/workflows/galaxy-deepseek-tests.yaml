@@ -87,9 +87,8 @@ jobs:
       tracy: ${{ inputs.enable-tracy || false }}
 
   # ── T3K fast gate ──────────────────────────────────────────────────────
-  # Runs the 5 migrated module tests on T3K (~30-40s).
-  # These tests use a 1x8 submesh and are data-parallel across rows,
-  # so T3K exercises the same shapes and memory configs as Galaxy.
+  # Runs the x migrated module tests on T3K (~30-40s). x = # of migrated tests
+  # These tests use a 1x8 submesh 
   t3k-deepseek-gate:
     needs: build-artifact
     if: ${{ contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
@@ -137,7 +136,7 @@ jobs:
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest $T3K_MIGRATED_TESTS --timeout 120 --durations=0
 
-  # ── Galaxy tests (N-5 module tests, runs in parallel with T3K gate) ────
+  # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
@@ -153,7 +152,7 @@ jobs:
       enable-tracy: ${{ inputs.enable-tracy || false }}
 
   # ── Galaxy confirmation (gated behind T3K) ─────────────────────────────
-  # Re-runs the same 5 migrated tests on Galaxy after T3K gate passes.
+  # Re-runs the same x migrated tests on Galaxy after T3K gate passes.
   Galaxy-DeepSeek-confirmation:
     needs: [build-artifact, t3k-deepseek-gate]
     if: ${{ contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
