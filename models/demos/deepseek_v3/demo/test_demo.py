@@ -18,6 +18,7 @@ MODEL_PATH = Path(
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
+
 @lru_cache(maxsize=1)
 def get_total_model_layers(model_path: Path) -> int:
     with open(model_path / "config.json", "r", encoding="utf-8") as config_file:
@@ -82,7 +83,6 @@ def maybe_validate_english_keyboard_output(results: dict, override_num_layers: i
 
     validate_english_keyboard_output(results)
 
-
 def _demo_case(
     *,
     max_prompts: int,
@@ -116,6 +116,7 @@ def _demo_case(
         id=case_id,
         marks=marks,
     )
+
 
 # Test matrix:
 # +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
