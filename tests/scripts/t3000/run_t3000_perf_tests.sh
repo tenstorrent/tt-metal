@@ -11,6 +11,7 @@ run_t3000_falcon7b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon7b_tests"
 
   # TODO(ci): T3000 Falcon7b prefill_seq2048 fails merge_perf_results gate (measured inference time slightly above expected baseline).
+  # Tracking: https://github.com/tenstorrent/tt-metal/issues/40304
   # Evidence: https://github.com/tenstorrent/tt-metal/actions/runs/23294477140/job/67739500698
   # Re-enable: drop -k filter after updating expected inference baseline in test_perf_falcon.py or restoring perf.
   pytest models/demos/falcon7b_common/tests -m "model_perf_t3000" -k "not prefill_seq2048" ; fail+=$?
