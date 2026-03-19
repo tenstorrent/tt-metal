@@ -324,7 +324,7 @@ def main():
                         "__package__": None,
                         "__cached__": None,
                     }
-                except ValueError as exc:
+                except (ValueError, SyntaxError) as exc:
                     trySystem = True
                 if trySystem:
                     subprocess.run(" ".join(args), shell=True, check=True)
