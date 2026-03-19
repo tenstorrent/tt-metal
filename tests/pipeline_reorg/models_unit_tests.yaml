@@ -210,13 +210,13 @@
 - name: Mixtral-8x7B unit tests
   cmd: |
     export HF_MODEL=mistralai/Mixtral-8x7B-v0.1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai/Mixtral-8x7B-v0.1
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy"
-    pytest --timeout 720 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_mlp.py
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy"
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
