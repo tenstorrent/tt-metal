@@ -1396,7 +1396,10 @@ if __name__ == "__main__":
             model_filter = sys.argv[4].split(",") if len(sys.argv) > 4 else None
             reconstruct_from_db(output, schema, model_filter)
         elif cmd == "reconstruct-lead":
-            from tests.sweep_framework.framework.constants import LEAD_MODELS
+            try:
+                from tests.sweep_framework.framework.constants import LEAD_MODELS
+            except ModuleNotFoundError:
+                LEAD_MODELS = ["deepseek_v3"]
 
             output = (
                 sys.argv[2]
