@@ -156,70 +156,6 @@ Tensor maximum(
         value);
 }
 
-Tensor bias_gelu(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::detail::invoke_binary_ng(
-        input_tensor_a_arg,
-        input_tensor_b_arg,
-        binary::BinaryOpType::BIAS_GELU,
-        output_dtype,
-        memory_config,
-        optional_output_tensor,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legac);
-}
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    const float bias,
-    const std::optional<const DataType>& /*dtype*/,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    std::optional<bool> /*use_legacy*/,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::gelu(
-        ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
-        true,
-        memory_config,
-        optional_output_tensor);
-}
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    float scalar,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
-    return ttnn::detail::invoke_binary_ng(
-        input_tensor_a,
-        scalar,
-        binary::BinaryOpType::BIAS_GELU,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        std::nullopt,  // use_legads
-}
-
 Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
     Tensor result(input_a);
@@ -679,6 +615,7 @@ Tensor run_remainder(
 
     return result;
 }
+
 // Binary remainder will be overloaded by unary remainder in another PR
 Tensor remainder(
     const Tensor& input_a,
@@ -735,15 +672,6 @@ Tensor fmod(
         std::nullopt);
 }
 
-Tensor fmod(
-    const Tensor& input,
-    float scalar,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::unary::ExecuteUnaryWithFloatParameter<ttnn::unary::UnaryOpType::FMOD>::invoke(
-        input, scalar, output_mem_config);
-}
-
 Tensor floor_div(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
     if (value == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
@@ -769,6 +697,111 @@ Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::option
                 ttnn::eq(temp, -std::numeric_limits<float>::infinity()))),
         temp,
         result);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return bias_gelu(
+        input_tensor_a,
+        input_tensor_b,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        sub_core_grids);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        binary::BinaryOpType::BIAS_GELU,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legac);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    const float bias,
+    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    std::optional<bool> /*use_legacy*/,
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    return ttnn::gelu(
+        ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
+        true,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
+    return ttnn::detail::invoke_binary_ng(
+        input_tensor_a,
+        scalar,
+        binary::BinaryOpType::BIAS_GELU,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,  // use_legads
+}
+
+
+
+
+
+
+
+
+
+
+Tensor fmod(
+    const Tensor& input,
+    float scalar,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    return ttnn::unary::ExecuteUnaryWithFloatParameter<ttnn::unary::UnaryOpType::FMOD>::invoke(
+        input, scalar, output_mem_config);
 }
 
 /**
@@ -1442,29 +1475,6 @@ Tensor logical_left_shift(
         lhs_activations,
         rhs_activations,
         use_legacy);
-}
-
-Tensor bias_gelu(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return bias_gelu(
-        input_tensor_a,
-        input_tensor_b,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        std::nullopt,
-        sub_core_grids);
 }
 
 }  // namespace ttnn
