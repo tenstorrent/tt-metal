@@ -47,7 +47,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -173,6 +172,25 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
 
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
+
+
+def _launch_merged_descriptors(op_descriptors):
+    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
+    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
+    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
+    if not op_descriptors:
+        raise ValueError("op_descriptors cannot be empty")
+
+    merged_descriptor = op_descriptors[0].descriptor
+    if len(op_descriptors) > 1:
+        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
+
+    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
+        tensor for op in op_descriptors for tensor in op.output_tensors
+    ]
+    ttnn.generic_op(io_tensors, merged_descriptor)
+
+    return [op.output_tensors for op in op_descriptors]
 
 
 class MLA1D(AbstractModule):
@@ -1061,8 +1079,8 @@ class MLA1D(AbstractModule):
         )  # 1,4,128,576, height sharded 8x8 [32,576]
 
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        # Q and KV nope use non-overlapping core grids so they can run parallel norms
-        # via Parallel (which requires non-overlapping core ranges).
+        # Q and KV nope use non-overlapping core grids, but keep this decode path
+        # on the pre-40275 merged-descriptor dispatch as a temporary workaround.
         num_q_cores = 16
         num_kv_nope_cores = 16
         shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
@@ -1868,27 +1886,24 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        Parallel(q_norm_desc, kv_norm_desc).build(tt_q.device()).launch()
-        tt_q = q_norm_desc.output_tensors[0]
-        tt_kv_nope = kv_norm_desc.output_tensors[0]
+        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
+        # avoid the fusion cache/rebind path here until
+        # Parallel(...).build().launch() is fixed for this decode flow.
+        results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
+        tt_q = results[0][0]
+        tt_kv_nope = results[1][0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
         # 1,1,32,64 1x2 [32,32]
-        tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, memory_config=cfg["kv_rope_reshard"]
-        )  # [1, bsz, 1, qk_rope_head_dim]        # 1,32,1,64 interleaved | should be: 4x8 [32,64]
         tt_kv_rope = ttnn.experimental.rotary_embedding_llama(
             tt_kv_rope,
-            rope_tensors["cos_matrix"],
-            rope_tensors["sin_matrix"],
+            rope_tensors["cos_matrix_prefill_shape"],
+            rope_tensors["sin_matrix_prefill_shape"],
             rope_tensors["trans_matrix"],
-            is_decode_mode=True,
+            is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # 1,32,1,64 4x8 [32,64]
-        tt_kv_rope = ttnn.transpose(
-            tt_kv_rope, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG
-        )  # [1, 1, bsz, qk_rope_head_dim]
         # 1,1,32,64 L1 interleaved
         tt_kv_nope = ttnn.to_memory_config(tt_kv_nope, memory_config=ttnn.L1_MEMORY_CONFIG)
 

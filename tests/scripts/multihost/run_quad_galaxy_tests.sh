@@ -104,6 +104,7 @@ setup_quad_galaxy_env() {
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
+    export USE_TORUS_MODE=1
 }
 
 # Compute pytest --timeout value.
