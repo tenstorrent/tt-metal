@@ -10,6 +10,9 @@ Tests decoder fused operation with full pipeline:
 - Qrope output: [64, 1, 64] after RoPE
 """
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -24,6 +27,8 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
+    load_moe_decoder_layer,
+    load_moe_routed_experts,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
@@ -65,6 +70,7 @@ def create_decoder_block_tensors(
     num_routed_experts: int = 0,
     preloaded_weights=None,
     rigged_experts: bool = False,
+    input_override: torch.Tensor | None = None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -172,7 +178,9 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
-    if rigged_experts:
+    if input_override is not None:
+        torch_input = input_override.reshape(shape).to(torch.bfloat16)
+    elif rigged_experts:
         # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
         # (all-ones can produce brittle saturation in downstream low-precision paths)
         torch_input_f32 = torch.randn(shape, dtype=torch.float32)
