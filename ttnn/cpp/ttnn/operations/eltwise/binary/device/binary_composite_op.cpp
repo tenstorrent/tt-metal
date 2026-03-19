@@ -26,8 +26,7 @@ namespace ttnn {
 using namespace operations;
 
 // nextafter
-Tensor operations::binary::_nextafter(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
     Tensor result(input_a);
     {
@@ -47,7 +46,7 @@ Tensor operations::binary::_nextafter(
 }
 
 // ∣input−other∣≤ atol+rtol×∣other∣
-Tensor operations::binary::_isclose(
+Tensor isclose(
     const Tensor& input_a,
     const Tensor& input_b,
     float rtol,
@@ -223,8 +222,7 @@ Tensor bias_gelu(
         std::nullopt);  // sub_core_grids
 }
 
-Tensor operations::binary::_atan2(
-    const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
     Tensor result(input_a);
     {
@@ -547,16 +545,14 @@ Tensor div(
     return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
-Tensor operations::binary::_div_no_nan_overload(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor div_no_nan(const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     if (value == 0) {
         return ttnn::zeros_like(input_a);
     }
     return ttnn::multiply(input_a, (1.0f / value));
 }
 
-Tensor operations::binary::_div_no_nan(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         // Not using SFPU div op here since inf/nan handling is not required
         Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
@@ -752,8 +748,7 @@ Tensor fmod(
         input, scalar, output_mem_config);
 }
 
-Tensor operations::binary::_floor_div_overload(
-    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor floor_div(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
     if (value == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
         float t_nan = std::nanf("");
@@ -766,8 +761,7 @@ Tensor operations::binary::_floor_div_overload(
     return ttnn::floor(temp);
 }
 
-Tensor operations::binary::_floor_div(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
@@ -787,8 +781,7 @@ Tensor operations::binary::_floor_div(
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor operations::binary::_outer(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
@@ -833,7 +826,7 @@ Tensor operations::binary::_outer(
     return ttnn::matmul(a_slim, b_slim);
 }
 
-Tensor operations::binary::_polyval(
+Tensor polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
     if (coeffs.size() == 1) {
@@ -1516,63 +1509,6 @@ Tensor bias_gelu(
         rhs_activations,
         std::nullopt,
         sub_core_grids);
-}
-
-Tensor atan2(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::ATAN2>::handle(
-        input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor nextafter(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::NEXTAFTER>::handle(
-        input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor isclose(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    float rtol,
-    float atol,
-    const bool equal_nan,
-    const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::ISCLOSE>::handle(
-        input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
-}
-
-Tensor div_no_nan(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::DIV_NO_NAN>::handle(
-        input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor div_no_nan(const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::DIV_NO_NAN>::handle(
-        input_tensor_a, value, memory_config);
-}
-
-Tensor floor_div(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::FLOOR_DIV>::handle(
-        input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor floor_div(const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::FLOOR_DIV>::handle(
-        input_tensor_a, value, memory_config);
-}
-
-Tensor outer(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::OUTER>::handle(
-        input_tensor_a, input_tensor_b, memory_config);
-}
-
-Tensor polyval(
-    const Tensor& input_tensor_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& memory_config) {
-    return operations::binary::OpHandler<binary::BinaryCompositeOpType::POLYVAL>::handle(
-        input_tensor_a, coeffs, memory_config);
 }
 
 }  // namespace ttnn

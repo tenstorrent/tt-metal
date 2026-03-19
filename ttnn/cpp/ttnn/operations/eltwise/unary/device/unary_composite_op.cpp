@@ -31,7 +31,7 @@ namespace ttnn::operations::unary {
 
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
-Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor input = input_a.dtype() == DataType::BFLOAT8_B ? ttnn::fill_implicit_tile_padding(input_a, 1.0f) : input_a;
     Tensor t_log_out = ttnn::log(input, true, output_mem_config);  // negative log is not useful here
 
@@ -188,7 +188,7 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
 
 // multivariate log-gamma function
 // Ref : https://pytorch.org/docs/stable/special.html#torch.special.multigammaln
-Tensor _multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor multigammaln(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result = _lgamma(x, output_mem_config);
     result = ttnn::add(
         result,
@@ -228,7 +228,7 @@ Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional
     return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
-Tensor _variance(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor var_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     auto output_memory_config = output_mem_config.value_or(y.memory_config());
     ttnn::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
@@ -250,13 +250,13 @@ Tensor _std(
     return ttnn::sqrt(_variance_impl(y, mean_y, y_minus_mean_y, output_mem_config));
 }
 
-Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::sqrt(_variance(y, output_mem_config));
+Tensor std_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::sqrt(var_hw(y, output_mem_config));
 }
 
 // Function normalize
 // use transformation y = (y - mean(y))/std(y) by broadcast
-Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
@@ -376,7 +376,7 @@ std::vector<Tensor> split_tensor_for_glu(
 }
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
-Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -388,7 +388,7 @@ Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig
 }
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
-Tensor _reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -400,7 +400,7 @@ Tensor _reglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConf
 }
 
 // Gaussian Error Gated Linear Unit activation: matmul(split[0],gelu(split[1]))
-Tensor _geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -415,7 +415,7 @@ Tensor _geglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConf
 }
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
-Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
@@ -429,7 +429,7 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 }
 
 // tril : select lower triangular region of input matrix
-Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_l = ttnn::index_tril<::bfloat16>(
         input_a.logical_shape(),
         input_a.padded_shape(),
@@ -442,7 +442,7 @@ Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
 }
 
 // triu : select upper triangular region of input matrix
-Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor index_u = ttnn::index_triu<::bfloat16>(
         input_a.logical_shape(),
         input_a.padded_shape(),
@@ -461,7 +461,7 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
 }
 
 // polygamma support for the range of input(1, 10) and n(1, 10)
-Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryConfig>& output_mem_config) {
     float k_der = 1.0f + k;
     float fact_val = std::tgamma(k_der);
     float pos_neg = 1.0f;
@@ -484,8 +484,13 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 }
 
 // // tanhshrink(x) = x - tanh(x)
-Tensor _logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);
+}
+
+// frac(x) = x - trunc(x), fractional part
+Tensor frac(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::subtract(x, ttnn::trunc(x, output_mem_config), std::nullopt, output_mem_config);
 }
 
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
@@ -511,8 +516,8 @@ Tensor _make_global_from_hw_impl(
 }
 
 // Global Norm
-Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return _make_global_from_hw_impl(_normalize, y, output_mem_config);
+Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
+    return _make_global_from_hw_impl(normalize_hw, y, output_mem_config);
 }
 
 }  // namespace ttnn::operations::unary

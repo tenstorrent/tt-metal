@@ -20,7 +20,6 @@ namespace detail {
 
 namespace nb = nanobind;
 
-// OpHandler_complex_binary_type1 = get_function_complex_binary
 template <typename complex_unary_operation_t>
 void bind_complex_binary_type1(
     nb::module_& mod, const complex_unary_operation_t& operation, const std::string& description) {

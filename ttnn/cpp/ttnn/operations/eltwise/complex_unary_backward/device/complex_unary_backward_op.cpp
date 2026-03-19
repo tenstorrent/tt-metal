@@ -38,16 +38,16 @@ std::vector<ComplexTensor> _polar_bw(
     sgn_result_r.deallocate();
     sgn_result_i.deallocate();
     Tensor grad_abs = ttnn::real(
-        ttnn::operations::complex_binary::_mul(ttnn::conj(grad, output_mem_config), sgn_result, output_mem_config),
+        ttnn::operations::complex_binary::multiply(ttnn::conj(grad, output_mem_config), sgn_result, output_mem_config),
         output_mem_config);
     sgn_result.deallocate();
     ComplexTensor flip_tensor = ComplexTensor(
         {ttnn::zeros_like(input.real(), input.real().dtype(), input.real().layout(), std::nullopt, output_mem_config),
          ttnn::ones_like(input.imag())});
     Tensor grad_angle = ttnn::real(
-        ttnn::operations::complex_binary::_mul(
+        ttnn::operations::complex_binary::multiply(
             ttnn::conj(grad, output_mem_config),
-            ttnn::operations::complex_binary::_mul(result, flip_tensor, output_mem_config),
+            ttnn::operations::complex_binary::multiply(result, flip_tensor, output_mem_config),
             output_mem_config),
         output_mem_config);
     result.deallocate();

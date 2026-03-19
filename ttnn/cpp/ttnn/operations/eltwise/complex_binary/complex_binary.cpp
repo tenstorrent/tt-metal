@@ -4,26 +4,4 @@
 
 #include "complex_binary.hpp"
 
-namespace ttnn::operations::complex_binary {
-
-ComplexTensor add(
-    const ComplexTensor& input_tensor_a, const ComplexTensor& input_tensor_b, const MemoryConfig& memory_config) {
-    return _add(input_tensor_a, input_tensor_b, memory_config);
-}
-
-ComplexTensor subtract(
-    const ComplexTensor& input_tensor_a, const ComplexTensor& input_tensor_b, const MemoryConfig& memory_config) {
-    return _sub(input_tensor_a, input_tensor_b, memory_config);
-}
-
-ComplexTensor multiply(
-    const ComplexTensor& input_tensor_a, const ComplexTensor& input_tensor_b, const MemoryConfig& memory_config) {
-    return _mul(input_tensor_a, input_tensor_b, memory_config);
-}
-
-ComplexTensor divide(
-    const ComplexTensor& input_tensor_a, const ComplexTensor& input_tensor_b, const MemoryConfig& memory_config) {
-    return _div(input_tensor_a, input_tensor_b, memory_config);
-}
-
-}  // namespace ttnn::operations::complex_binary
+// Add, subtract, multiply, divide implementations are in device/complex_binary_op.cpp

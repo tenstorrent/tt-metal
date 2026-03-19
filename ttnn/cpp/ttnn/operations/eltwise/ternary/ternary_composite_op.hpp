@@ -32,57 +32,7 @@ Tensor _lerp(
     const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 Tensor _lerp_overload(
     const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-Tensor _mac(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _mac_overload(const Tensor&, float, float, const std::optional<MemoryConfig>&);
-
-template <TernaryCompositeOpType OpType>
-struct OpHandler;
-
-template <>
-struct OpHandler<TernaryCompositeOpType::ADDCMUL> {
-    static Tensor handle(
-        const Tensor& t1, const Tensor& t2, const Tensor& t3, float value, const std::optional<MemoryConfig>& mem_cfg) {
-        return _addcmul(t1, t2, t3, value, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<TernaryCompositeOpType::ADDCDIV> {
-    static Tensor handle(
-        const Tensor& t1, const Tensor& t2, const Tensor& t3, float value, const std::optional<MemoryConfig>& mem_cfg) {
-        return _addcdiv(t1, t2, t3, value, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<TernaryCompositeOpType::LERP> {
-    static Tensor handle(
-        const Tensor& t1,
-        const Tensor& t2,
-        const Tensor& t3,
-        const std::optional<MemoryConfig>& mem_cfg,
-        const std::optional<Tensor>& output) {
-        return _lerp(t1, t2, t3, mem_cfg, output);
-    }
-    static Tensor handle(
-        const Tensor& t1,
-        const Tensor& t2,
-        float value,
-        const std::optional<MemoryConfig>& mem_cfg,
-        const std::optional<Tensor>& output) {
-        return _lerp_overload(t1, t2, value, mem_cfg, output);
-    }
-};
-
-template <>
-struct OpHandler<TernaryCompositeOpType::MAC> {
-    static Tensor handle(
-        const Tensor& t1, const Tensor& t2, const Tensor& t3, const std::optional<MemoryConfig>& mem_cfg) {
-        return _mac(t1, t2, t3, mem_cfg);
-    }
-    static Tensor handle(const Tensor& t1, float value1, float value2, const std::optional<MemoryConfig>& mem_cfg) {
-        return _mac_overload(t1, value1, value2, mem_cfg);
-    }
-};
+Tensor mac(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
+Tensor mac(const Tensor&, float, float, const std::optional<MemoryConfig>&);
 
 }  // namespace ttnn::operations::ternary

@@ -11,46 +11,6 @@ namespace ttnn {
 
 namespace operations::unary {
 
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOp {
-    static Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-        return OpHandler<unary_comp_op_type>::handle(input_tensor, output_memory_config);
-    }
-};
-
-// OpHandler_float : get_function_type_float
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithFloat {
-    // Type : 1 inputs, 1 float
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor, float param1, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, memory_config);
-    }
-};
-
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithDim {
-    static Tensor invoke(
-        const Tensor& input_tensor, int32_t dim, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-        return OpHandler<unary_comp_op_type>::handle(input_tensor, dim, output_memory_config);
-    }
-};
-
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithFloats {
-    // Type 1: 1 inputs, 2 float
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float param1,
-        float param2,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-        return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, param2, output_memory_config);
-    }
-};
-
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
         const Tensor& input_a,
@@ -81,14 +41,6 @@ struct ExecuteUnaryCompositeClip {
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
-template <UnaryCompositeOpType unary_comp_op_type>
-struct ExecuteUnaryCompositeOpWithInt {
-    static Tensor invoke(
-        const Tensor& input_tensor, int32_t param1, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-        return OpHandler<unary_comp_op_type>::handle(input_tensor, param1, output_memory_config);
-    }
-};
 }  // namespace operations::unary
 
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
@@ -134,24 +86,22 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
             original_shape);                                                                           \
     })
 
-// Free functions for unary composite operations
+// Free functions for unary composite operations (impl is the public API)
 inline Tensor digamma(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::DIGAMMA>::invoke(t, m);
+    return operations::unary::digamma(t, m);
 }
 Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt);
 inline Tensor multigammaln(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::MULTIGAMMALN>::invoke(
-        t, m);
+    return operations::unary::multigammaln(t, m);
 }
 inline Tensor var_hw(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::VAR_HW>::invoke(t, m);
+    return operations::unary::var_hw(t, m);
 }
 inline Tensor std_hw(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::STD_HW>::invoke(t, m);
+    return operations::unary::std_hw(t, m);
 }
 inline Tensor normalize_hw(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>::invoke(
-        t, m);
+    return operations::unary::normalize_hw(t, m);
 }
 inline Tensor clip(
     const Tensor& a,
@@ -185,40 +135,31 @@ inline Tensor clamp(
         a, std::move(min), std::move(max), output_mem_config, output_tensor);
 }
 inline Tensor glu(const Tensor& t, int32_t dim = -1, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>::invoke(
-        t, dim, m);
+    return operations::unary::glu(t, dim, m);
 }
 inline Tensor reglu(const Tensor& t, int32_t dim = -1, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::REGLU>::invoke(
-        t, dim, m);
+    return operations::unary::reglu(t, dim, m);
 }
 inline Tensor geglu(const Tensor& t, int32_t dim = -1, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GEGLU>::invoke(
-        t, dim, m);
+    return operations::unary::geglu(t, dim, m);
 }
 inline Tensor swiglu(const Tensor& t, int32_t dim = -1, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>::invoke(
-        t, dim, m);
+    return operations::unary::swiglu(t, dim, m);
 }
 inline Tensor logical_not_(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>::invoke(
-        t, m);
+    return operations::unary::logical_not_(t, m);
 }
 inline Tensor tril(const Tensor& t, int32_t diagonal = 0, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>::invoke(
-        t, diagonal, m);
+    return operations::unary::tril(t, diagonal, m);
 }
 inline Tensor triu(const Tensor& t, int32_t diagonal = 0, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIU>::invoke(
-        t, diagonal, m);
+    return operations::unary::triu(t, diagonal, m);
 }
 inline Tensor polygamma(const Tensor& t, int32_t param, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOpWithInt<
-        operations::unary::UnaryCompositeOpType::POLYGAMMA>::invoke(t, param, m);
+    return operations::unary::polygamma(t, param, m);
 }
 inline Tensor normalize_global(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeOp<
-        operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>::invoke(t, m);
+    return operations::unary::normalize_global(t, m);
 }
 
 }  // namespace ttnn
