@@ -19,6 +19,7 @@ Review open CI maintenance issues and close only those no longer relevant based 
 3. **Decide closures**
    - Close if exact failing test now passes, or if root cause is clearly different
    - Do not close for cosmetic differences, infra-only noise, or same root cause
+   - Do not close if the test is only "passing" because it was disabled or removed. Verify the test actually ran and passed in the logs (look for the test name in output with a PASSED/OK status, not SKIPPED/deselected/disabled)
    - Apply user cap (for example, "close up to N issues") only at final close step
    - Always review the failure logs yourself. Never write a script to close tickets for you
 

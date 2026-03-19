@@ -42,6 +42,7 @@ Close only issues that are no longer actionable based on the latest completed ru
 - The difference is cosmetic only (timestamps, ANSI, formatting, host/runner, dynamic IDs).
 - The evidence is only infrastructure noise (transient network/runner/process exit lines).
 - The job is a matrix job with multiple matching instances and at least one still fails with the same root cause.
+- The test appears to pass only because it was disabled, skipped, or removed from the test suite. When a test is "now passing", verify in the job logs that the specific test actually ran and produced a PASSED/OK result, rather than being deselected, skipped, or absent from the run.
 
 ## Output File
 
