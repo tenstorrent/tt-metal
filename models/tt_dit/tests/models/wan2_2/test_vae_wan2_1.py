@@ -4,7 +4,9 @@
 
 import time
 from collections import defaultdict
+from unittest.mock import patch
 
+import numpy as np
 import pytest
 import torch
 from diffusers import AutoencoderKLWan
@@ -1832,3 +1834,408 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")
+
+
+# ---------------------------------------------------------------------------
+# Blocking configs for decoder-level comparison test
+# ---------------------------------------------------------------------------
+#
+# ROOT CAUSE ANALYSIS (from investigation of PRs #38579 and #39043):
+#
+# Only C_in_block affects numerical accuracy (changes matmul accumulation
+# group sizes). C_out_block and spatial blocks only affect tiling/memory.
+#
+# Effective impact per blocking entry:
+#   (32, 384, 3x3x3): C_in_block is 32 in BOTH configs — zero numerical effect.
+#   (192, 384, 3x3x3): C_in_block 96→64 — affects 1 decoder layer.
+#   (384, 384, 3x3x3): C_in_block 128→96 — affects 15 decoder layers (dominant).
+#   (384, 768, 3x3x3): DEAD ENTRY — never matched (time_conv has kernel (3,1,1)).
+#
+# Causal chain:
+#   C_in_block 128→96 changes matmul from 3 groups of K=3456 to 4 groups of K=2592
+#   → TF32 truncation (13 mantissa bits) + non-associative fp32 accumulation
+#   → ~2.6e-06 max error per output channel per pixel per layer
+#   → cascade through 16 affected layers with RMSNorm + residual connections
+#   → ~0.002 mean error per pixel at decoder output
+#   → temporal cache propagation compounds error across frames
+#   → ~1% of pixels differ by ≥1 value → video hash changes
+#
+# Both configs are equally accurate vs fp32 reference. The hash difference
+# is inherent to TF32 math when accumulation order changes.
+# See conv3d_blocking_root_cause.md for full analysis.
+
+# Current production blockings (the "good" defaults from conv3d.py)
+GOOD_BLOCKINGS = {
+    (32, 384, (3, 3, 3)): (32, 384, 1, 8, 8),
+    (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
+    (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
+    (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+}
+
+# Aggressive blockings from PR #38579 (reverted in PR #39043)
+AGGRESSIVE_BLOCKINGS = {
+    (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
+    (192, 384, (3, 3, 3)): (64, 128, 1, 8, 4),
+    (384, 384, (3, 3, 3)): (96, 96, 1, 8, 4),
+    (384, 768, (3, 3, 3)): (96, 96, 1, 8, 4),
+}
+
+# FIXED blockings: keep C_in_block from GOOD (preserves accumulation order / hash),
+# use faster C_out_block and spatial blocks from AGGRESSIVE.
+# These are now the defaults in conv3d.py.
+FIXED_BLOCKINGS = {
+    (32, 384, (3, 3, 3)): (32, 96, 1, 2, 32),
+    (192, 384, (3, 3, 3)): (96, 128, 1, 8, 4),
+    (384, 384, (3, 3, 3)): (128, 96, 1, 8, 4),
+    (384, 768, (3, 3, 3)): (128, 96, 1, 8, 4),
+}
+
+
+def _make_patched_get_conv3d_config(overrides):
+    """
+    Create a patched version of get_conv3d_config that overrides specific blocking entries.
+    Imports the real function at call time so the patch is self-contained.
+    """
+    from ....utils.conv3d import get_conv3d_config as _original_get_conv3d_config
+
+    def patched(in_channels, out_channels, kernel_size, weights_dtype, grid_size):
+        import ttnn as _ttnn
+
+        key = (in_channels, out_channels, kernel_size)
+        if weights_dtype != _ttnn.float32 and key in overrides:
+            C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = overrides[key]
+            return _ttnn.Conv3dConfig(
+                weights_dtype=weights_dtype,
+                output_layout=_ttnn.ROW_MAJOR_LAYOUT,
+                T_out_block=T_out_block,
+                W_out_block=W_out_block,
+                H_out_block=H_out_block,
+                C_out_block=C_out_block,
+                C_in_block=C_in_block,
+                compute_with_storage_grid_size=grid_size,
+            )
+        return _original_get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size)
+
+    return patched
+
+
+def _deallocate_model(model):
+    """Deallocate all device tensors owned by a TT model so the device can be reused."""
+    for name, param in model.named_parameters():
+        if hasattr(param, "data") and hasattr(param.data, "is_allocated") and param.data.is_allocated():
+            ttnn.deallocate(param.data)
+    # Also clean up any feat_cache entries
+    if hasattr(model, "_feat_cache"):
+        for i, cache_entry in enumerate(model._feat_cache):
+            if cache_entry is not None and not isinstance(cache_entry, str):
+                try:
+                    ttnn.deallocate(cache_entry)
+                except Exception:
+                    pass
+        model._feat_cache = []
+
+
+def _run_decoder(mesh_device, torch_state, T, H, W, h_axis, w_axis, dtype, blocking_overrides=None):
+    """
+    Build a TT WanDecoder, load weights, run forward for T frames, return output on host.
+
+    If blocking_overrides is provided, monkeypatches get_conv3d_config during model construction.
+    """
+    B, C = 1, 16
+    base_dim = 96
+    z_dim = 16
+    dim_mult = [1, 2, 4, 4]
+    num_res_blocks = 2
+    attn_scales = []
+    temperal_downsample = [False, True, True]
+    out_channels = 3
+
+    tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
+    )
+
+    # Build model, optionally with patched blockings
+    if blocking_overrides is not None:
+        patched_fn = _make_patched_get_conv3d_config(blocking_overrides)
+        with patch("models.tt_dit.models.vae.vae_wan2_1.get_conv3d_config", patched_fn):
+            tt_model = WanDecoder(
+                base_dim=base_dim,
+                z_dim=z_dim,
+                dim_mult=dim_mult,
+                num_res_blocks=num_res_blocks,
+                attn_scales=attn_scales,
+                temperal_downsample=temperal_downsample,
+                out_channels=out_channels,
+                is_residual=False,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                dtype=dtype,
+            )
+    else:
+        tt_model = WanDecoder(
+            base_dim=base_dim,
+            z_dim=z_dim,
+            dim_mult=dim_mult,
+            num_res_blocks=num_res_blocks,
+            attn_scales=attn_scales,
+            temperal_downsample=temperal_downsample,
+            out_channels=out_channels,
+            is_residual=False,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            dtype=dtype,
+        )
+
+    tt_model.load_torch_state_dict(torch_state)
+
+    # Prepare input
+    torch.manual_seed(42)
+    torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
+    tt_input = torch_input.permute(0, 2, 3, 4, 1)
+    tt_input = conv_pad_in_channels(tt_input)
+    tt_input, logical_h = conv_pad_height(tt_input, parallel_config.height_parallel.factor)
+    tt_input = typed_tensor_2dshard(
+        tt_input,
+        mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_mapping={h_axis: 2, w_axis: 3},
+        dtype=tt_input_dtype,
+    )
+
+    # Forward
+    start = time.time()
+    tt_output, new_logical_h = tt_model(tt_input, logical_h)
+    elapsed = time.time() - start
+
+    # Copy output to host
+    concat_dims = [None, None]
+    concat_dims[h_axis] = 3
+    concat_dims[w_axis] = 4
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
+    )
+
+    # Trim to valid region
+    if tt_output_torch.shape[1] != out_channels:
+        tt_output_torch = tt_output_torch[:, :out_channels]
+    if new_logical_h != tt_output_torch.shape[3]:
+        tt_output_torch = tt_output_torch[:, :, :, :new_logical_h, :]
+
+    logger.info(f"Decoder forward took {elapsed:.2f}s, output shape: {tt_output_torch.shape}")
+
+    # Deallocate
+    _deallocate_model(tt_model)
+    del tt_model
+
+    return tt_output_torch, torch_input
+
+
+def _compute_comparison_metrics(name_a, tensor_a, name_b, tensor_b):
+    """
+    Compute and log detailed comparison metrics between two tensors.
+    Returns a dict of metrics.
+    """
+    a = tensor_a.detach().float()
+    b = tensor_b.detach().float()
+
+    # Global metrics
+    diff = a - b
+    abs_diff = diff.abs()
+    mse = (diff**2).mean().item()
+    max_abs_err = abs_diff.max().item()
+
+    a_flat = a.flatten()
+    b_flat = b.flatten()
+    pcc = torch.corrcoef(torch.stack([a_flat, b_flat]))[0, 1].item()
+
+    logger.info(f"=== {name_a} vs {name_b} ===")
+    logger.info(f"  Global PCC:          {pcc:.8f}")
+    logger.info(f"  MSE:                 {mse:.2e}")
+    logger.info(f"  Max absolute error:  {max_abs_err:.2e}")
+
+    metrics = {
+        "pcc": pcc,
+        "mse": mse,
+        "max_abs_err": max_abs_err,
+    }
+
+    # Per-channel metrics (C=3, dim=1 in BCTHW)
+    if a.shape[1] == 3:
+        logger.info(f"  Per-channel (RGB) diff stats:")
+        for c, ch_name in enumerate(["R", "G", "B"]):
+            ch_diff = diff[:, c]
+            ch_abs = ch_diff.abs()
+            ch_pcc = torch.corrcoef(torch.stack([a[:, c].flatten(), b[:, c].flatten()]))[0, 1].item()
+            logger.info(
+                f"    {ch_name}: mean={ch_diff.mean().item():.2e}, std={ch_diff.std().item():.2e}, "
+                f"max={ch_abs.max().item():.2e}, PCC={ch_pcc:.8f}"
+            )
+            metrics[f"channel_{ch_name}_pcc"] = ch_pcc
+            metrics[f"channel_{ch_name}_max_err"] = ch_abs.max().item()
+
+    # Per-frame metrics (T is dim 2 in BCTHW)
+    num_frames = a.shape[2]
+    if num_frames > 1:
+        logger.info(f"  Per-frame PCC ({num_frames} frames):")
+        frame_pccs = []
+        for t in range(num_frames):
+            frame_a = a[:, :, t].flatten()
+            frame_b = b[:, :, t].flatten()
+            frame_pcc = torch.corrcoef(torch.stack([frame_a, frame_b]))[0, 1].item()
+            frame_pccs.append(frame_pcc)
+            logger.info(f"    Frame {t:3d}: PCC={frame_pcc:.8f}")
+        metrics["frame_pccs"] = frame_pccs
+
+        # Check for monotonic degradation (H7: temporal cache contamination)
+        if len(frame_pccs) > 2:
+            diffs_between_frames = [frame_pccs[i + 1] - frame_pccs[i] for i in range(len(frame_pccs) - 1)]
+            num_decreasing = sum(1 for d in diffs_between_frames if d < 0)
+            logger.info(
+                f"    Monotonic degradation check: {num_decreasing}/{len(diffs_between_frames)} " f"consecutive drops"
+            )
+
+    # Error distribution percentiles
+    percentiles = [50, 90, 95, 99, 99.9]
+    abs_diff_np = abs_diff.numpy().flatten()
+    pct_values = np.percentile(abs_diff_np, percentiles)
+    logger.info(f"  Error distribution percentiles:")
+    for p, v in zip(percentiles, pct_values):
+        logger.info(f"    P{p:5.1f}: {v:.2e}")
+    metrics["error_percentiles"] = dict(zip(percentiles, pct_values))
+
+    return metrics
+
+
+@pytest.mark.parametrize("T", [1, 10], ids=["1f", "10f"])
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis",
+    [
+        ((2, 4), 0, 1),
+    ],
+    ids=[
+        "2x4_h0_w1",
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_wan_decoder_blocking_comparison(mesh_device, T, h_axis, w_axis):
+    """
+    Compare WAN VAE decoder outputs between GOOD and AGGRESSIVE Conv3D blockings.
+
+    This test investigates why aggressive blockings produce visual artifacts (motion blur,
+    incorrect colors) even though per-layer PCC is ~0.99999. It runs the full decoder with
+    real weights under both blocking configs and compares outputs with detailed metrics.
+
+    Hypotheses tested:
+    - H5: RMSNorm + residual cascade amplifies small per-layer errors
+    - H6: Real weight outliers interact with different blocking partitions
+    - H7: Temporal cache contamination compounds over frames (per-frame PCC degradation)
+    - H9: C_out_block channel reassembly issues (per-channel PCC)
+    """
+    from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
+
+    B, C, H, W = 1, 16, 60, 104  # 480p bottleneck
+    dtype = ttnn.DataType.BFLOAT16
+
+    # Step 1: Load torch reference model and extract state dict
+    logger.info("Loading real weights from Wan-AI/Wan2.2-T2V-A14B-Diffusers...")
+    torch_model = TorchAutoencoderKLWan.from_pretrained("Wan-AI/Wan2.2-T2V-A14B-Diffusers", subfolder="vae")
+    torch_model.eval()
+    torch_state = torch_model.state_dict()
+
+    # Step 2: Run TT decoder with GOOD blockings (override to old defaults)
+    logger.info(f"Running decoder with GOOD blockings (T={T})...")
+    good_output, torch_input = _run_decoder(
+        mesh_device, torch_state, T, H, W, h_axis, w_axis, dtype, blocking_overrides=GOOD_BLOCKINGS
+    )
+    logger.info(f"GOOD output shape: {good_output.shape}")
+
+    # Step 3: Run TT decoder with FIXED blockings (current defaults in conv3d.py, no patch)
+    logger.info(f"Running decoder with FIXED blockings (T={T})...")
+    fixed_output, _ = _run_decoder(mesh_device, torch_state, T, H, W, h_axis, w_axis, dtype, blocking_overrides=None)
+    logger.info(f"FIXED output shape: {fixed_output.shape}")
+
+    # Step 4: Run TT decoder with AGGRESSIVE blockings (patched get_conv3d_config)
+    logger.info(f"Running decoder with AGGRESSIVE blockings (T={T})...")
+    aggressive_output, _ = _run_decoder(
+        mesh_device, torch_state, T, H, W, h_axis, w_axis, dtype, blocking_overrides=AGGRESSIVE_BLOCKINGS
+    )
+    logger.info(f"AGGRESSIVE output shape: {aggressive_output.shape}")
+
+    # Step 5: Run torch reference
+    logger.info("Running torch reference decoder...")
+    with torch.no_grad():
+        torch_output = torch_model.decode(torch_input.to(torch.float32), return_dict=False)[0]
+    logger.info(f"Torch output shape: {torch_output.shape}")
+
+    # Ensure shapes match for comparison
+    min_t = min(good_output.shape[2], fixed_output.shape[2], aggressive_output.shape[2], torch_output.shape[2])
+    good_output = good_output[:, :, :min_t]
+    fixed_output = fixed_output[:, :, :min_t]
+    aggressive_output = aggressive_output[:, :, :min_t]
+    torch_output = torch_output[:, :, :min_t]
+
+    # Step 6: Compute comparison metrics
+    logger.info("\n" + "=" * 80)
+    logger.info("BLOCKING COMPARISON RESULTS")
+    logger.info("=" * 80)
+
+    good_vs_torch = _compute_comparison_metrics("GOOD", good_output, "Torch", torch_output)
+    fixed_vs_torch = _compute_comparison_metrics("FIXED", fixed_output, "Torch", torch_output)
+    aggressive_vs_torch = _compute_comparison_metrics("AGGRESSIVE", aggressive_output, "Torch", torch_output)
+    good_vs_fixed = _compute_comparison_metrics("GOOD", good_output, "FIXED", fixed_output)
+    good_vs_aggressive = _compute_comparison_metrics("GOOD", good_output, "AGGRESSIVE", aggressive_output)
+
+    # Step 7: Log summary
+    logger.info("\n" + "=" * 80)
+    logger.info("SUMMARY")
+    logger.info("=" * 80)
+    logger.info(f"  GOOD vs Torch PCC:       {good_vs_torch['pcc']:.8f}")
+    logger.info(f"  FIXED vs Torch PCC:      {fixed_vs_torch['pcc']:.8f}")
+    logger.info(f"  AGGRESSIVE vs Torch PCC: {aggressive_vs_torch['pcc']:.8f}")
+    logger.info(f"  GOOD vs FIXED PCC:       {good_vs_fixed['pcc']:.8f}")
+    logger.info(f"  GOOD vs AGGRESSIVE PCC:  {good_vs_aggressive['pcc']:.8f}")
+
+    # Step 8: Assertions
+    # GOOD should match torch reasonably well
+    assert good_vs_torch["pcc"] > 0.999, f"GOOD vs Torch PCC {good_vs_torch['pcc']:.8f} below 0.999 threshold"
+
+    # CRITICAL: FIXED must match GOOD exactly (same C_in_block → same accumulation)
+    assert good_vs_fixed["pcc"] > 0.999_999, (
+        f"FIXED blockings diverged from GOOD! PCC={good_vs_fixed['pcc']:.8f}. "
+        f"C_in_block may have changed — check conv3d.py blocking table."
+    )
+    assert good_vs_fixed["max_abs_err"] < 1e-6, (
+        f"FIXED blockings diverged from GOOD! Max abs err={good_vs_fixed['max_abs_err']:.2e}. "
+        f"Expected identical output since C_in_block is preserved."
+    )
+    logger.info(
+        f"FIXED matches GOOD: PCC={good_vs_fixed['pcc']:.8f}, "
+        f"max_err={good_vs_fixed['max_abs_err']:.2e} (expected: identical)"
+    )
+
+    # Log AGGRESSIVE vs GOOD difference (informational)
+    if aggressive_vs_torch["pcc"] < good_vs_torch["pcc"]:
+        logger.info(
+            f"AGGRESSIVE is measurably worse than GOOD "
+            f"(PCC gap: {good_vs_torch['pcc'] - aggressive_vs_torch['pcc']:.2e})"
+        )
+
+    # Check for temporal degradation pattern (H7)
+    if T > 1 and "frame_pccs" in good_vs_aggressive:
+        frame_pccs = good_vs_aggressive["frame_pccs"]
+        if len(frame_pccs) > 2:
+            first_half_avg = np.mean(frame_pccs[: len(frame_pccs) // 2])
+            second_half_avg = np.mean(frame_pccs[len(frame_pccs) // 2 :])
+            if second_half_avg < first_half_avg:
+                logger.info(
+                    f"H7 signal: Later frames have lower PCC "
+                    f"(first half avg: {first_half_avg:.8f}, second half avg: {second_half_avg:.8f})"
+                )
