@@ -47,7 +47,6 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     cb_wait_front(cb_sum, kOneTile);
     cb_wait_front(kCbScaler, kOneTile);
     cb_wait_front(kCbEps, kOneTile);
-    cb_reserve_back(cb_inv_rms, kOneTile);
 
     tile_regs_acquire();
     constexpr uint32_t kAccReg = 0U;
@@ -71,12 +70,7 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
     recip_tile(kAccReg);
 
     tile_regs_commit();
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_inv_rms);
-    pack_tile(kAccReg, cb_inv_rms);
-    tile_regs_release();
-
-    cb_push_back(cb_inv_rms, kOneTile);
+    pack_and_push(kAccReg, cb_inv_rms);
     cb_pop_front(cb_sum, kOneTile);
 }
 
@@ -167,7 +161,6 @@ void emit_output_for_row() {
         cb_wait_front(kCbInputPass2, kBlockSize);
         cb_reserve_back(kCbOutput, kBlockSize);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
-            cb_reserve_back(kCbSumX2, kOneTile);
             tile_regs_acquire();
             unary_bcast_init<BroadcastType::COL>(kCbInvRmsX3, kCbInvRmsX3);
             unary_bcast<BroadcastType::COL>(kCbInvRmsX3, 0, 5U);
@@ -183,13 +176,8 @@ void emit_output_for_row() {
             copy_tile(kCbW0, 0, 4U);
             mul_binary_tile(2U, 4U, 2U);  // w0 * norm(x^3)
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(kCbSumX2);
-            pack_tile(2U, kCbSumX2);
-            tile_regs_release();
-            cb_push_back(kCbSumX2, kOneTile);
+            pack_and_push(2U, kCbSumX2);
 
-            cb_reserve_back(kCbSumX4, kOneTile);
             tile_regs_acquire();
             unary_bcast_init<BroadcastType::COL>(kCbInvRmsX2, kCbInvRmsX2);
             unary_bcast<BroadcastType::COL>(kCbInvRmsX2, 0, 1U);
@@ -204,13 +192,8 @@ void emit_output_for_row() {
             copy_tile(kCbW1, 0, 4U);
             mul_binary_tile(0U, 4U, 0U);  // w1 * norm(x^2)
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(kCbSumX4);
-            pack_tile(0U, kCbSumX4);
-            tile_regs_release();
-            cb_push_back(kCbSumX4, kOneTile);
+            pack_and_push(0U, kCbSumX4);
 
-            cb_reserve_back(kCbSumX6, kOneTile);
             tile_regs_acquire();
             unary_bcast_init<BroadcastType::COL>(kCbInvRmsX, kCbInvRmsX);
             unary_bcast<BroadcastType::COL>(kCbInvRmsX, 0, 5U);
@@ -223,11 +206,7 @@ void emit_output_for_row() {
             copy_tile(kCbW2, 0, 4U);
             mul_binary_tile(0U, 4U, 0U);  // w2 * norm(x)
             tile_regs_commit();
-            tile_regs_wait();
-            pack_reconfig_data_format(kCbSumX6);
-            pack_tile(0U, kCbSumX6);
-            tile_regs_release();
-            cb_push_back(kCbSumX6, kOneTile);
+            pack_and_push(0U, kCbSumX6);
 
             cb_wait_front(kCbSumX2, kOneTile);
             cb_wait_front(kCbSumX4, kOneTile);
