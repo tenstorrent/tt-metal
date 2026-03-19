@@ -45,7 +45,7 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
 }
 
 TensorAttributes TensorAttributes::with_tensor_topology(TensorTopology tensor_topology) const {
-    // This need to moved to HostTensor after TODO(#39485)
+    // This needs to be moved to HostTensor after TODO(#39485)
     if (const auto* host_storage = std::get_if<HostStorage>(&storage_)) {
         HostStorage new_storage(*host_storage, tensor_spec_, tensor_topology);
         return TensorAttributes(std::move(new_storage), tensor_spec_, tensor_topology);
