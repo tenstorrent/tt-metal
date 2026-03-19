@@ -298,6 +298,8 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteMultipleCoresL1) {
     }
 }
 
+// Skips on Galaxy MMIO: all 16 ethernet cores are active (used for tunnel routing and
+// forced-active channels 0,1,2,3,15), leaving no idle cores available.
 TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteEntireL1) {
     const DeviceAddr address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -331,6 +333,8 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteEntireL1) {
     }
 }
 
+// Skips on Galaxy MMIO: all 16 ethernet cores are active (used for tunnel routing and
+// forced-active channels 0,1,2,3,15), leaving no idle cores available.
 TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
     const uint32_t num_elements = 1010;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
@@ -368,6 +372,8 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
     }
 }
 
+// Skips on Galaxy MMIO: all 16 ethernet cores are active (used for tunnel routing and
+// forced-active channels 0,1,2,3,15), leaving no idle cores available.
 TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
     const DeviceAddr address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
