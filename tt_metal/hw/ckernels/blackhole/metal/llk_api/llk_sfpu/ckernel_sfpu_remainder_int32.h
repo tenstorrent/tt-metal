@@ -43,8 +43,7 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vUInt q = sfpi::exman9(q_f);
 
     // Compute q * b using 24-bit multiplication
-    sfpi::vInt qb;
-    qb.get() = __builtin_rvtt_sfpmul24(q.get(), b.get(), 0);
+    sfpi::vInt qb = __builtin_rvtt_sfpmul24(q.get(), b.get(), 0);
     qb <<= 10;
 
     // Compute initial remainder
@@ -55,11 +54,10 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     sfpi::vInt correction = sfpi::float_to_uint16(r_f * inv_b_f, 0);
 
     // Compute correction * b (full 32-bit result from 24-bit multiplies)
-    sfpi::vInt tmp_lo, tmp_hi, b_hi;
-    tmp_lo.get() = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 0);
-    tmp_hi.get() = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 1);
-    b_hi = b >> 23;
-    b_hi.get() = __builtin_rvtt_sfpmul24(correction.get(), b_hi.get(), 0);
+    sfpi::vInt tmp_lo = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 0);
+    sfpi::vInt tmp_hi = __builtin_rvtt_sfpmul24(correction.get(), b.get(), 1);
+    sfpi::vInt b_hi = b >> 23;
+    b_hi = __builtin_rvtt_sfpmul24(correction.get(), b_hi.get(), 0);
     sfpi::vInt tmp = tmp_lo + ((tmp_hi + b_hi) << 23);
 
     // Extract sign mask of r
