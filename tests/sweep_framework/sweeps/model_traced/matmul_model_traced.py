@@ -110,6 +110,24 @@ def run(
     if "memory_config" not in op_kwargs and output_memory_config is not None:
         op_kwargs["memory_config"] = output_memory_config
 
+    # Validate program_config grid against actual device grid.
+    # Traced configs were captured on a specific device; the grid encoded in
+    # program_config may exceed the current device's core grid, triggering
+    # TT_FATAL: "out_block_w must be …". Clear it when incompatible so the op
+    # falls back to auto-selection — same strategy used in linear_model_traced.py.
+    program_config = op_kwargs.get("program_config", None)
+    if program_config is not None:
+        try:
+            device_grid = device.compute_with_storage_grid_size()
+            cfg_grid = getattr(program_config, "compute_with_storage_grid_size", None)
+            if cfg_grid is not None and (
+                cfg_grid.x > device_grid.x or cfg_grid.y > device_grid.y
+            ):
+                op_kwargs.pop("program_config", None)
+        except Exception:
+            # If we can't validate, drop the program_config to be safe
+            op_kwargs.pop("program_config", None)
+
     # V2 format provides separate shapes for each input
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else shape_a

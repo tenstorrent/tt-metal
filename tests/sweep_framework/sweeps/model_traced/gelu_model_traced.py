@@ -109,9 +109,25 @@ def run(
             )
             if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
                 try:
+                    # Validate that traced shard grid fits within the current device grid.
+                    # Wormhole-traced configs may reference core coordinates absent on
+                    # Blackhole (P150b), causing TT_FATAL "No core coordinate found".
+                    shard_spec = getattr(input_a_memory_config, "shard_spec", None)
+                    if shard_spec is not None:
+                        device_grid = device.compute_with_storage_grid_size()
+                        shard_grid = getattr(shard_spec, "grid", None)
+                        if shard_grid is not None:
+                            bounding = getattr(shard_grid, "bounding_box", None)
+                            if bounding is not None:
+                                end = getattr(bounding, "end", None)
+                                if end is not None and (end.x >= device_grid.x or end.y >= device_grid.y):
+                                    raise ValueError(
+                                        f"Shard grid end ({end.x},{end.y}) exceeds device grid "
+                                        f"({device_grid.x},{device_grid.y}) — skipping sharded placement"
+                                    )
                     input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
-                except Exception:
-                    pass  # Stay on DRAM if shard spec is incompatible
+                except Exception as e:
+                    pass  # Stay on DRAM if shard spec is incompatible with this device
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 

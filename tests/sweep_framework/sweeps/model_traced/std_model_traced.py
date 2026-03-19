@@ -85,8 +85,21 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Read keepdim from op_kwargs if present (traced config), falling back to function param
-    keepdim = op_kwargs.get("keepdim", keepdim)
+    # Traced configs store dim as positional arg1 (SmallVector) and keepdim as arg2.
+    # op_kwargs won't have "keepdim"/"dim" keys — extract directly from kwargs.
+    raw_dim = kwargs.get("arg1", dim)
+    if raw_dim is not None and raw_dim != dim:
+        # SmallVector comes through as a list e.g. [1, 2, 3]
+        if isinstance(raw_dim, (list, tuple)):
+            dim = list(raw_dim)
+        else:
+            dim = raw_dim
+
+    raw_keepdim = kwargs.get("arg2", None)
+    if raw_keepdim is not None:
+        keepdim = bool(int(raw_keepdim)) if not isinstance(raw_keepdim, bool) else raw_keepdim
+    else:
+        keepdim = op_kwargs.get("keepdim", keepdim)
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -96,7 +109,10 @@ def run(
     )(shape)
 
     if dim is None:
-        torch_output_tensor = torch.std(torch_input_tensor_a)
+        torch_output_tensor = torch.std(torch_input_tensor_a, keepdim=keepdim)
+        # Reshape to match ttnn output which always returns at least 1D
+        if keepdim:
+            torch_output_tensor = torch_output_tensor.reshape([1] * len(shape))
     else:
         torch_output_tensor = torch.std(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
@@ -124,11 +140,16 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
+    # Build clean op_kwargs - remove positional arg placeholders that were already parsed
+    op_kwargs.pop("arg1", None)
+    op_kwargs.pop("arg2", None)
+    op_kwargs.pop("keepdim", None)  # handled explicitly via dim/keepdim params
+
     start_time = start_measuring_time()
     if dim is None:
-        output_tensor = ttnn.std(input_tensor_a, **op_kwargs)
+        output_tensor = ttnn.std(input_tensor_a, keepdim=keepdim, **op_kwargs)
     else:
-        output_tensor = ttnn.std(input_tensor_a, dim=dim, **op_kwargs)
+        output_tensor = ttnn.std(input_tensor_a, dim=dim, keepdim=keepdim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

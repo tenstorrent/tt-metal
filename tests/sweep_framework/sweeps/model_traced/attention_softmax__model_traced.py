@@ -90,21 +90,30 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs)
 
-    # Parse input_a_shape - can be tuple/list or dict (from binary operation extraction)
-    if isinstance(input_a_shape, dict):
-        # Binary operation format: {"input_a": shape_a, "input_b": shape_b}
-        shape_a = tuple(input_a_shape.get("input_a", input_a_shape.get("self", [1, 32, 32])))
-        shape_b = tuple(input_a_shape.get("input_b", input_a_shape.get("other", shape_a)))
-    elif isinstance(input_a_shape, (tuple, list)):
-        shape_a = tuple(input_a_shape)
-        shape_b = shape_a  # Mask has same shape as input
+    # Traced positional arg mapping:
+    #   arg0 → input tensor  → input_a_shape/dtype/layout/memory_config (handled by loader)
+    #   arg1 → head_size (int, e.g. 64)  → stored as kwargs["arg1"]
+    #   arg2 → attention_mask tensor      → input_b_shape/dtype/layout/memory_config
+    # Remove positional arg placeholders so they don't get forwarded to the op
+    raw_head_size = kwargs.get("arg1", None)
+    if raw_head_size is not None:
+        head_size = int(raw_head_size)
     else:
-        shape_a = input_a_shape
-        shape_b = shape_a
+        head_size = op_kwargs.get("head_size", int(scalar) if scalar is not None else None)
+    op_kwargs.pop("arg1", None)
+    op_kwargs.pop("arg4", None)  # numeric_stable flag (not supported)
 
-    # Get head_size from op_kwargs if provided (traced configs provide it as a kwarg),
-    # otherwise fall back to scalar
-    head_size = op_kwargs.get("head_size", int(scalar) if scalar is not None else None)
+    # input_a shape
+    shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
+
+    # input_b (attention mask) shape — traced mask is [batch, 1, 1, seq_len], NOT same as input.
+    # The loader stores it under input_b_shape in kwargs.
+    raw_input_b_shape = kwargs.get("input_b_shape", None)
+    if raw_input_b_shape is not None:
+        shape_b = tuple(raw_input_b_shape)
+    else:
+        # Sample suite fallback: use last dim of input as seq_len for mask
+        shape_b = shape_a
 
     # Generate input tensor
     torch_input_tensor = gen_func_with_cast_tt(

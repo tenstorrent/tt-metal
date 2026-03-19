@@ -88,8 +88,19 @@ def run(
         kwargs, exclude={"compute_with_storage_grid_size", "memory_config"}, output_memory_config=output_memory_config
     )
 
-    # Read num_heads from op_kwargs if present (traced config), falling back to function param
-    num_heads = op_kwargs.get("num_heads", num_heads)
+    # Traced configs store num_heads as positional arg2 (not a named kwarg).
+    # The loader maps non-tensor positional args as arg0, arg1, arg2... in kwargs.
+    # arg1=nullopt (kv_input), arg2=num_heads (e.g. "12"), arg3=nullopt (num_kv_heads),
+    # arg4=transpose_key flag.
+    raw_num_heads = kwargs.get("arg2", None)
+    if raw_num_heads is not None:
+        num_heads = int(raw_num_heads)
+    else:
+        num_heads = op_kwargs.get("num_heads", num_heads)
+
+    # Remove positional arg placeholders — do not forward them to the op
+    for k in ("arg1", "arg2", "arg3", "arg4"):
+        op_kwargs.pop(k, None)
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):

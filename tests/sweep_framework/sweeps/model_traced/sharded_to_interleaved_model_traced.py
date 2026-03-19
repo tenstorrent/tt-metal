@@ -147,6 +147,13 @@ def run(
 
         # Validate shard spec fits device before calling interleaved_to_sharded (TT_FATAL can't be caught)
         shard_ok = True
+        # On Blackhole (P150b) some TENSIX cores are reserved for dispatch.
+        # Wormhole-traced shard specs may land on those dispatch cores, triggering
+        # TT_FATAL: "Kernels cannot be placed on dispatch cores!". Skip sharded
+        # placement on Blackhole for Wormhole-originated traced configs.
+        arch_name = ttnn.get_arch_name() if hasattr(ttnn, "get_arch_name") else ""
+        if "blackhole" in str(arch_name).lower():
+            shard_ok = False
         try:
             shard_spec = input_a_memory_config.shard_spec
             if shard_spec is not None:

@@ -232,8 +232,15 @@ def run(
     device_cores = device_grid.x * device_grid.y
 
     program_config = None
+    # Blackhole (P150b) has a larger core grid (13x10=130) than Wormhole (N300).
+    # SDPADecodeProgramConfig requires num_cores_available <= num_cores_in_grid;
+    # a Wormhole-traced config that encodes fewer cores than Blackhole's 130
+    # triggers TT_FATAL. Skip program_config on Blackhole — kernel will auto-select.
+    arch_name = ttnn.get_arch_name() if hasattr(ttnn, "get_arch_name") else ""
+    is_blackhole = "blackhole" in str(arch_name).lower()
+
     pc_dict = kwargs.get("program_config")
-    if isinstance(pc_dict, dict):
+    if isinstance(pc_dict, dict) and not is_blackhole:
         # Check grid size before constructing program config
         cg = pc_dict.get("compute_with_storage_grid_size", {})
         if isinstance(cg, dict):
