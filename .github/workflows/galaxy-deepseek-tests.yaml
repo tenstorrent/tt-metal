@@ -88,7 +88,7 @@ jobs:
 
   # ── T3K fast gate ──────────────────────────────────────────────────────
   # Runs the x migrated module tests on T3K (~30-40s). x = # of migrated tests
-  # These tests use a 1x8 submesh 
+  # These tests use a 1x8 submesh
   t3k-deepseek-gate:
     needs: build-artifact
     if: ${{ contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
