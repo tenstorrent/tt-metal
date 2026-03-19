@@ -190,9 +190,6 @@ class SuffixEmbeddingTTNN:
             bias=self.weights["action_time_mlp_out.bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return x, None
 
@@ -201,6 +198,8 @@ class SuffixEmbeddingTTNN:
         state: ttnn.Tensor,
         noisy_actions: ttnn.Tensor,
         timestep: ttnn.Tensor,
+        state_emb: Optional[ttnn.Tensor] = None,
+        time_emb: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
         """
         Create suffix embeddings using TTNN operations.
@@ -208,7 +207,13 @@ class SuffixEmbeddingTTNN:
         Args:
             state: TTNN tensor (batch_size, state_dim) or None
             noisy_actions: TTNN tensor (batch_size, action_horizon, action_dim)
-            timestep: TTNN tensor (batch_size,)
+            timestep: TTNN tensor (batch_size,). Unused when time_emb is provided.
+            state_emb: Optional pre-computed state embedding (batch_size, 1, expert_width).
+                When provided, skips the state_proj linear and uses this directly.
+                Useful for caching across denoising steps where state is constant.
+            time_emb: Optional pre-computed timestep embedding (batch_size, expert_width).
+                When provided, skips the sinusoidal embedding computation.
+                Useful when all timestep embeddings are pre-computed at init.
 
         Returns:
             Tuple of (suffix_embs, pad_masks, att_masks, adarms_cond)
@@ -222,12 +227,14 @@ class SuffixEmbeddingTTNN:
 
         # Embed state (PI0 only, not PI05)
         if not self.config.pi05:
-            state_emb = self.embed_state(state)
+            if state_emb is None:
+                state_emb = self.embed_state(state)
             if state_emb is not None:
                 embs.append(state_emb)
 
-        # Embed timestep
-        time_emb = self.embed_timestep(timestep)
+        # Embed timestep (skip if pre-computed time_emb provided)
+        if time_emb is None:
+            time_emb = self.embed_timestep(timestep)
 
         # Embed actions
         action_emb = self.embed_actions(noisy_actions)
@@ -271,10 +278,6 @@ class SuffixEmbeddingTTNN:
                 (batch_size, 1),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
-        ttnn.ReadDeviceProfiler(
-            self.device
-        )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         return suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond
 

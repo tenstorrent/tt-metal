@@ -852,9 +852,6 @@ class SigLIPVisionTowerTTNN:
         # Run through TTNN transformer blocks
         for block in self.blocks:
             hidden_states = block.forward(hidden_states)
-            ttnn.ReadDeviceProfiler(
-                self.device
-            )  # Clear device profiler buffer, this helps resolve a issue when building profiler perf sheets
 
         # Final layer norm (on device)
         if self.post_ln_weight is not None:
