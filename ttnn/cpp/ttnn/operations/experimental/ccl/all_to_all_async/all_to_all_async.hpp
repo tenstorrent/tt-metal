@@ -18,6 +18,7 @@ ttnn::Tensor all_to_all_async(
     int32_t in_dim,
     int32_t out_dim,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

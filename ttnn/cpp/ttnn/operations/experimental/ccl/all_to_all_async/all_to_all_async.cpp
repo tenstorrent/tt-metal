@@ -19,11 +19,11 @@ ttnn::Tensor all_to_all_async(
     const int32_t in_dim,
     const int32_t out_dim,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     bool composite_all_to_all_case =
         composite_common::use_composite_all_to_all(input_tensor, in_dim, out_dim, memory_config);
     if (composite_all_to_all_case) {
