@@ -5,7 +5,6 @@
 #include <cmath>
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 #include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
