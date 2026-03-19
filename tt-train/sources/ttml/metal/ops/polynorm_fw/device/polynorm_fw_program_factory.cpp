@@ -4,9 +4,7 @@
 
 #include "polynorm_fw_program_factory.hpp"
 
-#include <cstdlib>
 #include <enchantum/enchantum.hpp>
-#include <string>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -47,24 +45,6 @@ constexpr auto kDebugCbIndex = tt::CBIndex::c_18;
 
 constexpr uint32_t kNumOneTile = 1U;
 
-int get_polynorm_stage_from_env() {
-    constexpr int kMinStage = 0;
-    constexpr int kMaxStage = 10;
-    const char* env = std::getenv("TTML_POLYNORM_FW_STAGE");
-    if (env == nullptr) {
-        return 0;
-    }
-    try {
-        int stage = std::stoi(env);
-        if (stage < kMinStage || stage > kMaxStage) {
-            return 0;
-        }
-        return stage;
-    } catch (...) {
-        return 0;
-    }
-}
-
 struct PolyNormForwardKernels {
     tt::tt_metal::KernelHandle reader{};
     tt::tt_metal::KernelHandle writer{};
@@ -72,6 +52,7 @@ struct PolyNormForwardKernels {
     tt::tt_metal::KernelHandle compute_group_2{};
 };
 
+// Assign reader/writer runtime arguments for every active core.
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const PolyNormForwardKernels& kernels,
@@ -126,6 +107,7 @@ void assign_per_core_runtime_args(
 
 namespace ttml::metal::ops::polynorm_fw::device {
 
+// Build and cache the full PolyNorm forward program (reader/compute/writer kernels + CB layout).
 PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
@@ -146,7 +128,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    const uint32_t block_size = get_block_size(Wt, 4U);
+    constexpr uint32_t block_size = 4U;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
@@ -209,13 +191,6 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     std::map<std::string, std::string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    const uint32_t polynorm_stage = static_cast<uint32_t>(get_polynorm_stage_from_env());
-    defines["POLYNORM_STAGE"] = std::to_string(polynorm_stage);
-    // Toggle to 1 while debugging fused forward internals.
-    constexpr bool kEnablePolyNormDebug = false;
-    if constexpr (kEnablePolyNormDebug) {
-        defines["POLYNORM_DEBUG"] = "1";
-    }
 
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
@@ -223,15 +198,14 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
-    // Bump this to force fresh JIT binaries when debugging kernel behavior.
-    constexpr uint32_t kPolyNormKernelRevision = 13U;
-    std::vector<uint32_t> compute_group_1_args = {
-        num_rows_per_core_group_1, block_size, Wt, polynorm_stage, kPolyNormKernelRevision};
+    // Bump this when compute kernel ABI/logic changes to avoid stale binaries.
+    constexpr uint32_t kPolyNormKernelRevision = 15U;
+    std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size, Wt, kPolyNormKernelRevision};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, true);
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {
-            num_rows_per_core_group_2, block_size, Wt, polynorm_stage, kPolyNormKernelRevision};
+            num_rows_per_core_group_2, block_size, Wt, kPolyNormKernelRevision};
         kernels.compute_group_2 =
             create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, true);
     }
@@ -275,6 +249,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
         }};
 }
 
+// Update runtime addresses/scalars when operation attributes or buffers change.
 void PolyNormForwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
