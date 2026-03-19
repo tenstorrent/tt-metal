@@ -15,7 +15,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tt_metal/llrt # Hack - circular dep, generated dev_msgs.hpp
-        .
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(
