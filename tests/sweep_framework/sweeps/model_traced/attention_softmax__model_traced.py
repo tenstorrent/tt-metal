@@ -209,8 +209,13 @@ def run(
     # Run operation (in-place operation modifies input)
     # Note: attention_softmax_ does NOT support numeric_stable parameter
     # Do NOT use causal_mask parameter - use the binary mask instead
+    # head_size was stored as positional arg1 in traced configs. build_op_kwargs filters
+    # arg* keys, so head_size is NOT in op_kwargs — pass it explicitly here.
+    op_kwargs.pop("head_size", None)  # avoid duplicate if somehow present as named key
     start_time = start_measuring_time()
-    result = ttnn.transformer.attention_softmax_(input_tensor, attention_mask=mask_tensor, **op_kwargs)
+    result = ttnn.transformer.attention_softmax_(
+        input_tensor, head_size=head_size, attention_mask=mask_tensor, **op_kwargs
+    )
     output_tensor = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

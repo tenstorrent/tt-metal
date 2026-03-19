@@ -171,9 +171,13 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
+    # num_heads was stored as positional arg2 in traced configs and is required by the op.
+    # It is NOT included in op_kwargs (arg* keys are filtered by build_op_kwargs),
+    # so pass it explicitly. Pop from op_kwargs in case it snuck in via named key.
+    op_kwargs.pop("num_heads", None)
     # This operation splits QKV and heads - returns tuple of (Q, K, V)
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor_a, **op_kwargs
+        input_tensor_a, num_heads=num_heads, **op_kwargs
     )
     query_tensor = mesh_tensor_to_torch(query_tensor, device if is_mesh_device else None)
     key_tensor = mesh_tensor_to_torch(key_tensor, device if is_mesh_device else None)

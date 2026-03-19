@@ -124,6 +124,16 @@ def run(
                 cfg_grid.x > device_grid.x or cfg_grid.y > device_grid.y
             ):
                 op_kwargs.pop("program_config", None)
+            else:
+                # Also validate the matmul op assertion:
+                #   program_config.out_block_w == per_core_N || program_config.out_block_h == 1
+                # If neither holds, the op will TT_FATAL. Drop config so matmul auto-selects.
+                out_block_w = getattr(program_config, "out_block_w", None)
+                per_core_N = getattr(program_config, "per_core_N", None)
+                out_block_h = getattr(program_config, "out_block_h", None)
+                if out_block_w is not None and per_core_N is not None and out_block_h is not None:
+                    if out_block_w != per_core_N and out_block_h != 1:
+                        op_kwargs.pop("program_config", None)
         except Exception:
             # If we can't validate, drop the program_config to be safe
             op_kwargs.pop("program_config", None)

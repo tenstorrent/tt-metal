@@ -77,6 +77,16 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # Blackhole (P150b) dispatch cores sit at y=0 of the Tensix grid — those
+    # coordinates are absent from the compute grid. Wormhole-traced shard specs
+    # that include y=0 cause "No core coordinate found" TT_FATAL even when the
+    # bounding-box check passes. Strip all sharded memory configs on Blackhole so
+    # both input-placement and output-placement fall back to DRAM.
+    arch_name = ttnn.get_arch_name() if hasattr(ttnn, "get_arch_name") else ""
+    is_blackhole = "blackhole" in str(arch_name).lower()
+    if is_blackhole:
+        op_kwargs.pop("memory_config", None)
+
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     torch_input_tensor_a = gen_func_with_cast_tt(
@@ -107,11 +117,11 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded() and not is_blackhole:
                 try:
                     # Validate that traced shard grid fits within the current device grid.
                     # Wormhole-traced configs may reference core coordinates absent on
-                    # Blackhole (P150b), causing TT_FATAL "No core coordinate found".
+                    # other hardware, causing TT_FATAL "No core coordinate found".
                     shard_spec = getattr(input_a_memory_config, "shard_spec", None)
                     if shard_spec is not None:
                         device_grid = device.compute_with_storage_grid_size()
