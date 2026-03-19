@@ -715,7 +715,7 @@ def _enrich_ops_from_device_logs(
                     f"on device {device} (likely trace replay dispatch entries)"
                 )
             else:
-                assert False, "Unrecognized dispatch OPs are presentent by dispatch cores"
+                assert False, "Unrecognized dispatch OPs are presented by dispatch cores"
 
         if len(host_ops_by_device[device]) != len(device_ops_time):
             device_op_id_debug = None
