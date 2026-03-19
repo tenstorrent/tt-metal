@@ -434,7 +434,17 @@ void kernel_main() {
             const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
 
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+            for (uint32_t q_iter = 0; q_iter < (global_q_end - global_q_start); ++q_iter) {
+                // Linear flat index for this iteration
+                uint32_t linear_flat = global_q_start + q_iter;
+
+#if defined BALANCED_Q_PARALLEL
+                // Apply per-head zigzag for load balancing
+                uint32_t global_q_chunk = linear_to_zigzag(linear_flat, num_q_chunks);
+#else
+                uint32_t global_q_chunk = linear_flat;
+#endif
+
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
@@ -493,7 +503,17 @@ void kernel_main() {
             }
             noc_async_write_barrier();
         } else {
-            for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+            for (uint32_t q_iter = 0; q_iter < (global_q_end - global_q_start); ++q_iter) {
+                // Linear flat index for this iteration
+                uint32_t linear_flat = global_q_start + q_iter;
+
+#if defined BALANCED_Q_PARALLEL
+                // Apply per-head zigzag for load balancing
+                uint32_t global_q_chunk = linear_to_zigzag(linear_flat, num_q_chunks);
+#else
+                uint32_t global_q_chunk = linear_flat;
+#endif
+
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;

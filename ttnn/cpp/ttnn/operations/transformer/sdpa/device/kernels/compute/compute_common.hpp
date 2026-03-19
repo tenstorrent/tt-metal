@@ -10,6 +10,26 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/debug/assert.h"
+
+/**
+ * Convert linear flat index to zigzag flat index for per-head load balancing.
+ * See dataflow_common.hpp for full documentation.
+ */
+ALWI uint32_t linear_to_zigzag(uint32_t linear_flat, uint32_t num_q_chunks) {
+    const uint32_t head_idx = linear_flat / num_q_chunks;
+    const uint32_t pos_in_head = linear_flat % num_q_chunks;
+
+    uint32_t q_chunk;
+    if (pos_in_head % 2 == 0) {
+        // Even positions: forward from start
+        q_chunk = pos_in_head / 2;
+    } else {
+        // Odd positions: backward from end
+        q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
+    }
+    return head_idx * num_q_chunks + q_chunk;
+}
+
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"

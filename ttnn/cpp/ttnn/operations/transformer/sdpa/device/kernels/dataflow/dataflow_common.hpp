@@ -10,6 +10,41 @@
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
 
+/**
+ * Convert linear flat index to zigzag flat index for per-head load balancing.
+ *
+ * In causal attention with is_balanced=true, Q chunks in the first half of each head
+ * (positions 0 to num_q_chunks/2-1) process fewer KV chunks than Q chunks in the
+ * second half. This creates work imbalance when cores process consecutive Q chunks.
+ *
+ * Per-head zigzag interleaves light and heavy work within each core:
+ *   - Even positions (0, 2, 4, ...) map to forward indices: 0, 1, 2, 3, ...
+ *   - Odd positions (1, 3, 5, ...) map to backward indices: N-1, N-2, N-3, ...
+ *
+ * Example with num_q_chunks=20:
+ *   pos 0 -> q_chunk 0  (light)
+ *   pos 1 -> q_chunk 19 (heavy)
+ *   pos 2 -> q_chunk 1  (light)
+ *   pos 3 -> q_chunk 18 (heavy)
+ *   ...
+ *
+ * This works for ANY division of work across cores (no exact division constraint).
+ */
+FORCE_INLINE uint32_t linear_to_zigzag(uint32_t linear_flat, uint32_t num_q_chunks) {
+    const uint32_t head_idx = linear_flat / num_q_chunks;
+    const uint32_t pos_in_head = linear_flat % num_q_chunks;
+
+    uint32_t q_chunk;
+    if (pos_in_head % 2 == 0) {
+        // Even positions: forward from start
+        q_chunk = pos_in_head / 2;
+    } else {
+        // Odd positions: backward from end
+        q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
+    }
+    return head_idx * num_q_chunks + q_chunk;
+}
+
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
     return ((512 / num_readers) * (1024 + 128)) / tile_bytes;

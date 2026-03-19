@@ -528,6 +528,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
+    // Enable per-head zigzag for load balancing in balanced causal mode
+    // Requires even num_q_chunks for symmetric light/heavy work distribution
+    bool balanced_q_parallel = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
+    if (balanced_q_parallel) {
+        defines["BALANCED_Q_PARALLEL"] = "1";
+    }
+
+    // Emit warning if is_balanced is requested but num_q_chunks is odd
+    if (args.is_balanced && args.is_causal && (num_q_chunks % 2 != 0)) {
+        log_warning(
+            tt::LogOp,
+            "Balanced work distribution requested but num_q_chunks ({}) is odd. "
+            "Zigzag pattern requires even num_q_chunks for symmetric distribution. "
+            "Falling back to imbalanced distribution.",
+            num_q_chunks);
+    }
+
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
 
