@@ -106,13 +106,17 @@ void kernel_main() {
     constexpr uint32_t max_batch_size = (in0_B > in1_B) ? in0_B : in1_B;
     for (uint32_t b = 0; b < max_batch_size; ++b) {
         if (in0_B == 1 && in1_B > 1 && b > 0) {
-            // DPRINT << "in 0 reader, batch " << b << "dummy reading " << in0_block_num_tiles << " tiles from DRAM" <<
-            // ENDL();
-            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-            // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
-            // DPRINT_DATA1({ DPRINT << " in0 reader - batch: " << b << " data at read pointer: " << TileSlice(0, 0, sr,
-            // TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true,false) << ENDL(); });
-            cb_push_back(cb_id_in0, in0_block_num_tiles);
+            for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
+                // DPRINT << "in 0 reader, batch " << b << " starting dummy reading " << in0_block_num_tiles << " tiles
+                // from DRAM" << ENDL();
+                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                // DPRINT_DATA1({ DPRINT << " in0 reader - batch: " << b << " data at read pointer: " << TileSlice(0, 0,
+                // sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true,false) << ENDL(); });
+                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                // DPRINT << "in 0 reader, batch " << b << " finished dummy reading " << in0_block_num_tiles << " tiles
+                // from DRAM" << ENDL();
+            }
         } else {
             uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
