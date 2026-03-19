@@ -160,6 +160,8 @@ void kernel_main() {
     // DPRINT << "after find_last_active_ring_iter: " << fused_op_receiver.seq.transfer_idx << ENDL();
     DPRINT << "last_active_ring_iter: " << last_active_ring_iter << ENDL();
 
+    uint32_t chunks_signaled_by_remote = 0;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -251,6 +253,13 @@ void kernel_main() {
                         kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }
+                }
+
+                // Per-chunk sync: wait for remote MUX writers to finish writing this chunk
+                if (is_injector && ring_iter > 0 && !kv_chunk_is_joint) {
+                    chunks_signaled_by_remote++;
+                    noc_semaphore_wait_min(
+                        fused_op_receiver.signal_op_semaphore_addr_ptr, chunks_signaled_by_remote * 2);
                 }
 
                 // K: either read locally (injector or not participant) or receive from previous core
