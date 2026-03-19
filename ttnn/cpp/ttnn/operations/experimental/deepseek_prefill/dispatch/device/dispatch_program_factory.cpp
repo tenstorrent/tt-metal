@@ -149,7 +149,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
-    uint32_t effective_num_links = num_links >= 2 ? 2u : 1u;
+    uint32_t effective_num_links = std::min(num_links, 4u);
     TT_FATAL(
         subdevice_cores.size() >= effective_num_links,
         "Not enough cores {} for {} links",
