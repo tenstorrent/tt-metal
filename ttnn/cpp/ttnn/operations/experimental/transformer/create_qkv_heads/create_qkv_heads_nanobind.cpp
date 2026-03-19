@@ -11,7 +11,6 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
-#include <nanobind/stl/tuple.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/transformer/create_qkv_heads/create_qkv_heads.hpp"
