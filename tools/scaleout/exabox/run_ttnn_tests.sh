@@ -112,18 +112,22 @@ echo "Slurm nodelist: $NODELIST"
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
+
+LOG_FILE="$OUTPUT_DIR/ttnn_tests_$(date +%Y%m%d_%H%M%S).log"
+
 WORK_DIR=/workspace
 
-LOG_FILE="$OUTPUT_DIR/ttnn_validation.log"
-
-srun \
+{
+    # mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+    # sleep 1
+    echo "Starting ttnn tests at $(date)"
+    srun \
     --partition=$PARTITION \
     docker run \
     --rm --device /dev/tenstorrent \
     -v $(pwd):/workspace \
-    -e TT_VISIBLE_DEVICES=13 \
     --entrypoint="" \
     $DOCKER_IMAGE \
     pytest -o cache_dir=/tmp/.pytest_cache /workspace/${SCRIPT_PATH}
-
+} 2>&1 | tee "$LOG_FILE"
 echo "Done."
