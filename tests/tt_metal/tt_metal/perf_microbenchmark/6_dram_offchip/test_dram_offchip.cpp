@@ -34,10 +34,9 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -155,9 +154,9 @@ int main(int argc, char** argv) {
             test_args::validate_remaining_args(input_args);
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
-            TT_ASSERT(false);
+            TT_FATAL(false, "Command line arguments found exception: {}", e.what());
         }
-        TT_ASSERT(input_size != 0, "--input-size should not be zero");
+        TT_FATAL(input_size != 0, "--input-size should not be zero");
 
         if (use_device_profiler) {
             bool device_profiler = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled();
@@ -256,7 +255,7 @@ int main(int argc, char** argv) {
                 } else if (core_group_2.contains(core)) {
                     num_tiles_per_core = num_tiles_per_core_group_2;
                 } else {
-                    TT_ASSERT(false, "Core not in specified core ranges");
+                    TT_FATAL(false, "Core not in specified core ranges");
                 }
                 auto write_size = num_reqs_at_a_time * 512;
                 auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
@@ -443,7 +442,7 @@ bool assign_runtime_args_to_program(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            TT_ASSERT(false, "Core not in specified core ranges");
+            TT_FATAL(false, "Core not in specified core ranges");
         }
         uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
         const std::array kernel_args = {
@@ -483,7 +482,7 @@ bool validation(
             } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                TT_FATAL(false, "Core not in specified core ranges");
             }
 
             std::vector<uint32_t> result_vec;
@@ -516,7 +515,7 @@ bool validation(
             } else if (core_group_2.contains(core)) {
                 num_tiles_per_core = num_tiles_per_core_group_2;
             } else {
-                TT_ASSERT(false, "Core not in specified core ranges");
+                TT_FATAL(false, "Core not in specified core ranges");
             }
 
             uint32_t num_blocks = num_tiles_per_core / num_reqs_at_a_time;
@@ -538,14 +537,11 @@ bool validation(
 }
 
 uint32_t get_dram_bandwidth(tt::ARCH arch) {
-    constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
     }
     return dram_bandwidth_gb_per_sec;
 }

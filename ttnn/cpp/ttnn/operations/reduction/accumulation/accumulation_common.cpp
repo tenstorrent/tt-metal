@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_common.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn::operations::reduction::accumulation::common {
@@ -71,6 +73,7 @@ Tensor postprocess_output_tensor(
 }
 
 void validate_output_tensor(const Tensor& input_tensor, const Tensor& output_tensor) {
+    TT_FATAL(is_device_tensor(output_tensor), "Preallocated output tensor must be on device");
     TT_FATAL(
         input_tensor.logical_shape() == output_tensor.logical_shape(),
         "Shape mismatch: input tensor shape {} does not match output tensor shape {}.",
@@ -85,12 +88,26 @@ Tensor accumulation_invoke(
     std::optional<Tensor> optional_out,
     const bool& reverse_order,
     const std::optional<MemoryConfig>& memory_config,
-    AccumulationOp op) {
+    ttnn::prim::AccumulationOp op) {
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 
+    if (optional_out.has_value()) {
+        validate_output_tensor(input_tensor, *optional_out);
+    }
+
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
-        return input_tensor;
+        if (!optional_out.has_value()) {
+            return ttnn::clone(
+                input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
+        }
+
+        Tensor& preallocated_tensor = optional_out.value();
+        // It only makes sense to copy non-zero volume tensor.
+        if (input_tensor.logical_volume() > 0) {
+            ttnn::copy(input_tensor, preallocated_tensor);
+        }
+        return preallocated_tensor;
     }
 
     TT_FATAL(
@@ -102,10 +119,6 @@ Tensor accumulation_invoke(
 
     // Normalize negative dim
     const int32_t cum_axis = (dim < 0) ? (dim + input_rank) : dim;
-
-    if (optional_out.has_value()) {
-        validate_output_tensor(input_tensor, *optional_out);
-    }
 
     Tensor wip_tensor = input_tensor;
     ttnn::SmallVector<int64_t> permutation;
@@ -121,7 +134,10 @@ Tensor accumulation_invoke(
         op);
     wip_tensor = common::postprocess_output_tensor(wip_tensor, cum_axis, permutation, input_shape, input_rank);
     if (optional_out.has_value()) {
-        optional_out->storage() = wip_tensor.storage();
+        // TODO(#37807):
+        // This is a temporary fix, the op needs to be refactored to apply the output directly to optional_out,
+        // or pass in optional_out as a reference.
+        optional_out->tensor_attributes->get_storage() = wip_tensor.tensor_attributes->get_storage();
     }
     return wip_tensor;
 }

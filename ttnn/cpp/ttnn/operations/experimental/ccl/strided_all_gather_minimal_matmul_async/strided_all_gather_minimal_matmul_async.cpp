@@ -5,9 +5,9 @@
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
+std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
@@ -20,7 +20,7 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
     std::optional<uint32_t> cluster_axis,
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
-    const std::optional<const minimal_matmul::MinimalMatmulConfig>& config,
+    const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
     const std::optional<ttnn::MemoryConfig>& memory_config_mm,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> num_workers_per_link,
@@ -48,4 +48,4 @@ std::vector<ttnn::Tensor> ExecuteStridedAllGatherMinimalMatmulAsync::invoke(
         read_local_slice_from_input);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

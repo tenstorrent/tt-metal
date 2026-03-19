@@ -3,17 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 // HW-bcast scale for fused scale-attn-softmax
 FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
+    experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
     uint32_t u = get_arg_val<uint32_t>(1);
-    cb_reserve_back(cb_fused_scale, 1);
-    auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_fused_scale));
+    cb_fused_scale_obj.reserve_back(1);
+    auto ptr = reinterpret_cast<uint16_t*>(cb_fused_scale_obj.get_write_ptr());
     ptr[0] = u >> 16;
-    cb_push_back(cb_fused_scale, 1);
+    cb_fused_scale_obj.push_back(1);
 }
 
 void kernel_main() {
@@ -33,26 +37,30 @@ void kernel_main() {
 
     const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_attn_obj(cb_attn);
+
     constexpr auto cb_fused_scale = tt::CBIndex::c_2;
     const uint32_t pre_scale = get_arg_val<uint32_t>(1);
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 
     constexpr uint32_t block_ht = get_compile_time_arg_val(mask_args.next_compile_time_args_offset() + 2);
     for (uint32_t h = 0; h < block_ht; h++) {
-        cb_reserve_back(cb_attn, block_wt);
-        uint32_t l1_write_addr = get_write_ptr(cb_attn);
+        cb_attn_obj.reserve_back(block_wt);
+        uint32_t write_offset = 0;
         for (uint32_t w = 0; w < block_wt; w++) {
-            noc_async_read_tile(mask_id, addr_mask, l1_write_addr);
-            l1_write_addr += mask_tile_bytes;
+            noc.async_read(
+                addr_mask, cb_attn_obj, mask_tile_bytes, {.page_id = mask_id}, {.offset_bytes = write_offset});
+            write_offset += mask_tile_bytes;
             ++mask_id;
 
             if (h == 0 && w == 0) {
                 generate_reduce_scaler(cb_reduce_scaler, reduce_scaler);
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
-        cb_push_back(cb_attn, block_wt);
+        cb_attn_obj.push_back(block_wt);
         if (mask_id == mask_num_tiles) {
             mask_id = 0;
         }

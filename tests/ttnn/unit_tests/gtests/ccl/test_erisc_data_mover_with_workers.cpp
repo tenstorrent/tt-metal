@@ -30,11 +30,10 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -51,8 +50,6 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "common/tt_backend_api_types.hpp"
-
-// #include <tt-metalium/kernel_types.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -466,9 +463,8 @@ bool RunWriteBWTest(
 
     const uint32_t num_bytes_per_send = local_chip_edm_builder.get_eth_buffer_size_bytes();
     const uint32_t pages_per_send = num_bytes_per_send / page_size;
-    TT_ASSERT(num_bytes_per_send > 0);
-    TT_ASSERT(num_bytes_per_send >= page_size);
-    TT_ASSERT(num_bytes_per_send >= page_size);
+    TT_FATAL(num_bytes_per_send > 0, "num_bytes_per_send must be greater than 0");
+    TT_FATAL(num_bytes_per_send >= page_size, "num_bytes_per_send must be at least page_size");
     const uint32_t num_messages_to_send = (((num_pages_total * page_size) - 1) / num_bytes_per_send) + 1;
     log_info(tt::LogTest, "num_bytes_per_send={}", num_bytes_per_send);
     log_info(tt::LogTest, "page_size={}", page_size);
@@ -657,7 +653,7 @@ bool RunWriteBWTest(
             return false;
         }
         bool pass = (readback_data_vec == inputs);
-        TT_ASSERT(
+        TT_FATAL(
             std::any_of(inputs.begin(), inputs.end(), [](uint32_t x) { return x != 0; }),
             "Input buffer expected to not be all 0");
         if (not pass) {
@@ -707,14 +703,9 @@ int TestEntrypoint(
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_info(tt::LogTest, "This test can only be run on n300 devices");
-        return 0;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 
@@ -735,7 +726,7 @@ int TestEntrypoint(
         eth_sender_core = *eth_sender_core_iter;
         eth_sender_core_iter++;
     } while (device_id != 1);
-    TT_ASSERT(device_id == 1);
+    TT_FATAL(device_id == 1, "Expected device_id to be 1");
     const auto& mesh_device_1 = test_fixture.devices_.at(device_id);
 
     bool success = false;

@@ -1,0 +1,206 @@
+# =============================================================================
+# Shared TTNN Test Definitions
+# =============================================================================
+# This file defines all TTNN unit test groups used by both:
+#   - ttnn-post-commit.yaml (hardware CI)
+#   - ttsim.yaml (simulator CI)
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# Optional: merge_gate (filter in workflow), ttsim (for TTSim), fast_runtime_mode_off.
+# =============================================================================
+
+- name: "ttnn example tests"
+  cmd: "./tests/scripts/run_ttnn_examples.sh"
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  merge_gate: true
+  ttsim: false
+
+- name: "ttnn eltwise group 1"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn eltwise group 2"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn eltwise group 3"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn eltwise group 4"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn eltwise group 5"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn conv group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn fused group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn transformers group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn sdpa group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: false  # SDPA tests require device
+
+- name: "ttnn reduce and misc ops group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "core ttnn unit test group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  merge_gate: false
+  ttsim: true

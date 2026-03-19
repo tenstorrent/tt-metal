@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::test_utils {
 
@@ -46,7 +46,7 @@ float pcc(const std::vector<float>& x, const std::vector<float>& y) {
     return numerator / denominator;
 }
 
-Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
+Tensor dispatch_ops_to_device(const Tensor& input_tensor, QueueId cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 

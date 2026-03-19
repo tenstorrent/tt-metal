@@ -23,9 +23,11 @@
 #include <filesystem>
 
 #include <tt_stl/concepts.hpp>
+#include <tt_stl/small_vector.hpp>
 #include <nlohmann/json.hpp>
 #include <enchantum/scoped.hpp>
 #include <tt_stl/type_name.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 // NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
@@ -339,56 +341,15 @@ inline std::ostream& operator<<(std::ostream& os, const Attribute& attribute) {
     return os;
 }
 
-template <typename T>
-typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
-    std::ostream& os, const T& object) {
-    if constexpr (detail::supports_to_string_v<T>) {
-        os << object.to_string();
-    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
-        constexpr auto num_attributes = detail::get_num_attributes<T>();
-        os << get_type_name<T>();
-        os << "(";
-
-        if constexpr (num_attributes > 0) {
-            const auto attribute_values = object.attribute_values();
-            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
-                (
-                    [&os, &object, &attribute_values] {
-                        const auto& attribute = std::get<Ns>(attribute_values);
-                        os << std::get<Ns>(object.attribute_names);
-                        os << "=";
-                        os << attribute;
-                        os << ",";
-                    }(),
-                    ...);
-            }(std::make_index_sequence<num_attributes - 1>{});
-
-            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
-            os << std::get<num_attributes - 1>(object.attribute_names);
-            os << "=";
-            os << attribute;
-        }
-
-        os << ")";
-    } else {
-        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
-    }
-    return os;
-}
-
-template <typename T>
-typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
-    os << enchantum::scoped::to_string(value);
-    return os;
-}
-
+// Container operator<< definitions must come before the generic template below,
+// otherwise `os << attribute` will match `operator<<(ostream&, const Attribute&)` via implicit conversion.
 template <typename T1, typename T2>
 std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
     os << "{" << pair.first << ", " << pair.second << "}";
     return os;
 }
 
-static std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
+inline std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
     os << path.c_str();
     return os;
 }
@@ -493,6 +454,12 @@ std::ostream& operator<<(std::ostream& os, const std::unordered_map<K, V>& map) 
 }
 
 template <typename T>
+typename std::enable_if_t<std::is_enum_v<T>, std::ostream>& operator<<(std::ostream& os, const T& value) {
+    os << enchantum::scoped::to_string(value);
+    return os;
+}
+
+template <typename T>
     requires(ttsl::concepts::Reflectable<T> and not(std::integral<T> or std::is_array_v<T>))
 std::ostream& operator<<(std::ostream& os, const T& object) {
     os << reflect::type_name(object);
@@ -508,6 +475,45 @@ std::ostream& operator<<(std::ostream& os, const T& object) {
         object);
 
     os << ")";
+    return os;
+}
+
+// This template must be placed after the Reflectable operator<< to ensure proper
+// name lookup when printing objects that contain Reflectable fields.
+template <typename T>
+typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostream>& operator<<(
+    std::ostream& os, const T& object) {
+    if constexpr (detail::supports_to_string_v<T>) {
+        os << object.to_string();
+    } else if constexpr (detail::supports_compile_time_attributes_v<T>) {
+        constexpr auto num_attributes = detail::get_num_attributes<T>();
+        os << get_type_name<T>();
+        os << "(";
+
+        if constexpr (num_attributes > 0) {
+            const auto attribute_values = object.attribute_values();
+            [&os, &object, &attribute_values]<std::size_t... Ns>(std::index_sequence<Ns...>) {
+                (
+                    [&os, &object, &attribute_values] {
+                        const auto& attribute = std::get<Ns>(attribute_values);
+                        os << std::get<Ns>(object.attribute_names);
+                        os << "=";
+                        os << attribute;
+                        os << ",";
+                    }(),
+                    ...);
+            }(std::make_index_sequence<num_attributes - 1>{});
+
+            const auto& attribute = std::get<num_attributes - 1>(attribute_values);
+            os << std::get<num_attributes - 1>(object.attribute_names);
+            os << "=";
+            os << attribute;
+        }
+
+        os << ")";
+    } else {
+        static_assert(ttsl::concepts::always_false_v<T>, "Type cannot be converted to string");
+    }
     return os;
 }
 
@@ -532,7 +538,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& /*callback*/, T&& /*value*/) const {
-        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
     }
 
     template <typename object_t>
@@ -544,7 +550,7 @@ struct visit_object_of_type_t<T> {
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
     void operator()(auto&& /*callback*/, const T& /*value*/) const {
-        throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
     }
 };
 
@@ -929,148 +935,43 @@ struct get_first_object_of_type_t<T> {
 };
 
 }  // namespace reflection
+
+// operator<< for SmallVector lives in namespace ttsl (same as SmallVector)
+// so that ADL finds it from any call site.
+template <typename T, std::size_t PREALLOCATED_SIZE>
+std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
+    os << "SmallVector([";
+    for (std::size_t i = 0; i < vec.size(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        using ttsl::reflection::operator<<;
+        os << vec[i];
+    }
+    os << "])";
+    return os;
+}
+
 }  // namespace ttsl
 
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+// fmt::formatter specializations for standard containers, enums, filesystem::path,
+// and SmallVector are provided by the lightweight <tt_stl/fmt.hpp> header (included above)
+// so that translation units that only need formatting can avoid the heavy <reflect> and
+// <nlohmann/json.hpp> includes.
+//
+// The formatters below are for types that require the full reflection machinery.
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+template <typename T>
+struct fmt::formatter<
+    T,
+    char,
+    std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T> && !ttsl::is_strong_type_v<T>>> {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << value;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <>
-struct fmt::formatter<std::filesystem::path> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::filesystem::path& path, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << path;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::optional<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::optional<T>& optional, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << optional;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename... Ts>
-struct fmt::formatter<std::variant<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::variant<Ts...>& variant, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << variant;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::reference_wrapper<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::reference_wrapper<T> reference, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << reference;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename... Ts>
-struct fmt::formatter<std::tuple<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::tuple<Ts...>& tuple, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << tuple;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T, std::size_t N>
-struct fmt::formatter<std::array<T, N>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::array<T, N>& array, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << array;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::vector<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::vector<T>& vector, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << vector;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::set<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::set<T>& set, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << set;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename K, typename V>
-struct fmt::formatter<std::map<K, V>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << map;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename K, typename V>
-struct fmt::formatter<std::unordered_map<K, V>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::unordered_map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << map;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -1080,9 +981,9 @@ template <typename T>
         ttsl::concepts::Reflectable<T> and
         not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
@@ -1090,8 +991,7 @@ struct fmt::formatter<T> {
     }
 };
 
-namespace ttsl {
-namespace hash {
+namespace ttsl::hash {
 
 namespace detail {
 template <typename T, typename = std::void_t<>>
@@ -1281,9 +1181,20 @@ void hash_combine(std::size_t& seed, const T& value) {
     seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
-}  // namespace hash
+}  // namespace ttsl::hash
 
-namespace json {
+template <typename T, size_t PREALLOCATED_SIZE>
+struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
+        size_t hash = 0;
+        for (const auto& element : vec) {
+            hash = ttsl::hash::detail::hash_objects(hash, element);
+        }
+        return hash;
+    }
+};
+
+namespace ttsl::json {
 
 template <typename T>
     requires std::is_integral_v<T> or std::is_floating_point_v<T> or std::is_enum_v<T>
@@ -1607,6 +1518,28 @@ struct from_json_t<T> {
     }
 };
 
+template <typename T, size_t PREALLOCATED_SIZE>
+struct to_json_t<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    nlohmann::json operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector) const {
+        nlohmann::json json_array = nlohmann::json::array();
+        for (const auto& element : vector) {
+            json_array.push_back(to_json(element));
+        }
+        return json_array;
+    }
+};
+
+template <typename T, size_t PREALLOCATED_SIZE>
+struct from_json_t<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+    ttsl::SmallVector<T, PREALLOCATED_SIZE> operator()(const nlohmann::json& json_object) const {
+        ttsl::SmallVector<T, PREALLOCATED_SIZE> vector;
+        for (const auto& element : json_object) {
+            vector.push_back(from_json<T>(element));
+        }
+        return vector;
+    }
+};
+
 template <typename T>
 struct to_json_t {
     nlohmann::json operator()(const T& /*optional*/) noexcept {
@@ -1614,8 +1547,7 @@ struct to_json_t {
     }
 };
 
-}  // namespace json
-}  // namespace ttsl
+}  // namespace ttsl::json
 
 namespace tt {
 namespace [[deprecated("Use ttsl namespace instead")]] stl {

@@ -14,8 +14,8 @@ from models.demos.deepseek_v3.utils.hf_model_utils import (
     add_dynamic_weight_loading_hooks,
     add_gc_hooks,
     add_model_io_logging_hooks,
+    index_model_weights,
     load_model_uninitialized,
-    load_model_weights,
     load_tokenizer,
 )
 
@@ -167,8 +167,8 @@ def main():
     print("Model loaded successfully")
 
     # Load the model weights
-    print("Loading model weights")
-    weights_dict = load_model_weights(args.local_model_path)
+    print("Indexing model weights lazily")
+    weights_dict = index_model_weights(args.local_model_path)
     add_dynamic_weight_loading_hooks(
         model,
         weights_dict,
@@ -253,8 +253,8 @@ def main():
     for tok_idx in range(args.num_decode_tokens):
         print(f"Running the decode phase {tok_idx + 1}/{args.num_decode_tokens}")
         input_ids = model_inputs.input_ids[:, -args.num_decode_tokens + tok_idx - 1 : -args.num_decode_tokens + tok_idx]
-        attention_mask = torch.full(
-            (input_ids.shape[0], model_inputs.input_ids.shape[1] - args.num_decode_tokens + tok_idx + 1), float("-inf")
+        attention_mask = torch.ones(
+            (input_ids.shape[0], model_inputs.input_ids.shape[1] - args.num_decode_tokens + tok_idx + 1)
         )
         log_dict.update({layer_group: [] for layer_group in log_dict})
         with torch.no_grad():

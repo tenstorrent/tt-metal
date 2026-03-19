@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/reshuffle.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/reshuffle.h"
+#include "api/compute/tile_move_copy.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t tiles_per_core = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t max_tiles_per_core = get_compile_time_arg_val(0);
@@ -53,7 +52,7 @@ void MAIN {
 
                 reshuffle_rows_tile_init();
                 // reshuffle_rows_tile expects that tiles have a header of 16 bytes.
-                // This isn't true, so we have to substract 16 bytes from the address.
+                // This isn't true, so we have to subtract 16 bytes from the address.
                 // Check implementation of reshuffle_rows_tile in LLK for more details.
                 // tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_reshuffle_rows.h
                 reshuffle_rows_tile(0, idx_addr - 16);
@@ -73,4 +72,3 @@ void MAIN {
         cb_pop_front(cb_grad, max_tiles_per_core);
     }
 }
-}  // namespace NAMESPACE

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <stdint.h>
+#include <cstdint>
+#include <bitset>
 #include <span>
 #include <tt_stl/aligned_allocator.hpp>
 #include <functional>
@@ -15,9 +16,15 @@
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build_options.hpp"
 #include <umd/device/types/arch.hpp>
-#include "llrt/hal.hpp"
+
+namespace tt::llrt {
+class RunTimeOptions;
+}
 
 namespace tt::tt_metal {
+
+struct JitDeviceConfig;
+class Hal;
 
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 
@@ -50,11 +57,13 @@ public:
     JitBuildEnv();
     void init(
         uint64_t build_key,
-        size_t fw_compile_hash,
-        tt::ARCH arch,
+        const JitDeviceConfig& config,
+        const tt::llrt::RunTimeOptions& rtoptions,
         const std::map<std::string, std::string>& device_kernel_defines);
 
     tt::ARCH get_arch() const { return arch_; }
+    uint32_t get_max_cbs() const { return max_cbs_; };
+    const tt::llrt::RunTimeOptions& get_rtoptions() const { return *rtoptions_; }
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
@@ -63,14 +72,23 @@ public:
     }  // Path to the firmware directory for this device
     uint64_t get_build_key() const { return build_key_; }
 
+    // Where firmware binaries are loaded/linked from. Defaults to out_firmware_root_.
+    // May differ when binaries are provided from an external source.
+    const std::string& get_firmware_binary_root() const { return firmware_binary_root_; }
+    void set_firmware_binary_root(const std::string& path) { firmware_binary_root_ = path; }
+
 private:
+    const tt::llrt::RunTimeOptions* rtoptions_{nullptr};
+
     tt::ARCH arch_{tt::ARCH::Invalid};
+    uint32_t max_cbs_{};
 
     // Paths
     std::string root_;
     std::string out_root_;
     std::string out_firmware_root_;
     std::string out_kernel_root_;
+    std::string firmware_binary_root_;
 
     // Tools
     std::string gpp_;
@@ -94,7 +112,6 @@ protected:
     bool is_fw_;
     bool process_defines_at_compile_{};
     bool firmware_is_kernel_object_{};
-    uint32_t dispatch_message_addr_;
 
     std::string out_path_;
     std::string target_name_;
@@ -108,8 +125,10 @@ protected:
 
     vector_cache_aligned<std::string> srcs_;
     vector_cache_aligned<std::string> objs_;
+    vector_cache_aligned<std::string> temp_objs_;
 
-    std::string link_objs_;
+    std::string extra_link_objs_;
+    std::string weakened_firmware_name_;
 
     // Default compiler optimization setting
     // Used when JitBuildSettings is not provided
@@ -119,39 +138,61 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
+    // Hash of all effective compilation/linking parameters (including HAL-populated flags).
+    // Used to detect when build flags change between runs so that stale cached objects
+    // are not reused.  Written to a ".build_state" file in the output directory.
+    uint64_t build_state_hash_{};
+
+    // Upper bound for compile objects.
+    // Current max obj count is 2 -- very sufficient for now.
+    static constexpr size_t kMaxBuildBitset = 64;
+
+    bool build_state_matches(const std::string& out_dir) const;
+    void write_build_state_hash(const std::string& out_dir) const;
+
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    size_t compile(const std::string& out_dir, const JitBuildSettings* settings) const;
-    void compile_one(
-        const std::string& out_dir,
-        const JitBuildSettings* settings,
-        const std::string& src,
-        const std::string& obj) const;
+    std::bitset<kMaxBuildBitset> compile(
+        const std::string& out_dir, const JitBuildSettings* settings, bool state_changed) const;
+    void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
     bool need_link(const std::string& out_dir) const;
-    void link(const std::string& out_dir, const JitBuildSettings* settings) const;
+    void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
-    std::string weakened_firmware_name() const;
     void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
-    JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
+    JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal);
 
-    void build(const JitBuildSettings* settings) const;
+    void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
+
     const std::string& get_out_path() const { return this->out_path_; }
-    const std::string& get_target_name() const { return this->target_name_; };
-    ;
+    const std::string& get_target_name() const { return this->target_name_; }
+    const std::string& get_target_full_path() const { return this->target_full_path_; }
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }
 };
 
-// Exracts a slice of builds from JitBuildStates
+// Extracts a slice of builds from JitBuildStates
 // Used for parallel building a subset of the builds, builds all members in one call
 using JitBuildStateSubset = std::span<const JitBuildState>;
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings);
 
+// Build for multiple processors that share the same source: the first target compiles,
+// and all targets (including the first) are linked. Writes the success marker once after all succeed.
+void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings);
+
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events);
 void sync_build_steps(std::vector<std::shared_future<void>>& events);
+
+// Execute build_fn exactly once for a given hash.
+// Concurrent callers with the same hash block until the build completes.
+// Returns immediately if hash was already built.
+// If build_fn throws, subsequent callers will retry.
+void jit_build_once(size_t hash, const std::function<void()>& build_fn);
+
+// Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
+void jit_build_cache_clear();
 
 }  // namespace tt::tt_metal

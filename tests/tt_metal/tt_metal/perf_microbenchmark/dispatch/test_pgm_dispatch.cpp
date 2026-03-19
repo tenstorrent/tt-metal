@@ -6,7 +6,6 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <cstdint>
-#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -27,15 +26,15 @@
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -45,6 +44,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include <distributed/mesh_device_impl.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -106,8 +106,8 @@ std::tuple<uint32_t, uint32_t> get_core_count() {
         core_x = 7;
         core_y = 6;
     } else if (arch_name == "blackhole") {
-        // Two columns and one row harvested.
-        core_x = 11;
+        // Two columns harvested, plus a row and column used for dispatch cores.
+        core_x = 10;
         core_y = 8;
     } else {
         log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
@@ -371,7 +371,7 @@ bool initialize_program(
     }
 
     if (info.erisc_enabled) {
-        auto erisc_cores = mesh_device->get_device(0, 0)->get_active_ethernet_cores(true);
+        auto erisc_cores = mesh_device->impl().get_device(0, 0)->get_active_ethernet_cores(true);
         if (info.erisc_count > erisc_cores.size()) {
             log_fatal(
                 tt::LogTest,
@@ -699,6 +699,18 @@ static int pgm_dispatch(T& state, TestInfo info) {
             device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, DispatchCoreConfig{dispatch_core_type});
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
+        auto grid_size = mesh_device->compute_with_storage_grid_size();
+        if (info.workers.end_coord.x >= grid_size.x || info.workers.end_coord.y >= grid_size.y) {
+            log_fatal(
+                LogTest,
+                "Requested worker range ({},{}) exceeds device grid ({}x{})",
+                info.workers.end_coord.x,
+                info.workers.end_coord.y,
+                grid_size.x,
+                grid_size.y);
+            return 1;
+        }
+
         std::vector<tt_metal::SubDevice> sub_devices;
         if (info.n_subdevice_ranges > 1) {
             std::array<CoreRangeSet, NumHalProgrammableCoreTypes> core_ranges;
@@ -731,7 +743,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         }
 
         // Set benchmark counters before timing (all values are known at this point)
-        set_benchmark_counters(state, info, mesh_device->get_device(0, 0), executor.total_program_iterations);
+        set_benchmark_counters(state, info, mesh_device->impl().get_device(0, 0), executor.total_program_iterations);
 
         // Run warmup
         executor.warmup_programs();

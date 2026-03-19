@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,12 +11,12 @@
 using namespace tt;
 using namespace tt::constants;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     if (!tensor_args.optional_input_tensors.empty()) {
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }
@@ -100,24 +100,26 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
     uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w};
+    uint32_t last_ktile_h = 0;
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w, (uint32_t)last_ktile_h};
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    std::vector<uint32_t> writer_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     auto reader_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, {{"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}}));
 
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, {{"cb_out", output_cb_index}}));
 
     std::vector<uint32_t> compute_args_group_1 = {
         1,                                 // B
@@ -132,7 +134,11 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         core_group_1,
         tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_1});
+            .math_fidelity = math_fidelity,
+            .dst_full_sync_en = true,
+            .compile_args = compute_args_group_1,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}}});
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_args_group_2 = {
@@ -148,7 +154,11 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
             core_group_2,
             tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity, .dst_full_sync_en = true, .compile_args = compute_args_group_2});
+                .math_fidelity = math_fidelity,
+                .dst_full_sync_en = true,
+                .compile_args = compute_args_group_2,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}, {"cb_out", tt::CBIndex::c_16}}});
     }
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
@@ -187,9 +197,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
 
 void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     auto reader_kernel_id = shared_variables.reader_kernel_id;
@@ -220,10 +230,10 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
 ////////////////////////////////////////////////////////////////////////////
 
 MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMultiCoreFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::MatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -239,9 +249,9 @@ MatmulMeshWorkloadMultiCoreFactory::cached_mesh_workload_t MatmulMeshWorkloadMul
 
 void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = MatmulMultiCoreProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
@@ -250,4 +260,4 @@ void MatmulMeshWorkloadMultiCoreFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

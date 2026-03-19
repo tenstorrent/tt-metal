@@ -12,20 +12,18 @@
 #include <vector>
 #include <optional>
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::prim {
 namespace untilize_helper {
 uint32_t get_largest_divisor(uint32_t dividend, uint32_t starting_divisor, uint32_t divisor_factor = 1);
 }  // namespace untilize_helper
 
-namespace untilize_types {
-struct tensor_args_t {
+struct UntilizeTensorArgs {
     Tensor input;
 };
 
-struct operation_attributes_t {
+struct UntilizeOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore{};
-    bool use_pack_untilize{};
     bool fp32_dest_acc_en{};
     std::optional<CoreRangeSet> sub_core_grids;
     bool enough_space_width{};
@@ -33,19 +31,17 @@ struct operation_attributes_t {
     uint32_t pf_type{};
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using UntilizeTensorReturnValue = Tensor;
+using UntilizeSpecReturnValue = ttnn::TensorSpec;
+using UntilizeShapeReturnValue = ttnn::Shape;
 
-using shape_return_value_t = ttnn::Shape;
-
-namespace program {
-struct untilize_shared_variables_t {
+struct UntilizeSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};
     tt::tt_metal::CBHandle cb_src0{};
     tt::tt_metal::CBHandle cb_output{};
     std::vector<CoreCoord> cores_with_runtime_args;
+    bool has_uneven_sharding = false;
 };
-}  // namespace program
-}  // namespace untilize_types
-}  // namespace ttnn::operations::data_movement
+
+}  // namespace ttnn::prim

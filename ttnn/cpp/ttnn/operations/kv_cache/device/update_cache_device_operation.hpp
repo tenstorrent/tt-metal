@@ -14,20 +14,18 @@
 #include "fill_cache_multi_core_program_factory.hpp"
 #include "update_cache_multi_core_program_factory.hpp"
 
-namespace ttnn::operations::kv_cache {
+namespace ttnn::prim {
 
 struct UpdateKVCacheOperation {
-    using operation_attributes_t = kv_cache::operation_attributes_t;
-    using tensor_args_t = kv_cache::tensor_args_t;
-    using spec_return_value_t = kv_cache::spec_return_value_t;
-    using tensor_return_value_t = kv_cache::tensor_return_value_t;
-    using program_factory_t =
-        std::variant<program::UpdateCacheMultiCoreProgramFactory, program::FillCacheMultiCoreProgramFactory>;
+    using operation_attributes_t = KvCacheParams;
+    using tensor_args_t = KvCacheInputs;
+    using spec_return_value_t = TensorSpec;
+    using tensor_return_value_t = Tensor;
+    using program_factory_t = std::variant<UpdateCacheMultiCoreProgramFactory, FillCacheMultiCoreProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static void validate_on_program_cache_miss(const operation_attributes_t& args, const tensor_args_t& tensor_args);
-    static void validate_on_program_cache_hit(const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
@@ -35,15 +33,13 @@ struct UpdateKVCacheOperation {
     static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttnn::operations::kv_cache
-
-namespace ttnn::prim {
-ttnn::operations::kv_cache::UpdateKVCacheOperation::tensor_return_value_t update_cache(
+Tensor update_cache(
     const Tensor& cache,
     const Tensor& input,
     uint32_t batch_idx,
     uint32_t update_index,
     uint32_t batch_offset,
-    ttnn::operations::kv_cache::UpdateCacheOpType op_type,
+    UpdateCacheOpType op_type,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
 }  // namespace ttnn::prim

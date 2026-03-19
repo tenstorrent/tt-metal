@@ -170,9 +170,10 @@ Usually specifies function\_start of a function where given tensor is passed as 
 ## Operation Dispatching
 When run in `NO_DISPATCH` run mode, real allocations do not happen, so trace collection does not have side effects on the allocator state.
 You can pass unrealistically big tensors in this mode and unless an operation does upper limit validation, you still can collect the trace.
-In this mode trace collection is faster because ops are dispatched to the device.
 
-When run in the `NORMAL` mode, memory can be fragmented, which can lead to a different trace and you see real addresses where everything is allocated.
+**Important: Program caching is disabled during `NO_DISPATCH` mode.** In this mode, buffer allocations are mocked with `address=0`, which means compiled programs contain invalid buffer addresses. If these programs were cached, subsequent runs in `NORMAL` mode would reuse programs with invalid addresses, causing device hangs. By disabling program caching during graph capture, we ensure that `NORMAL` mode always creates fresh programs with valid buffer addresses.
+
+When run in the `NORMAL` mode, memory can be fragmented, which can lead to a different trace and you see real addresses where everything is allocated. Programs are cached normally in this mode for reuse in future executions.
 
 ## Getting operation arguments data
 Another capability of the Graph, is to collect the whole set of arguments provided for each operation executed in a ttnn call. This can be done in an individual operation, or a model as a whole, providing additional information about the internals of the operations
@@ -422,10 +423,8 @@ def process_allocations(graph):
                        i += 1
                    else:
                        break
-           name = v.params['name']
-           if name == "ttnn::prim::old_infra_device_operation":
-               name = "ttnn::prim::old_infra_op"
-           cur_op.append(name)
+          name = v.params['name']
+          cur_op.append(name)
        if v.node_type == 'circular_buffer_allocate':
            total_cb += int(v.params['size'])
        if v.node_type == 'circular_buffer_deallocate_all':
@@ -456,7 +455,7 @@ High level call stack here is:
 ```
 ttnn::add
 ttnn::repeat
-ttnn::prim::old_infra_device_operation (calling ttnn primitive operation)
+ttnn::prim::repeat (calling ttnn primitive operation)
 Device Operation (dispatching device operation)
 create_device_tensor (creates intermediate output for ttnn::repeat)
 ttnn::prim::binary (calling ttnn primitive operation)
@@ -629,7 +628,7 @@ Deallocate Device Buffer
         "name": "function_start",
         "params": {
             "inputs": "5",
-            "name": "ttnn::prim::old_infra_device_operation"
+            "name": "ttnn::prim::repeat"
         }
     },
     {
@@ -735,7 +734,7 @@ Deallocate Device Buffer
         "counter": 16,
         "name": "function_end",
         "params": {
-            "name": "ttnn::prim::old_infra_device_operation"
+            "name": "ttnn::prim::repeat"
         }
     },
     {

@@ -14,7 +14,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
@@ -35,7 +34,7 @@ void measure_latency(const std::string& kernel_name) {
     CoreCoord consumer_logical_core =
         tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_core(device->id(), channel, 0);
 
-    TT_ASSERT(
+    TT_FATAL(
         producer_logical_core != consumer_logical_core,
         "Producer and consumer core are {}. They should not be the same!",
         producer_logical_core.str());

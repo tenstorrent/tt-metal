@@ -3,35 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <cstring>
 #define REDUCE_OP (PoolType::SUM)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/rand.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/reconfig_data_format.h"
-#include "compute_kernel_api/pack.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/rand.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/reduce.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/pack.h"
 #include "ckernel_sfpu.h"
-#include "compute_kernel_api/tilize.h"
+#include "api/compute/tilize.h"
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-namespace NAMESPACE {
 void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     init_sfpu(cb_id, cb_id);
 
-    union f2u {
-        float f;
-        uint32_t u;
-    } rand_scale;
-    rand_scale.f = 1;
+    uint32_t rand_scale = 0;
+    const float one_f = 1.0f;
+    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));  // Alternative to std::bit_cast
     uint32_t rand_from = 0;
 
     if (seed != 0) {
@@ -40,7 +38,7 @@ void generate_rand_tile(const uint32_t cb_id, const uint32_t seed) {
     cb_reserve_back(cb_id, 1);
 
     tile_regs_acquire();
-    rand_tile(0, rand_from, rand_scale.u);
+    rand_tile(0, rand_from, rand_scale);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -201,6 +199,7 @@ template <
     uint32_t index_transposed_cb_index,
     uint32_t values_cb_index,
     uint32_t output_ind_cb_index,
+    uint32_t tile_width,
     bool first_call>
 void top_k() {
     // dest indices for where to unpack the tiles for the llk
@@ -307,7 +306,7 @@ void top_k() {
             cb_push_back(index_transposed_cb_index, Wt);
         }
 
-        constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;
+        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
@@ -374,7 +373,7 @@ void mul_block_bcast_scalar_inplace() {
     }
 }
 
-void MAIN {
+void kernel_main() {
     constexpr uint32_t input_values_cb_index = get_compile_time_arg_val(0);
     constexpr uint32_t index_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(2);
@@ -393,6 +392,7 @@ void MAIN {
     constexpr uint32_t seed = get_compile_time_arg_val(14);
     constexpr uint32_t cb_local_vals = get_compile_time_arg_val(15);
     constexpr uint32_t temp_cb_index = get_compile_time_arg_val(16);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
     generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;
@@ -411,8 +411,9 @@ void MAIN {
         index_transposed_cb_index,
         values_cb_index,
         output_ind_cb_index,
+        tile_width,
         true>();
-    constexpr uint32_t Kt = nearest32_K / TILE_WIDTH;
+    constexpr uint32_t Kt = nearest32_K / tile_width;
 
     // scale temperature
 
@@ -428,4 +429,3 @@ void MAIN {
     recip_block_inplace(cb_cur_sum, Ht);
     mul_block_bcast_cols(values_cb_index, cb_cur_sum, cb_local_vals, Ht, Kt);
 }
-}  // namespace NAMESPACE

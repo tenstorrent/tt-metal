@@ -51,10 +51,6 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::vector;
 
@@ -270,11 +266,9 @@ void EnqueueWriteMeshSubBuffer(
     const std::vector<uint32_t>& src,
     const BufferRegion& region,
     bool blocking) {
-    auto shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = distributed::MeshCoordinate(0, 0),
-        .host_data = static_cast<void*>(const_cast<uint32_t*>(src.data())),
-        .region = region,
-    };
+    auto shard_data_transfer = distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
+                                   .host_data(static_cast<void*>(const_cast<uint32_t*>(src.data())))
+                                   .region(region);
 
     cq.enqueue_write_shards(buffer, {shard_data_transfer}, blocking);
 }
@@ -285,11 +279,8 @@ void EnqueueReadMeshSubBuffer(
     const std::shared_ptr<distributed::MeshBuffer>& buffer,
     const BufferRegion& region,
     bool blocking) {
-    auto shard_data_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
-        .shard_coord = distributed::MeshCoordinate(0, 0),
-        .host_data = dst.data(),
-        .region = region,
-    };
+    auto shard_data_transfer =
+        distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data()).region(region);
 
     cq.enqueue_read_shards({shard_data_transfer}, buffer, blocking);
 }
@@ -2135,6 +2126,39 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNonblockingReads) {
 
         EXPECT_EQ(src_a, result_a);
         EXPECT_EQ(src_b, result_b);
+    }
+}
+
+TEST_F(UnitMeshCQSingleCardBufferFixture, EnqueueBufferVariousDims) {
+    // Release fixture devices to use different mesh device dimensions
+    devices_.clear();
+    reserved_devices_.clear();
+
+    for (const distributed::MeshShape& mesh_shape : {distributed::MeshShape(1, 1), distributed::MeshShape(1)}) {
+        auto mesh_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(mesh_shape));
+
+        for (const BufferType buftype : {BufferType::DRAM, BufferType::L1}) {
+            constexpr uint32_t page_size = 2048;
+            constexpr uint32_t num_pages = 8;
+            constexpr uint32_t buf_size = num_pages * page_size;
+
+            distributed::DeviceLocalBufferConfig local_config{
+                .page_size = page_size, .buffer_type = buftype, .bottom_up = false};
+            const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+
+            auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+            auto src = local_test_functions::generate_arange_vector(buf->size());
+
+            EXPECT_NO_THROW(distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buf, src, false));
+
+            std::vector<uint32_t> dst;
+            EXPECT_NO_THROW(distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst, buf, true));
+
+            EXPECT_EQ(src, dst);
+        }
+
+        mesh_device->close();
+        mesh_device.reset();
     }
 }
 

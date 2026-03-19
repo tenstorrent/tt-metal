@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -18,14 +19,13 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::program {
+namespace ttnn::prim {
 UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFactory::create(
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& operation_attributes,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& operation_attributes,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     const auto& a = tensor_args.input;
     const auto& output = tensor_return_value;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::tt_metal::Program program{};
@@ -46,15 +46,19 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     uint32_t tile_width = tile_shape[1];
     uint32_t tile_volume = tile_height * tile_width;
 
-    bool input_is_sharded = a.memory_config().is_sharded();
-    bool output_is_sharded = output.memory_config().is_sharded();
-
     uint32_t num_tiles = a.physical_volume() / tile_volume;
     uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        num_columns_of_blocks = a.padded_shape()[-1] / output.shard_spec().value().shape[1];
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        uint32_t output_shard_width;
+        if (output.shard_spec().has_value()) {
+            output_shard_width = output.shard_spec().value().shape[1];
+        } else {
+            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+        }
+        num_columns_of_blocks = a.padded_shape()[-1] / output_shard_width;
     }
     uint32_t num_tiles_per_column_row = a.padded_shape()[-1] / num_columns_of_blocks / tile_width;
 
@@ -96,23 +100,14 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
     // Reader compute defines
     std::map<std::string, std::string> reader_compute_defines;
-    if (input_is_sharded) {
-        reader_compute_defines["SHARDED"] = "1";
-    }
 
     // Writer compute defines
     std::map<std::string, std::string> writer_compute_defines;
-    if (output_is_sharded) {
-        writer_compute_defines["SHARDED"] = "1";
-    }
 
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(a, reader_compile_time_args);
-    } else {
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    }
+
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -133,11 +128,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
         (uint32_t)num_tiles_per_block,
         (uint32_t)output_single_block_width_size,
     };
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_compile_time_args(output, writer_compile_time_args);
-    } else {
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Untilized writer
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -156,18 +147,7 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH)) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel =
-            std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-    }
+    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
 
     // Compute compile-time args
     uint32_t num_blocks = num_columns_of_blocks * num_blocks_per_column_row * num_blocks_across_height;
@@ -192,15 +172,9 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
         num_tiles,
         start_page_id,
     };
-    if (input_is_sharded) {
-        shard_builder::extend_sharding_run_time_args(a, reader_run_time_args);
-    }
 
     // Writer run-time args
     std::vector<uint32_t> writer_run_time_args = {dst_buffer->address()};
-    if (output_is_sharded) {
-        shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
-    }
 
     // Set run-time args
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
@@ -212,9 +186,9 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
 
 void UntilizeSingleCoreProgramFactory::override_runtime_arguments(
     UntilizeSingleCoreProgramFactory::cached_program_t& cached_program,
-    const ttnn::operations::data_movement::untilize_types::operation_attributes_t& /*operation_attributes*/,
-    const ttnn::operations::data_movement::untilize_types::tensor_args_t& tensor_args,
-    const ttnn::operations::data_movement::untilize_types::tensor_return_value_t& tensor_return_value) {
+    const UntilizeOperationAttributes& /*operation_attributes*/,
+    const UntilizeTensorArgs& tensor_args,
+    const UntilizeTensorReturnValue& tensor_return_value) {
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
@@ -234,4 +208,4 @@ void UntilizeSingleCoreProgramFactory::override_runtime_arguments(
         runtime_args[0] = dst_buffer->address();
     }
 }
-}  // namespace ttnn::operations::data_movement::program
+}  // namespace ttnn::prim

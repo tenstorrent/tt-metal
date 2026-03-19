@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "experimental/circular_buffer.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t num_input_tiles = get_compile_time_arg_val(1);
@@ -20,10 +20,14 @@ void MAIN {
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    experimental::CircularBuffer cb_out0_obj(cb_out0);
+
     constexpr uint32_t num_input_tiles_iter = num_input_tiles / input_granularity;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    cb_wait_front(cb_in1, onetile);
+    cb_in1_obj.wait_front(onetile);
 
     // For each assigned output tile, process the input tiles in a doubly nested
     // loop. The inner loop processes the number of tiles specified by
@@ -34,19 +38,18 @@ void MAIN {
         reconfig_data_format(cb_in0, cb_in1);
         tile_regs_acquire();
         for (uint32_t j = 0; j < num_input_tiles_iter; ++j) {
-            cb_wait_front(cb_in0, input_granularity);
+            cb_in0_obj.wait_front(input_granularity);
             for (uint32_t k = 0; k < input_granularity; k++) {
                 add_tiles(cb_in0, cb_in1, k, first_tile, dst0);
             }
-            cb_pop_front(cb_in0, input_granularity);
+            cb_in0_obj.pop_front(input_granularity);
         }
         tile_regs_commit();
-        cb_reserve_back(cb_out0, onetile);
+        cb_out0_obj.reserve_back(onetile);
         pack_reconfig_data_format(cb_out0);
         tile_regs_wait();
         pack_tile(dst0, cb_out0);
         tile_regs_release();
-        cb_push_back(cb_out0, onetile);
+        cb_out0_obj.push_back(onetile);
     }
 }
-}  // namespace NAMESPACE

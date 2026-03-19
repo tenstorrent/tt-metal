@@ -4,24 +4,22 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
-#include "compute_kernel_api/bcast.h"
+#include "api/compute/bcast.h"
 #endif
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
 // Have to keep a copy because cannot import ttnn into tests/tt_metal.
-
-namespace NAMESPACE {
 
 /**
  * @brief Transposes a block of tiles from one circular buffer to another.
@@ -137,7 +135,7 @@ inline void reblock_and_untilize(
     cb_pop_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 }
 
-void MAIN {
+void kernel_main() {
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;
@@ -172,18 +170,19 @@ void MAIN {
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
-    constexpr uint32_t in0_cb_id = in0_transpose_tile ? tt::CBIndex::c_10 : tt::CBIndex::c_0;
-    constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
-    constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
+    constexpr uint32_t in0_cb_id = in0_transpose_tile ? get_named_compile_time_arg_val("cb_in0_transposed")
+                                                      : get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t out_cb_id = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t mm_partials_cb_id = get_named_compile_time_arg_val("cb_intermed0");
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
-    // When in0 needs to be transposed, the original data is read from c_0 (in0_transpose_cb_id),
-    // transposed, and the result is written to c_10 (in0_cb_id), which is then used as input for
-    // the matmul call.
-    constexpr uint32_t in0_transpose_cb_id = tt::CBIndex::c_0;
+    // When in0 needs to be transposed, the original data is read from cb_in0 (in0_transpose_cb_id),
+    // transposed, and the result is written to cb_in0_transposed (in0_cb_id), which is then used
+    // as input for the matmul call.
+    constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = tt::CBIndex::c_3;
+    constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
@@ -279,11 +278,11 @@ void MAIN {
                                 0;  // start at 0, each call to matmul_block internally increments dst_index
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
+                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
                                 matmul_block(
                                     in0_cb_id,
@@ -499,4 +498,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

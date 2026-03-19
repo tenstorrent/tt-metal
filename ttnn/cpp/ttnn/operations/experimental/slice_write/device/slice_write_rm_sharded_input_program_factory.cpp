@@ -18,7 +18,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::slice_write::program {
+namespace ttnn::experimental::prim {
 
 namespace {
 
@@ -108,7 +108,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         "slice_write expects output start for the last dimension to be 0. Got {}",
         output_tensor_start[-1]);
 
-    log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
+    log_debug(tt::LogOp, "Output Buffer address: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
         output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
         output_row_size_bytes,
@@ -204,9 +204,7 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 }  // namespace
 
 SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInputProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
@@ -322,9 +320,9 @@ SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInpu
 
 void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SliceWriteParams& /*operation_attributes*/,
+    const SliceWriteInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto& src_tensor = tensor_args.input;
     const auto& dst_tensor = tensor_return_value;
 
@@ -355,4 +353,4 @@ void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::slice_write::program
+}  // namespace ttnn::experimental::prim

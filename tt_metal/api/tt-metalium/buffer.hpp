@@ -5,7 +5,6 @@
 #pragma once
 
 #include <nlohmann/json_fwd.hpp>
-#include <tt_stl/concepts.hpp>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -22,7 +21,6 @@
 #include <variant>
 #include <vector>
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
@@ -30,9 +28,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
+// UMD: re-exports CoreType (used in Buffer::core_type return type).
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::stl::json {
 template <typename T>
@@ -52,7 +49,7 @@ struct ShardSpec {
     /* Canonical tensor shape where the depth dimensions ([:-2] are folded along y) */
     std::array<uint32_t, 2> shape;
 
-    /* The sequence order of the grid cores that the shards are layed out onto. */
+    /* The sequence order of the grid cores that the shards are laid out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
 
     ShardSpec(

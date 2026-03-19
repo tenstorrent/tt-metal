@@ -1,31 +1,23 @@
 add_library(ttmetalium_hostdevcommon INTERFACE)
 add_library(TT::Metalium::HostDevCommon ALIAS ttmetalium_hostdevcommon)
 
+include(sources.cmake)
+
 target_sources(
     ttmetalium_hostdevcommon
     PUBLIC
         FILE_SET jit_api
         TYPE HEADERS
         BASE_DIRS api
-        FILES
-            api/hostdevcommon/common_values.hpp
-            api/hostdevcommon/dprint_common.h
-            api/hostdevcommon/kernel_structs.h
-            api/hostdevcommon/profiler_common.h
-            api/hostdevcommon/flags.hpp
-            api/hostdevcommon/fabric_common.h
-            api/hostdevcommon/tensor_accessor/arg_config.hpp
+        FILES ${HOSTDEVCOMMON_JIT_API_HEADERS}
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS api
-        FILES
-            api/hostdevcommon/common_values.hpp
-            api/hostdevcommon/dprint_common.h
-            api/hostdevcommon/kernel_structs.h
-            api/hostdevcommon/profiler_common.h
-            api/hostdevcommon/flags.hpp
-            api/hostdevcommon/fabric_common.h
-            api/hostdevcommon/tensor_accessor/arg_config.hpp
+        FILES ${HOSTDEVCOMMON_JIT_API_HEADERS}
+        FILE_SET hostdev_headers
+        TYPE HEADERS
+        BASE_DIRS ${PROJECT_SOURCE_DIR}
+        FILES ${HOSTDEVCOMMON_HOSTDEV_HEADERS}
 )
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
@@ -49,4 +41,8 @@ install(
     FILE_SET
     api
         COMPONENT metalium-dev
+    FILE_SET
+    hostdev_headers
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        COMPONENT metalium-runtime
 )

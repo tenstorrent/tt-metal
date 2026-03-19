@@ -10,7 +10,6 @@
 #include <vector>
 
 #include <tt_stl/span.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -43,11 +42,7 @@ void WriteShard(
     std::vector<DType>& src,
     const MeshCoordinate& coord,
     bool blocking = false) {
-    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = coord,
-        .host_data = src.data(),
-        .region = std::nullopt,
-    }};
+    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(src.data())};
     mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
 }
 
@@ -67,11 +62,7 @@ void ReadShard(
 
     auto* shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
-    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
-        .shard_coord = coord,
-        .host_data = dst.data(),
-        .region = std::nullopt,
-    }};
+    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }
 
@@ -110,9 +101,9 @@ bool EventQuery(const MeshEvent& event);
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 void Synchronize(
-    MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
-void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Returns true if the distributed environment is initialized and world_size > 1.
 bool UsingDistributedEnvironment();

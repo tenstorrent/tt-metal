@@ -15,7 +15,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -33,9 +33,9 @@ struct BinaryDeviceOperation {
         const CoreRangeSet worker_grid;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
-        tt::stl::hash::hash_t to_hash() const {
+        ttsl::hash::hash_t to_hash() const {
             // hash has to exclude the scalar value
-            return tt::stl::hash::hash_objects_with_default_seed(
+            return ttsl::hash::hash_objects_with_default_seed(
                 binary_op_type, activations, input_tensor_a_activation, memory_config, dtype, compute_kernel_config);
         }
     };
@@ -232,7 +232,7 @@ struct BinaryDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& attributes,

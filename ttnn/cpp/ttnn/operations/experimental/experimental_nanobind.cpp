@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
@@ -32,6 +33,10 @@
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/rmsnorm_distributed_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
+#include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
@@ -48,9 +53,14 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
-#include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
+#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -74,6 +84,10 @@ void py_module(nb::module_& mod) {
     transformer::detail::bind_all_reduce_create_qkv_heads(mod);
 
     transformer::bind_wan_fused_distributed_rmsnorm(mod);
+    transformer::bind_dit_layernorm_pre_all_gather(mod);
+    transformer::bind_dit_layernorm_post_all_gather(mod);
+    transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
+    transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_llama(mod);
     transformer::bind_rotary_embedding_llama_fused_qk(mod);
@@ -82,6 +96,7 @@ void py_module(nb::module_& mod) {
     create_qkv_heads::detail::bind_create_qkv_heads(mod);
 
     reduction::detail::bind_fast_reduce_nc(mod);
+    reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);
     reduction::detail::bind_reduction_intimg_operation(mod);
     reduction::detail::bind_deepseek_grouped_gate(mod);
 
@@ -117,9 +132,16 @@ void py_module(nb::module_& mod) {
 
     broadcast_to::detail::bind_broadcast_to(mod);
 
-    operations::experimental::ternary::detail::bind_where(mod);
-
     minimal_matmul::detail::bind_minimal_matmul(mod);
+    minimal_matmul::detail::bind_minimal_matmul_split(mod);
+
+    isin::detail::bind_isin_operation(mod);
+    deepseek::moe::detail::bind_moe_gate_mm(mod);
+    deepseek::mla::detail::bind_matmul_wo(mod);
+
+    // DeepSeek prefill MoE operations
+    deepseek_prefill::detail::bind_dispatch(mod);
+    deepseek_prefill::detail::bind_combine(mod);
 }
 
 }  // namespace ttnn::operations::experimental

@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::argmax {
+namespace ttnn::prim {
 
 /*
  * Generates the output shape for the reduction operation.
@@ -58,14 +59,9 @@ ttnn::SmallVector<uint32_t> get_output_shape(const Tensor& input_tensor, const s
 ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     if (args.use_multicore) {
-        return program::ArgMaxMultiCoreProgramFactory{};
+        return ArgMaxMultiCoreProgramFactory{};
     }
-    return program::ArgMaxSingleCoreProgramFactory{};
-}
-
-void ArgMaxDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    return ArgMaxSingleCoreProgramFactory{};
 }
 
 void ArgMaxDeviceOperation::validate_on_program_cache_miss(
@@ -95,16 +91,18 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
         auto rank = input_shape.size();
         // With TILE layout, padded shape has always at least 2 dims (i.e., also for 1D input tensors).
         TT_FATAL(rank > 1, "Invalid rank {} for input tensor with TILE layout", rank);
+        const uint32_t tile_width = input_tensor_a.tensor_spec().tile().get_width();
+        const uint32_t tile_height = input_tensor_a.tensor_spec().tile().get_height();
         TT_FATAL(
-            input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0,
-            "Last dimension {} must be divisible by TILE_WIDTH {}",
+            input_shape[rank - 1] % tile_width == 0,
+            "Last dimension {} must be divisible by tile width {}",
             input_shape[rank - 1],
-            tt::constants::TILE_WIDTH);
+            tile_width);
         TT_FATAL(
-            input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0,
-            "Second-to-last dimension {} must be divisible by TILE_HEIGHT {}",
+            input_shape[rank - 2] % tile_height == 0,
+            "Second-to-last dimension {} must be divisible by tile height {}",
             input_shape[rank - 2],
-            tt::constants::TILE_HEIGHT);
+            tile_height);
     }
 
     TT_FATAL(args.output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs, got {}", args.output_dtype);
@@ -131,7 +129,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (args.dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.padded_shape().rank();
+        const uint32_t input_rank = input_tensor_a.logical_shape().rank();
         const uint32_t normalized_dim = args.dim.value() < 0 ? args.dim.value() + input_rank : args.dim.value();
 
         // TODO: Add support for normalized_dim = 0, 1, 2
@@ -159,7 +157,7 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t ArgMaxDeviceOperation::compute_output_specs(
+TensorSpec ArgMaxDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
@@ -172,7 +170,7 @@ spec_return_value_t ArgMaxDeviceOperation::compute_output_specs(
         TensorLayout(args.output_dtype, PageConfig(Layout::ROW_MAJOR), args.output_mem_config));
 }
 
-tensor_return_value_t ArgMaxDeviceOperation::create_output_tensors(
+Tensor ArgMaxDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor.value();
@@ -180,21 +178,17 @@ tensor_return_value_t ArgMaxDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::reduction::argmax
-
-namespace ttnn::prim {
 ttnn::Tensor argmax(
-    const Tensor& input,
+    const ttnn::Tensor& input,
     tt::tt_metal::DataType output_dtype,
     std::optional<int> dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool use_multicore,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    std::optional<Tensor> optional_output_tensor) {
-    using OperationType = ttnn::operations::reduction::argmax::ArgMaxDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    std::optional<ttnn::Tensor> optional_output_tensor) {
+    return ttnn::device_operation::launch<ArgMaxDeviceOperation>(
+        ArgMaxDeviceOperation::operation_attributes_t{
             .output_dtype = output_dtype,
             .dim = dim,
             .keepdim = keepdim,
@@ -202,6 +196,8 @@ ttnn::Tensor argmax(
             .use_multicore = use_multicore,
             .output_mem_config = output_mem_config,
         },
-        OperationType::tensor_args_t{.input = input, .optional_output_tensor = std::move(optional_output_tensor)});
+        ArgMaxDeviceOperation::tensor_args_t{
+            .input = input, .optional_output_tensor = std::move(optional_output_tensor)});
 }
+
 }  // namespace ttnn::prim

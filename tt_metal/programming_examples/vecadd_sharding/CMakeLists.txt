@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22...3.30)
+cmake_minimum_required(VERSION 3.22...4.2)
 project(metal_example_vecadd_sharding)
 
 add_executable(metal_example_vecadd_sharding)
@@ -8,3 +8,6 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-Metalium REQUIRED)
 endif()
 target_link_libraries(metal_example_vecadd_sharding PUBLIC TT::Metalium)
+if(TARGET TT::CommonPCH)
+    tt_reuse_precompile_headers(metal_example_vecadd_sharding TT::CommonPCH)
+endif()

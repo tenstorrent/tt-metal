@@ -380,7 +380,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::pack_to(
             &args[i], command_tensor.worker_pages_per_slice);
-        i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
     void pack_to(args_elem_t* args) const {
@@ -403,7 +402,6 @@ struct CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
         i += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
 
         CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(&args[i], out.worker_pages_per_slice);
-        i += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
     }
 
     void unpack(volatile args_elem_t const* args) {
@@ -548,7 +546,7 @@ using CclCommandCoreDescriptorArgs = std::variant<
 // A command is composed of one or more arguments
 // This enum specifies the high level command
 // Future commands are to be added and will enable
-// functionalilty such as synchronizing
+// functionality such as synchronizing
 enum class CclCommandCode : uint8_t {
     STREAM_TENSOR_TO_EDM = 0,  // TODO: rename uses of to the below
     STREAM_TENSOR_TO_CB = 0,

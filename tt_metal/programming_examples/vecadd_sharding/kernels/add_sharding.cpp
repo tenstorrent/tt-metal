@@ -2,17 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 #include <cstdint>
 
-namespace NAMESPACE {
-void MAIN {
-    // IMPORTANT: since there is no read kernel, and data is alraedy in circular buffers
+void kernel_main() {
+    // IMPORTANT: since there is no read kernel, and data is already in circular buffers
     // do not call cb_wait_front() because there is no wait. And we ensured there is enough
-    // spece in the circular buffers for the entirty of the computation.
+    // space in the circular buffers for the entirty of the computation.
     // if calling cb_wait_front() here, the kernel will hang forever as no one is producing
     // data to the circular buffers.
 
@@ -62,4 +61,3 @@ void MAIN {
         cb_push_back(cb_out0, 1);
     }
 }
-}  // namespace NAMESPACE

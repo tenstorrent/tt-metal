@@ -8,7 +8,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import untilize, comp_pcc
-from models.common.utility_functions import is_grayskull, skip_for_blackhole
 
 
 @pytest.mark.parametrize(
@@ -26,8 +25,6 @@ from models.common.utility_functions import is_grayskull, skip_for_blackhole
     ),
 )
 def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
-    if is_grayskull():
-        pytest.skip("Skipping tests on Grayskull")
     shape = [nb, nc, nh, nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
@@ -95,8 +92,6 @@ def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
     ),
 )
 def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     shape = [nb, nc, 32 * nh, 32 * nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
@@ -118,7 +113,7 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True, use_pack_untilize=True)
+    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True)
     c1 = b1.cpu().to_torch()
 
     untilized_inp = untilize(inp)
@@ -148,9 +143,6 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
     ),
 )
 def test_run_untilize_5d(dtype, shape, device):
-    if is_grayskull() and dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
 
     torch.manual_seed(10)
@@ -164,7 +156,7 @@ def test_run_untilize_5d(dtype, shape, device):
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    our_untilized = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True, use_pack_untilize=True)
+    our_untilized = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True)
     our_untilized = our_untilized.cpu().to_torch()
 
     if dtype == ttnn.float32:

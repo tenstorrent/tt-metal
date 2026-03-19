@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole, skip_with_llk_assert
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 TILE_WIDTH = 32
@@ -56,6 +56,7 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         raise ValueError("Invalid ncores")
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shapes",
@@ -115,6 +116,7 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     assert isequal
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 def upsample_multicore_common(
     device,
     input_shape,
@@ -215,12 +217,6 @@ def upsample_multicore_common(
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
 
-    ## output shard
-    shard_height = shard_height * scale_h * scale_w
-    shard_shape = (shard_height, shard_width)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
-    out_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.types.BufferType.L1, shard_spec)
-
     scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(tt_input, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=in_sharded_mem_config)
@@ -234,7 +230,6 @@ def upsample_multicore_common(
             input_tensor,
             scale_factor,
             mode="bilinear",
-            memory_config=out_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
         )
         if run_twice:
@@ -243,20 +238,20 @@ def upsample_multicore_common(
                 input_tensor,
                 scale_factor,
                 mode="bilinear",
-                memory_config=out_sharded_mem_config,
                 compute_kernel_config=compute_kernel_config,
             )
     else:
-        output_tensor = ttnn.upsample(input_tensor, scale_factor, memory_config=out_sharded_mem_config)
+        output_tensor = ttnn.upsample(input_tensor, scale_factor)
         if run_twice:
             ttnn.deallocate(output_tensor, True)
-            output_tensor = ttnn.upsample(input_tensor, scale_factor, memory_config=out_sharded_mem_config)
+            output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_memory_config(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
 
     return (torch_result, output_tensor)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -354,6 +349,7 @@ def test_upsample_multicore_corerange(
     assert isequal
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",
@@ -436,6 +432,7 @@ def test_bilinear_multi_core(
     assert passing
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "scale_h, scale_w",
@@ -490,6 +487,20 @@ def test_bilinear_multi_core(
             32,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        (
+            1,
+            128,
+            13,
+            13,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                }
+            ),
+            3,
+            128,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
     ),
 )
 @pytest.mark.parametrize("run_twice", [False])
@@ -511,7 +522,7 @@ def test_nearest_upsample_with_uneven_input_shards(
         pytest.skip("Not enough cores for specified core grid")
 
     assert (
-        shard_height * core_grid.num_cores() > height
+        shard_height * core_grid.num_cores() > batch_size * height * width
     ), "Expected all test cases in this test suite to contain uneven shards (i.e. physical size > logical size)"
     if shard_strategy == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
         assert shard_width == channels, "Shard width must match number of input channels when height sharding"
@@ -544,3 +555,58 @@ def test_nearest_upsample_with_uneven_input_shards(
 
     assert allclose
     assert passing
+
+
+@pytest.mark.parametrize(
+    "input_shape, scale_factor_h, scale_factor_w",
+    [
+        # Basic fractional upscaling (NCHW format: [N, C, H, W])
+        ([1, 64, 8, 8], 1.5, 1.5),
+        ([1, 128, 16, 16], 1.25, 1.25),
+        ([1, 32, 8, 8], 2.5, 2.5),
+        # Asymmetric float scales
+        ([1, 64, 8, 16], 1.5, 2.0),
+        ([1, 128, 16, 8], 2.0, 1.5),
+        # Downscaling
+        ([1, 64, 16, 16], 0.5, 0.5),
+        ([1, 128, 32, 32], 0.75, 0.75),
+        # Mixed upscale/downscale
+        ([1, 64, 8, 16], 2.0, 0.5),
+        ([1, 128, 16, 8], 0.5, 2.0),
+        # Typical ML shapes
+        ([1, 64, 28, 28], 2.5, 2.5),
+    ],
+)
+def test_upsample_nearest_float_interleaved(device, input_shape, scale_factor_h, scale_factor_w):
+    """Test upsample with float scale factors using interleaved memory."""
+    torch.manual_seed(0)
+
+    # Input shape is NCHW, create tensor and permute to NHWC for ttnn
+    input_nchw = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_nhwc = input_nchw.permute(0, 2, 3, 1)
+
+    # PyTorch reference (uses NCHW)
+    torch_result_nchw = nn.functional.interpolate(
+        input_nchw, scale_factor=(scale_factor_h, scale_factor_w), mode="nearest"
+    )
+    torch_result = torch_result_nchw.permute(0, 2, 3, 1)
+
+    input_tensor = ttnn.from_torch(
+        input_nhwc,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+
+    output_tensor = ttnn.upsample(input_tensor, [scale_factor_h, scale_factor_w], mode="nearest")
+    output_torch = ttnn.to_torch(output_tensor)
+
+    assert list(output_torch.shape) == list(
+        torch_result.shape
+    ), f"Shape mismatch: expected {list(torch_result.shape)}, got {list(output_torch.shape)}"
+
+    is_equal = torch.equal(output_torch, torch_result)
+    if not is_equal:
+        pcc_passed, pcc_message = assert_with_pcc(torch_result, output_torch, pcc=0.9999)
+        logger.info(pcc_message)
+        assert pcc_passed, f"PCC check failed: {pcc_message}"

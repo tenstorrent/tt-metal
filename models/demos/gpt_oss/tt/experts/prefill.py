@@ -11,34 +11,52 @@ from .operations import (
     apply_expert_parallel_allreduce,
     apply_routing_weights,
     apply_sequence_parallel_allgather,
-    apply_swiglu,
     apply_tensor_parallel_allreduce,
     reduce_experts,
 )
 from .weights import ExpertWeights
 
 
-def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device):
-    """Reshard tensors for sequence parallel processing."""
-    hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
-    routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
+def _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_config, ccl_manager):
+    """
+    Convert replicated prefill inputs to SP row-sharded tensors using device-side CCL.
+
+    This avoids host reads (`to_torch/get_device_tensors`) so it is trace-capture safe.
+    The input tensors are replicated across rows, so reduce-scatter sums identical values.
+    We rescale by 1/sp to recover the original values after sharding.
+    """
+    sp = mesh_config.get_config(Mode.PREFILL).sp
+    if sp <= 1:
+        return hidden_states, routing_weights
+
+    cluster_axis = mesh_config.sp_axis
+    scale = 1.0 / sp
+
+    hidden_states_sharded = ttnn.reduce_scatter(
+        hidden_states,
+        dim=2,  # sequence dimension for hidden states: [1, B, S, H]
+        cluster_axis=cluster_axis,
+        memory_config=hidden_states.memory_config(),
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
+    )
+    routing_weights_sharded = ttnn.reduce_scatter(
+        routing_weights,
+        dim=0,  # sequence dimension for routing weights: [S, E]
+        cluster_axis=cluster_axis,
+        memory_config=routing_weights.memory_config(),
+        topology=ccl_manager.topology,
+        num_links=ccl_manager.num_links,
+    )
+
+    hidden_states_sharded = ttnn.mul(hidden_states_sharded, scale, output_tensor=hidden_states_sharded)
+    routing_weights_sharded = ttnn.mul(routing_weights_sharded, scale, output_tensor=routing_weights_sharded)
+
+    # Inputs are replaced by sharded outputs; release replicated tensors early.
     hidden_states.deallocate(True)
     routing_weights.deallocate(True)
 
-    routing_weights = ttnn.from_torch(
-        routing_weights_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
-    )
-    hidden_states = ttnn.from_torch(
-        hidden_states_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(-2, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
-    )
-
-    return hidden_states, routing_weights
+    return hidden_states_sharded, routing_weights_sharded
 
 
 def _process_prefill_chunk(
@@ -52,12 +70,12 @@ def _process_prefill_chunk(
     tp,
 ):
     """Process a single chunk of the sequence in prefill mode."""
+    _, batch_size, seq_len, hidden_size = hidden_states.shape
     activation_dtype = ttnn.bfloat8_b
     TILE_SIZE = 32
-    batch_size = hidden_states.shape[0]
-    seq_len = hidden_states.shape[1]
 
     # Reshape for prefill (group tokens into tiles)
+    # Note: unsqueeze_to_4D/reshape operations return views - do not deallocate originals
     hidden_states_4D = ttnn.unsqueeze_to_4D(hidden_states)
     hidden_states_4D = ttnn.reshape(hidden_states_4D, (1, seq_len // TILE_SIZE, TILE_SIZE, config.hidden_size))
     group_size = seq_len // TILE_SIZE
@@ -80,10 +98,21 @@ def _process_prefill_chunk(
         program_config=program_config.get_prefill_gate_up_config(hidden_states_4D.shape[2], weights.gate_proj.shape[3]),
         dtype=activation_dtype,
     )
+    # Note: transpose/reshape operations return views - do not deallocate originals
     gate = ttnn.transpose(gate, 1, 3)
     gate = ttnn.reshape(gate, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
     bias_transposed = ttnn.transpose(weights.gate_proj_bias, 1, 0)
     gate = ttnn.add(gate, bias_transposed, output_tensor=gate)
+
+    # # Do partial swiglu before up projection to save memory (fused gate projection + swiglu gate activation)
+    # Part 1
+    gate = ttnn.clamp(gate, min=None, max=config.swiglu_limit, output_tensor=gate)
+    gate_alpha = ttnn.mul(gate, config.alpha)
+    gate_sigmoid = ttnn.sigmoid(gate_alpha)
+    gate_alpha.deallocate(True)
+    glu = ttnn.mul(gate, gate_sigmoid, output_tensor=gate)
+
+    gate_sigmoid.deallocate(True)
 
     # Up projection
     up = ttnn.sparse_matmul(
@@ -97,14 +126,27 @@ def _process_prefill_chunk(
         dtype=activation_dtype,
     )
     hidden_states_4D.deallocate(True)
+    # Note: sparsity_layout is created from repeat(prefill_sparsity), and prefill_sparsity
+    # is reused later (line 123, 151). Don't deallocate as repeat may return a view/alias.
 
+    # Note: transpose/reshape operations return views - do not deallocate originals
     up = ttnn.transpose(up, 1, 3)
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
     bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
     up = ttnn.add(up, bias_transposed, output_tensor=up)
 
-    # Apply SwiGLU
-    down_input = apply_swiglu(gate, up, config)
+    # Apply SwiGLU (consumes gate and up internally)
+
+    # partial swiglu part 2
+    up = ttnn.clamp(up, min=-config.swiglu_limit, max=config.swiglu_limit, output_tensor=up)
+    up = ttnn.add(up, 1, output_tensor=up)
+    down_input = ttnn.mul(up, glu, output_tensor=up)
+    glu.deallocate(True)
+
+    # Disabled regular swiglu to save memory by deallocating gate early.
+    # down_input = apply_swiglu(gate, up, config)
+
+    # Note: reshape returns a view - do not deallocate original
     down_input = ttnn.reshape(down_input, (1, config.num_experts, seq_len, weights.intermediate_size_per_device))
 
     # Update routing weights and sparsity for down projection
@@ -116,12 +158,12 @@ def _process_prefill_chunk(
         output_tensor=routing_weights,
     )
 
-    routing_weights_permuted = ttnn.permute(routing_weights, (1, 0))
-    routing_weights.deallocate(True)
-    routing_weights = ttnn.reshape(routing_weights_permuted, (batch_size, config.num_experts, seq_len, 1))
+    # Note: permute/reshape operations return views - do not deallocate originals
+    routing_weights = ttnn.permute(routing_weights, (1, 0))
+    routing_weights = ttnn.reshape(routing_weights, (batch_size, config.num_experts, seq_len, 1))
 
     # Process down projection in splits if needed
-    split_size = program_config.down_split_size
+    split_size = program_config.get_down_split_size(seq_len)
     if seq_len > split_size:
         down_input_list = ttnn.split(down_input, split_size, dim=2)
         down_input.deallocate(True)
@@ -131,8 +173,8 @@ def _process_prefill_chunk(
         down_input_list = [down_input]
         routing_weights_list = [routing_weights]
 
-    # Process each split
-    next_states_reduced_list = []
+    # Process each split and stream-concatenate to avoid holding all split outputs.
+    next_states_reduced_acc = None
     for i, down_input_split in enumerate(down_input_list):
         down = ttnn.sparse_matmul(
             down_input_split,
@@ -151,6 +193,7 @@ def _process_prefill_chunk(
 
         # Apply bias and routing weights
         split_seq_len = seq_len if seq_len < split_size else split_size
+        # Note: reshape returns a view - do not deallocate original
         next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
         next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
@@ -158,13 +201,19 @@ def _process_prefill_chunk(
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
-        next_states_reduced_list.append(next_states_reduced)
+        down.deallocate(True)
+        if next_states_reduced_acc is None:
+            next_states_reduced_acc = next_states_reduced
+        else:
+            # ToDo: Replace with slice_write.
+            # Concat re-creates the output_tensor every iteration.
+            next_states_concat = ttnn.concat([next_states_reduced_acc, next_states_reduced], dim=2)
+            next_states_reduced_acc.deallocate(True)
+            next_states_reduced.deallocate(True)
+            next_states_reduced_acc = next_states_concat
         routing_weights_list[i].deallocate(True)
 
-    # Concatenate splits (deallocates list elements internally in some TTNN versions)
-    next_states_concat = ttnn.concat(next_states_reduced_list, dim=2)
-
-    return next_states_concat
+    return next_states_reduced_acc
 
 
 def prefill_forward(
@@ -193,11 +242,13 @@ def prefill_forward(
         prefill_sparsity: Cached prefill sparsity mask
 
     Returns:
-        Expert output [batch, seq_len, hidden_size]
+        Expert output [1, batch, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat8_b
-    batch_size = hidden_states.shape[0]
-    seq_len_global = hidden_states.shape[1]
+    batch_dim = 1
+    seq_dim = 2
+    batch_size = hidden_states.shape[batch_dim]
+    seq_len_global = hidden_states.shape[seq_dim]
 
     if batch_size != 1:
         raise NotImplementedError(f"Currently only batch_size=1 supported, got {batch_size}")
@@ -220,12 +271,14 @@ def prefill_forward(
 
     # Reshard for sequence parallelism if needed
     if sp > 1:
-        hidden_states, routing_weights = _reshard_for_sequence_parallel(hidden_states, routing_weights, mesh_device)
+        hidden_states, routing_weights = _reshard_for_sequence_parallel(
+            hidden_states, routing_weights, mesh_config, ccl_manager
+        )
 
     # Chunk processing for very long sequences
     chunk_size = program_config.sequence_chunk_size
-    if hidden_states.shape[1] > chunk_size:
-        hidden_states_chunks = ttnn.split(hidden_states, chunk_size, dim=1)
+    if hidden_states.shape[seq_dim] > chunk_size:
+        hidden_states_chunks = ttnn.split(hidden_states, chunk_size, dim=seq_dim)
         hidden_states.deallocate(True)
         routing_weights_chunks = ttnn.split(routing_weights, chunk_size, dim=0)
         routing_weights.deallocate(True)
@@ -233,8 +286,8 @@ def prefill_forward(
         hidden_states_chunks = [hidden_states]
         routing_weights_chunks = [routing_weights]
 
-    # Process each chunk
-    next_states_list = []
+    # Process each chunk and stream-concatenate to reduce peak DRAM usage.
+    next_states_acc = None
     for hidden_chunk, routing_chunk in zip(hidden_states_chunks, routing_weights_chunks):
         next_states = _process_prefill_chunk(
             hidden_chunk,
@@ -246,12 +299,16 @@ def prefill_forward(
             ep,
             tp,
         )
-        next_states_list.append(next_states)
+        if next_states_acc is None:
+            next_states_acc = next_states
+        else:
+            next_states_concat = ttnn.concat([next_states_acc, next_states], dim=2)
+            next_states_acc.deallocate(True)
+            next_states.deallocate(True)
+            next_states_acc = next_states_concat
         hidden_chunk.deallocate(True)
         routing_chunk.deallocate(True)
-
-    # Concatenate all chunks
-    next_states = ttnn.concat(next_states_list, dim=2)
+    next_states = next_states_acc
 
     # Expert parallel communication
     if ep > 1:
@@ -263,10 +320,8 @@ def prefill_forward(
             next_states,
             mesh_config,
             mesh_device,
-            ccl_manager,
-            activation_dtype,
             seq_len_global,
-            tp,
+            ccl_manager,
         )
 
     # Sequence parallel all-gather
@@ -276,8 +331,8 @@ def prefill_forward(
     # Final reshape
     next_states = ttnn.reshape(
         next_states,
-        (batch_size, seq_len_global, config.hidden_size),
-        (batch_size, max(32, seq_len_global), config.hidden_size),
+        (1, batch_size, seq_len_global, config.hidden_size),
+        (1, batch_size, max(32, seq_len_global), config.hidden_size),
     )
 
     return next_states

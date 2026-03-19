@@ -7,20 +7,15 @@
 #include <algorithm>
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::reduction::sampling::program {
+namespace ttnn::prim {
 
 SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    using namespace tt::constants;
-
+    const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_values_tensor = tensor_args.input_values;
     const auto& input_indices_tensor = tensor_args.input_indices;
     const auto& k = tensor_args.k;
@@ -55,9 +50,11 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     auto* device = input_values_tensor.device();
 
     auto input_shape = input_values_tensor.logical_shape();
-    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
-    uint32_t Wt = input_shape[3] / TILE_WIDTH;
-    auto num_cores = Ht * TILE_HEIGHT;
+    const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input_values_tensor.tensor_spec().tile().get_width();
+    uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
+    uint32_t Wt = input_shape[3] / tile_width;
+    auto num_cores = Ht * tile_height;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
@@ -173,18 +170,18 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
 
     // final indices
     uint32_t final_indices_rm_unit_size = input_indices_tensor.element_size();  // 4 for int32
-    uint32_t aligned_final_indices_rm_unit_size = Wt * TILE_WIDTH * final_indices_rm_unit_size;
+    uint32_t aligned_final_indices_rm_unit_size = Wt * tile_width * final_indices_rm_unit_size;
     uint32_t final_indices_rm_cb_index = tt::CBIndex::c_12;
     tt::tt_metal::CircularBufferConfig final_indices_rm_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            Ht * TILE_HEIGHT * aligned_final_indices_rm_unit_size,
+            Ht * tile_height * aligned_final_indices_rm_unit_size,
             {{final_indices_rm_cb_index, input_indices_cb_data_format}})
             .set_page_size(final_indices_rm_cb_index, aligned_final_indices_rm_unit_size);
     tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);
 
     // // Output sampling indices
     uint32_t output_unit_size = output_tensor.element_size();
-    uint32_t aligned_out0_unit_size = Ht * TILE_HEIGHT * output_unit_size;
+    uint32_t aligned_out0_unit_size = Ht * tile_height * output_unit_size;
     uint32_t output_cb_index = tt::CBIndex::c_13;
     tt::tt_metal::CircularBufferConfig output_cb_config =
         tt::tt_metal::CircularBufferConfig(aligned_out0_unit_size, {{output_cb_index, index_cb_data_format}})
@@ -220,7 +217,13 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, core_grid, temp_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_values_cb_index, final_indices_rm_cb_index, index_cb_index, Ht, Wt, aligned_final_indices_rm_unit_size};
+        input_values_cb_index,
+        final_indices_rm_cb_index,
+        index_cb_index,
+        Ht,
+        Wt,
+        aligned_final_indices_rm_unit_size,
+        tile_height};
     tt::tt_metal::TensorAccessorArgs(input_values_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -272,7 +275,7 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
                 p_cb_index,
                 temp_cb_index,
                 i,
-                TILE_WIDTH,
+                tile_width,
                 num_cores,
             });
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -306,7 +309,8 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
             rand_tile_index,
             random_seed,
             cb_local_vals_index,
-            temp_cb_index};
+            temp_cb_index,
+            tile_width};
 
         tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -322,9 +326,9 @@ SamplingProgramFactory::cached_program_t SamplingProgramFactory::create(
 
 void SamplingProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const SamplingParams& /*operation_attributes*/,
+    const SamplingInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
     auto& reader_kernel_id = shared_vars.reader_kernel_id;
@@ -352,4 +356,4 @@ void SamplingProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::reduction::sampling::program
+}  // namespace ttnn::prim

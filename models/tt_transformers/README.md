@@ -13,6 +13,7 @@ The current version is verified to work with the following models:
 | [Llama 3.2 11B Vision](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision)                   | n300                        | ```meta-llama/Llama-3.2-11B-Vision```           |
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
+| [Mixtral 8x7B Instruct v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1)        | LoudBox / QuietBox          | ```mistralai/Mixtral-8x7B-Instruct-v0.1```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
 | [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                    |
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
@@ -196,7 +197,7 @@ If you are bringing up a new model that is similar to these but is not listed ab
 
 You should also watch out for:
 - RoPE encoding style. `llama3`, `yarn` and of course `none` are supported. HuggingFace models encode the complex numbers in RoPE as r1, r2, ..., i1, i2, ... whereas Meta models encode the complex numbers as r1, i1, r2, i2, ... - TTT uses a Meta-style implementation of the RoPE op and when loading a HuggingFace it will reshuffle the weights of the pre-rope attention weights to interleave their outputs in this style (see `reverse_permute` in [load_checkpoints.py](tt/load_checkpoints.py)). When _using_ TTT this happens invisibly and should not affect you, but when bringing up a new model or modifying TTT being aware of this will make some otherwise confusing things clearer.
-- Our [accuracy test](tests/test_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
+- Our [accuracy test](demo/simple_text_demo.py -k ci-token-matching) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
 - We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
 
 Huggingface models specify their architecture in the `config.json` file. The following architectures are known to work:

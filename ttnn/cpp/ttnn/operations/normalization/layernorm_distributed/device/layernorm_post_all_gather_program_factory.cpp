@@ -6,19 +6,18 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
+#include <bit>
 #include <optional>
 #include <string>
 #include <variant>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
-namespace ttnn::operations::normalization::program {
+namespace ttnn::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -53,9 +52,9 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 // =============================================================================
 
 LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherProgramFactory::create(
-    const LayerNormPostAllGatherOperationAttributes& operation_attributes,
-    const LayerNormPostAllGatherTensorArgs& tensor_args,
-    LayerNormPostAllGatherTensorReturnValue& output) {
+    const LayerNormPostAllGatherParams& operation_attributes,
+    const LayerNormPostAllGatherInputs& tensor_args,
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBHandle;
     using tt::tt_metal::CircularBuffer;
@@ -66,15 +65,19 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
 
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
+
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / TILE_WIDTH;
-    const uint32_t Ht = H / TILE_HEIGHT;
-    const uint32_t stats_tiles_cols = stats.padded_shape()[-1] / TILE_WIDTH;
+    const uint32_t Wt = W / tile_width;
+    const uint32_t Ht = H / tile_height;
+    const uint32_t stats_tiles_cols = stats.padded_shape()[-1] / tile_width;
     const uint32_t tile_cols_per_device = is_rmsnorm ? 1 : 2;
     const uint32_t num_devices = stats_tiles_cols / tile_cols_per_device;
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
@@ -130,15 +133,15 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
     auto dst_addr = output.buffer()->address();
 
-    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_HW : 0;
-    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_HW : 0;
+    [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_hw : 0;
+    [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_hw : 0;
 
     // For bert, tensor is packed as RM with width 32
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / TILE_WIDTH : 0;
+        num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_width : 0;
     }
     if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / TILE_WIDTH : 0;
+        num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_width : 0;
     }
 
     log_debug(tt::LogOp, "num_gamma_tiles: {}", num_gamma_tiles);
@@ -300,9 +303,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Get program config
-    LayerNormDefaultProgramConfig program_config;
-    if (std::holds_alternative<LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
-        program_config = std::get<LayerNormDefaultProgramConfig>(operation_attributes.program_config);
+    ttnn::prim::LayerNormDefaultProgramConfig program_config;
+    if (std::holds_alternative<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config)) {
+        program_config = std::get<ttnn::prim::LayerNormDefaultProgramConfig>(operation_attributes.program_config);
     }
 
     bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
@@ -433,11 +436,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
     float winv = 1.0f / (W * num_devices);  // bcast-w scaler
     auto bfloat_winv_value = bfloat16(winv);
     uint32_t packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv_value, bfloat_winv_value});
-    union {
-        float f;
-        uint32_t u;
-    } e{};
-    e.f = operation_attributes.eps;  // epsilon
+    uint32_t eps = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
     // Set runtime arguments based on kernel layout type
     if (use_2d_kernel) {
@@ -464,7 +463,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                      tile_offset,
                      stats_offset,
                      packed_winv_value,
-                     e.u,
+                     eps,
                      gamma_dram_addr,
                      beta_dram_addr,
                      stats_addr,
@@ -501,7 +500,7 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
                  tile_offset,
                  stats_offset,
                  packed_winv_value,
-                 e.u,
+                 eps,
                  gamma_dram_addr,
                  beta_dram_addr,
                  stats_addr,
@@ -520,9 +519,9 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
 
 void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const LayerNormPostAllGatherOperationAttributes& /*operation_attributes*/,
-    const LayerNormPostAllGatherTensorArgs& tensor_args,
-    LayerNormPostAllGatherTensorReturnValue& output) {
+    const LayerNormPostAllGatherParams& /*operation_attributes*/,
+    const LayerNormPostAllGatherInputs& tensor_args,
+    Tensor& output) {
     auto& shared_vars = cached_program.shared_variables;
     auto& program = cached_program.program;
 
@@ -558,4 +557,4 @@ void LayerNormPostAllGatherProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::program
+}  // namespace ttnn::prim

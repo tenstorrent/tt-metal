@@ -2,14 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include <tt-metalium/constants.hpp>
 
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/untilize.h"
+#include "api/compute/tilize.h"
+#include "api/compute/matmul.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
@@ -26,7 +28,7 @@ void matmul_blocks(
     const uint32_t subblock_w,
     const bool transpose) {
     // precondition: in0_cb has M*K produced
-    // preconditino: in1_cb has K*N produced
+    // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
     mm_block_init_short(
@@ -121,8 +123,7 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t cb_vol2col_rm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_vol2col_tiled = get_compile_time_arg_val(1);
     constexpr uint32_t cb_weight_tiled = get_compile_time_arg_val(2);
@@ -195,23 +196,16 @@ void MAIN {
                 for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
-                            // Tilize row-major patches
-                            uint32_t patch_rows_left = num_patches;
-                            tilize_init(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
-                            for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                                // Reader produces row pages, which may not be tile aligned. Wait on the correct number
-                                // of rows.
-                                uint32_t current_patch_rows = patch_rows_left < tt::constants::TILE_HEIGHT
-                                                                  ? patch_rows_left
-                                                                  : tt::constants::TILE_HEIGHT;
-                                cb_wait_front(cb_vol2col_rm, current_patch_rows);
-                                cb_reserve_back(cb_vol2col_tiled, matmul_K_t);
-                                tilize_block(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
-                                cb_push_back(cb_vol2col_tiled, matmul_K_t);
-                                cb_pop_front(cb_vol2col_rm, current_patch_rows);
-                                patch_rows_left -= current_patch_rows;
-                            }
-                            tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
+                            // Tilize row-major patches with variable row alignment
+                            // Reader produces row pages, which may not be tile aligned
+                            compute_kernel_lib::tilize<
+                                matmul_K_t,
+                                cb_vol2col_rm,
+                                cb_vol2col_tiled,
+                                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                                matmul_M_t, num_patches);
 
                             // Apply matmul blocks
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
@@ -266,16 +260,15 @@ void MAIN {
                                     add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                                 }
 
-                                // After reduction (if any), untilize result
-                                cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-                                untilize_init(cb_matmul_interm_tiled);
-                                for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                                    cb_reserve_back(cb_matmul_result_rm, matmul_N_t);
-                                    untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);
-                                    cb_push_back(cb_matmul_result_rm, matmul_N_t);
-                                    cb_pop_front(cb_matmul_interm_tiled, matmul_N_t);
-                                }
-                                untilize_uninit(cb_matmul_interm_tiled);
+                                // After reduction (if any), untilize result using helper
+                                compute_kernel_lib::untilize<
+                                    matmul_N_t,
+                                    cb_matmul_interm_tiled,
+                                    cb_matmul_result_rm,
+                                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+                                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::
+                                        NoReconfigure>(matmul_M_t);
                             }
                         }
                     }
@@ -291,4 +284,3 @@ void MAIN {
         }
     }
 }
-}  // namespace NAMESPACE

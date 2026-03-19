@@ -1,7 +1,7 @@
 add_library(ttnn_op_examples ${LIB_TYPE})
 add_library(TTNN::Ops::Examples ALIAS ttnn_op_examples)
 
-target_precompile_headers(ttnn_op_examples REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_examples TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_examples)
 
 set_target_properties(
@@ -29,6 +29,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
+        example/example.cpp
         example/device/example_device_operation.cpp
         example/device/multi_core_program_factory.cpp
         example/device/single_core_program_factory.cpp

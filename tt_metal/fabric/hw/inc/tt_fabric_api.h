@@ -134,7 +134,7 @@ void fabric_set_mcast_route(
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
-    // If so, set the forwarding flags for east and/or west branchs.
+    // If so, set the forwarding flags for east and/or west branches.
     if (e_num_hops) {
         mcast_branch |= MeshRoutingFields::FORWARD_EAST;
     }
@@ -218,6 +218,10 @@ bool fabric_set_unicast_route(
                     break;
                 case eth_chan_directions::SOUTH:
                     packet_header->route_buffer[0] = MeshRoutingFields::FORWARD_SOUTH;
+                    break;
+                case eth_chan_directions::Z:
+                    // Z exit port will use NOOP to indicate forward to Z
+                    packet_header->route_buffer[0] = MeshRoutingFields::NOOP;
                     break;
                 default: ASSERT(false); break;
             }
@@ -306,4 +310,15 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
         }
     }
 }
+
+// 1D sparse multicast
+template <typename HopMaskType>  // HopMaskType is uint8_t, uint16_t, uint32_t, or uint64_t
+void fabric_set_sparse_multicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, HopMaskType hop_mask) {
+    uint32_t temp_routing_fields;
+    routing_encoding::encode_1d_sparse_multicast(hop_mask, temp_routing_fields);
+
+    // Copy to volatile output
+    packet_header->routing_fields.value = temp_routing_fields;
+}
+
 }  // namespace tt::tt_fabric

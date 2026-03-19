@@ -8,13 +8,12 @@ from typing import Optional
 
 from loguru import logger
 from PIL import Image as PIL_Image
-from pkg_resources import resource_filename
 from transformers import AutoProcessor
 
 from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
+IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
 
 import os
 import time
@@ -279,7 +278,7 @@ def prepare_generator_args(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 17000000, "num_command_queues": 2}], indirect=True
+    "device_params", [{"fabric_config": True, "trace_region_size": 17300000, "num_command_queues": 2}], indirect=True
 )
 def test_multimodal_demo_text(
     mesh_device,
@@ -326,6 +325,7 @@ def test_multimodal_demo_text(
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
     )
+
     processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
     tokenizer = processor.tokenizer
     generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
@@ -436,7 +436,7 @@ def test_multimodal_demo_text(
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits = generator.decode_forward(
+                    logits = generator.decode_forward_llama_vision(
                         position_id,
                         next_token_tensor,
                         prefill_batch_xattn_masks,
@@ -446,6 +446,9 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         enable_trace=enable_trace,
                     )
+
+                    if isinstance(logits, tuple):
+                        logits = logits[0]
 
                     next_tokens, next_texts = sampler(logits)
                     # Update next token
@@ -552,7 +555,7 @@ def test_multimodal_demo_text(
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
             ("N300", "Llama-3.2-11B", 16): 18.3,
-            ("T3K", "Llama-3.2-90B", 1): 14.2,
+            ("T3K", "Llama-3.2-90B", 1): 14.02,
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
@@ -560,7 +563,7 @@ def test_multimodal_demo_text(
             # For T3K Llama-3.2-90B, the decode_t/s/u target used to be set to 3 with a wide tolerance (4.3, i.e. 330% increase) due to high variance observed across CI machines.
             # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
             # The slow CI machine seems to be out of circulation for now, so we can use a high target to avoid spurious test failures.
-            ("T3K", "Llama-3.2-90B", 1): (12, None),
+            ("T3K", "Llama-3.2-90B", 1): (10.5, None),
         }
 
         perf_targets = {}

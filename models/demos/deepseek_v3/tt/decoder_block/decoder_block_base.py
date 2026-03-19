@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from abc import abstractmethod
+from time import perf_counter
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -28,6 +30,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelPrefillConfig:
         mla_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.prefill_model_config(hf_config, mesh_device)
@@ -42,7 +45,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
             "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            "mlp": cls.prefill_mlp_config(hf_config, mesh_device),
+            "mlp": cls.prefill_mlp_config(hf_config, mesh_device, fabric_config),
         }
 
     @classmethod
@@ -50,21 +53,30 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelDecodeConfig:
         mla_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
         mla_config = cls.decode_mla_config(hf_config, mesh_device)
+        mlp_config = cls.decode_mlp_config(hf_config, mesh_device, fabric_config)
+
+        # Get the input_memory_config for the mlp_reshard
+        # For MoE blocks, input_memory_config is nested inside shared_expert
+        if "shared_expert" in mlp_config:
+            mlp_input_memory_config = mlp_config["shared_expert"]["input_memory_config"]
+        else:
+            mlp_input_memory_config = mlp_config["input_memory_config"]
 
         return {
             "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
             "mla_norm": mla_norm_config,
-            "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
+            "mla_reshard": mla_config["mla1d"]["wq_kv_a_in0_memory_config"],
             "mla": mla_config,
             "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
-            "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
-            "mlp": cls.decode_mlp_config(hf_config, mesh_device),
+            "mlp_reshard": ReshardConfig(memory_config=mlp_input_memory_config),
+            "mlp": mlp_config,
         }
 
     @classmethod
@@ -73,13 +85,19 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
-        return {
+        logger.info(f"Creating {cls.__name__} shared state...")
+        mlp_start = perf_counter()
+        mlp_shared_state = cls.create_mlp_shared_state(
+            hf_config,
+            mesh_device,
+        )
+        logger.info(f"Created {cls.__name__} MLP shared state in {perf_counter() - mlp_start:.2f}s")
+        state = {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "mlp": cls.create_mlp_shared_state(
-                hf_config,
-                mesh_device,
-            ),
+            "mlp": mlp_shared_state,
         }
+        logger.info(f"Created {cls.__name__} shared state")
+        return state
 
     @classmethod
     @abstractmethod
@@ -100,6 +118,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLP component of the decoder layer.
@@ -126,6 +145,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLP component of the decoder layer.

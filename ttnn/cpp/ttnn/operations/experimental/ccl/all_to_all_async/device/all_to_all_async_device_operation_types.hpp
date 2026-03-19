@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -10,9 +11,9 @@
 #include <tt-metalium/sub_device.hpp>
 #include <optional>
 
-namespace ttnn::operations::experimental::ccl::all_to_all_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllToAllAsyncParams {
     const uint32_t in_dim;
     const uint32_t out_dim;
     const uint32_t num_links;
@@ -22,7 +23,7 @@ struct operation_attributes_t {
     const ttnn::GlobalSemaphore semaphore;
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
-    operation_attributes_t(
+    AllToAllAsyncParams(
         uint32_t in_dim,
         uint32_t out_dim,
         uint32_t num_links,
@@ -41,7 +42,7 @@ struct operation_attributes_t {
         sub_device_id(sub_device_id) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("in_dim", in_dim);
         attrs.emplace_back("out_dim", out_dim);
@@ -57,13 +58,10 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct AllToAllAsyncInputs {
     Tensor input_tensor;
     Tensor persistent_intermediate_buffer;
     Tensor persistent_output_buffer;
 };
 
-using tensor_return_value_t = Tensor;
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::ccl::all_to_all_async
+}  // namespace ttnn::experimental::prim

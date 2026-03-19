@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <string>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::conv3d {
+namespace ttnn::experimental::prim {
 
 struct Conv3dConfig {
     Conv3dConfig(
@@ -21,6 +22,8 @@ struct Conv3dConfig {
         uint32_t H_out_block_ = 1,
         uint32_t C_out_block_ = 0,
         uint32_t C_in_block_ = 0,
+        std::array<uint32_t, 3> dilation_ = {1, 1, 1},
+        uint32_t alignment_ = 32,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
@@ -29,6 +32,8 @@ struct Conv3dConfig {
         H_out_block(H_out_block_),
         C_out_block(C_out_block_),
         C_in_block(C_in_block_),
+        dilation(dilation_),
+        alignment(alignment_),
         compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
     tt::tt_metal::DataType weights_dtype;
@@ -38,6 +43,8 @@ struct Conv3dConfig {
     uint32_t H_out_block;
     uint32_t C_out_block;
     uint32_t C_in_block;
+    std::array<uint32_t, 3> dilation;
+    uint32_t alignment;
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -48,6 +55,8 @@ struct Conv3dConfig {
         "H_out_block",
         "C_out_block",
         "C_in_block",
+        "dilation",
+        "alignment",
         "compute_with_storage_grid_size");
 
     auto attribute_values() const {
@@ -59,11 +68,13 @@ struct Conv3dConfig {
             this->H_out_block,
             this->C_out_block,
             this->C_in_block,
+            this->dilation,
+            this->alignment,
             this->compute_with_storage_grid_size);
     }
 };
 
-struct operation_attributes_t {
+struct Conv3dParams {
     Conv3dConfig config;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -77,15 +88,11 @@ struct operation_attributes_t {
     uint32_t groups;
 };
 
-struct tensor_args_t {
+struct Conv3dInputs {
     Tensor input_tensor;
     Tensor weight_tensor;
     std::optional<const Tensor> bias_tensor;
 };
-
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
 
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
@@ -94,7 +101,8 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_output_dims(
     uint32_t W_in,
     const std::array<uint32_t, 3>& padding,
     const std::array<uint32_t, 3>& stride,
-    const std::array<uint32_t, 3>& kernel_size);
+    const std::array<uint32_t, 3>& kernel_size,
+    const std::array<uint32_t, 3>& dilation);
 }  // namespace detail
 
-}  // namespace ttnn::operations::experimental::conv3d
+}  // namespace ttnn::experimental::prim

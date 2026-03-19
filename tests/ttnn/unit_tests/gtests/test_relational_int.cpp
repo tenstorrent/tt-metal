@@ -16,7 +16,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -33,7 +33,7 @@ struct RelationalUnaryParam {
     uint32_t w;
 };
 
-class RelationalUnaryFixture : public TTNNFixtureWithDevice,
+class RelationalUnaryFixture : public TTNNFixtureWithSuiteDevice<RelationalUnaryFixture>,
                                public testing::WithParamInterface<RelationalUnaryParam> {};
 
 static ttnn::Tensor make_int_tensor(ttnn::MeshDevice& device, uint32_t h, uint32_t w, int32_t fill_value) {

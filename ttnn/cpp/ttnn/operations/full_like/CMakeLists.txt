@@ -1,7 +1,7 @@
 add_library(ttnn_op_full_like ${LIB_TYPE})
 add_library(TTNN::Ops::FullLike ALIAS ttnn_op_full_like)
 
-target_precompile_headers(ttnn_op_full_like REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_full_like TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_full_like)
 
 target_sources(
@@ -12,8 +12,6 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES full_like.hpp
     PRIVATE
-        device/full_like_device_operation.cpp
-        device/full_like_factory.cpp
         full_like.cpp
 )
 

@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "transpose.hpp"
 
@@ -31,32 +31,33 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`input_tensor`: Input Tensor.
                 * :attr:`dim1`: First dim of transpose.
                 * :attr:`dim2`: Second dim of transpose.
-                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
+                * :attr:`pad_value` (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`.
 
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    using OperationType = decltype(ttnn::transpose);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"transpose">(
         mod,
-        ttnn::transpose,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int64_t dim1,
-               int64_t dim2,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<float> pad_value) {
-                return self(input_tensor, dim1, dim2, memory_config, pad_value);  // TODO(#34353)
-            },
+
+        // Overload 1: with memory_config
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, int64_t, int64_t, const std::optional<ttnn::MemoryConfig>&, float>(
+                &ttnn::transpose),
             nb::arg("input_tensor"),
             nb::arg("dim1"),
             nb::arg("dim2"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = nb::none(),
-        });
+            nb::arg("pad_value") = 0.0f),
+
+        // Overload 2: without memory_config
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::Tensor&, int64_t, int64_t, float>(&ttnn::transpose),
+            nb::arg("input_tensor"),
+            nb::arg("dim1"),
+            nb::arg("dim2"),
+            nb::arg("pad_value") = 0.0f));
 }
 }  // namespace ttnn::operations::data_movement::detail

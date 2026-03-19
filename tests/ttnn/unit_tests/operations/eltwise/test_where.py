@@ -602,16 +602,16 @@ def test_addcdiv_edgcase(device):
     golden_tensor = torch.addcdiv(c, a, b, value=value)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
-    # output_tensor tensor([ 0.5000,    -inf,     inf,    -inf, -1.5000,  0.0000],dtype=torch.bfloat16)
+    # output_tensor tensor([ 0.5000,    -inf,     inf,     inf, -1.5000,  0.0000],dtype=torch.bfloat16)
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
 
-    # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
-    golden_tensor = torch.where(
-        torch.isnan(golden_tensor), value * torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
+    # Where golden is NaN (e.g. 0/0), normalize ttnn output to NaN for comparison
+    output_tensor = torch.where(
+        torch.isnan(golden_tensor),
+        torch.tensor(float("nan"), dtype=output_tensor.dtype, device=output_tensor.device),
+        output_tensor,
     )
-
-    assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
+    assert torch.allclose(output_tensor, golden_tensor, equal_nan=True)
 
 
 def test_addcdiv_edgcase_fp32(device):
@@ -634,10 +634,13 @@ def test_addcdiv_edgcase_fp32(device):
     assert torch_equal_nan(output_tensor1, golden_tensor)
 
 
-def test_ttnn_where_forge_nan(device):
-    C = torch.ones(1, 4, 1, dtype=torch.float32)
-    T = torch.randn(1, 4, 768, dtype=torch.float32)
-    F = torch.ones(1, 4, 768, dtype=torch.float32) * float("nan")
+@pytest.mark.parametrize(
+    "a_shape, b_shape, c_shape", [((1, 4, 1), (1, 1, 768), (1, 4, 768)), ((1, 4, 768), (1, 4, 768), (1, 4, 768))]
+)
+def test_ttnn_where_forge_nan(device, a_shape, b_shape, c_shape):
+    C = torch.ones(a_shape, dtype=torch.float32)
+    T = torch.randn(b_shape, dtype=torch.float32)
+    F = torch.ones(c_shape, dtype=torch.float32) * float("nan")
     golden = torch.where(C != 0, T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)

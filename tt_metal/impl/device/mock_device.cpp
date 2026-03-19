@@ -1,0 +1,79 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <tt-metalium/experimental/mock_device.hpp>
+
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
+#include <unordered_map>
+#include "llrt/get_platform_architecture.hpp"
+#include "llrt/tt_cluster.hpp"
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include "impl/device/mock_device_util.hpp"
+
+namespace tt::tt_metal::experimental {
+
+struct MockDeviceConfig {
+    tt::ARCH arch;
+    uint32_t num_chips;
+};
+
+// TODO: Remove this global once MetalContext can be initialized with a config object
+// that includes mock device configuration.
+static std::optional<MockDeviceConfig> g_registered_mock_config = std::nullopt;
+
+void configure_mock_mode(tt::ARCH arch, uint32_t num_chips) {
+    g_registered_mock_config = MockDeviceConfig{arch, num_chips};
+    log_info(tt::LogMetal, "Mock mode configured: arch={}, num_chips={}", static_cast<int>(arch), num_chips);
+
+    // Only destroy MetalContext if it already exists to avoid creating it unnecessarily
+    if (tt::tt_metal::MetalContext::instance_exists() &&
+        tt::tt_metal::MetalContext::instance().is_device_manager_initialized()) {
+        tt::tt_metal::detail::ReleaseOwnership();
+    }
+}
+
+void configure_mock_mode_from_hw() {
+    tt::ARCH arch = get_physical_architecture();
+    TT_FATAL(arch != tt::ARCH::Invalid, "No TT hardware detected - cannot auto-detect architecture for mock mode");
+    configure_mock_mode(arch, 1);
+}
+
+void disable_mock_mode() {
+    if (!g_registered_mock_config.has_value()) {
+        return;
+    }
+
+    g_registered_mock_config = std::nullopt;
+    log_info(tt::LogMetal, "Mock mode disabled");
+
+    // Only destroy MetalContext if it already exists
+    if (tt::tt_metal::MetalContext::instance_exists() &&
+        tt::tt_metal::MetalContext::instance().is_device_manager_initialized()) {
+        tt::tt_metal::detail::ReleaseOwnership();
+    }
+}
+
+bool is_mock_mode_registered() {
+    return g_registered_mock_config.has_value();
+}
+
+std::optional<std::string> get_mock_cluster_desc() {
+    if (!g_registered_mock_config.has_value()) {
+        return std::nullopt;
+    }
+
+    auto name = get_mock_cluster_desc_name(g_registered_mock_config->arch, g_registered_mock_config->num_chips);
+    if (!name.has_value()) {
+        TT_THROW(
+            "Unsupported mock device configuration: arch={}, num_chips={}",
+            static_cast<int>(g_registered_mock_config->arch),
+            g_registered_mock_config->num_chips);
+    }
+
+    return name;
+}
+
+}  // namespace tt::tt_metal::experimental

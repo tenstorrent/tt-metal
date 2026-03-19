@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation_types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
@@ -33,6 +34,7 @@
 namespace ttnn::operations::conv {
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
+using ttnn::prim::conv_op_l1_usage;
 
 uint32_t find_closest_largest_divisor(uint32_t num, uint32_t start_divisor) {
     uint32_t divisor = start_divisor;
@@ -1211,7 +1213,13 @@ std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_con
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
-conv_op_l1_usage conv2d::calculate_L1_usage(
+}  // namespace ttnn::operations::conv
+
+namespace ttnn::prim {
+
+using ttnn::operations::sliding_window::SlidingWindowConfig;
+
+conv_op_l1_usage calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Conv2dBlockConfig& block_config,
     const Conv2dParallelizationConfig& pconfig,
@@ -1257,12 +1265,16 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     }
     log_trace(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
 
-    return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
+    return conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
 }
 
-bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w) {
+bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w) {
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
+
+}  // namespace ttnn::prim
+
+namespace ttnn::operations::conv {
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
@@ -1311,8 +1323,8 @@ Tensor fold_input_tensor_if_required(
     std::array<uint32_t, 4>& padding_n4,
     bool& mm_conv,
     Conv2dConfig& conv_config) {
-    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
-    // also need to be folded.
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would still be true as
+    // weights also need to be folded.
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_tensor.memory_config(),
         input_tensor.layout(),
@@ -1427,7 +1439,7 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
 }
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
-    tt::stl::reflection::operator<<(os, config);
+    ttsl::reflection::operator<<(os, config);
     return os;
 }
 

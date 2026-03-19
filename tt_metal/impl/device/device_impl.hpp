@@ -9,9 +9,10 @@
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "impl/dispatch/command_queue.hpp"
+#include "context/metal_context.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "trace/trace_buffer.hpp"
@@ -22,12 +23,19 @@
 namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class AllocatorImpl;
+class DispatchTopology;
+
+namespace experimental {
+class DispatchContext;
+}  // namespace experimental
 
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
     Device() = delete;
     Device(
+        MetalEnv* env,
+        MetalContext* context,
         ChipId device_id,
         uint8_t num_hw_cqs,
         std::size_t l1_small_size,
@@ -47,6 +55,8 @@ public:
     Device(Device&& other) noexcept;
     Device& operator=(Device&& other) noexcept;
 
+    ContextId get_context_id() const { return context_->get_context_id(); }
+
     tt::ARCH arch() const override;
 
     ChipId id() const override { return id_; }
@@ -60,6 +70,7 @@ public:
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
     uint32_t dram_size_per_channel() const override;
+    int get_clock_rate_mhz() const override;
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
@@ -109,8 +120,8 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
-    SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
-    CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) override;
+    SystemMemoryManager& sysmem_manager() override;
+    HWCommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt);
 
     // Metal trace device capture mode
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
@@ -128,13 +139,14 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
+    void init_command_queue_device_with_topology(DispatchTopology* topology);
+
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
     // Puts device into reset
     bool close() override;
 
-    // Program cache interface. Synchronize with worker worker threads before querying or
+    // Program cache interface. Synchronize with worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     void enable_program_cache() override;
     void clear_program_cache() override;
@@ -157,7 +169,7 @@ public:
     };
 
 private:
-    // Depracated ovverrides for sub_device_manager_tracker
+    // Deprecated overrides for sub_device_manager_tracker
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
@@ -190,7 +202,7 @@ private:
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
 
-    void configure_command_queue_programs();
+    void configure_command_queue_programs(DispatchTopology* topology);
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     void mark_allocations_unsafe();
@@ -201,6 +213,9 @@ private:
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
+    // TODO: Remove this member in favor of passing in dependencies directly
+    MetalContext* context_ = nullptr;  // Runtime state
+    MetalEnv* env_;                    // Lower level state
     ChipId id_;
     std::vector<std::vector<ChipId>> tunnels_from_mmio_;
 
@@ -215,12 +230,11 @@ private:
     // Fabric program includes ethernet router kernel
     std::unique_ptr<Program> fabric_program_;
 
-    uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
 
     // SystemMemoryManager is the interface to the hardware command queue
-    std::vector<std::unique_ptr<CommandQueue>> command_queues_;
+    std::vector<std::unique_ptr<HWCommandQueue>> command_queues_;
 
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
@@ -241,6 +255,8 @@ private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
+
+    friend class experimental::DispatchContext;
 };
 
 }  // namespace tt::tt_metal

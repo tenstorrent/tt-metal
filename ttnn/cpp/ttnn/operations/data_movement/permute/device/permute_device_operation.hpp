@@ -20,7 +20,7 @@ struct PermuteDeviceOperation {
     struct operation_attributes_t {
         const SmallVector<uint32_t> dims;
         const MemoryConfig output_mem_config;
-        const std::optional<float> pad_value;
+        const float pad_value = 0.0f;
     };
     struct tensor_args_t {
         const Tensor& input_tensor;
@@ -98,8 +98,8 @@ struct PermuteDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Implemention for when only one of the height dimension (rank - 2) and the width dimension is swapped with another
-    // dimension (dims = {..., rank - 2,
+    // Implementation for when only one of the height dimension (rank - 2) and the width dimension is swapped with
+    // another dimension (dims = {..., rank - 2,
     // ..., i, rank - 1})
     struct MultiCoreTileRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
@@ -180,5 +180,5 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     const SmallVector<uint32_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor,
-    const std::optional<float>& pad_value = std::nullopt);
+    float pad_value = 0.0f);
 }  // namespace ttnn::prim

@@ -5,12 +5,18 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace tt::tt_metal {
+
+// Returns true if the logical tensor data matches the physical tensor data:
+// 1. Row major layout is used.
+// 2. Logical 2D shape matches physical shape.
+// Used for optimizing conversion operations.
+bool logical_matches_physical(const TensorSpec& tensor_spec);
 
 // Returns true if tensor has Host storage.
 bool is_cpu_tensor(const Tensor& tensor);
@@ -29,6 +35,9 @@ bool is_device_tensor(const Tensor& tensor);
  *
  * @param cb_index The CB ID to use for this circular buffer
  * @param tensor The sharded tensor to derive CB configuration from
+ * @param address_offset Byte offset from buffer base address for CB placement (default 0)
+ * @param total_size Total CB size in bytes (default 0 = use tensor's full bank size)
+ * @param core_ranges Optional CoreRangeSet override; if std::nullopt, uses the tensor's shard grid
  * @return CBDescriptor with all fields populated from the tensor
  *
  * Example usage (replaces manual calculation of all CB fields):
@@ -49,6 +58,24 @@ bool is_device_tensor(const Tensor& tensor);
  *   CBDescriptor cb = cb_descriptor_from_sharded_tensor(in_cb_id, device_input_tensor);
  * @endcode
  */
-CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor);
+CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index,
+    const Tensor& tensor,
+    uint32_t address_offset = 0,
+    uint32_t total_size = 0,
+    const std::optional<CoreRangeSet>& core_ranges = std::nullopt);
+
+/**
+ * @brief Get the L1 byte address of a CB descriptor.
+ *
+ * Returns buffer->address() + address_offset when a buffer is present,
+ * or just address_offset when no buffer is set (manually placed CB).
+ */
+inline uint32_t get_cb_address(const CBDescriptor& desc) {
+    if (desc.buffer == nullptr) {
+        return desc.address_offset;
+    }
+    return desc.buffer->address() + desc.address_offset;
+}
 
 }  // namespace tt::tt_metal

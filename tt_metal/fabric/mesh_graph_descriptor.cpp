@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <stdexcept>
 #include <fstream>
 #include <sstream>
@@ -16,6 +17,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -158,7 +160,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     const auto errors = static_validate(temp_proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
-    proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
+    proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
     populate();
 }
@@ -176,6 +178,42 @@ proto::Architecture MeshGraphDescriptor::get_arch() const {
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
+}
+
+uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
+    const auto& instance = get_instance(mesh_instance_id);
+    return get_chip_count(instance);
+}
+
+uint32_t MeshGraphDescriptor::get_chip_count(const InstanceData& mesh_instance) const {
+    TT_FATAL(is_mesh(mesh_instance), "get_chip_count() can only be called on mesh instances");
+
+    const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
+    TT_FATAL(mesh_desc != nullptr, "Mesh descriptor is null for instance {}", mesh_instance.global_id);
+
+    uint32_t chip_count = 1;
+    for (const auto& dim : mesh_desc->device_topology().dims()) {
+        chip_count *= dim;
+    }
+
+    return chip_count;
+}
+
+std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_by_type(
+    const std::vector<std::string>& types) const {
+    std::unordered_map<std::string, uint32_t> counts;
+
+    for (const auto& type : types) {
+        // Check if this type exists in instances_by_type_
+        auto it = instances_by_type_.find(type);
+        if (it != instances_by_type_.end()) {
+            counts[type] = static_cast<uint32_t>(it->second.size());
+        } else {
+            counts[type] = 0;
+        }
+    }
+
+    return counts;
 }
 
 FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
@@ -274,6 +312,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_switch_descriptors(proto, all_errors);
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
+        validate_pinnings(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -299,6 +338,8 @@ void MeshGraphDescriptor::populate() {
     pre_populate_connections_lookups();
 
     populate_connections();
+
+    populate_pinnings();
 }
 
 void MeshGraphDescriptor::populate_top_level_instance() {
@@ -683,6 +724,36 @@ void MeshGraphDescriptor::validate_legacy_requirements(
                 error_messages.push_back(fmt::format(
                     "MGD 1.0 Compatibility requirement: Connections must have exactly 2 nodes (Graph: {})",
                     graph.name()));
+            }
+        }
+    }
+
+    // Check that connections in the same graph don't mix STRICT and RELAXED policies
+    for (const auto& graph : proto.graph_descriptors()) {
+        if (graph.connections_size() == 0) {
+            continue;
+        }
+
+        // Determine the policy of the first connection (default to STRICT if not specified)
+        proto::Policy first_policy = proto::Policy::STRICT;
+        if (graph.connections(0).has_channels() && graph.connections(0).channels().has_policy()) {
+            first_policy = graph.connections(0).channels().policy();
+        }
+
+        // Check all other connections have the same policy
+        for (int i = 1; i < graph.connections_size(); ++i) {
+            const auto& connection = graph.connections(i);
+            proto::Policy connection_policy = proto::Policy::STRICT;
+            if (connection.has_channels() && connection.channels().has_policy()) {
+                connection_policy = connection.channels().policy();
+            }
+
+            if (connection_policy != first_policy) {
+                error_messages.push_back(fmt::format(
+                    "MGD 1.0 Compatibility requirement: Cannot mix STRICT and RELAXED policies in the same graph. "
+                    "All connections in a graph must use the same policy (Graph: {})",
+                    graph.name()));
+                break;  // Only report once per graph
             }
         }
     }
@@ -1455,5 +1526,51 @@ void MeshGraphDescriptor::print_all_nodes() {
 
     // Start from top-level and recursively print in local-id order
     print_node(top_level_id_, 0);
+}
+
+void MeshGraphDescriptor::populate_pinnings() {
+    pinnings_.clear();
+
+    // Extract pinnings from top-level pinnings section
+    for (const auto& pinning : proto_->pinnings()) {
+        // Extract LogicalFabricNodeId from proto
+        const auto& logical_node_id = pinning.logical_fabric_node_id();
+        ::tt::tt_fabric::FabricNodeId fabric_node(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+
+        // Extract PhysicalAsicPosition from proto and convert to AsicPosition
+        const auto& physical_pos = pinning.physical_asic_position();
+        AsicPosition asic_pos(
+            tt::tt_metal::TrayID{physical_pos.tray_id()}, tt::tt_metal::ASICLocation{physical_pos.asic_location()});
+
+        // Store as pair(AsicPosition, FabricNodeId) for C++ compatibility
+        // MeshId is embedded in FabricNodeId, so no need to group by MeshId
+        pinnings_.emplace_back(asic_pos, fabric_node);
+    }
+}
+
+void MeshGraphDescriptor::validate_pinnings(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Track duplicate pinnings for the same logical_fabric_node_id
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> fabric_node_pinning_count;
+
+    for (const auto& pinning : proto.pinnings()) {
+        const auto& logical_node_id = pinning.logical_fabric_node_id();
+
+        uint32_t mesh_id = logical_node_id.mesh_id();
+        uint32_t chip_id = logical_node_id.chip_id();
+
+        // Check for duplicate pinnings
+        auto key = std::make_pair(mesh_id, chip_id);
+        fabric_node_pinning_count[key]++;
+        if (fabric_node_pinning_count[key] > 1) {
+            error_messages.push_back(
+                fmt::format("Duplicate pinning for fabric node (mesh_id: {}, chip_id: {})", mesh_id, chip_id));
+        }
+
+        // Validate that mesh_id exists in the mesh instances
+        // Note: We can't fully validate chip_id range without knowing which mesh descriptor
+        // corresponds to which mesh_id, but we can at least check that mesh_id is reasonable
+        // More precise validation would require checking the top_level_instance structure
+    }
 }
 }  // namespace tt::tt_fabric

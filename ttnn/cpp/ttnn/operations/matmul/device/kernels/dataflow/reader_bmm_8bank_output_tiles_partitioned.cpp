@@ -23,15 +23,16 @@ void kernel_main() {
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(1);
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
     // DPRINT << "batch=" << batch << ENDL();
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     constexpr uint32_t onetile = 1;
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
@@ -59,8 +60,14 @@ void kernel_main() {
                 noc_async_read_barrier();
                 if constexpr (in0_last_ktile_w > 0) {
                     if (kt == Kt - 1) {
-                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
                         pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                    }
+                }
+                if constexpr (in0_last_ktile_h > 0) {
+                    if (kt == Kt - 1) {
+                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(l1_write_addr_in0);
                     }
                 }
                 cb_push_back(cb_id_in0, onetile);

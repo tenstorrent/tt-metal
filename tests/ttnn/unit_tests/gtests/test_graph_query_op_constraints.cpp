@@ -17,7 +17,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
@@ -36,6 +35,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -192,7 +192,7 @@ const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
 // Unary tests
 // ============================================================================
 
-class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
+class EltwiseUnaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseUnaryOpIfTest>,
                              public testing::WithParamInterface<std::tuple<ttnn::TensorSpec>> {};
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
@@ -208,15 +208,19 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
         distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::relu, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -232,7 +236,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::sqrt,
+            [](auto&&... args) { return ttnn::sqrt(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             /*fast_and_approximate_mode=*/false,
@@ -243,8 +247,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -261,13 +266,12 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         const auto& output_spec = input_spec;
         // Add default parameters
         int32_t vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
-        bool approximateMode = false;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::sigmoid,
+            [](auto&&... args) { return ttnn::sigmoid(std::forward<decltype(args)>(args)...); },
             device,
             input_spec,
             vectorMode,
-            approximateMode,
+            ::ttnn::operations::unary::SigmoidMode::ACCURATE,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
@@ -275,8 +279,9 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -296,15 +301,21 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
         float maxVal = 5.0f;
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::clamp, device, input_spec, minVal, maxVal, output_spec.tensor_layout().get_memory_config());
+            [](auto&&... args) { return ttnn::clamp(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec,
+            minVal,
+            maxVal,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -320,15 +331,19 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::reciprocal, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            [](auto&&... args) { return ttnn::reciprocal(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -344,15 +359,19 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::sin, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            [](auto&&... args) { return ttnn::sin(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -368,15 +387,19 @@ TEST_P(EltwiseUnaryOpIfTest, Cos) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::cos, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            [](auto&&... args) { return ttnn::cos(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -407,7 +430,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Softmax tests
 // ============================================================================
 
-class SoftmaxOpIfTest : public TTNNFixtureWithDevice,
+class SoftmaxOpIfTest : public TTNNFixtureWithSuiteDevice<SoftmaxOpIfTest>,
                         public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, int>> {};
 
 TEST_P(SoftmaxOpIfTest, Softmax) {
@@ -423,7 +446,13 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
+            ttnn::softmax,
+            device,
+            input_spec,
+            dim_arg,
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // compute_kernel_config
+            true);         // numeric_stable
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -431,7 +460,8 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
-        EXPECT_EQ(query.output_tensor_spec.value(), input_spec);
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), input_spec);
     }
 }
 
@@ -462,7 +492,7 @@ INSTANTIATE_TEST_SUITE_P(
 // Binary tests
 // ============================================================================
 
-class EltwiseBinaryOpIfTest : public TTNNFixtureWithDevice,
+class EltwiseBinaryOpIfTest : public TTNNFixtureWithSuiteDevice<EltwiseBinaryOpIfTest>,
                               public testing::WithParamInterface<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec>> {};
 
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
@@ -480,7 +510,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::add,
+            [](auto&&... args) { return ttnn::add(args...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -515,7 +545,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::subtract,
+            [](auto&&... args) { return ttnn::subtract(args...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -550,7 +580,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::multiply,
+            [](auto&&... args) { return ttnn::multiply(args...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -585,7 +615,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::maximum,
+            [](auto&&... args) { return ttnn::maximum(args...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -620,7 +650,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
         constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::minimum,
+            [](auto&&... args) { return ttnn::minimum(args...); },
             device,
             input_spec_a,
             input_spec_b,
@@ -689,7 +719,7 @@ INSTANTIATE_TEST_SUITE_P(
 // ============================================================================
 
 class MatmulOpIfTest
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<MatmulOpIfTest>,
       public testing::WithParamInterface<
           std::
               tuple<ttnn::TensorSpec, ttnn::TensorSpec, std::optional<ttnn::operations::matmul::MatmulProgramConfig>>> {
@@ -736,7 +766,14 @@ TEST_P(MatmulOpIfTest, Matmul) {
             false,  // transpose_b
             output_spec.tensor_layout().get_memory_config(),
             output_spec.data_type(),
-            matmul_program_config);
+            matmul_program_config,
+            std::nullopt,   // activation
+            std::nullopt,   // compute_kernel_config
+            std::nullopt,   // core_grid
+            std::nullopt,   // output_tile
+            std::nullopt,   // optional_output_tensor
+            std::nullopt,   // global_cb
+            std::nullopt);  // sub_device_id
 
         log_info(
             tt::LogTest, "query status = {}, error_message = {}", query.status, query.error_message.value_or("none"));
@@ -747,8 +784,9 @@ TEST_P(MatmulOpIfTest, Matmul) {
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 1024);
         EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 1024);
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 1024);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), output_spec);
     }
 }
 
@@ -790,9 +828,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .transpose_mcast = false,
                 .fused_activation = std::nullopt})));
 
-class Conv2dOpIfTest
-    : public ttnn::TTNNFixtureWithDevice,
-      public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
+class Conv2dOpIfTest : public ttnn::TTNNFixtureWithSuiteDevice<Conv2dOpIfTest>,
+                       public ::testing::WithParamInterface<std::optional<ttnn::prim::Conv2dConfig>> {};
 
 TEST_P(Conv2dOpIfTest, Conv2d) {
     const auto& conv2d_config = GetParam();
@@ -849,23 +886,76 @@ TEST_P(Conv2dOpIfTest, Conv2d) {
             std::nullopt,
             conv2d_config,
             std::nullopt,
-            output_spec.tensor_layout().get_memory_config());
+            output_spec.tensor_layout().get_memory_config(),
+            std::nullopt,  // dram_slice_config
+            false,         // return_output_dim
+            false);        // return_weights_and_bias
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 200000 : 150000;
+        const uint32_t l1_peak_threshold = (conv2d_config == std::nullopt) ? 150000 : 120000;
         EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, l1_peak_threshold);
-        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 400000 : 350000;
+        const uint32_t total_peak_threshold = (conv2d_config == std::nullopt) ? 250000 : 220000;
         EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, total_peak_threshold);
-        ASSERT_TRUE(query.output_tensor_spec.has_value());
-        EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 1);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0), output_spec);
     }
 }
 
 INSTANTIATE_TEST_SUITE_P(
     Conv2dConfigVariations,
     Conv2dOpIfTest,
-    ::testing::Values(std::nullopt, ttnn::operations::conv::conv2d::Conv2dConfig{.deallocate_activation = true}));
+    ::testing::Values(std::nullopt, ttnn::prim::Conv2dConfig{.deallocate_activation = true}));
+
+// ============================================================================
+// Transformer tests
+// ============================================================================
+
+class SplitQKVAndSplitHeadsOpIfTest : public ttnn::TTNNFixtureWithDevice {};
+
+TEST_F(SplitQKVAndSplitHeadsOpIfTest, SplitQueryKeyValueAndSplitHeads) {
+    const auto& input_spec = ttnn::TensorSpec(
+        ttnn::Shape{1, 1024, 768},
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            ttnn::L1_MEMORY_CONFIG));
+    const uint32_t num_heads = 4;
+
+    // Run the test
+    {
+        tt::tt_metal::distributed::MeshDevice* device = device_;
+
+        // Calculate expected output shapes
+        const auto batch_size = input_spec.logical_shape()[0];
+        const auto M = input_spec.logical_shape()[-2];
+        const auto K = input_spec.logical_shape()[-1] / (num_heads * 3);
+
+        auto query = ttnn::graph::query_op_constraints(
+            [](auto&&... args) {
+                return ttnn::transformer::split_query_key_value_and_split_heads(std::forward<decltype(args)>(args)...);
+            },
+            device,
+            input_spec,
+            std::optional<ttnn::TensorSpec>{},  // input_tensor_kv
+            num_heads,
+            std::nullopt,
+            true,                                  // transpose_key
+            std::optional<ttnn::MemoryConfig>{});  // memory_config
+
+        EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 48000);  // 49152 as of 2025/11/20
+        EXPECT_GT(query.resource_usage.l1_output_buffer_per_core, 8000);    // 8192 as of 2025/11/20
+
+        ASSERT_TRUE(query.output_tensor_specs.has_value());
+        EXPECT_EQ(query.output_tensor_specs.value().size(), 3);
+        EXPECT_EQ(query.output_tensor_specs.value().at(0).logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
+        EXPECT_EQ(query.output_tensor_specs.value().at(1).logical_shape(), ttnn::Shape({batch_size, num_heads, K, M}));
+        EXPECT_EQ(query.output_tensor_specs.value().at(2).logical_shape(), ttnn::Shape({batch_size, num_heads, M, K}));
+    }
+}
 
 }  // namespace ttnn::operations::binary::test

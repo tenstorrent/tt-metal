@@ -7,7 +7,6 @@
 #include "ttnn/operations/math.hpp"
 
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <optional>
@@ -15,9 +14,8 @@
 #include <variant>
 
 using uint32_t = std::uint32_t;
-using namespace tt::constants;
 
-namespace ttnn::operations::normalization::layernorm::program {
+namespace ttnn::prim {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -46,20 +44,22 @@ inline uint32_t pack_two_bfloat16_into_uint32(std::pair<uint16_t, uint16_t> two_
 
 // 2D Program Factory Implementation
 LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const LayerNormPreAllGatherParams& operation_attributes,
+    const LayerNormPreAllGatherInputs& tensor_args,
+    Tensor& output) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& a = tensor_args.input;
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / TILE_WIDTH;
-    const uint32_t Ht = H / TILE_HEIGHT;
+    const uint32_t Wt = W / tile_width;
+    const uint32_t Ht = H / tile_height;
 
     uint32_t num_tile_rows = NC * Ht;
 
@@ -90,10 +90,10 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
     uint32_t out0_tiles = is_rmsnorm ? 1 : 2;
 
     TT_FATAL(
-        W <= TILE_WIDTH * in0_tiles,
+        W <= tile_width * in0_tiles,
         "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
         W,
-        TILE_WIDTH,
+        tile_width,
         in0_tiles);
     TT_FATAL(
         in0_tiles % block_size == 0,
@@ -258,10 +258,10 @@ LayerNormPreAllGather2DProgramFactory::cached_program_t LayerNormPreAllGather2DP
 
 void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    const auto& input_tensor = tensor_args.input;
+    const LayerNormPreAllGatherParams& operation_attributes,
+    const Tensor& tensor_args,
+    Tensor& output) {
+    const auto& input_tensor = tensor_args;
     const auto input_addr = input_tensor.buffer()->address();
     const auto output_addr = output.buffer()->address();
 
@@ -289,4 +289,4 @@ void LayerNormPreAllGather2DProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::normalization::layernorm::program
+}  // namespace ttnn::prim

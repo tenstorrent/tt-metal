@@ -6,16 +6,14 @@
 #include <sys/types.h>
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/losses.hpp"
@@ -91,7 +89,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Batch) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -136,7 +134,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 1024, W = 1024U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -181,7 +179,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 32U, W = 128007U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -223,14 +221,10 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 64, W = 128000U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -275,7 +269,7 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
     using namespace ttml;
 
     const uint32_t N = 5U, C = 1U, H = 91U, W = 187U;
-    const auto shape = ttnn::SmallVector<uint32_t>{N, C, H, W};
+    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
     std::random_device rd;
     std::mt19937 gen(42);
@@ -296,7 +290,8 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
         }
     }
 
-    auto input = ttml::autograd::create_tensor(core::from_xtensor(input_tensor, &autograd::ctx().get_device()));
+    auto input = ttml::autograd::create_tensor(
+        core::from_xtensor(input_tensor, &autograd::ctx().get_device()), /* requires_grad */ true);
     auto target = ttml::autograd::create_tensor(core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR));
 

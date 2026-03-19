@@ -10,6 +10,19 @@ Automatically extracts real-world operation configurations from model tests and 
 - ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
+## New Simple Tracer (Updated Jan 2026)
+
+The tracer has been updated to use the new `--trace-params` flag instead of graph tracing. This provides:
+- ✅ Simpler implementation (no C++ graph tracing dependencies)
+- ✅ Individual JSON files per operation for easier debugging
+- ✅ Works with both pytest tests and standalone Python scripts
+
+**How it works:**
+1. Runs your test/script with `--trace-params` flag
+2. Collects individual operation JSON files from `generated/ttnn/reports/operation_parameters/`
+3. Filters valid operations (from `Allops.txt`)
+4. Merges into master JSON with deduplication and source tracking
+
 ### Currently Traced Models
 
 The following models have been traced and their configurations are available in `ttnn_operations_master.json`:
@@ -27,14 +40,14 @@ The following models have been traced and their configurations are available in 
 | microsoft/Phi-3-mini-128k-instruct | Small instruction model | `HF_MODEL=microsoft/Phi-3-mini-128k-instruct python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | mistralai/Mistral-7B-Instruct-v0.3 | Instruction-tuned model | `HF_MODEL=mistralai/Mistral-7B-Instruct-v0.3 python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
-| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/vit/demo/demo_vit_performant_imagenet_inference.py` |
+| vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py` |
 | ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
-| stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
-| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/whisper/demo/demo.py` |
-| gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/gemma3/demo/text_demo.py` |
+| stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/demos/stable_diffusion_xl_base/demo/demo_img2img.py` |
+| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
+| gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/multimodal/gemma3/demo/text_demo.py` |
 | falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/falcon7b/demo_wormhole.py` |
 | sentence-bert | Sentence embeddings | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/sentence_bert/demo/demo.py` |
-| segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/segmentation_evaluation/test_segmentation_eval.py` |
+| segmentation | Image segmentation | `python model_tracer/generic_ops_tracer.py models/demos/vision/segmentation/segmentation_evaluation/test_segmentation_eval.py` |
 
 **T3K Machine:**
 
@@ -42,6 +55,13 @@ The following models have been traced and their configurations are available in 
 |-------|---------|---------------------------------|
 | deepseek-ai/DeepSeek-R1-Distill-Qwen-32B | Distilled reasoning model | `HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Qwen-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
 | Qwen/Qwen2.5-Coder-32B | Large code generation model | `HF_MODEL=Qwen/Qwen2.5-Coder-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+| Qwen/Qwen3-32B | Large language model | `HF_MODEL=Qwen/Qwen3-32B python model_tracer/generic_ops_tracer.py models/tt_transformers/demo/simple_text_demo.py::test_demo_text` |
+
+**BH (p150b) Machine:**
+
+| Model | Purpose | Pytest command used for tracing |
+|-------|---------|----------------------------------|
+| whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 
 **WH Galaxy (32 cards):**
 
@@ -69,10 +89,114 @@ These traced configurations provide real-world operation patterns from productio
 
 ### Key Files
 
-- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
+- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [operation tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/operation-tracing.md)
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
+
+---
+
+## Master JSON Format
+
+The `ttnn_operations_master.json` file stores traced configurations in a structured format. The loader supports both legacy and new formats for backward compatibility.
+
+### Configuration Formats
+
+**Legacy Format (Single Source):**
+```json
+{
+  "operations": {
+    "ttnn::silu": {
+      "configurations": [
+        {
+          "arguments": [...],
+          "source": "models/demos/model_name/demo.py",
+          "machine_info": [
+            {
+              "board_type": "Wormhole",
+              "device_series": "n300",
+              "card_count": 1
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+**New Format (Contexts with Multiple Sources):**
+
+The new format supports multiple execution contexts per configuration, enabling the same operation arguments to be traced from different models and hardware configurations:
+
+```json
+{
+  "operations": {
+    "ttnn::silu": {
+      "configurations": [
+        {
+          "arguments": [...],
+          "contexts": [
+            {
+              "source": ["models/demos/deepseek_v3/demo/demo.py"],
+              "machine_info": [
+                {
+                  "board_type": "Wormhole",
+                  "device_series": "tt-galaxy-wh",
+                  "card_count": 32,
+                  "tensor_placements": [
+                    {
+                      "mesh_device_shape": "[4, 8]"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+### Multi-Chip Mesh Configuration
+
+For multi-chip operations (Galaxy, T3K, etc.), the `machine_info` should include `tensor_placements` with `mesh_device_shape` to enable proper runner assignment in CI:
+
+```json
+{
+  "machine_info": [
+    {
+      "board_type": "Wormhole",
+      "device_series": "tt-galaxy-wh",
+      "card_count": 32,
+      "tensor_placements": [
+        {
+          "mesh_device_shape": "[4, 8]"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Note:** Only `mesh_device_shape` is used by the sweep framework for runner assignment. Other tensor placement fields (like `shard_mesh`, `tensor_layout`) may be captured during tracing for informational purposes but are not used for CI routing.
+
+**Mesh Shape Values:**
+| Mesh Shape | Description | Runner Assignment |
+|------------|-------------|-------------------|
+| `[1, 1]` | Single-chip | N150 runner |
+| `[1, 2]` | 2-chip | N300/Galaxy runner |
+| `[1, 4]` | 4-chip | T3K/Galaxy runner |
+| `[2, 4]` | 8-chip | T3K/Galaxy runner |
+| `[4, 8]` | 32-chip | Galaxy runner |
+| `[8, 4]` | 32-chip (alt layout) | Galaxy runner |
+
+The sweep framework automatically:
+1. Groups vectors by mesh shape during generation
+2. Creates separate JSON files per mesh (e.g., `op__mesh_4x8.json`)
+3. Routes tests to appropriate hardware runners in CI
 
 ---
 
@@ -121,11 +245,22 @@ python model_tracer/generic_ops_tracer.py /path/to/model/demo.py
 python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
 
 # Examples - Standalone scripts
-python model_tracer/generic_ops_tracer.py models/demos/wormhole/resnet50/demo/demo.py
+python model_tracer/generic_ops_tracer.py models/demos/vision/classification/resnet50/wormhole/demo/demo.py
 python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inference.py
 
 # Keep trace files (default: auto-deleted after adding to master)
 python model_tracer/generic_ops_tracer.py <test_path> --store
+
+# Import traces from another machine
+# 1. On Machine A: Trace with --store to keep JSON files
+python model_tracer/generic_ops_tracer.py test.py --store
+# This creates: generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/
+
+# 2. Copy trace directory to Machine B
+# scp -r generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/ machine_b:/tmp/traces/
+
+# 3. On Machine B: Import the traces
+python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_name>_<timestamp>
 ```
 
 **Detection Logic:**
@@ -140,6 +275,8 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
 - Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
+- Mesh device shape for multi-chip configurations (e.g., `[4, 8]` for 32-chip Galaxy)
+- Tensor placements for distributed operations
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`
@@ -174,14 +311,14 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name model_traced.pad_model_traced
+  --module-name model_traced.add_model_traced
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name model_traced.pad_model_traced \
+  --module-name model_traced.add_model_traced \
   --suite model_traced \
   --vector-source vectors_export \
-  --result-dest results_export
+  --result-dest results_export --summary
 ```
 
 ---

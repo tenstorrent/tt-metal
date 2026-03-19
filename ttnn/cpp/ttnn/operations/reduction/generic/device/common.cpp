@@ -4,10 +4,10 @@
 
 #include "common.hpp"
 
-namespace ttnn::operations::reduction::generic::detail {
+namespace ttnn::prim {
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
-    uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
+    uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
     if (reduce_dim == tt::tt_metal::ReduceOpDim::H) {
         return tt::tt_metal::ReduceOpParallelizationStrategy::MULTI_CORE_H;
     }
@@ -22,4 +22,4 @@ tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     }
     TT_THROW("Unsupported reduce dim");
 }
-}  // namespace ttnn::operations::reduction::generic::detail
+}  // namespace ttnn::prim

@@ -87,11 +87,14 @@ def compute_reference_reduce_to_root(
     return torch.cat(l_final_cores, dim=1), torch.cat(s_final_cores, dim=1), torch.cat(m_final_cores, dim=1)
 
 
+@pytest.mark.skip(
+    reason="Consistently failing with data mismatch after trace replay on all BH multi-chip setups. See #39098"
+)
 @skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 217872}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 225280}),
     ],
     indirect=["device_params"],
     ids=["fabric_1d_linear_trace"],

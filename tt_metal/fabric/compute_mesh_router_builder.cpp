@@ -3,20 +3,159 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_mesh_router_builder.hpp"
+#include <limits>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/third_party/umd/device/api/umd/device/types/core_coordinates.hpp"
-#include "metal_soc_descriptor.h"
+#include "llrt/metal_soc_descriptor.hpp"
 #include "tt_metal.hpp"
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric {
+
+namespace {
+
+// Set bits [0, channels_per_vc[0]) | [offset1, offset1+channels_per_vc[1]) | ... in a bitfield.
+void set_all_channel_bits(
+    uint16_t& bitfield, const std::array<std::size_t, builder_config::MAX_NUM_VCS>& channels_per_vc) {
+    size_t offset = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        bitfield |= static_cast<uint16_t>(((1u << channels_per_vc[vc]) - 1) << offset);
+        offset += channels_per_vc[vc];
+    }
+}
+
+// Replace a VC's channel bits in a bitfield using override settings.
+// Clears all bits in [offset, offset+count), then sets only override-specified bits.
+void apply_vc_override_to_bitfield(
+    uint16_t& bitfield,
+    size_t offset,
+    size_t count,
+    size_t vc,
+    const std::optional<bool>& force_enable_all,
+    const std::optional<std::vector<size_t>>& force_enable_indices,
+    const char* direction_name) {
+    uint16_t vc_mask = static_cast<uint16_t>(((1u << count) - 1) << offset);
+
+    // CLEAR all bits for this VC range
+    bitfield &= ~vc_mask;
+
+    // SET only what the override says
+    if (force_enable_all.value_or(false)) {
+        bitfield |= vc_mask;
+    } else if (force_enable_indices.has_value()) {
+        for (size_t idx : *force_enable_indices) {
+            TT_FATAL(
+                idx < count,
+                "Override {} channel index {} exceeds VC{} {} count {}",
+                direction_name,
+                idx,
+                vc,
+                direction_name,
+                count);
+            bitfield |= (1u << (offset + idx));
+        }
+    }
+}
+
+}  // namespace
+
+void apply_global_overrides_to_entry(
+    ChannelTrimmingOverrides& entry,
+    const ChannelTrimmingGlobalOverrides& global_overrides,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) {
+    size_t sender_offset = 0;
+    size_t receiver_offset = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        const auto& vc_override = global_overrides.per_vc[vc];
+
+        if (vc_override.has_sender_override()) {
+            apply_vc_override_to_bitfield(
+                entry.sender_channel_used_bitfield_by_vc,
+                sender_offset,
+                sender_channels_per_vc[vc],
+                vc,
+                vc_override.force_enable_all_sender_channels,
+                vc_override.force_enable_sender_channels,
+                "sender");
+        }
+        sender_offset += sender_channels_per_vc[vc];
+
+        if (vc_override.has_receiver_override()) {
+            apply_vc_override_to_bitfield(
+                entry.receiver_channel_data_forwarded_bitfield_by_vc,
+                receiver_offset,
+                receiver_channels_per_vc[vc],
+                vc,
+                vc_override.force_enable_all_receiver_channels,
+                vc_override.force_enable_receiver_channels,
+                "receiver");
+        }
+        receiver_offset += receiver_channels_per_vc[vc];
+    }
+}
+
+namespace {
+
+// Resolve the effective channel trimming overrides for a single router.
+//
+// Looks up the router in the capture map (if present), then conditionally applies
+// global overrides. Returns nullopt if neither capture nor global override applies
+// (meaning the builder should use its default: all channels enabled).
+//
+// Priority:
+//   - No capture, no global override → nullopt (builder default)
+//   - Capture only → capture entry (existing behavior)
+//   - Global override only → fully-enabled baseline with override applied
+//   - Capture + global override → capture entry with override applied
+std::optional<ChannelTrimmingOverrides> resolve_channel_trimming_for_router(
+    const std::optional<ChannelTrimmingOverrideMap>& capture_overrides,
+    const ChannelTrimmingGlobalOverrides& global_overrides,
+    ChipId chip_id,
+    chan_id_t eth_chan,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) {
+    // Look up capture entry for this router
+    std::optional<ChannelTrimmingOverrides> result;
+    if (capture_overrides.has_value()) {
+        auto key = make_override_key(chip_id, eth_chan);
+        auto it = capture_overrides->find(key);
+        if (it != capture_overrides->end()) {
+            result = it->second;
+        }
+    }
+
+    bool has_global_override = global_overrides.has_any_override();
+    if (!result.has_value() && !has_global_override) {
+        return std::nullopt;  // No trimming — builder default
+    }
+
+    if (!result.has_value()) {
+        // No capture entry — construct a fully-enabled baseline for the override to modify
+        ChannelTrimmingOverrides baseline;
+        baseline.sender_channel_min_packet_size_seen_bytes_by_vc.fill(std::numeric_limits<uint16_t>::max());
+        set_all_channel_bits(baseline.sender_channel_used_bitfield_by_vc, sender_channels_per_vc);
+        set_all_channel_bits(baseline.receiver_channel_data_forwarded_bitfield_by_vc, receiver_channels_per_vc);
+        result = baseline;
+    }
+
+    if (has_global_override) {
+        apply_global_overrides_to_entry(*result, global_overrides, sender_channels_per_vc, receiver_channels_per_vc);
+    }
+
+    return result;
+}
+
+}  // namespace
 
 ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     FabricNodeId local_node,
@@ -69,22 +208,24 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     auto tensix_config_for_lookup = will_create_tensix_builder ? fabric_tensix_config : FabricTensixConfig::DISABLED;
     const auto& edm_config = builder_context.get_fabric_router_config(tensix_config_for_lookup, eth_direction);
 
-    // Create channel mapping EARLY (needed for computing injection flags)
+    // Determine the router variant
+    bool has_z_router = fabric_context.has_z_router_on_device(control_plane, local_node);
     RouterVariant variant = (location.direction == RoutingDirection::Z) ? RouterVariant::Z_ROUTER : RouterVariant::MESH;
+
+    // Create channel mapping EARLY (needed for computing injection flags)
     const auto& intermesh_config = fabric_context.get_builder_context().get_intermesh_vc_config();
     auto channel_mapping =
-        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config);
+        FabricRouterChannelMapping(topology, downstream_is_tensix_builder, variant, &intermesh_config, has_z_router);
 
     // Create connection mapping (Phase 3)
     RouterConnectionMapping connection_mapping;
     if (variant == RouterVariant::Z_ROUTER) {
         connection_mapping = RouterConnectionMapping::for_z_router();
     } else {
-        // Check if this device has a Z router
-        bool has_z = fabric_context.has_z_router_on_device(device->id());
         // Enable VC1 for all routers when intermesh VC is configured
         bool enable_vc1 = intermesh_config.requires_vc1;
-        connection_mapping = RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z, enable_vc1);
+        connection_mapping =
+            RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z_router, enable_vc1);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders
@@ -138,6 +279,15 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         actual_receiver_channels_per_vc[vc] = 1;  // Always 1 receiver per VC (when VC exists)
     }
 
+    // Resolve channel trimming for this router: capture lookup + global override application
+    auto channel_trimming_overrides_for_router = resolve_channel_trimming_for_router(
+        builder_context.get_channel_trimming_overrides(),
+        builder_context.get_channel_trimming_global_overrides(),
+        device->id(),
+        location.eth_chan,
+        actual_sender_channels_per_vc,
+        actual_receiver_channels_per_vc);
+
     // NOW create erisc builder with computed injection flags and actual channel counts
     auto edm_builder = std::make_unique<FabricEriscDatamoverBuilder>(FabricEriscDatamoverBuilder::build(
         device,
@@ -151,14 +301,15 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         eth_direction,
         downstream_is_tensix_builder,
         actual_sender_channels_per_vc,
-        actual_receiver_channels_per_vc));
+        actual_receiver_channels_per_vc,
+        channel_trimming_overrides_for_router));
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
         // Enable updates at a fixed interval for link stability and link status updates
         constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
-        edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+        edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE);
     }
 
     // Create tensix builder if needed
@@ -194,8 +345,8 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
 
     // Sender channel 0 is always reserved for the local worker (VC0 only).
     //
-    // VC0: Sender channels 1–3 correspond to the three upstream neighbors
-    // VC1: Sender channels 0–2 correspond to the three upstream neighbors
+    // VC0: Sender channels 1–4 correspond to the four upstream neighbors (E/W/N/S/Z)
+    // VC1: Sender channels 0–3 correspond to the four upstream neighbors (E/W/N/S)
     //
     // The mapping from receiver direction → sender channel depends on the
     // downstream forwarding direction:
@@ -204,21 +355,25 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     //         WEST  → channel 1 (VC0) or 0 (VC1)
     //         NORTH → channel 2 (VC0) or 1 (VC1)
     //         SOUTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
     //
     //   • Downstream = WEST:
     //         EAST  → channel 1 (VC0) or 0 (VC1)
     //         NORTH → channel 2 (VC0) or 1 (VC1)
     //         SOUTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
     //
     //   • Downstream = NORTH:
     //         EAST  → channel 1 (VC0) or 0 (VC1)
     //         WEST  → channel 2 (VC0) or 1 (VC1)
     //         SOUTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
     //
     //   • Downstream = SOUTH:
     //         EAST  → channel 1 (VC0) or 0 (VC1)
     //         WEST  → channel 2 (VC0) or 1 (VC1)
     //         NORTH → channel 3 (VC0) or 2 (VC1)
+    //         Z     → channel 4 (VC0) or 3 (VC1)
 
     size_t downstream_compact_index_for_upstream;
     if (downstream_direction == eth_chan_directions::EAST) {
@@ -232,8 +387,8 @@ uint32_t ComputeMeshRouterBuilder::get_downstream_sender_channel(
     }
 
     // Compute sender channel based on VC
-    // VC0: 1 + compact_index (channels 1-3, skip 0 for local worker)
-    // VC1: compact_index (channels 0-2, no local worker channel)
+    // VC0: 1 + compact_index (channels 1-4 for normal mesh, can go up to 4 for Z connections)
+    // VC1: compact_index (channels 0-3, no local worker channel)
     uint32_t sender_channel =
         (vc == 0) ? (1 + downstream_compact_index_for_upstream) : downstream_compact_index_for_upstream;
 
@@ -277,10 +432,12 @@ std::vector<bool> ComputeMeshRouterBuilder::compute_sender_channel_injection_fla
 
     bool I_am_ew = builder::is_east_or_west(direction);
     bool I_am_ns = builder::is_north_or_south(direction);
+    bool I_am_z = direction == eth_chan_directions::Z;
 
     TT_FATAL(
-        I_am_ew ^ I_am_ns,
-        "Internal error: In compute_sender_channel_injection_flags_for_vc, I_am_ew and I_am_ns cannot both be true");
+        I_am_ew + I_am_ns + I_am_z == 1,
+        "Internal error: In compute_sender_channel_injection_flags_for_vc, exactly one of I_am_ew, I_am_ns, and I_am_z "
+        "must be true");
 
     for (size_t ch_idx = 1; ch_idx < num_channels; ++ch_idx) {
         // Map to VC0 equivalent channel for direction lookup
@@ -372,8 +529,7 @@ void ComputeMeshRouterBuilder::connect_to_local_tensix_builder(FabricTensixDatam
 }
 
 void ComputeMeshRouterBuilder::establish_connections_to_router(
-    ComputeMeshRouterBuilder& downstream_router,
-    const std::function<bool(ConnectionType)>& /*connection_type_filter*/) {
+    ComputeMeshRouterBuilder& downstream_router, const std::function<bool(ConnectionType)>& connection_type_filter) {
     // Establish VC connections between this router and the specified downstream router
     // This function does NOT iterate through targets - it connects to the single downstream_router passed in
     uint32_t num_vcs = channel_mapping_.get_num_virtual_channels();
@@ -382,50 +538,111 @@ void ComputeMeshRouterBuilder::establish_connections_to_router(
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-        // Compute sender channel on downstream router based on directions and VC
-        uint32_t downstream_sender_channel =
-            get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
-
-        // Get downstream builder and mapping
-        auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);
-        auto downstream_mapping = downstream_router.channel_mapping_.get_sender_mapping(vc, downstream_sender_channel);
-        uint32_t internal_channel_id = downstream_mapping.internal_sender_channel_id;
-
-        // Setup producer → consumer connection
-        // setup_downstream_vc_connection handles type checking internally
-        erisc_builder_->setup_downstream_vc_connection(downstream_builder, vc, vc, internal_channel_id);
-        // Record connection in registry if present
-        if (connection_registry_) {
-            RouterConnectionRecord record{
-                .source_node = local_node_,
-                .source_direction = location_.direction,
-                .source_eth_chan = location_.eth_chan,
-                .source_vc = vc,
-                .source_receiver_channel = 0,
-                .dest_node = downstream_router.local_node_,
-                .dest_direction = downstream_router.location_.direction,
-                .dest_eth_chan = downstream_router.location_.eth_chan,
-                .dest_vc = vc,
-                .dest_sender_channel = internal_channel_id,
-                .connection_type = connection_mapping_.get_downstream_targets(vc, 0).at(0).type};
-            connection_registry_->record_connection(record);
-        }
-
+        auto targets = connection_mapping_.get_downstream_targets(vc, 0);
         log_debug(
-            tt::LogTest,
-            "Router at x={}, y={}, Direction={}, FabricNodeId={} :: Connecting VC{} receiver_ch={} to downstream "
-            "router at x={}, y={}, Direction={}, VC{}, internal_ch={}",
+            LogMetal,
+            "Router at x={}, y={}, Channel={}, Direction={}, FabricNodeId={} :: VC{} has {} targets",
             get_noc_x(),
             get_noc_y(),
+            location_.eth_chan,
             get_eth_direction(),
             local_node_,
             vc,
-            0,
-            downstream_builder->get_noc_x(),
-            downstream_builder->get_noc_y(),
-            downstream_builder->get_direction(),
-            vc,
-            internal_channel_id);
+            targets.size());
+        for (const auto& target : targets) {
+            if (!connection_type_filter(target.type)) {
+                // Skip connection if it's not allowed by the connection_type_filter
+                log_debug(
+                    LogMetal,
+                    "Skipping VC{} connection type({}) not allowed by connection_type_filter",
+                    vc,
+                    static_cast<int>(target.type));
+                continue;
+            }
+            // Only apply direction filtering for 2D routing or when there are multiple targets
+            // For 1D routing with a single target, skip direction check to avoid false negatives
+            bool should_check_direction = is_2D_routing || targets.size() > 1;
+            if (should_check_direction && target.target_direction.has_value() &&
+                target.target_direction.value() != downstream_router.get_location().direction) {
+                // connection mapping contains connection info to all downstream directions.
+                // Proceed with connection setup only for the current downstream direction.
+                log_debug(
+                    LogMetal,
+                    "Skipping VC{} connection to direction({}), Downstream router is at direction({})",
+                    vc,
+                    target.target_direction.value(),
+                    downstream_router.get_location().direction);
+                continue;
+            }
+
+            // Compute sender channel on downstream router based on directions and VC
+            uint32_t downstream_sender_channel =
+                get_downstream_sender_channel(is_2D_routing, downstream_router.get_eth_direction(), vc);
+
+            // Validate the channel index using downstream router's channel mapping
+            uint32_t num_sender_channels_for_vc = downstream_router.channel_mapping_.get_num_sender_channels_for_vc(vc);
+            TT_FATAL(
+                downstream_sender_channel < num_sender_channels_for_vc,
+                "Computed downstream sender channel {} exceeds available channels ({}) for VC{} on downstream router",
+                downstream_sender_channel,
+                num_sender_channels_for_vc,
+                vc);
+
+            // Get downstream builder and mapping
+            auto* downstream_builder = downstream_router.get_builder_for_vc_channel(vc, downstream_sender_channel);
+            auto downstream_mapping =
+                downstream_router.channel_mapping_.get_sender_mapping(vc, downstream_sender_channel);
+
+            // Get both absolute and VC-relative channel IDs
+            // - absolute_channel_id: flattened across all VCs (used for flat arrays)
+            // - vc_relative_channel_id: 0-based within the VC (used for allocator calls)
+            uint32_t absolute_channel_id = downstream_mapping.internal_sender_channel_id;
+            uint32_t vc_relative_channel_id = downstream_sender_channel;  // This is already VC-relative
+
+            // Setup producer → consumer connection
+            // Pass both indices - build_connection_to_fabric_channel needs both
+            erisc_builder_->setup_downstream_vc_connection(
+                downstream_builder, vc, vc, absolute_channel_id, vc_relative_channel_id);
+            // Record connection in registry if present
+            if (connection_registry_) {
+                RouterConnectionRecord record{
+                    .source_node = local_node_,
+                    .source_direction = location_.direction,
+                    .source_eth_chan = location_.eth_chan,
+                    .source_vc = vc,
+                    .source_receiver_channel = 0,
+                    .dest_node = downstream_router.local_node_,
+                    .dest_direction = downstream_router.location_.direction,
+                    .dest_eth_chan = downstream_router.location_.eth_chan,
+                    .dest_vc = vc,
+                    .dest_sender_channel = absolute_channel_id,
+                    .connection_type = connection_mapping_.get_downstream_targets(vc, 0).at(0).type};
+                connection_registry_->record_connection(record);
+            }
+
+            log_debug(
+                tt::LogTest,
+                "M{}-D{}: Router at x={}, y={}, UpstreamEthernetChannel={}, Direction={} :: Connecting VC{} "
+                "receiver_ch={} to "
+                "downstream "
+                "router at x={}, y={}, DownstreamEthernetChannel={}, Direction={}, VC{}, RelativeChannel={}, "
+                "AbsoluteChannel={}",
+                local_node_.mesh_id.get(),
+                local_node_.chip_id,
+                get_noc_x(),
+                get_noc_y(),
+                location_.eth_chan,
+                get_eth_direction(),
+                vc,
+                0,
+                downstream_builder->get_noc_x(),
+                downstream_builder->get_noc_y(),
+                downstream_router.location_.eth_chan,
+                downstream_builder->get_direction(),
+                vc,
+                vc_relative_channel_id,
+                absolute_channel_id);
+        }
     }
 }
 
@@ -444,6 +661,7 @@ void ComputeMeshRouterBuilder::configure_connection(
         "Tried to connect router to downstream in worker connection mode");
 
     // Establish INTRA_MESH connections between the two routers (bidirectional)
+    // Z routers follow inter-mesh conventions: VC0 and VC1 both use INTRA_MESH for local routing
     auto intra_mesh_filter = [](ConnectionType type) { return type == ConnectionType::INTRA_MESH; };
 
     establish_connections_to_router(peer_compute, intra_mesh_filter);
@@ -577,14 +795,14 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
     const auto num_enabled_risc_cores = get_configured_risc_count();
 
     for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
-        // Get compile-time args and append cluster-wide coordination info
-        std::vector<uint32_t> ct_args = erisc_builder_->get_compile_time_args(risc_id);
+        // Get compile-time args (positional + named) and append cluster-wide coordination info
+        auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
 
         const auto is_master_risc_core = (eth_chan == ctx.master_router_chan) && (risc_id == 0);
-        ct_args.push_back(is_master_risc_core);
-        ct_args.push_back(ctx.master_router_chan);
-        ct_args.push_back(ctx.num_local_fabric_routers);
-        ct_args.push_back(ctx.router_channels_mask);
+        named_ct_args["IS_LOCAL_HANDSHAKE_MASTER"] = is_master_risc_core;
+        named_ct_args["LOCAL_HANDSHAKE_MASTER_ETH_CHAN"] = ctx.master_router_chan;
+        named_ct_args["NUM_LOCAL_EDMS"] = ctx.num_local_fabric_routers;
+        named_ct_args["EDM_CHANNELS_MASK"] = ctx.router_channels_mask;
 
         // Determine processor
         auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
@@ -595,10 +813,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
             proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
         }
 
-        // Use Os (optimize for size) when VC1 is active to fit in code space
-        // Use O3 (optimize for performance) otherwise
-        bool vc1_active = erisc_builder_->config.num_used_receiver_channels_per_vc[1] > 0;
-        auto opt_level = vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
+        auto opt_level = erisc_builder_->get_kernel_opt_level();
 
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
@@ -610,6 +825,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .processor = proc,
                 .compile_args = ct_args,
                 .defines = defines,
+                .named_compile_args = named_ct_args,
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);

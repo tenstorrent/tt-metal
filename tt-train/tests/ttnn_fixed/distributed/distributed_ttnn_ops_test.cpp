@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -12,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/device.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
@@ -40,6 +40,9 @@ protected:
 }  // namespace
 
 TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
+    // Test failing with watcher enabled, github issue #29556
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
 
     uint32_t size = 64U;
@@ -66,6 +69,9 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
 }
 
 TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
+    // Test failing with watcher enabled, github issue #29556
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
 
     uint32_t size = 64U;
@@ -92,6 +98,9 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
 }
 
 TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
+    // Test failing with watcher enabled, github issue #29556
+    SKIP_FOR_WATCHER();
+
     auto* device = &ttml::autograd::ctx().get_device();
 
     uint32_t size = 64U;

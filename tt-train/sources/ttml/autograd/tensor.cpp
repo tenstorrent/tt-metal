@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,6 +33,11 @@ Tensor::Tensor(const tt::tt_metal::Tensor& value, bool requires_grad) : m_value(
 }
 
 void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
+    // Skip gradient addition if not required. Part of branch pruning autograd optimization.
+    if (!m_requires_grad) {
+        return;
+    }
+
     if (!is_grad_initialized()) {
         auto value_shape = m_value.get_tensor().logical_shape();
         if (grad.logical_shape() != value_shape) {
@@ -59,7 +64,7 @@ void Tensor::add_grad(const tt::tt_metal::Tensor& grad) {
 
 void Tensor::backward(bool retain_graph) {
     if (!m_node_id.has_value()) {
-        return;
+        throw std::runtime_error("[Tensor::backward] This tensor has no associated gradient function.");
     }
     std::vector<size_t> sorted_nodes;
     std::unordered_set<std::size_t> visited_nodes;

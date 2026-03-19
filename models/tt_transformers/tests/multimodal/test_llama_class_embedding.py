@@ -19,7 +19,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 ###### Torch op #####
 # Loading the whole Llama model can be avoided by copying this method [HF class embedding](https://github.com/huggingface/transformers/blob/b2feaa215f1f736a2c36c2198a4e3f089e72c564/src/transformers/models/mllama/modeling_mllama.py#L1030)
 # and pasting it into this custom ClassEmbedding. This allows to test only the class embedding method in HF, it generates the same identical tensor as before with meta lib.
-# HF uses transformers lib which applies the class embeddding with only pytorch operations as in the TT unit test here
+# HF uses transformers lib which applies the class embedding with only pytorch operations as in the TT unit test here
 class ClassEmbedding(nn.Module):
     def __init__(self, width):
         super().__init__()

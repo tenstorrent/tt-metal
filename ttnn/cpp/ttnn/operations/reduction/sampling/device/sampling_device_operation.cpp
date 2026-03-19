@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include <optional>
@@ -12,18 +13,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::reduction::sampling {
-
-SamplingDeviceOperation::program_factory_t SamplingDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return program::SamplingProgramFactory{};
-}
-
-void SamplingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
+namespace ttnn::prim {
 void SamplingDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_values_tensor = tensor_args.input_values;
@@ -55,7 +45,10 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         "Input values and indices must have the same shape!");
     auto input_shape = input_values_tensor.logical_shape();
     TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
-    TT_FATAL(input_shape[3] % 32 == 0, "Input inner dim ({}) must be divisible by 32, pad if needed!", input_shape[3]);
+    TT_FATAL(
+        input_shape[3] != 0 && input_shape[3] % 32 == 0,
+        "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
+        input_shape[3]);
 
     if (args.sub_core_grids.has_value()) {
         TT_FATAL(
@@ -86,7 +79,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(temp.logical_shape() == Shape({32}), "temp must have shape [32]!");
 }
 
-spec_return_value_t SamplingDeviceOperation::compute_output_specs(
+TensorSpec SamplingDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -101,7 +94,7 @@ spec_return_value_t SamplingDeviceOperation::compute_output_specs(
         TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));
 }
 
-tensor_return_value_t SamplingDeviceOperation::create_output_tensors(
+Tensor SamplingDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
@@ -110,9 +103,6 @@ tensor_return_value_t SamplingDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_values.device());
 }
 
-}  // namespace ttnn::operations::reduction::sampling
-
-namespace ttnn::prim {
 ttnn::Tensor sampling(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
@@ -122,10 +112,9 @@ ttnn::Tensor sampling(
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& preallocated_output_tensor) {
-    using OperationType = ttnn::operations::reduction::sampling::SamplingDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.seed = seed, .sub_core_grids = sub_core_grids},
-        OperationType::tensor_args_t{
+    return ttnn::device_operation::launch<SamplingDeviceOperation>(
+        SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids},
+        SamplingInputs{
             .input_values = input_values_tensor,
             .input_indices = input_indices_tensor,
             .k = k,
@@ -133,4 +122,5 @@ ttnn::Tensor sampling(
             .temp = temp,
             .preallocated_output = preallocated_output_tensor});
 }
+
 }  // namespace ttnn::prim

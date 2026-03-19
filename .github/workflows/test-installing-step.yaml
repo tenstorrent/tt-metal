@@ -1,0 +1,12 @@
+name: "Validate installation step from instructions"
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
+
+jobs:
+  test-installing-step:
+    uses: ./.github/workflows/test-installing-step-impl.yaml
+    secrets: inherit

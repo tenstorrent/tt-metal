@@ -8,12 +8,10 @@
 #include <tt-metalium/allocator.hpp>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/allocator/bank_manager.hpp"
 
@@ -27,6 +25,10 @@ struct AllocatorDependenciesParam {
     tt::tt_metal::BankManager::AllocatorDependencies::AdjacencyList expected_dependencies;
 };
 
+uint32_t get_dram_alignment_from_hal() {
+    return tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::DRAM);
+}
+
 tt::tt_metal::BankManager get_bank_manager_with_allocator_dependencies(
     const uint64_t size,
     const uint32_t alignment,
@@ -34,7 +36,14 @@ tt::tt_metal::BankManager get_bank_manager_with_allocator_dependencies(
     std::vector<int64_t> bank_desc = {0};
     const uint64_t unreserved_base = 0;
     return tt::tt_metal::BankManager(
-        tt::tt_metal::BufferType::DRAM, bank_desc, size, alignment, unreserved_base, false, allocator_dependencies);
+        tt::tt_metal::BufferType::DRAM,
+        bank_desc,
+        size,
+        alignment,
+        get_dram_alignment_from_hal(),
+        unreserved_base,
+        false,
+        allocator_dependencies);
 }
 
 }  // namespace overlapped_bank_manager_tests
@@ -1004,6 +1013,7 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
         total_size,
         address_limit,  // interleaved_address_limit
         alignment,
+        get_dram_alignment_from_hal(),
         0,      // alloc_offset
         false,  // disable_interleaved
         deps);
@@ -1130,6 +1140,7 @@ TEST(OverlappedAllocators, NonzeroAllocOffset) {
         allocatable_l1_size,
         interleaved_address_limit,
         l1_alignment,
+        get_dram_alignment_from_hal(),
         l1_unreserved_base,
         disable_interleaved,
         deps);

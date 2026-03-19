@@ -4,23 +4,16 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
-#include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
+#include <optional>
 
-namespace ttnn {
-namespace operations::experimental {
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
-struct PlusOneOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        bool skip_negative_entries = false);
-};
+namespace ttnn::operations::experimental {
 
-}  // namespace operations::experimental
+ttnn::Tensor plus_one(
+    const Tensor& input_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool skip_negative_entries = false);
 
-constexpr auto plus_one =
-    ttnn::register_operation<"ttnn::plus_one", ttnn::operations::experimental::PlusOneOperation>();
-
-}  // namespace ttnn
+}  // namespace ttnn::operations::experimental

@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "moe.hpp"
 
 namespace ttnn::operations::reduction::detail {
@@ -22,18 +22,21 @@ void bind_reduction_moe_operation(nb::module_& mod) {
 
             Note:
                 This is equivalent to the following PyTorch code:
-                val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
-                return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)
+
+                .. code-block:: python
+
+                    val, ind = torch.topk(input_tensor + expert_mask_tensor, k)
+                    return torch.sum(torch.softmax(val+topk_mask_tensor, dim=-1)*(ind==0), dim=-1)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor for moe.
-                * :attr:`expert_mask_tensor`: Expert Mask Tensor for mask to out invalid experts.
-                * :attr:`topk_mask_tensor`: Topk Mask Tensor for mask to out everything except topk.
-                * :attr:`k`: the number of top elements to look for
+                input_tensor (ttnn.Tensor): Input Tensor for moe.
+                expert_mask_tensor (ttnn.Tensor): Expert Mask Tensor to mask out invalid experts.
+                topk_mask_tensor (ttnn.Tensor): Topk Mask Tensor to mask out everything except topk.
+                k (number): the number of top elements to look for
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensors
-                * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
+                memory_config (ttnn.MemoryConfig, optional): Memory Config of the output tensors
+                output_tensor (Optional[ttnn.Tensor]): preallocated output tensors
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -65,28 +68,18 @@ void bind_reduction_moe_operation(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::moe);
-    bind_registered_operation(
+    ttnn::bind_function<"moe">(
         mod,
-        ttnn::moe,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const Tensor& input_tensor,
-               const Tensor& expert_mask_tensor,
-               const Tensor& topk_mask_tensor,
-               uint16_t k,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::moe,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_mask_tensor").noconvert(),
             nb::arg("topk_mask_tensor").noconvert(),
             nb::arg("k") = 32,
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

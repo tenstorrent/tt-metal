@@ -34,6 +34,11 @@ enum class ProgramBinaryStatus : uint8_t;
 struct KernelGroup;
 struct ProgramCommandSequence;
 
+namespace distributed {
+class MeshWorkloadImpl;
+class MeshDevice;
+}  // namespace distributed
+
 namespace program_dispatch {
 
 struct ProgramDispatchMetadata {
@@ -68,18 +73,14 @@ uint32_t configure_crta_offsets_for_kernel_groups(
     uint32_t programmable_core_type_index,
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
-    uint32_t crta_base_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
+    uint32_t crta_base_offset);
 
 uint32_t finalize_rt_args(
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
     uint32_t programmable_core_type_index,
-    uint32_t& rta_offset,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_offsets,
-    std::array<uint32_t, DISPATCH_CLASS_MAX>& crta_sizes);
+    uint32_t& rta_offset);
 
 uint32_t finalize_sems(
     uint32_t programmable_core_type_index,
@@ -109,7 +110,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device);
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr);
+void initialize_worker_config_buf_mgr(
+    const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start);
 
 void reserve_space_in_kernel_config_buffer(
     WorkerConfigBufferMgr& config_buffer_mgr,
@@ -158,6 +160,7 @@ void write_program_command_sequence(
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
+    const Hal& hal,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
@@ -197,9 +200,14 @@ void set_core_go_message_mapping_on_device(
     SystemMemoryManager& manager,
     uint8_t cq_id);
 
-template <typename WorkloadType, typename DeviceType>
+// ProgramImpl version - does not support CQs
+uint32_t program_base_addr_on_core(detail::ProgramImpl& program, IDevice* device, HalProgrammableCoreType core_type);
+
+// MeshWorkloadImpl version - supports both CQs and not having CQs
 uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
+    distributed::MeshWorkloadImpl& mesh_workload,
+    distributed::MeshDevice* mesh_device,
+    HalProgrammableCoreType core_type);
 
 }  // namespace program_dispatch
 

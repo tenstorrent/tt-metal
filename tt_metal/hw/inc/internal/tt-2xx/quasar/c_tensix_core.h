@@ -178,7 +178,7 @@ public:
 
     static std::uint32_t l1_size() { return SIM_L1_SIZE; }
 
-    // MM July 19 2022: In a desperate bid to fix copmiler errors, I just
+    // MM July 19 2022: In a desperate bid to fix compiler errors, I just
     // copy-pasted the version of these NOC functions directly from c_tensix_core.h
     // in blackhole. Fingers crossed...
     /*
@@ -355,7 +355,7 @@ inline atomic_rwptr<uint>& c_tensix_core::fifo_rdptr(uint addr) { return fifo_rd
 inline atomic_rwptr<uint>& c_tensix_core::fifo_endptr(uint addr) { return fifo_endptr(l1_cast<uint*>(addr)); }
 
 // NOC API
-// MM July 19 2022: In a desperate bid to fix copmiler errors, I just
+// MM July 19 2022: In a desperate bid to fix compiler errors, I just
 // copy-pasted the version of these NOC functions directly from c_tensix_core.h
 // in blackhole. Fingers crossed...
 /*
@@ -414,7 +414,7 @@ inline std::uint32_t c_tensix_core::noc_id()
 */
 
 inline void c_tensix_core::initialize_tensix_semaphores(vptr_uint instrn_buf) {
-    // Initialize sempahores - check if we need to do this still
+    // Initialize semaphores - check if we need to do this still
     // math->packer semaphore - max set to 1, as double-buffering is disabled by default
     ex_sem_init(ckernel::semaphore::MATH_PACK, 1, 0, instrn_buf);
     ex_sem_init(ckernel::semaphore::UNPACK_TO_DEST, 1, 0, instrn_buf);
@@ -500,11 +500,14 @@ inline uint32_t c_tensix_core::read_stream_register_field(
     return (read_stream_register(stream_id, index) >> shift) & ((1 << width) - 1);
 }
 
-inline uint32_t c_tensix_core::read_wall_clock_l() { return memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+// TODO check if this is correct
+inline uint32_t c_tensix_core::read_wall_clock_l() {
+    return memory_read(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
+}
 
 inline uint64_t c_tensix_core::read_wall_clock() {
-    uint32_t low = memory_read(RISCV_DEBUG_REG_WALL_CLOCK_L);  // latches high
-    uint32_t high = memory_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    uint32_t low = memory_read(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);  // latches high
+    uint32_t high = memory_read(RISCV_DEBUG_REG_WALL_CLONEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDRCK_H);
 
     return ((uint64_t)high << 32) | low;
 }

@@ -8,7 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::experimental::reduction::detail::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
@@ -50,9 +50,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 }  // namespace
 
 FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FastReduceNCParams& operation_attributes,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -227,7 +227,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     // Each core is assigned an output work unit in a row wise round robin
     // fashion. For a given core, the first index is i, and all subsequent
-    // indicies are increments of num_cores_to_be_used. The total number of
+    // indices are increments of num_cores_to_be_used. The total number of
     // units is num_tiles_per_group times num_cores_to_be_used.
     // For example, with 130 output tiles to be processed and no shards (shard
     // factor is 1) on an 8x8 grid
@@ -240,7 +240,7 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     // - etc
     // The first tile that needs to be reduced has the same as the output tile.
     // That is the starting point for the reader, which then processes all
-    // subsequent tiles to be reduced. The increment for the input indicies is
+    // subsequent tiles to be reduced. The increment for the input indices is
     // the size of the inner dimensions in tiles (inner_tile_size). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduce_tile_size).
@@ -293,9 +293,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
 
 void FastReduceNCProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t&,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const FastReduceNCParams&,
+    const FastReduceNCInputs& tensor_args,
+    Tensor& tensor_return_value) {
     const auto* input_buffer = tensor_args.input.buffer();
     const auto* output_buffer = tensor_return_value.buffer();
     auto& program = cached_program.program;
@@ -315,4 +315,4 @@ void FastReduceNCProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail::program
+}  // namespace ttnn::experimental::prim

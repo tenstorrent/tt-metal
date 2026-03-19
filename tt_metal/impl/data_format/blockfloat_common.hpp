@@ -4,13 +4,15 @@
 
 #pragma once
 #include <stdint.h>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>
+#include <bit>
 #include <cstddef>
 #include <optional>
 #include <vector>
+
+constexpr int log2(int n) { return (n <= 1) ? 0 : std::bit_width(static_cast<unsigned>(n)) - 1; }
 
 namespace tt {
 enum class DataFormat : uint8_t;

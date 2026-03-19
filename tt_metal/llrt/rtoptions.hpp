@@ -10,15 +10,18 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <set>
-#include <unordered_set>
 #include <string>
+#include <unordered_set>
+#include <utility>
 #include <vector>
-#include "llrt/hal.hpp"
+#include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
@@ -26,6 +29,20 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+
+// Forward declarations — full definitions not needed in this header
+namespace tt::tt_metal {
+class Hal;
+enum class KernelBuildOptLevel : uint8_t;
+}  // namespace tt::tt_metal
+
+namespace tt::tt_fabric {
+class ControlPlane;
+}  // namespace tt::tt_fabric
+
+namespace tt::tt_metal::distributed {
+class SystemMesh;
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
@@ -65,6 +82,10 @@ struct TargetSelection {
     std::map<CoreType, int> all_cores;
     bool enabled{};
     std::vector<int> chip_ids;
+    std::vector<tt_fabric::FabricNodeId> node_ids;  // Resolved to chip IDs in resolve_fabric_node_ids_to_chip_ids
+    // System mesh coordinates (row, col) in the global mesh grid.
+    // Resolved to chip IDs in resolve_mesh_coords_to_chip_ids.
+    std::vector<std::pair<uint32_t, uint32_t>> mesh_coords;
     bool all_chips = false;
     tt_metal::HalProcessorSet processors;
     std::string file_name;  // File name to write output to.
@@ -156,6 +177,8 @@ class RunTimeOptions {
 
     bool enable_llk_asserts = false;
 
+    bool disable_sfploadmacro = false;
+
     // Fabric profiling settings
     struct FabricProfilingSettings {
         bool enable_rx_ch_fwd = false;
@@ -180,7 +203,7 @@ class RunTimeOptions {
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
-    bool experimental_device_debug_dump_enabled = false;
+    bool experimental_noc_debug_dump_enabled = false;
 
     bool null_kernels = false;
     // Kernels should return early, skipping the rest of the kernel. Kernels
@@ -209,15 +232,7 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
-    bool skip_deleting_built_cache = false;
-
     std::filesystem::path simulator_path = "";
-
-    bool erisc_iram_enabled = false;
-    // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
-    // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
-    // to the user override (if it existed)
-    std::optional<bool> erisc_iram_enabled_env_var = std::nullopt;
 
     bool fast_dispatch = true;
 
@@ -235,7 +250,7 @@ class RunTimeOptions {
     uint32_t arc_debug_buffer_size = 0;
 
     // Force disables using DMA for reads and writes
-    bool disable_dma_ops = false;
+    std::atomic<bool> disable_dma_ops = false;
 
     // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
@@ -261,6 +276,15 @@ class RunTimeOptions {
     // Enable fabric performance telemetry
     bool enable_fabric_bw_telemetry = false;
 
+    // Enable channel trimming resource usage capture
+    bool enable_channel_trimming_capture = false;
+
+    // Path to channel trimming profile YAML for import-driven router construction
+    std::string fabric_trimming_profile_path;
+
+    // Path to channel trimming global override YAML
+    std::string fabric_trimming_override_path;
+
     // Enable fabric telemetry
     bool enable_fabric_telemetry = false;
     FabricTelemetrySettings fabric_telemetry_settings;
@@ -274,6 +298,8 @@ class RunTimeOptions {
     std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
+    // Dispatch kernel progress update period in milliseconds (default 100ms)
+    uint32_t dispatch_progress_update_ms = 100;
 
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
@@ -291,11 +317,21 @@ class RunTimeOptions {
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
 
+    // User override for fabric kernel compiler optimization level
+    // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
+    std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
+
     // Disable XIP dump
     bool disable_xip_dump = false;
 
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
+
+    // Disable use of pre-compiled firmware and fall back to JIT compilation.
+    bool disable_precompiled_fw = false;
+
+    // Use new DEVICE_PRINT system instead of legacy DPRINT
+    bool use_device_print = false;
 
 public:
     RunTimeOptions();
@@ -326,8 +362,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled.load(std::memory_order_relaxed); }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
-    // Return a hash of which watcher features are enabled
-    uint32_t get_watcher_hash() const;
+    // Return a hash string of which watcher features are enabled
+    std::string get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
@@ -368,13 +404,17 @@ public:
     bool watcher_ring_buffer_disabled() const { return watcher_feature_disabled(watcher_ring_buffer_str); }
     bool watcher_stack_usage_disabled() const { return watcher_feature_disabled(watcher_stack_usage_str); }
     bool watcher_dispatch_disabled() const { return watcher_feature_disabled(watcher_dispatch_str); }
+    bool watcher_eth_disabled() const { return watcher_feature_disabled(watcher_eth_str); }
     bool watcher_eth_link_status_disabled() const { return watcher_feature_disabled(watcher_eth_link_status_str); }
+    bool watcher_cb_sanitize_disabled() const { return watcher_feature_disabled(watcher_cb_sanitize_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
 
     bool get_llk_asserts() const { return enable_llk_asserts; }
     void set_llk_asserts(bool enabled) { enable_llk_asserts = enabled; }
+
+    bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     // Info from inspector environment variables, setters included so that user
     // can override with a SW call.
@@ -424,6 +464,10 @@ public:
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
         feature_targets[feature].chip_ids = std::move(chip_ids);
     }
+    // Directly set mesh coordinates for a feature; resolved to chip IDs by resolve_mesh_coords_to_chip_ids().
+    void set_feature_mesh_coords(RunTimeDebugFeatures feature, std::vector<std::pair<uint32_t, uint32_t>> coords) {
+        feature_targets[feature].mesh_coords = std::move(coords);
+    }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
         feature_targets[feature].all_chips = all_chips;
@@ -465,11 +509,7 @@ public:
     // Returns the string representation for hash computation.
     std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: {
-                std::string hash_str = std::to_string(get_feature_enabled(feature));
-                hash_str += std::to_string(get_feature_all_chips(feature));
-                return hash_str;
-            }
+            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
@@ -484,12 +524,13 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode());
+            get_disable_fabric_2_erisc_mode(),
+            get_use_device_print());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -523,7 +564,8 @@ public:
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
-    bool get_experimental_device_debug_dump_enabled() const { return experimental_device_debug_dump_enabled; }
+    void set_experimental_noc_debug_dump_enabled(bool enabled);
+    bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
 
     void set_kernels_nullified(bool v) { null_kernels = v; }
     bool get_kernels_nullified() const { return null_kernels; }
@@ -566,36 +608,24 @@ public:
 
     tt_metal::DispatchCoreConfig get_dispatch_core_config() const;
 
-    bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
-
     bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return erisc_iram_enabled && !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
-    }
-    bool get_erisc_iram_env_var_enabled() const {
-        return erisc_iram_enabled_env_var.has_value() && erisc_iram_enabled_env_var.value();
-    }
-    bool get_erisc_iram_env_var_disabled() const {
-        return erisc_iram_enabled_env_var.has_value() && !erisc_iram_enabled_env_var.value();
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
-    // Temporary API until all multi-device workloads are ported to run on fabric.
-    // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
-    // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
-    // copy to IRAM can noticeably degrade legacy CCL op performance in those cases.
-    void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
+    void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }
     void set_arc_debug_buffer_size(uint32_t size) { arc_debug_buffer_size = size; }
 
-    bool get_disable_dma_ops() const { return disable_dma_ops; }
-    void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+    bool get_disable_dma_ops() const { return disable_dma_ops.load(std::memory_order_relaxed); }
+    void set_disable_dma_ops(bool disable) { disable_dma_ops.store(disable, std::memory_order_relaxed); }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
 
@@ -622,6 +652,11 @@ public:
 
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+    void set_enable_all_telemetry() {
+        enable_fabric_telemetry = true;
+        fabric_telemetry_settings.stats_mask = FabricTelemetrySettings::kAllStatsMask;
+        fabric_telemetry_settings.enabled = true;
+    }
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
@@ -630,18 +665,54 @@ public:
         fabric_profiling_settings.enable_rx_ch_fwd = enable;
     }
 
+    // If true, enables channel trimming resource usage capture on fabric routers
+    bool get_enable_channel_trimming_capture() const { return enable_channel_trimming_capture; }
+    void set_enable_channel_trimming_capture(bool enable) { enable_channel_trimming_capture = enable; }
+
+    // Channel trimming profile import path
+    bool has_fabric_trimming_profile() const { return !fabric_trimming_profile_path.empty(); }
+    const std::string& get_fabric_trimming_profile_path() const { return fabric_trimming_profile_path; }
+    void set_fabric_trimming_profile_path(const std::string& path) { fabric_trimming_profile_path = path; }
+
+    // Channel trimming global override path
+    bool has_fabric_trimming_override() const { return !fabric_trimming_override_path.empty(); }
+    const std::string& get_fabric_trimming_override_path() const { return fabric_trimming_override_path; }
+    void set_fabric_trimming_override_path(const std::string& path) { fabric_trimming_override_path = path; }
+
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+    // Set mock cluster descriptor from filename (prepends base path automatically)
+    // NOTE: Must be called before Cluster is created (e.g., in MetalContext constructor).
+    // Path depends on UMD's cluster_descriptor_examples directory structure.
+    void set_mock_cluster_desc(const std::string& filename) {
+        if (filename.empty()) {
+            return;
+        }
+        mock_cluster_desc_path =
+            get_root_dir() + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/" + filename;
+        // Set target device to Mock if simulator is not enabled
+        if (simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Mock;
+        }
+    }
+    void clear_mock_cluster_desc() {
+        mock_cluster_desc_path.clear();
+        // Only reset to Silicon if simulator is not enabled
+        if (simulator_path.empty()) {
+            runtime_target_device_ = tt::TargetDevice::Silicon;
+        }
+    }
 
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
+    uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -652,23 +723,44 @@ public:
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
+    std::optional<tt_metal::KernelBuildOptLevel> get_fabric_kernel_opt_level() const { return fabric_kernel_opt_level; }
+    void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
+        fabric_kernel_opt_level = opt_level;
+    }
+
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
 
+    bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
+    void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
+
+    bool get_use_device_print() const { return use_device_print; }
+    void set_use_device_print(bool use) { use_device_print = use; }
+
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
-    void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
-        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-            ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
-        }
-    }
+    void ParseAllFeatureEnv(const tt_metal::Hal& hal);
+
+    // Resolve FabricNodeIds to physical chip IDs using the control plane.
+    // This must be called after the control plane is initialized, since during
+    // rtoptions parsing we don't have access to the control plane yet.
+    void resolve_fabric_node_ids_to_chip_ids(const tt::tt_fabric::ControlPlane& control_plane);
+
+    // Resolve mesh coordinates (row, col) in the global system mesh to physical chip IDs.
+    // This must be called after the system mesh is initialized (which in turn requires the
+    // control plane). Coordinates that belong to remote hosts in a multi-host system are
+    // skipped with a warning.
+    void resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distributed::SystemMesh& system_mesh);
 
 private:
-    // Helper functions to parse feature-specific environment vaiables.
+    // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
-    void ParseFeatureChipIds(RunTimeDebugFeatures feature, const std::string& env_var);
+    bool ParseFeatureChipIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if chips are specified
+    bool ParseFeatureNodeIds(
+        RunTimeDebugFeatures feature, const std::string& env_var);  // Returns true if nodes are specified
     void ParseFeatureRiscvMask(RunTimeDebugFeatures feature, const std::string& env_var, const tt_metal::Hal& hal);
     void ParseFeatureFileName(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
@@ -679,6 +771,9 @@ private:
     void InitializeFromEnvVars();         // Initialize all environment variables from table
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
+    // Parse (row,col) mesh coordinate tuples from an environment variable.
+    // Returns true if the variable was set.
+    bool ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const std::string& env_var);
 
     // Watcher feature name strings (used in env vars + defines in the device code), as well as a
     // set to track disabled features.
@@ -689,9 +784,11 @@ private:
     const std::string watcher_ring_buffer_str = "RING_BUFFER";
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
+    const std::string watcher_eth_str = "ETH";
     const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
     const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
     const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
+    const std::string watcher_cb_sanitize_str = "CB_SANITIZE";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };

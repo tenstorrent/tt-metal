@@ -13,8 +13,57 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+
+
+def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
+    if prompts is not None and index < len(prompts):
+        return prompts[index]
+    if random_weights:
+        return "[random-weights default prompt]"
+    return "[empty prompt]"
+
+
+def _build_output_data(
+    prompts: list[str] | None,
+    generations: list[dict],
+    statistics: dict,
+    random_weights: bool,
+) -> dict:
+    output_data = {
+        "prompts": prompts if prompts else [],
+        "generations": [],
+        "statistics": statistics,
+    }
+    for i, gen_result in enumerate(generations):
+        output_data["generations"].append(
+            {
+                "index": i + 1,
+                "prompt": _prompt_text_for_index(prompts, random_weights, i),
+                "text": gen_result.get("text"),
+            }
+        )
+    return output_data
+
+
+def _resolve_saved_output_path(prompts_file_path: Path | None, output_path_arg: str | None) -> Path | None:
+    if output_path_arg:
+        return Path(output_path_arg)
+    if prompts_file_path is not None:
+        return prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    return None
+
+
+def _write_json_output(path: Path, payload: dict, label: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        logger.info(f"{label} saved to '{path}'")
+        print(f"\n{label} saved to '{path}'\n")
+    except Exception as e:
+        raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -60,6 +109,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to output JSON file. If --prompts-file is provided and --output-path is not specified, output will be saved to <prompts-file-stem>_output.json in the same directory as the prompts file.",
     )
     p.add_argument(
+        "--checkpoint-jsonl",
+        type=str,
+        help="Optional JSONL path for appending per-user results during generation.",
+    )
+    p.add_argument(
         "--model-path",
         type=str,
         required=True,
@@ -75,6 +129,11 @@ def create_parser() -> argparse.ArgumentParser:
         "--single-layer",
         choices=["mlp", "moe"],
         help="When using --random-weights, request a single layer (mlp supported)",
+    )
+    p.add_argument(
+        "--override-num-layers",
+        type=int,
+        help="Override the number of layers in the model. Defaults to None.",
     )
     # Teacher-forcing / accuracy verification options
     p.add_argument("--token-accuracy", action="store_true", help="Enable teacher-forced decode and report accuracy")
@@ -101,10 +160,23 @@ def create_parser() -> argparse.ArgumentParser:
         help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
-        "--enable-trace",
+        "--disable-trace",
+        action="store_false",
+        dest="enable_trace",
+        default=True,
+        help="Disable trace for decode forward pass.",
+    )
+    p.add_argument(
+        "--enable-mem-profile",
         action="store_true",
         default=False,
-        help="Enable trace for decode forward pass",
+        help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
+        "--mtp",
+        choices=["on", "off"],
+        default="off",
+        help="Control MTP usage: on (requires MTP weights), off (default).",
     )
     p.add_argument(
         "--repeat-batches",
@@ -112,6 +184,50 @@ def create_parser() -> argparse.ArgumentParser:
         default=1,
         help="Number of times to repeat the generation process.",
     )
+    p.add_argument(
+        "--signpost",
+        action="store_true",
+        help="Enable signpost for tracing.",
+    )
+    p.add_argument(
+        "--prefill-max-tokens",
+        type=int,
+        help="Maximum number of tokens to prefill.",
+    )
+    p.add_argument(
+        "--profile-decode",
+        action="store_true",
+        default=False,
+        help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
+    )
+    p.add_argument(
+        "--sample-on-host",
+        action="store_false",
+        dest="sample_on_device",
+        default=True,
+        help="Disable on-device sampling and use host-side sampling.",
+    )
+    p.add_argument(
+        "--force-recalculate",
+        "--recalculate-weights",
+        dest="force_recalculate",
+        action="store_true",
+        default=False,
+        help="Force regeneration of cached TTNN weight files and config.",
+    )
+    p.add_argument(
+        "--stop-at-eos",
+        dest="stop_at_eos",
+        action="store_true",
+        help="Stop recording output tokens for a user after EOS (default).",
+    )
+    p.add_argument(
+        "--no-stop-at-eos",
+        dest="stop_at_eos",
+        action="store_false",
+        help="Always record max-new-tokens even after EOS.",
+    )
+    p.set_defaults(stop_at_eos=True)
     return p
 
 
@@ -217,20 +333,29 @@ def run_demo(
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
+    override_num_layers: int | None = None,
     token_accuracy: bool = False,
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
-    enable_trace: bool = False,
-    override_num_layers: int | None = None,
+    enable_trace: bool = True,
+    enable_mem_profile: bool = False,
     repeat_batches: int = 1,
+    signpost: bool = False,
+    prefill_max_tokens: int = None,
+    profile_decode: bool = False,
+    sample_on_device: bool = True,
+    force_recalculate: bool = False,
+    stop_at_eos: bool = True,
+    checkpoint_jsonl: str | Path | None = None,
+    enable_mtp: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
     Returns a dict with keys:
-        - tokens: List[int] of generated token IDs
-        - text: Optional[str] decoded text (only when a tokenizer is present)
+        - generations: List[dict] with per-prompt tokens/text
+        - statistics: Performance counters from the generator
     """
     if model_path is None:
         raise SystemExit("Missing model path. Provide --model-path.")
@@ -246,21 +371,32 @@ def run_demo(
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-
-    fabric_config = ttnn.FabricConfig.FABRIC_1D
+    fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        trace_region_size = 4880384 + int(0.20 * 4880384)  # 20% additional
+        # NOTE:
+        # The base trace region size below (~36.3 MiB) was empirically determined from
+        # vLLM decode workloads to be sufficient to keep the trace buffer from
+        # overflowing under typical DeepSeek-V3 demo settings (batch size, sequence
+        # length, and mesh configuration). We add 20% headroom as a conservative
+        # safety margin to accommodate variability across models / prompts without
+        # repeatedly re-tuning this value.
+        #
+        # If you are optimizing memory usage, this can be reduced after verifying
+        # that tracing completes without buffer exhaustion for your target workload.
+        BASE_TRACE_REGION_BYTES = 38_070_272
+        trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
+        if enable_mtp:
+            trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
@@ -277,6 +413,7 @@ def run_demo(
             )
             raise
 
+    gen = None
     try:
         # If random single-layer requested with 'moe', fail fast (Model1D demo is MLP-only)
         if random_weights and single_layer and single_layer.lower() == "moe":
@@ -310,7 +447,16 @@ def run_demo(
                 ),
                 single_layer=(single_layer if random_weights else None),
                 enable_trace=enable_trace,
+                enable_mem_profile=enable_mem_profile,
+                signpost=signpost,
+                prefill_max_tokens=prefill_max_tokens,
+                force_recalculate=force_recalculate,
+                profile_decode=profile_decode,
+                sample_on_device=sample_on_device,
+                enable_mtp=enable_mtp,
             )
+        else:
+            raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
         pre_tokenized_prompts = None
         if random_weights:
@@ -319,9 +465,12 @@ def run_demo(
             if token_acc is not None:
                 # Use pre-tokenized tokens directly to avoid re-encoding with chat template.
                 # This ensures the TT model uses the exact same token sequence as the reference.
-                pre_tokenized_prompts = [token_acc.get_prompt_token_ids()]
-                # Still need a placeholder prompt for the generator API
-                prompt_list = [""]
+                if prompts:
+                    prompt_list = prompts
+                else:
+                    # Still need a placeholder prompt for the generator API
+                    prompt_list = [""]
+                pre_tokenized_prompts = [token_acc.get_prompt_token_ids() for _ in range(len(prompt_list))]
                 # If not overridden, ensure we don't decode past the available ground truth
                 max_new_tokens = min(max_new_tokens, token_acc.num_gt_tokens())
             else:
@@ -329,40 +478,158 @@ def run_demo(
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
 
-        # Multi-prompt generation
-        generations, statistics = gen.generate(
-            prompt_list,
-            max_new_tokens=max_new_tokens,
-            teacher_forcing=token_acc,
-            early_print_first_user=early_print_first_user,
-            repeat_batches=repeat_batches,
-            pre_tokenized=pre_tokenized_prompts,
-        )
-
-        # Process all generations
-        results = []
-        for i, generation_tokens in enumerate(generations):
-            result = {"tokens": generation_tokens, "text": None}
-            if gen.tokenizer is not None:
-                result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
-            if token_acc is not None and i == 0:  # Only compute accuracy for first generation
-                acc = token_acc.compute_accuracy()
-                result.update(
-                    {
-                        "accuracy_top1": acc.get("top1"),
-                        "accuracy_top5": acc.get("top5"),
-                        "predicted_tokens": token_acc._pred_tokens,
-                    }
+        checkpoint_fh = None
+        checkpoint_written: set[int] = set()
+        checkpoint_path = Path(checkpoint_jsonl) if checkpoint_jsonl is not None else None
+        if checkpoint_path is not None:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_fh = open(checkpoint_path, "w", encoding="utf-8")
+            if not stop_at_eos:
+                logger.info(
+                    "checkpoint-jsonl is enabled without stop-at-eos; records will be written after generation."
                 )
-            results.append(result)
 
-        return {"generations": results, "statistics": statistics}
+        def checkpoint_user(user_idx: int, token_ids: list[int]) -> None:
+            if checkpoint_fh is None or user_idx in checkpoint_written:
+                return
+            text = None
+            if gen.tokenizer is not None:
+                text = gen.tokenizer.decode(token_ids, skip_special_tokens=True)
+            record = {
+                "index": user_idx + 1,
+                "prompt": prompt_list[user_idx] if user_idx < len(prompt_list) else "",
+                "text": text,
+            }
+            checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            checkpoint_fh.flush()
+            os.fsync(checkpoint_fh.fileno())
+            checkpoint_written.add(user_idx)
+
+        def make_checkpoint_callback(index_offset: int):
+            if checkpoint_fh is None:
+                return None
+
+            def checkpoint_user_with_offset(user_idx: int, token_ids: list[int]) -> None:
+                checkpoint_user(index_offset + user_idx, token_ids)
+
+            return checkpoint_user_with_offset
+
+        try:
+            # Multi-prompt generation
+            use_mtp_path = gen.enable_mtp and token_acc is None and max_new_tokens > 1
+            max_prompts_per_batch = gen.batch_size
+            if use_mtp_path:
+                max_prompts_per_batch = max(1, gen.batch_size // 2)
+
+            if use_mtp_path and len(prompt_list) > max_prompts_per_batch:
+                logger.info(
+                    f"MTP enabled with {len(prompt_list)} prompts; running in batches of up to {max_prompts_per_batch} "
+                    "to reserve lanes for verify batching."
+                )
+                all_generations = []
+                all_stats = []
+                for start in range(0, len(prompt_list), max_prompts_per_batch):
+                    batch_prompts = prompt_list[start : start + max_prompts_per_batch]
+                    batch_pre_tokenized = (
+                        pre_tokenized_prompts[start : start + max_prompts_per_batch]
+                        if pre_tokenized_prompts is not None
+                        else None
+                    )
+                    batch_generations, batch_stats = gen.generate(
+                        batch_prompts,
+                        max_new_tokens=max_new_tokens,
+                        teacher_forcing=token_acc,
+                        early_print_first_user=early_print_first_user,
+                        repeat_batches=repeat_batches,
+                        pre_tokenized=batch_pre_tokenized,
+                        stop_at_eos=stop_at_eos,
+                        on_user_finished=make_checkpoint_callback(start),
+                    )
+                    all_generations.extend(batch_generations)
+                    all_stats.append(batch_stats)
+
+                generations = all_generations
+                statistics = all_stats[-1] if all_stats else {}
+                if all_stats:
+                    statistics["batch_count"] = len(all_stats)
+                    mtp_accepts = [s.get("mtp_accepts") for s in all_stats if s.get("mtp_accepts") is not None]
+                    mtp_verifies = [s.get("mtp_verifies") for s in all_stats if s.get("mtp_verifies") is not None]
+                    if mtp_accepts and mtp_verifies:
+                        total_accepts = sum(int(x) for x in mtp_accepts)
+                        total_verifies = sum(int(x) for x in mtp_verifies)
+                        statistics["mtp_accepts"] = total_accepts
+                        statistics["mtp_accept_rate"] = total_accepts / total_verifies if total_verifies > 0 else 0.0
+                    else:
+                        mtp_rates = [
+                            s.get("mtp_accept_rate") for s in all_stats if s.get("mtp_accept_rate") is not None
+                        ]
+                        if mtp_rates:
+                            statistics["mtp_accept_rate"] = sum(mtp_rates) / len(mtp_rates)
+                    for key in (
+                        "preparing_prefill_config",
+                        "preparing_decode_config",
+                        "inference_prefill",
+                        "inference_decode",
+                        "decode_forward_passes",
+                        "Full demo runtime",
+                    ):
+                        if any(key in s for s in all_stats):
+                            statistics[key] = sum(float(s.get(key, 0) or 0) for s in all_stats)
+            else:
+                generations, statistics = gen.generate(
+                    prompt_list,
+                    max_new_tokens=max_new_tokens,
+                    teacher_forcing=token_acc,
+                    early_print_first_user=early_print_first_user,
+                    repeat_batches=repeat_batches,
+                    pre_tokenized=pre_tokenized_prompts,
+                    stop_at_eos=stop_at_eos,
+                    on_user_finished=make_checkpoint_callback(0),
+                )
+
+            # Process all generations
+            results = []
+            for i, generation_tokens in enumerate(generations):
+                result = {"tokens": generation_tokens, "text": None}
+                if gen.tokenizer is not None:
+                    result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
+                if token_acc is not None and i == 0:  # Only compute accuracy for first generation
+                    acc = token_acc.compute_accuracy()
+                    result.update(
+                        {
+                            "accuracy_top1": acc.get("top1"),
+                            "accuracy_top5": acc.get("top5"),
+                            "predicted_tokens": token_acc._pred_tokens,
+                        }
+                    )
+                results.append(result)
+
+            if checkpoint_fh is not None:
+                for i, result in enumerate(results):
+                    if i in checkpoint_written:
+                        continue
+                    record = {
+                        "index": i + 1,
+                        "prompt": prompt_list[i] if i < len(prompt_list) else "",
+                        "text": result["text"],
+                    }
+                    checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                checkpoint_fh.flush()
+                os.fsync(checkpoint_fh.fileno())
+
+            return {"generations": results, "statistics": statistics}
+        finally:
+            if checkpoint_fh is not None:
+                checkpoint_fh.close()
     finally:
         # Clean up generator resources
         try:
-            gen.cleanup_all()
+            if gen is not None:
+                gen.cleanup_all()
         except Exception as e:
             logger.warning(f"Failed to cleanup generator: {e}")
+        # Synchronize device before closing to flush pending ops (e.g. profiler data)
+        ttnn.synchronize_device(mesh_device)
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
@@ -396,69 +663,44 @@ def main() -> None:
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
+        override_num_layers=args.override_num_layers,
         token_accuracy=bool(args.token_accuracy),
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
         generator=args.generator,
         enable_trace=args.enable_trace,
+        enable_mem_profile=args.enable_mem_profile,
+        signpost=args.signpost,
+        prefill_max_tokens=args.prefill_max_tokens,
+        profile_decode=args.profile_decode,
+        sample_on_device=args.sample_on_device,
+        force_recalculate=bool(args.force_recalculate),
+        stop_at_eos=bool(args.stop_at_eos),
+        checkpoint_jsonl=args.checkpoint_jsonl,
+        enable_mtp=(args.mtp == "on"),
     )
 
-    # If prompts were loaded from a JSON file, save output to JSON file instead of printing
-    if prompts_file_path:
-        # Use provided output path, or generate default: input_name + "_output.json"
-        if args.output_path:
-            output_path = Path(args.output_path)
-        else:
-            output_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
 
-        # Prepare output data structure
-        output_data = {
-            "prompts": args.prompts if args.prompts else [],
-            "generations": [],
-            "statistics": results.get("statistics", {}),
-        }
-
-        # Add generation results
-        for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
-            output_data["generations"].append(
-                {
-                    "index": i + 1,
-                    "prompt": prompt_text if prompt_text else "[empty prompt]",
-                    "text": gen_result.get("text"),
-                }
-            )
-
-        # Write to JSON file
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Results saved to '{output_path}'")
-            print(f"\nResults saved to '{output_path}'\n")
-        except Exception as e:
-            raise SystemExit(f"Failed to write output file '{output_path}': {e}")
+    # If prompts were loaded from a JSON file, save output to JSON file instead of printing.
+    # Only host rank 0 writes the shared file to avoid rank races corrupting the JSON.
+    if prompts_file_path and saved_output_path is not None:
+        output_data = _build_output_data(
+            prompts=args.prompts,
+            generations=results["generations"],
+            statistics=results.get("statistics", {}),
+            random_weights=bool(args.random_weights),
+        )
+        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+            _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before
         print("\n===== Generated =====\n")
 
         for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
             print("-" * 30)
-            if prompt_text:
-                print(f"Prompt[{i+1}]: {prompt_text}")
-            else:
-                print(f"Prompt[{i+1}]: [empty prompt]")
+            print(f"Prompt[{i+1}]: {_prompt_text_for_index(args.prompts, bool(args.random_weights), i)}")
             print(f"Generation[{i+1}]:")
             if gen_result.get("text") is not None:
                 print(gen_result["text"])  # type: ignore

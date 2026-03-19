@@ -138,6 +138,7 @@ BankManager::BankManager(
     const std::vector<int64_t>& bank_offsets,
     DeviceAddr size_bytes,
     uint32_t alignment_bytes,
+    uint32_t dram_alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
@@ -154,7 +155,8 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    // Pass in the DRAM alignment to ensure L1<->DRAM or DRAM<->DRAM data transfers are aligned
+    this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
 
 BankManager::BankManager(
@@ -163,6 +165,7 @@ BankManager::BankManager(
     DeviceAddr size_bytes,
     DeviceAddr interleaved_address_limit,
     uint32_t alignment_bytes,
+    uint32_t dram_alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
@@ -174,7 +177,8 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    // Pass in the DRAM alignment to ensure L1<->DRAM or DRAM<->DRAM data transfers are aligned
+    this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
@@ -403,7 +407,8 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
+    DeviceAddr size_per_bank =
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;
@@ -434,6 +439,16 @@ uint64_t BankManager::allocate_buffer(
                 mem_stats.largest_free_block_bytes);
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
+
+        // Track allocation high water mark
+        if (tracking_high_water_mark_) {
+            // Calculate end address in interleaved space: address + size_per_bank
+            // Bank offsets don't need to be accounted for here since overlap comparisons
+            // are done in interleaved space where both allocations have the same bank offset applied
+            DeviceAddr end_address = address.value() + size_per_bank;
+            allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+        }
+
         // No neighbors, nothing to invalidate
         return address.value();
     }
@@ -489,6 +504,16 @@ uint64_t BankManager::allocate_buffer(
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
+
+    // Track allocation high water mark
+    if (tracking_high_water_mark_) {
+        // Calculate end address in interleaved space: address + size_per_bank
+        // Bank offsets don't need to be accounted for here since overlap comparisons
+        // are done in interleaved space where both allocations have the same bank offset applied
+        DeviceAddr end_address = address.value() + size_per_bank;
+        allocation_high_water_mark_ = std::max(allocation_high_water_mark_, end_address);
+    }
+
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
     return address.value();
@@ -497,6 +522,17 @@ uint64_t BankManager::allocate_buffer(
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
+
+    // Track deletion high water mark - remember the extent of buffers being freed
+    if (tracking_high_water_mark_) {
+        auto size_opt = alloc->get_allocation_size(address);
+        if (size_opt.has_value()) {
+            // Update deletion high water mark with the end address of the buffer being deallocated
+            DeviceAddr end_address = address + size_opt.value();
+            deletion_high_water_mark_ = std::max(deletion_high_water_mark_, end_address);
+        }
+    }
+
     alloc->deallocate(address);
     allocated_buffers_[allocator_id.get()].erase(address);
     // Deallocation in this allocator invalidates caches in allocators that depend on this allocator
@@ -555,6 +591,25 @@ Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::Alloc
     const auto* alloc = this->get_allocator_from_id(allocator_id);
     return alloc ? alloc->get_statistics() : Statistics();
 }
+
+void BankManager::begin_high_water_mark_tracking() {
+    tracking_high_water_mark_ = true;
+    allocation_high_water_mark_ = 0;
+    deletion_high_water_mark_ = 0;
+}
+
+DeviceAddr BankManager::end_high_water_mark_tracking() {
+    tracking_high_water_mark_ = false;
+    return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
+}
+
+DeviceAddr BankManager::get_high_water_mark() const {
+    return std::max(allocation_high_water_mark_, deletion_high_water_mark_);
+}
+
+DeviceAddr BankManager::get_allocation_high_water_mark() const { return allocation_high_water_mark_; }
+
+DeviceAddr BankManager::get_deletion_high_water_mark() const { return deletion_high_water_mark_; }
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);

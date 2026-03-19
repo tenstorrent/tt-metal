@@ -27,6 +27,7 @@ target_sources(
         test_mesh_events.cpp
         test_mesh_trace.cpp
         test_thread_pool.cpp
+        test_dispatch_context.cpp
         utils.cpp
 )
 
@@ -57,6 +58,8 @@ target_sources(
     PRIVATE
         benchmark_thread_pool.cpp
         benchmark_distributed_host_buffer.cpp
+        benchmark_hd_sockets.cpp
+        hd_socket_test_utils.cpp
 )
 
 target_link_libraries(
@@ -73,6 +76,7 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
 )
 
 set_target_properties(

@@ -31,10 +31,10 @@ struct address_map {
     static constexpr std::int32_t APP_FIRMWARE_SIZE = 32 * 1024;
     static constexpr std::int32_t ROUTING_FW_RESERVED_SIZE = 28 * 1024;
 
-    //  Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
+    //  Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS +
     //  NUM_L1_BANKS)
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
-    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
     // NUM_L1_BANKS)
     static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
 
@@ -101,18 +101,22 @@ struct address_map {
     static constexpr std::uint32_t FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D = COMPRESSED_ROUTING_PATH_SIZE_2D;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_1D = ROUTING_PATH_SIZE_1D;
     static constexpr std::uint32_t FABRIC_ROUTING_PATH_SIZE_2D = FABRIC_COMPRESSED_ROUTING_PATH_SIZE_2D;
+    // Union size: 1D and 2D share the same memory
+    static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE = MEM_ERISC_FABRIC_ROUTING_PATH_SIZE;
 
-    static constexpr std::int32_t FABRIC_ROUTING_PATH_BASE = AERISC_ROUTING_TABLE_BASE + MEM_OFFSET_OF_ROUTING_PATHS;
-    static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_1D = FABRIC_ROUTING_PATH_BASE;
-    static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_2D =
-        FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE_1D;
+    // AERISC routing paths (union = same offset for 1D and 2D)
+    static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE = MEM_AERISC_FABRIC_ROUTING_PATH_BASE;
+    static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_1D = AERISC_FABRIC_ROUTING_PATH_BASE;
+    static constexpr std::int32_t AERISC_FABRIC_ROUTING_PATH_BASE_2D = AERISC_FABRIC_ROUTING_PATH_BASE;
+    static constexpr std::int32_t AERISC_EXIT_NODE_TABLE_BASE = MEM_AERISC_EXIT_NODE_TABLE_BASE;
 
+    // IERISC routing paths
+    static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE = MEM_IERISC_FABRIC_ROUTING_PATH_BASE;
     static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_1D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D;
     static constexpr std::int32_t IERISC_FABRIC_ROUTING_PATH_BASE_2D = MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D;
-    static constexpr std::int32_t FABRIC_ROUTING_PATH_SIZE = FABRIC_ROUTING_PATH_SIZE_1D + FABRIC_ROUTING_PATH_SIZE_2D;
 
     static_assert(
-        AERISC_FABRIC_ROUTING_PATH_BASE_2D + FABRIC_ROUTING_PATH_SIZE_2D <
+        AERISC_FABRIC_ROUTING_PATH_BASE + FABRIC_ROUTING_PATH_SIZE <
             FABRIC_ROUTER_RESERVED_BASE + FABRIC_ROUTER_RESERVED_SIZE,
         "Active Erisc region is greater than MAX_SIZE");
     static constexpr std::int32_t ERISC_BARRIER_BASE =

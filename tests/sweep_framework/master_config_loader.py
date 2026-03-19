@@ -18,7 +18,30 @@ import ttnn
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
-from .operation_parameter_extractors import OperationParameterExtractors
+from operation_parameter_extractors import OperationParameterExtractors
+from framework.constants import LEAD_MODELS
+
+# Add repo root and current dir to sys.path BEFORE dependent imports
+_current_file = os.path.abspath(__file__)
+_current_dir = os.path.dirname(_current_file)
+_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+
+# Inline lead_models_filter state (avoids dependency on untracked/separate module)
+class lead_models_filter:
+    _lead_models_only = os.environ.get("TTNN_LEAD_MODELS_ONLY", "").lower() in ("1", "true", "yes")
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        cls._lead_models_only = enabled
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1" if enabled else "0"
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        return cls._lead_models_only
+
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -28,21 +51,48 @@ try:
 except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
-        """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+        """Get the tt-metal base directory.
+
+        Resolution order:
+        1. Walk up from this script's location to find model_tracer/traced_operations
+        2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+        3. PYTHONPATH entries
+        4. Current working directory
+        """
+        _marker = os.path.join("model_tracer", "traced_operations")
+
+        def _walk_up(start_dir):
+            current = os.path.abspath(start_dir)
+            while current != "/":
+                if os.path.isdir(os.path.join(current, _marker)):
+                    return current
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+            return None
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        base = _walk_up(script_dir)
+        if base:
+            return base
+
+        tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+        if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+            return tt_metal_home
+
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
-            paths = pythonpath.split(":")
-            for path in paths:
-                if "tt-metal" in path:
-                    if path.endswith("tt-metal"):
-                        return path
-                    parts = path.split("tt-metal")
-                    if parts:
-                        return parts[0] + "tt-metal"
+            for path in pythonpath.split(":"):
+                base = _walk_up(path)
+                if base:
+                    return base
+
         current_dir = os.getcwd()
-        if "tt-metal" in current_dir:
-            parts = current_dir.split("tt-metal")
-            return parts[0] + "tt-metal"
+        base = _walk_up(current_dir)
+        if base:
+            return base
+
         return current_dir
 
 
@@ -61,7 +111,109 @@ class TensorConfig:
 
 
 class MasterConfigLoader:
-    """Loads and converts master JSON configurations to sweep test parameters"""
+    """Loads and converts master JSON configurations to sweep test parameters
+
+    Class Attributes:
+        lead_models_only: When True, filters configurations to only include
+            those from lead models (e.g., deepseek_v3). Set via set_lead_models_filter()
+            before importing sweep modules that use this loader.
+        _use_database: When True, loads configurations from PostgreSQL database
+            instead of the JSON file. Set via set_database_mode().
+        _mesh_filter: When set, filters configurations to a specific mesh shape
+            at the database query level. Set via set_mesh_filter().
+    """
+
+    # Class-level filter setting (replaces environment variable approach)
+    # This is set by sweeps_parameter_generator.py before importing sweep modules
+    _lead_models_only: bool = False
+
+    # Database mode settings (Phase 2)
+    _use_database: bool = False
+
+    # Mesh filter for server-side filtering (Phase 3)
+    _mesh_filter: Optional[Tuple[int, int]] = None
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        """Set the lead models filter.
+
+        Args:
+            enabled: If True, only configurations from lead models will be loaded.
+                    If False, all configurations will be loaded.
+
+        Note:
+            This must be called BEFORE importing sweep modules that use MasterConfigLoader,
+            as the filtering happens at module load time when get_suite_parameters() is called.
+        """
+        # Use shared global filter state
+        lead_models_filter.set_lead_models_filter(enabled)
+        cls._lead_models_only = enabled  # Keep for backwards compatibility
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        """Get the current lead models filter setting."""
+        # Read from shared global filter state
+        return lead_models_filter.get_lead_models_filter()
+
+    @classmethod
+    def set_database_mode(cls, enabled: bool) -> None:
+        """Enable or disable database loading mode.
+
+        Args:
+            enabled: If True, load configurations from PostgreSQL database.
+                    If False, load from JSON file (default behavior).
+
+        Note:
+            Database mode requires TTNN_OPS_DATABASE_URL or POSTGRES_* environment
+            variables to be set. If database connection fails, it will fall back
+            to JSON file loading.
+        """
+        cls._use_database = enabled
+
+    @classmethod
+    def get_database_mode(cls) -> bool:
+        """Get the current database mode setting."""
+        return cls._use_database
+
+    @classmethod
+    def set_mesh_filter(cls, mesh_shape: Optional[Tuple[int, int]]) -> None:
+        """Set mesh shape filter for server-side filtering.
+
+        Args:
+            mesh_shape: Tuple of (rows, cols) to filter configs by mesh shape,
+                       e.g., (2, 4) for 2x4 mesh. Set to None to disable filtering.
+
+        Note:
+            This filter is applied at the database query level when in database mode,
+            reducing data transfer.
+        """
+        cls._mesh_filter = mesh_shape
+
+    @classmethod
+    def get_mesh_filter(cls) -> Optional[Tuple[int, int]]:
+        """Get the current mesh filter setting."""
+        return cls._mesh_filter
+
+    @staticmethod
+    def _source_matches_lead_models(source) -> bool:
+        """Check if source matches any lead model pattern.
+
+        Args:
+            source: Either a string path or a list of string paths
+
+        Returns:
+            True if any source path contains a lead model pattern
+        """
+        # Normalize source to a list
+        sources = source if isinstance(source, list) else [source]
+
+        for src in sources:
+            if not isinstance(src, str):
+                continue
+            src_lower = src.lower()
+            if any(pattern.lower() in src_lower for pattern in LEAD_MODELS):
+                return True
+        return False
 
     def _matches_operation(self, operation_name: str, base_name: str) -> bool:
         """Check if operation_name matches any variant of base_name.
@@ -90,7 +242,23 @@ class MasterConfigLoader:
 
     def __init__(self, master_file_path: str = None):
         if master_file_path is None:
-            master_file_path = os.path.join(BASE_DIR, "model_tracer/traced_operations/ttnn_operations_master.json")
+            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
+            original_path = os.path.join(traced_dir, "ttnn_operations_master.json")
+            reconstructed_path = os.path.join(traced_dir, "ttnn_operations_master_reconstructed.json")
+
+            if os.path.exists(reconstructed_path):
+                print(
+                    f"✅ Reconstructed JSON from database found at {reconstructed_path}. Using reconstructed master file."
+                )
+                master_file_path = reconstructed_path
+            elif MasterConfigLoader._use_database:
+                print(
+                    f"❌ Reconstructed JSON from database not found at {reconstructed_path}. "
+                    f"Direct database querying is not yet implemented. Resorting to original master file at {original_path}."
+                )
+                master_file_path = original_path
+            else:
+                master_file_path = original_path
         self.master_file_path = master_file_path
         self.master_data = None
         self.traced_configs_cache = {}  # Cache configs by operation name
@@ -119,70 +287,125 @@ class MasterConfigLoader:
             # Convert new format (dict with source) to old format (list) for backward compatibility
             return self._normalize_configs(configs)
 
-        # Try with ttnn:: prefix
-        ttnn_op_name = f"ttnn::{operation_name}"
-        if ttnn_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with ttnn::experimental:: namespace (e.g., ttnn::experimental::create_qkv_heads)
-        experimental_full_op_name = f"ttnn::experimental::{operation_name}"
-        if experimental_full_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
-
-        # Try with experimental:: namespace (e.g., experimental::nlp_concat_heads)
-        if operation_name.startswith("experimental::"):
-            experimental_op_name = f"ttnn::{operation_name}"
-            if experimental_op_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+        # Try with ttnn:: prefix (V1 format) and ttnn. prefix (V2 format)
+        for sep in ["::", "."]:
+            ttnn_op_name = f"ttnn{sep}{operation_name}"
+            if ttnn_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][ttnn_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
 
-        # Try with transformer:: namespace (e.g., transformer::paged_scaled_dot_product_attention_decode)
-        transformer_op_name = f"ttnn::transformer::{operation_name}"
-        if transformer_op_name in self.master_data.get("operations", {}):
-            configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
-            return self._normalize_configs(configs)
+        # Try with ttnn::experimental:: / ttnn.experimental. namespace
+        for sep in ["::", "."]:
+            experimental_full_op_name = f"ttnn{sep}experimental{sep}{operation_name}"
+            if experimental_full_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][experimental_full_op_name].get("configurations", [])
+                return self._normalize_configs(configs)
 
-        # Try without prefix if it starts with ttnn::
-        if operation_name.startswith("ttnn::"):
-            base_name = operation_name[6:]  # Remove "ttnn::"
-            if base_name in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][base_name].get("configurations", [])
+        # Try with experimental:: / experimental. namespace prefix on operation name
+        for sep in ["::", "."]:
+            if operation_name.startswith(f"experimental{sep}"):
+                experimental_op_name = f"ttnn{sep}{operation_name}"
+                if experimental_op_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][experimental_op_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+
+        # Try with transformer:: / transformer. namespace
+        for sep in ["::", "."]:
+            transformer_op_name = f"ttnn{sep}transformer{sep}{operation_name}"
+            if transformer_op_name in self.master_data.get("operations", {}):
+                configs = self.master_data["operations"][transformer_op_name].get("configurations", [])
                 return self._normalize_configs(configs)
-            # Also try with transformer:: namespace
-            transformer_base = f"ttnn::transformer::{base_name}"
-            if transformer_base in self.master_data.get("operations", {}):
-                configs = self.master_data["operations"][transformer_base].get("configurations", [])
-                return self._normalize_configs(configs)
+
+        # Try without prefix if it starts with ttnn:: or ttnn.
+        for sep in ["::", "."]:
+            if operation_name.startswith(f"ttnn{sep}"):
+                base_name = operation_name[len(f"ttnn{sep}") :]
+                if base_name in self.master_data.get("operations", {}):
+                    configs = self.master_data["operations"][base_name].get("configurations", [])
+                    return self._normalize_configs(configs)
+                # Also try with transformer:: / transformer. namespace
+                for sep2 in ["::", "."]:
+                    transformer_base = f"ttnn{sep2}transformer{sep2}{base_name}"
+                    if transformer_base in self.master_data.get("operations", {}):
+                        configs = self.master_data["operations"][transformer_base].get("configurations", [])
+                        return self._normalize_configs(configs)
 
         print(f"⚠️ No configurations found for operation: {operation_name}")
         return []
 
-    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str]]:
+    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
         """
-        Normalize configurations to always return list of (argument list, source) tuples.
-        Handles both old format (list) and new format (dict with source).
+        Normalize configurations to always return list of (argument list, source, machine_info, config_hash) tuples.
+        Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
-            configs: List of configurations (either list of args or dict with 'arguments' and 'source')
+            configs: List of configurations (either list of args or dict with 'arguments' and 'source'/'contexts')
 
         Returns:
-            List of (arguments, source) tuples for traceability
+            List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
+        # Check if we should filter for lead models only
+        # Uses shared global filter state to work across V1 and V2 loaders
+        lead_models_only = lead_models_filter.get_lead_models_filter()
+
         normalized = []
         for config in configs:
             if isinstance(config, dict) and "arguments" in config:
-                # New format: extract arguments, source, and machine_info
-                source = config.get("source", "unknown")
-                machine_info = config.get("machine_info", None)
-                normalized.append((config["arguments"], source, machine_info))
+                # Extract config_hash if present (from database-generated JSON)
+                config_hash = config.get("config_hash", None)
+
+                # Check for V2 "executions" format first (most common in reconstructed JSON)
+                if "executions" in config:
+                    # V2 executions format: each execution is a separate source/machine pair
+                    arguments = config["arguments"]
+                    for execution in config["executions"]:
+                        source = execution.get("source", "unknown")
+                        machine_info = execution.get("machine_info", None)
+
+                        # Filter for lead models if requested
+                        if lead_models_only:
+                            if not self._source_matches_lead_models(source):
+                                # print(f"V1: Skipping {source[:50]}")  # Debug
+                                continue  # Skip this execution
+
+                        normalized.append((arguments, source, machine_info, config_hash))
+                # Check if this config has the new contexts format
+                elif "contexts" in config:
+                    # New contexts format: expand each context into separate tuples
+                    arguments = config["arguments"]
+                    for context in config["contexts"]:
+                        # Extract source (should be a list in new format)
+                        source_list = context.get("source", ["unknown"])
+                        source = source_list[0] if isinstance(source_list, list) and len(source_list) > 0 else "unknown"
+
+                        # Extract machine_info
+                        machine_info = context.get("machine_info", None)
+
+                        # Filter for lead models if requested
+                        if lead_models_only:
+                            if not self._source_matches_lead_models(source_list):
+                                continue  # Skip this context
+
+                        normalized.append((arguments, source, machine_info, config_hash))
+                else:
+                    # Old single source/machine_info format
+                    source = config.get("source", "unknown")
+                    machine_info = config.get("machine_info", None)
+
+                    # Filter for lead models if requested
+                    if lead_models_only:
+                        if not self._source_matches_lead_models(source):
+                            continue  # Skip this config
+
+                    normalized.append((config["arguments"], source, machine_info, config_hash))
             elif isinstance(config, list):
                 # Old format: use as-is with unknown source and no machine_info
-                normalized.append((config, "unknown", None))
+                # Skip if lead_models_only since we can't determine source
+                if not lead_models_only:
+                    normalized.append((config, "unknown", None, None))
             else:
-                # Fallback: wrap in list with unknown source
-                normalized.append((config if isinstance(config, list) else [config], "unknown"))
+                # Fallback: wrap in list with unknown source and no machine_info
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None, None))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
@@ -348,8 +571,18 @@ class MasterConfigLoader:
                         # 2. Complex: [[{"x":0,"y":0}, {"x":7,"y":5}], [{"x":0,"y":6}, {"x":0,"y":6}]] - multiple ranges
 
                         if isinstance(grid_data, list) and len(grid_data) > 0:
+                            # Grid can be in three formats:
+                            # 1. Simple: [{"x":0,"y":0}, {"x":7,"y":7}] - direct coordinates
+                            # 2. Complex: [[{"x":0,"y":0}, {"x":7,"y":5}], [...]] - multiple ranges
+                            # 3. CoreRange: [{"start": {"x":0,"y":0}, "end": {"x":7,"y":3}}] - CoreRange format
+
+                            # Check for CoreRange format first (has "start" and "end" keys)
+                            if isinstance(grid_data[0], dict) and "start" in grid_data[0] and "end" in grid_data[0]:
+                                # CoreRange format
+                                start_coords = grid_data[0].get("start", {})
+                                end_coords = grid_data[0].get("end", {})
                             # Check if it's a complex grid (list of lists)
-                            if isinstance(grid_data[0], list):
+                            elif isinstance(grid_data[0], list):
                                 # Multiple core ranges - use the first range for now
                                 first_range = grid_data[0]
                                 if len(first_range) >= 2:
@@ -372,6 +605,10 @@ class MasterConfigLoader:
                                 end_x = end_coords.get("x", 0)
                                 end_y = end_coords.get("y", 0)
 
+                                # Note: We don't validate coordinates here - let TTNN fail naturally
+                                # with a clear error message if coordinates exceed hardware limits.
+                                # This provides better debugging information than silently falling back.
+
                                 # Create CoreGrid from the range
                                 # CoreGrid expects (y, x) format and represents number of cores, not end coordinates
                                 num_cores_y = end_y - start_y + 1
@@ -387,25 +624,44 @@ class MasterConfigLoader:
                                 num_cores_x = end_x - start_x + 1
                                 core_grid = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
 
-                        if core_grid and shard_shape:
+                        if core_grid and shard_shape and isinstance(grid_data, list) and len(grid_data) > 0:
                             # Create ShardSpec manually using the EXACT shard_shape from traced data
                             # Don't let TTNN calculate it - use the actual traced values!
                             from ttnn import CoreCoord, CoreRange, CoreRangeSet
 
-                            # Build CoreRangeSet from grid_data (handle both simple and complex grids)
+                            # Build CoreRangeSet from grid_data (handle all three formats)
                             core_ranges = []
-                            if isinstance(grid_data[0], list):
-                                # Complex multi-range grid
+                            if isinstance(grid_data[0], dict) and "start" in grid_data[0] and "end" in grid_data[0]:
+                                # CoreRange format: [{"start": {...}, "end": {...}}]
+                                for range_obj in grid_data:
+                                    if isinstance(range_obj, dict) and "start" in range_obj and "end" in range_obj:
+                                        start_coords = range_obj["start"]
+                                        end_coords = range_obj["end"]
+                                        if isinstance(start_coords, dict) and isinstance(end_coords, dict):
+                                            start = CoreCoord(start_coords["x"], start_coords["y"])
+                                            end = CoreCoord(end_coords["x"], end_coords["y"])
+                                            core_ranges.append(CoreRange(start, end))
+                            elif isinstance(grid_data[0], list):
+                                # Complex multi-range grid: [[{...}, {...}], ...]
                                 for range_pair in grid_data:
-                                    if len(range_pair) >= 2:
+                                    if (
+                                        len(range_pair) >= 2
+                                        and isinstance(range_pair[0], dict)
+                                        and isinstance(range_pair[1], dict)
+                                    ):
                                         start = CoreCoord(range_pair[0]["x"], range_pair[0]["y"])
                                         end = CoreCoord(range_pair[1]["x"], range_pair[1]["y"])
                                         core_ranges.append(CoreRange(start, end))
-                            else:
-                                # Simple single-range grid
-                                start = CoreCoord(grid_data[0]["x"], grid_data[0]["y"])
-                                end = CoreCoord(grid_data[1]["x"], grid_data[1]["y"])
-                                core_ranges.append(CoreRange(start, end))
+                            elif len(grid_data) >= 2:
+                                # Simple single-range grid: [{...}, {...}]
+                                if isinstance(grid_data[0], dict) and isinstance(grid_data[1], dict):
+                                    start = CoreCoord(grid_data[0]["x"], grid_data[0]["y"])
+                                    end = CoreCoord(grid_data[1]["x"], grid_data[1]["y"])
+                                    core_ranges.append(CoreRange(start, end))
+
+                            # Only create CoreRangeSet if we have valid core_ranges
+                            if not core_ranges:
+                                raise ValueError("Could not parse core ranges from grid_data")
 
                             core_range_set = CoreRangeSet(set(core_ranges))
 
@@ -452,8 +708,8 @@ class MasterConfigLoader:
             return 0
 
         # Check first config for number of tensor arguments
-        # configs is a list of (arguments, source, machine_info) tuples
-        first_config_args, first_source, first_machine_info = configs[0]
+        # configs is a list of (arguments, source, machine_info, config_hash) tuples
+        first_config_args, first_source, first_machine_info, _ = configs[0]
         tensor_count = 0
 
         # Only count consecutive tensors from the start
@@ -586,11 +842,19 @@ class MasterConfigLoader:
             elif self._matches_operation(operation_name, "scatter"):
                 print(f"🔧 Detected scatter operation - extracting dim parameter")
                 return self._get_scatter_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
+            elif self._matches_operation(operation_name, "attention_softmax_"):
+                print(f"🔧 Detected attention_softmax_ operation - extracting head_size parameter")
+                return self._get_attention_softmax_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
             elif self._matches_operation(operation_name, "fast_reduce_nc"):
                 print(f"🔧 Detected fast_reduce_nc operation - extracting dims parameter")
                 return self._get_fast_reduce_nc_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
+            elif self._matches_operation(operation_name, "repeat"):
+                print(f"🔧 Detected repeat operation - extracting repeat vector (no deduplication)")
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs=False)
             elif self._matches_operation(
                 operation_name, "scaled_dot_product_attention"
             ) and not self._matches_operation(operation_name, "decode"):
@@ -605,6 +869,13 @@ class MasterConfigLoader:
                     f"🔧 Detected paged_update_cache operation (multi-input with non-consecutive tensors) - using operation-specific extractor"
                 )
                 return self._get_operation_suite_parameters(
+                    operation_name, configs, all_cases, deduplicate_inputs=False
+                )
+            elif self._matches_operation(operation_name, "paged_fused_update_cache"):
+                print(
+                    f"🔧 Detected paged_fused_update_cache operation (4 tensors + additional parameters) - using operation-specific extractor"
+                )
+                return self._get_paged_fused_update_cache_suite_parameters(
                     operation_name, configs, all_cases, deduplicate_inputs=False
                 )
 
@@ -672,7 +943,7 @@ class MasterConfigLoader:
         failed_configs = 0
         seen_input_signatures = set() if deduplicate_inputs else None
 
-        for config_idx, (config, source, machine_info) in enumerate(configs):
+        for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
             try:
                 # Extract first tensor from each config
                 # Config is a list of arguments: [{"UnparsedElement": ...}, {"arg1": "nullopt"}, ...]
@@ -819,6 +1090,7 @@ class MasterConfigLoader:
                             "storage_type": storage_type_str,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
 
                         # Extract operation-specific parameters using registry extractors
@@ -866,6 +1138,20 @@ class MasterConfigLoader:
                                             parsed_layout,
                                             parsed_mem_config,
                                             target_shape,
+                                        )
+                                    ).encode()
+                                ).hexdigest()
+                            elif self._matches_operation(operation_name, "repeat") and "repeat_shape" in config_dict:
+                                # For repeat, deduplicate based on (input, repeat_shape) pair
+                                repeat_shape = config_dict["repeat_shape"]
+                                input_sig = hashlib.md5(
+                                    str(
+                                        (
+                                            tensor_config.shape,
+                                            parsed_dtype,
+                                            parsed_layout,
+                                            parsed_mem_config,
+                                            repeat_shape,
                                         )
                                     ).encode()
                                 ).hexdigest()
@@ -974,6 +1260,7 @@ class MasterConfigLoader:
                 traced_machine_info_list = []
                 traced_config_names = []
                 config_ids = []  # Unique IDs to prevent hash collisions
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 dims_list = [] if (operation_name == "permute" or operation_name == "ttnn::permute") else None
                 end_shape_list = [] if operation_name == "untilize_with_unpadding" else None
                 dim0_list = [] if operation_name == "transpose" else None
@@ -1031,10 +1318,26 @@ class MasterConfigLoader:
                 scalar_if_false_list = [] if self._matches_operation(operation_name, "where") else None
                 # multiply_ specific parameters (scalar multiply)
                 scalar_value_list = [] if self._matches_operation(operation_name, "multiply_") else None
+                # repeat specific parameters
+                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
                 # New operation parameters
                 exponent_list = [] if self._matches_operation(operation_name, "pow") else None
                 min_list = [] if self._matches_operation(operation_name, "clamp") else None
                 max_list = [] if self._matches_operation(operation_name, "clamp") else None
+                # rms_norm specific parameters
+                program_config_list = (
+                    []
+                    if (
+                        operation_name
+                        in [
+                            "rms_norm_pre_all_gather",
+                            "ttnn::rms_norm_pre_all_gather",
+                            "rms_norm_post_all_gather",
+                            "ttnn::rms_norm_post_all_gather",
+                        ]
+                    )
+                    else None
+                )
                 # dim parameter is used by multiple operations
                 dim_list = (
                     []
@@ -1046,7 +1349,6 @@ class MasterConfigLoader:
                     )
                     else None
                 )
-                repeat_shape_list = [] if self._matches_operation(operation_name, "repeat") else None
                 # group_norm parameters (all 16 traced arguments)
                 num_groups_list = [] if self._matches_operation(operation_name, "group_norm") else None
                 epsilon_list = [] if self._matches_operation(operation_name, "group_norm") else None
@@ -1117,8 +1419,20 @@ class MasterConfigLoader:
                     # Convert shape to tuple so it serializes as a string for proper deserialization
                     input_shapes.append(tuple(cfg["shape"]))
                     # Parse dtype/layout strings to ttnn objects
-                    input_a_dtypes.append(self.parse_dtype(cfg["dtype"]))
-                    input_a_layouts.append(self.parse_layout(cfg["layout"]))
+                    parsed_dtype = self.parse_dtype(cfg["dtype"])
+                    parsed_layout = self.parse_layout(cfg["layout"])
+
+                    # Override UINT16 TILE to ROW_MAJOR for reshape to avoid device operation assertion
+                    # The reshape device operation doesn't support UINT16, but ROW_MAJOR uses view path
+                    if (
+                        operation_name == "reshape"
+                        and parsed_dtype == ttnn.uint16
+                        and parsed_layout == ttnn.TILE_LAYOUT
+                    ):
+                        parsed_layout = ttnn.ROW_MAJOR_LAYOUT
+
+                    input_a_dtypes.append(parsed_dtype)
+                    input_a_layouts.append(parsed_layout)
                     # Parse memory configs to ttnn objects (for proper serialization)
                     # Check if already a MemoryConfig object (from some extractors)
                     mem_config = cfg["memory_config"]
@@ -1135,6 +1449,7 @@ class MasterConfigLoader:
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     config_ids.append(f"config_{idx}")  # Unique ID to prevent hash collisions
+                    config_hash_list.append(cfg.get("config_hash"))  # Database config_hash for direct correlation
                     if (operation_name == "permute" or operation_name == "ttnn::permute") and "dims" in cfg:
                         dims_list.append(cfg["dims"])
                     if operation_name == "untilize_with_unpadding" and "end_shape" in cfg:
@@ -1145,6 +1460,18 @@ class MasterConfigLoader:
                             dim1_list.append(cfg["dim1"])
                     if operation_name == "reshape" and "target_shape" in cfg:
                         target_shape_list.append(cfg["target_shape"])
+                    if self._matches_operation(operation_name, "repeat") and "repeat_shape" in cfg:
+                        repeat_shape_list.append(cfg["repeat_shape"])
+                    if operation_name in [
+                        "rms_norm_pre_all_gather",
+                        "ttnn::rms_norm_pre_all_gather",
+                        "rms_norm_post_all_gather",
+                        "ttnn::rms_norm_post_all_gather",
+                    ]:
+                        if "program_config" in cfg:
+                            program_config_list.append(cfg["program_config"])
+                        else:
+                            program_config_list.append(None)
                     if operation_name == "pad" or operation_name == "ttnn::pad":
                         if "padding" in cfg and "value" in cfg:
                             # Using padding format
@@ -1251,10 +1578,6 @@ class MasterConfigLoader:
                     ):
                         if "dim" in cfg:
                             dim_list.append(cfg["dim"])
-                    # Extract repeat shape parameter
-                    if self._matches_operation(operation_name, "repeat"):
-                        if "shape" in cfg:
-                            repeat_shape_list.append(cfg["shape"])
                     # Extract group_norm parameters (all 16 arguments)
                     # NOTE: All optional parameters must be appended for EVERY config (use None if missing)
                     # to ensure zip(*param_lists) doesn't truncate
@@ -1333,6 +1656,7 @@ class MasterConfigLoader:
                     "storage_type",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                     "config_id",  # Unique ID to prevent hash collisions
                 ]
                 param_lists = [
@@ -1344,6 +1668,7 @@ class MasterConfigLoader:
                     storage_types,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,  # Database config_hash for direct correlation
                     config_ids,  # Add unique config IDs
                 ]
 
@@ -1474,6 +1799,21 @@ class MasterConfigLoader:
                     if scalar_value_list:
                         param_names.append("scalar_value")
                         param_lists.append(scalar_value_list)
+                # Add repeat parameters (repeat vector as 'repeat_shape')
+                if self._matches_operation(operation_name, "repeat"):
+                    if repeat_shape_list:
+                        param_names.append("repeat_shape")
+                        param_lists.append(repeat_shape_list)
+                # Add rms_norm program_config
+                if operation_name in [
+                    "rms_norm_pre_all_gather",
+                    "ttnn::rms_norm_pre_all_gather",
+                    "rms_norm_post_all_gather",
+                    "ttnn::rms_norm_post_all_gather",
+                ]:
+                    if program_config_list:
+                        param_names.append("program_config")
+                        param_lists.append(program_config_list)
                 # Add pow parameters
                 if self._matches_operation(operation_name, "pow"):
                     if exponent_list:
@@ -1497,11 +1837,6 @@ class MasterConfigLoader:
                     if dim_list:
                         param_names.append("dim")
                         param_lists.append(dim_list)
-                # Add repeat shape parameter
-                if self._matches_operation(operation_name, "repeat"):
-                    if repeat_shape_list:
-                        param_names.append("shape")
-                        param_lists.append(repeat_shape_list)
                 # Add group_norm parameters (all 16 arguments)
                 # Always add all parameters (not conditionally) to ensure zip doesn't truncate
                 if self._matches_operation(operation_name, "group_norm"):
@@ -1602,7 +1937,7 @@ class MasterConfigLoader:
         paired_configs = []
         failed_configs = 0
 
-        for config_idx, (config, source, machine_info) in enumerate(configs):
+        for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
             try:
                 # Extract BOTH tensors from each config
                 tensor_configs = []
@@ -1678,6 +2013,7 @@ class MasterConfigLoader:
                             "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
 
                         # Add scalar value if present
@@ -1781,6 +2117,7 @@ class MasterConfigLoader:
                 # This ensures that even if two configs have identical parameters,
                 # they generate different test vectors if they come from different traced configs
                 config_ids = []
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for idx, cfg in enumerate(paired_configs):
                     # Handle both tensor-tensor and tensor-scalar operations
@@ -1804,6 +2141,7 @@ class MasterConfigLoader:
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     # Add unique config ID to ensure unique hashes
                     config_ids.append(f"config_{idx}")
+                    config_hash_list.append(cfg.get("config_hash"))  # Database config_hash for direct correlation
 
                     # Add scalar value if present (will be None for tensor-tensor ops)
                     scalars.append(cfg.get("scalar", None))
@@ -1822,6 +2160,7 @@ class MasterConfigLoader:
                     "scalar",  # For tensor-scalar operations (None for tensor-tensor)
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                     "config_id",  # Unique ID to prevent hash collisions
                     # NOTE: traced_config_name is metadata only, not passed to run()
                     # "traced_config_name",
@@ -1838,6 +2177,7 @@ class MasterConfigLoader:
                     scalars,  # Add scalar values
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,  # Database config_hash for direct correlation
                     config_ids,  # Add unique config IDs
                     # traced_config_names,
                 ]
@@ -1883,7 +2223,7 @@ class MasterConfigLoader:
         is_paged_update_cache = "paged_update_cache" in operation_name.lower()
         min_tensor_count = tensor_count - 1 if is_paged_update_cache else tensor_count
 
-        for config_idx, (config, source, machine_info) in enumerate(configs):
+        for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
             try:
                 # Extract ALL tensors from each config
                 tensor_configs = []
@@ -1901,7 +2241,11 @@ class MasterConfigLoader:
                     continue
 
                 # Parse all tensor configs (actual count may be less than tensor_count if optional)
-                parsed_config = {"traced_source": source, "traced_machine_info": machine_info}
+                parsed_config = {
+                    "traced_source": source,
+                    "traced_machine_info": machine_info,
+                    "config_hash": config_hash,
+                }
                 actual_tensor_count = len(tensor_configs)
                 parse_failed = False
 
@@ -1920,8 +2264,8 @@ class MasterConfigLoader:
                 if not parse_failed:
                     # Verify we have all required fields for the actual tensors parsed
                     expected_fields = (
-                        actual_tensor_count * 4 + 2
-                    )  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info
+                        actual_tensor_count * 4 + 3
+                    )  # shape, dtype, layout, mem_config for each tensor + traced_source + traced_machine_info + config_hash
                     if len(parsed_config) == expected_fields:
                         paired_configs.append(parsed_config)
 
@@ -1990,6 +2334,7 @@ class MasterConfigLoader:
                 traced_machine_info_list = []
                 traced_config_names = []
                 config_ids = []  # Unique IDs to prevent hash collisions
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for idx, cfg in enumerate(paired_configs):
                     # Determine actual tensor count in this config (may be less than expected for optional tensors)
@@ -2018,6 +2363,7 @@ class MasterConfigLoader:
                     traced_machine_info_list.append(cfg.get("traced_machine_info", None))
                     traced_config_names.append(f"{operation_name}_traced_{idx}")
                     config_ids.append(f"config_{idx}")  # Unique ID to prevent hash collisions
+                    config_hash_list.append(cfg.get("config_hash"))  # Database config_hash for direct correlation
 
                 # Convert to exact configurations format (prevents Cartesian product)
                 # Use comma-separated parameter names to pass tuples of values together
@@ -2037,6 +2383,8 @@ class MasterConfigLoader:
                 param_lists.append(traced_source_list)
                 param_names.append("traced_machine_info")
                 param_lists.append(traced_machine_info_list)
+                param_names.append("config_hash")  # Database config_hash for direct correlation
+                param_lists.append(config_hash_list)
                 param_names.append("config_id")  # Unique ID to prevent hash collisions
                 param_lists.append(config_ids)
 
@@ -2115,8 +2463,9 @@ class MasterConfigLoader:
             config_tensors_in_dram_list = []
             traced_source_list = []
             traced_machine_info_list = []
+            config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
-            for config, source, machine_info in configs:
+            for config, source, machine_info, config_hash in configs:
                 params = self._extract_conv2d_parameters(config)
                 if params:
                     # Build input_specs list:
@@ -2151,12 +2500,14 @@ class MasterConfigLoader:
                     traced_source_list.append(source)
                     # Track machine_info for traceability
                     traced_machine_info_list.append(machine_info)
+                    # Track config_hash for direct correlation with ttnn_ops.ttnn_configuration
+                    config_hash_list.append(config_hash)
 
             if input_specs_list:
                 print(
                     f"✅ Loaded {len(input_specs_list)} traced configurations for {operation_name} (model_traced suite)"
                 )
-                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, traced_machine_info, and config_id to prevent Cartesian product
+                # Pair input_specs with is_conv1d, compute_config, dtype, config_tensors_in_dram, traced_source, traced_machine_info, config_hash, and config_id to prevent Cartesian product
                 # Use comma-separated parameter name to pass tuples together
                 config_ids = [f"config_{idx}" for idx in range(len(input_specs_list))]
                 paired_configs = list(
@@ -2168,11 +2519,12 @@ class MasterConfigLoader:
                         config_tensors_in_dram_list,
                         traced_source_list,
                         traced_machine_info_list,
+                        config_hash_list,
                         config_ids,
                     )
                 )
                 return {
-                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info,config_id": paired_configs,
+                    "input_specs,is_conv1d,compute_config,dtype,config_tensors_in_dram,traced_source,traced_machine_info,config_hash,config_id": paired_configs,
                 }
 
             return {"input_specs": [], "is_conv1d": []}
@@ -2190,7 +2542,7 @@ class MasterConfigLoader:
         try:
             paired_configs = []
 
-            for config, source, machine_info in configs:
+            for config, source, machine_info, config_hash in configs:
                 # Extract base tensor config for input tensor
                 tensor_config = None
                 for arg in config:
@@ -2229,6 +2581,7 @@ class MasterConfigLoader:
                         "has_bias": linear_params["has_bias"],
                         "traced_source": source,
                         "traced_machine_info": machine_info,
+                        "config_hash": config_hash,  # Database config_hash for direct correlation
                     }
                     paired_configs.append(config_dict)
 
@@ -2238,7 +2591,7 @@ class MasterConfigLoader:
                 # Build parameter dict
                 param_names = [
                     "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info"
+                    + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_hash"
                 ]
                 param_lists = [
                     [
@@ -2258,6 +2611,7 @@ class MasterConfigLoader:
                             cfg["has_bias"],
                             cfg["traced_source"],
                             cfg["traced_machine_info"],
+                            cfg.get("config_hash"),  # Database config_hash for direct correlation
                         )
                         for cfg in paired_configs
                     ]
@@ -2281,16 +2635,18 @@ class MasterConfigLoader:
             # Clean operation name (remove namespace prefix if present)
             clean_op_name = operation_name.replace("ttnn::", "")
 
-            # First extract parameters from each config, tracking sources and machine_info
+            # First extract parameters from each config, tracking sources, machine_info, and config_hash
             extracted_params = []
             extracted_sources = []
             extracted_machine_infos = []
-            for config, source, machine_info in configs:
+            extracted_config_hashes = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
+            for config, source, machine_info, config_hash in configs:
                 params = OperationParameterExtractors.extract_parameters(clean_op_name, config)
                 if params:
                     extracted_params.append(params)
                     extracted_sources.append(source)
                     extracted_machine_infos.append(machine_info)
+                    extracted_config_hashes.append(config_hash)
 
             # Then transform the extracted parameters
             if extracted_params:
@@ -2352,17 +2708,18 @@ class MasterConfigLoader:
                                     cfg["output_memory_config"],
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                             )
 
                         # Return as comma-separated parameter name with tuple list (like linear)
-                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config,traced_source,traced_machine_info"
+                        param_name = "embedding_args,input_dtype,weight_dtype,output_dtype,input_layout,weight_layout,input_memory_config,weight_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         return {param_name: param_tuples}
 
                     elif clean_op_name == "linear":
                         param_names = [
                             "input_shape,weight_shape,bias_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,"
-                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_id"
+                            + "input_a_memory_config,input_b_memory_config,output_memory_config,transpose_a,transpose_b,has_bias,traced_source,traced_machine_info,config_hash,config_id"
                         ]
                         param_lists = [
                             [
@@ -2382,6 +2739,7 @@ class MasterConfigLoader:
                                     cfg["has_bias"],
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                     f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
@@ -2407,7 +2765,7 @@ class MasterConfigLoader:
 
                         # Create tuples of exact configurations
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2419,6 +2777,7 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2470,7 +2829,7 @@ class MasterConfigLoader:
 
                         # Create tuples of exact configurations
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,input_e_dtype,input_e_layout,input_e_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2494,6 +2853,7 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2507,7 +2867,7 @@ class MasterConfigLoader:
                     ):
                         # Build parameter tuples including scalar parameters
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,scale,k_chunk_size,is_causal,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2531,6 +2891,7 @@ class MasterConfigLoader:
                                     cfg.get("is_causal"),  # Scalar parameter
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2540,7 +2901,7 @@ class MasterConfigLoader:
                     # For paged_update_cache (4 tensor inputs)
                     elif clean_op_name == "experimental::paged_update_cache" or clean_op_name == "paged_update_cache":
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,traced_source,traced_machine_info"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,input_c_dtype,input_c_layout,input_c_memory_config,input_d_dtype,input_d_layout,input_d_memory_config,output_memory_config,traced_source,traced_machine_info,config_hash"
                         ]
                         param_lists = [
                             [
@@ -2561,6 +2922,7 @@ class MasterConfigLoader:
                                     cfg.get("output_memory_config"),
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
                             ]
@@ -2573,7 +2935,7 @@ class MasterConfigLoader:
                         or clean_op_name == "ttnn::scale_mask_softmax_in_place"
                     ):
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,mask_shape,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_id"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,mask_shape,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_hash,config_id"
                         ]
                         param_lists = [
                             [
@@ -2590,6 +2952,7 @@ class MasterConfigLoader:
                                     cfg.get("scalar"),  # Scale value
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                     f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
@@ -2600,7 +2963,7 @@ class MasterConfigLoader:
                     # For update_cache (2 tensor inputs + 2 scalars)
                     elif clean_op_name == "update_cache" or clean_op_name == "ttnn::update_cache":
                         param_names = [
-                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_id"
+                            "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,input_b_dtype,input_b_layout,input_b_memory_config,output_memory_config,scalar,traced_source,traced_machine_info,config_hash,config_id"
                         ]
                         param_lists = [
                             [
@@ -2616,6 +2979,7 @@ class MasterConfigLoader:
                                     cfg.get("scalar"),  # Dict with update_index and batch_offset
                                     extracted_sources[idx] if idx < len(extracted_sources) else "unknown",
                                     extracted_machine_infos[idx] if idx < len(extracted_machine_infos) else None,
+                                    extracted_config_hashes[idx] if idx < len(extracted_config_hashes) else None,
                                     f"config_{idx}",  # Unique config ID
                                 )
                                 for idx, cfg in enumerate(transformed_configs)
@@ -2643,8 +3007,11 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
+                    # Debug: Check config structure
+                    # print(f"V1 concat: Processing config {config_idx}, config type: {type(config)}, len: {len(config) if isinstance(config, list) else 'N/A'}")
+
                     # Concat takes a vector of tensors as arg0, dim as arg1, memory_config as arg2
                     # Extract vector of tensors from arg0 (may be UnparsedElement)
                     tensor_configs = []
@@ -2703,6 +3070,10 @@ class MasterConfigLoader:
                                     tensor_configs = tensor_vector
 
                     # Extract shapes, dtypes, layouts, and memory_configs from tensor vector
+                    if not (tensor_configs and len(tensor_configs) >= 2 and dim is not None):
+                        # Debug: print why this config was skipped
+                        # print(f"V1 concat: Skip config - tensors={len(tensor_configs) if tensor_configs else 0}, dim={dim}")
+                        pass
                     if tensor_configs and len(tensor_configs) >= 2 and dim is not None:
                         # Build input_shape dict with all tensor shapes
                         input_shape_dict = {}
@@ -2749,6 +3120,7 @@ class MasterConfigLoader:
                             "output_memory_config": memory_config or ttnn.DRAM_MEMORY_CONFIG,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
 
                         # Add dtype, layout, memory_config for each input (at least 2)
@@ -2781,6 +3153,8 @@ class MasterConfigLoader:
                     "input_b_memory_config",
                     "output_memory_config",
                     "traced_source",
+                    "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     [cfg.get("input_shape") for cfg in paired_configs],
@@ -2793,6 +3167,8 @@ class MasterConfigLoader:
                     [cfg.get("input_b_memory_config") for cfg in paired_configs],
                     [cfg.get("output_memory_config") for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("traced_machine_info") for cfg in paired_configs],
+                    [cfg.get("config_hash") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -2891,6 +3267,31 @@ class MasterConfigLoader:
 
         return params
 
+    def _get_attention_softmax_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for attention_softmax_ operation which requires head_size and attention_mask"""
+        scalars = []
+        for config in configs:
+            if isinstance(config, dict) and "arguments" in config:
+                args = config["arguments"]
+                # arg0 is input tensor, arg1 is head_size (scalar), arg2 is attention_mask tensor
+                if len(args) > 1 and isinstance(args[1], dict) and "arg1" in args[1]:
+                    try:
+                        head_size_value = args[1]["arg1"]
+                        scalars.append(int(head_size_value) if head_size_value else None)
+                    except:
+                        scalars.append(None)
+
+        # Get base parameters using the binary operation logic (has 2 tensor inputs)
+        params = self._get_binary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+
+        # Add scalar parameter (head_size)
+        if scalars:
+            params["scalar"] = scalars
+
+        return params
+
     def _get_fast_reduce_nc_suite_parameters(
         self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
     ) -> Dict:
@@ -2929,7 +3330,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -3008,6 +3409,7 @@ class MasterConfigLoader:
                             "num_kv_heads": num_kv_heads,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
                         paired_configs.append(config_dict)
 
@@ -3028,6 +3430,7 @@ class MasterConfigLoader:
                     "num_kv_heads",
                     "output_memory_config",
                     "traced_source",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     [cfg["shape"] for cfg in paired_configs],
@@ -3038,6 +3441,7 @@ class MasterConfigLoader:
                     [cfg["num_kv_heads"] for cfg in paired_configs],
                     [cfg["output_memory_config"] for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("config_hash") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -3062,7 +3466,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -3122,6 +3526,7 @@ class MasterConfigLoader:
                             "num_kv_heads": num_kv_heads,
                             "traced_source": source,
                             "traced_machine_info": machine_info,
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
                         paired_configs.append(config_dict)
 
@@ -3142,6 +3547,7 @@ class MasterConfigLoader:
                     "num_kv_heads",
                     "output_memory_config",
                     "traced_source",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     [cfg["shape"] for cfg in paired_configs],
@@ -3152,6 +3558,7 @@ class MasterConfigLoader:
                     [cfg["num_kv_heads"] for cfg in paired_configs],
                     [cfg["output_memory_config"] for cfg in paired_configs],
                     [cfg.get("traced_source", "unknown") for cfg in paired_configs],
+                    [cfg.get("config_hash") for cfg in paired_configs],
                 ]
 
                 # Create tuples of exact configurations
@@ -3184,7 +3591,7 @@ class MasterConfigLoader:
             paired_configs = []
             failed_configs = 0
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract input tensor (arg0)
                     tensor_config = None
@@ -3241,6 +3648,7 @@ class MasterConfigLoader:
                             "transpose_k_heads": transpose_k_heads,
                             "traced_source": source or "unknown",
                             "traced_machine_info": machine_info or {},
+                            "config_hash": config_hash,  # Database config_hash for direct correlation
                         }
                         paired_configs.append(paired_config)
                     else:
@@ -3266,6 +3674,7 @@ class MasterConfigLoader:
             transpose_k_heads_list = []
             traced_source_list = []
             traced_machine_info_list = []
+            config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
             for cfg in paired_configs:
                 input_shape_list.append(cfg["input_shape"])
@@ -3279,6 +3688,7 @@ class MasterConfigLoader:
                 transpose_k_heads_list.append(cfg["transpose_k_heads"])
                 traced_source_list.append(cfg["traced_source"])
                 traced_machine_info_list.append(cfg["traced_machine_info"])
+                config_hash_list.append(cfg.get("config_hash"))
 
             if all_cases:
                 # For all_cases, Cartesian product (but for model_traced, it's typically 1:1)
@@ -3300,6 +3710,7 @@ class MasterConfigLoader:
                     "transpose_k_heads",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     input_shape_list,
@@ -3312,6 +3723,7 @@ class MasterConfigLoader:
                     transpose_k_heads_list,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,
                 ]
 
                 # Create tuples of exact configurations (prevents Cartesian product)
@@ -3339,7 +3751,7 @@ class MasterConfigLoader:
             failed_configs = 0
             seen_input_signatures = set() if deduplicate_inputs else None
 
-            for config_idx, (config, source, machine_info) in enumerate(configs):
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
                 try:
                     # Extract Q, K, V tensor configs (first 3 args)
                     tensor_configs = []
@@ -3406,6 +3818,7 @@ class MasterConfigLoader:
                         "scale": scale,
                         "traced_source": source,
                         "traced_machine_info": machine_info,
+                        "config_hash": config_hash,  # Database config_hash for direct correlation
                     }
 
                     if deduplicate_inputs:
@@ -3457,6 +3870,7 @@ class MasterConfigLoader:
                 scale_list = []
                 traced_source_list = []
                 traced_machine_info_list = []
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
 
                 for cfg in paired_configs:
                     input_shapes.append(cfg["input_shape"])
@@ -3474,6 +3888,7 @@ class MasterConfigLoader:
                     scale_list.append(cfg["scale"])
                     traced_source_list.append(cfg["traced_source"])
                     traced_machine_info_list.append(cfg["traced_machine_info"])
+                    config_hash_list.append(cfg.get("config_hash"))
 
                 param_names = [
                     "input_shape",
@@ -3491,6 +3906,7 @@ class MasterConfigLoader:
                     "scale",
                     "traced_source",
                     "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
                 ]
                 param_lists = [
                     input_shapes,
@@ -3508,6 +3924,7 @@ class MasterConfigLoader:
                     scale_list,
                     traced_source_list,
                     traced_machine_info_list,
+                    config_hash_list,
                 ]
 
                 exact_configs = list(zip(*param_lists))
@@ -3524,6 +3941,283 @@ class MasterConfigLoader:
             return {}
         except Exception as e:
             print(f"❌ Error extracting scaled_dot_product_attention parameters: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def _get_paged_fused_update_cache_suite_parameters(
+        self, operation_name: str, configs: List, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """Get parameters for paged_fused_update_cache operation with 4 tensors + additional parameters"""
+        try:
+            paired_configs = []
+            failed_configs = 0
+            seen_input_signatures = set() if deduplicate_inputs else None
+
+            for config_idx, (config, source, machine_info, config_hash) in enumerate(configs):
+                try:
+                    # Extract 4 tensor configs (cache1, input1, cache2, input2)
+                    tensor_configs = []
+                    for arg in config:
+                        tensor_config = self.extract_tensor_config(arg)
+                        if tensor_config:
+                            tensor_configs.append(tensor_config)
+                            if len(tensor_configs) >= 4:
+                                break
+
+                    if len(tensor_configs) < 4:
+                        failed_configs += 1
+                        continue
+
+                    # Extract additional parameters
+                    # arg4: update_idxs (vector<uint32_t>)
+                    # arg5: update_idxs_tensor (optional Tensor)
+                    # arg6: share_cache (optional<bool>)
+                    # arg7: page_table (optional Tensor)
+                    # arg8: batch_offset (uint32_t)
+
+                    update_idxs = []
+                    update_idxs_tensor_config = None
+                    share_cache = None
+                    page_table_config = None
+                    batch_offset = 0
+
+                    for arg in config:
+                        if isinstance(arg, dict):
+                            # arg4: update_idxs vector
+                            if "arg4" in arg:
+                                val = arg["arg4"]
+                                if isinstance(val, list):
+                                    update_idxs = val
+
+                            # arg5: update_idxs_tensor
+                            if "arg5" in arg:
+                                val = arg["arg5"]
+                                if isinstance(val, dict) and "Tensor" in val:
+                                    # Extract tensor config for arg5
+                                    update_idxs_tensor_config = self.extract_tensor_config(arg)
+
+                            # arg6: share_cache
+                            if "arg6" in arg:
+                                val = arg["arg6"]
+                                if val != "nullopt" and isinstance(val, (bool, int, str)):
+                                    try:
+                                        share_cache = bool(int(val)) if isinstance(val, (int, str)) else val
+                                    except:
+                                        pass
+
+                            # arg7: page_table
+                            if "arg7" in arg:
+                                val = arg["arg7"]
+                                if isinstance(val, dict) and "Tensor" in val:
+                                    # Extract tensor config for arg7
+                                    page_table_config = self.extract_tensor_config(arg)
+
+                            # arg8: batch_offset
+                            if "arg8" in arg:
+                                val = arg["arg8"]
+                                if isinstance(val, (int, str)) and val != "nullopt":
+                                    try:
+                                        batch_offset = int(val)
+                                    except:
+                                        pass
+
+                    # Build config dict with all 4 tensor inputs + additional params
+                    config_dict = {
+                        "input_shape": {
+                            "input_a": tensor_configs[0].shape,  # cache_tensor1
+                            "input_b": tensor_configs[1].shape,  # input_tensor1
+                            "input_c": tensor_configs[2].shape,  # cache_tensor2
+                            "input_d": tensor_configs[3].shape,  # input_tensor2
+                        },
+                        "input_a_dtype": self.parse_dtype(tensor_configs[0].dtype),
+                        "input_a_layout": self.parse_layout(tensor_configs[0].layout),
+                        "input_a_memory_config": self.parse_memory_config(
+                            tensor_configs[0].memory_config, tensor_configs[0].shape
+                        ),
+                        "input_b_dtype": self.parse_dtype(tensor_configs[1].dtype),
+                        "input_b_layout": self.parse_layout(tensor_configs[1].layout),
+                        "input_b_memory_config": self.parse_memory_config(
+                            tensor_configs[1].memory_config, tensor_configs[1].shape
+                        ),
+                        "input_c_dtype": self.parse_dtype(tensor_configs[2].dtype),
+                        "input_c_layout": self.parse_layout(tensor_configs[2].layout),
+                        "input_c_memory_config": self.parse_memory_config(
+                            tensor_configs[2].memory_config, tensor_configs[2].shape
+                        ),
+                        "input_d_dtype": self.parse_dtype(tensor_configs[3].dtype),
+                        "input_d_layout": self.parse_layout(tensor_configs[3].layout),
+                        "input_d_memory_config": self.parse_memory_config(
+                            tensor_configs[3].memory_config, tensor_configs[3].shape
+                        ),
+                        "output_memory_config": self.parse_memory_config(
+                            tensor_configs[0].memory_config, tensor_configs[0].shape
+                        ),
+                        "update_idxs": update_idxs,
+                        "batch_offset": batch_offset,
+                        "traced_source": source,
+                        "traced_machine_info": machine_info,
+                        "config_hash": config_hash,  # Database config_hash for direct correlation
+                    }
+
+                    # Add optional tensor parameters if present
+                    if update_idxs_tensor_config:
+                        config_dict["update_idxs_tensor"] = {
+                            "shape": update_idxs_tensor_config.shape,
+                            "dtype": self.parse_dtype(update_idxs_tensor_config.dtype),
+                            "layout": ttnn.ROW_MAJOR_LAYOUT,  # update_idxs_tensor must be ROW_MAJOR per C++ validation
+                            "memory_config": self.parse_memory_config(
+                                update_idxs_tensor_config.memory_config, update_idxs_tensor_config.shape
+                            ),
+                        }
+
+                    if page_table_config:
+                        config_dict["page_table"] = {
+                            "shape": page_table_config.shape,
+                            "dtype": self.parse_dtype(page_table_config.dtype),
+                            "layout": ttnn.ROW_MAJOR_LAYOUT,  # page_table must be ROW_MAJOR per C++ validation
+                            "memory_config": self.parse_memory_config(
+                                page_table_config.memory_config, page_table_config.shape
+                            ),
+                        }
+
+                    if share_cache is not None:
+                        config_dict["share_cache"] = share_cache
+
+                    if deduplicate_inputs:
+                        import hashlib
+
+                        input_sig = hashlib.md5(
+                            str(
+                                (
+                                    tuple(tensor_configs[i].shape for i in range(4)),
+                                    tuple(config_dict[f"input_{chr(97+i)}_dtype"] for i in range(4)),
+                                    update_idxs,
+                                    batch_offset,
+                                )
+                            ).encode()
+                        ).hexdigest()
+                        if input_sig in seen_input_signatures:
+                            continue
+                        seen_input_signatures.add(input_sig)
+
+                    paired_configs.append(config_dict)
+                except Exception as e:
+                    failed_configs += 1
+                    print(f"⚠️ Failed to parse config {config_idx}: {e}")
+                    continue
+
+            if paired_configs:
+                if all_cases:
+                    # Generate all combinations
+                    print("Generating all combinations...")
+                    # Implementation similar to other operations
+                    # For now, use exact configs
+                    pass
+
+                # Collect parameters
+                input_shapes = []
+                input_a_dtypes, input_a_layouts, input_a_memory_configs = [], [], []
+                input_b_dtypes, input_b_layouts, input_b_memory_configs = [], [], []
+                input_c_dtypes, input_c_layouts, input_c_memory_configs = [], [], []
+                input_d_dtypes, input_d_layouts, input_d_memory_configs = [], [], []
+                output_memory_configs = []
+                update_idxs_list = []
+                update_idxs_tensor_list = []
+                page_table_list = []
+                share_cache_list = []
+                batch_offset_list = []
+                traced_source_list, traced_machine_info_list = [], []
+                config_hash_list = []  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
+
+                for cfg in paired_configs:
+                    input_shapes.append(cfg["input_shape"])
+                    input_a_dtypes.append(cfg["input_a_dtype"])
+                    input_a_layouts.append(cfg["input_a_layout"])
+                    input_a_memory_configs.append(cfg["input_a_memory_config"])
+                    input_b_dtypes.append(cfg["input_b_dtype"])
+                    input_b_layouts.append(cfg["input_b_layout"])
+                    input_b_memory_configs.append(cfg["input_b_memory_config"])
+                    input_c_dtypes.append(cfg["input_c_dtype"])
+                    input_c_layouts.append(cfg["input_c_layout"])
+                    input_c_memory_configs.append(cfg["input_c_memory_config"])
+                    input_d_dtypes.append(cfg["input_d_dtype"])
+                    input_d_layouts.append(cfg["input_d_layout"])
+                    input_d_memory_configs.append(cfg["input_d_memory_config"])
+                    output_memory_configs.append(cfg["output_memory_config"])
+                    update_idxs_list.append(cfg.get("update_idxs", []))
+                    update_idxs_tensor_list.append(cfg.get("update_idxs_tensor", None))
+                    page_table_list.append(cfg.get("page_table", None))
+                    share_cache_list.append(cfg.get("share_cache", None))
+                    batch_offset_list.append(cfg.get("batch_offset", 0))
+                    traced_source_list.append(cfg["traced_source"])
+                    traced_machine_info_list.append(cfg["traced_machine_info"])
+                    config_hash_list.append(cfg.get("config_hash"))
+
+                param_names = [
+                    "input_shape",
+                    "input_a_dtype",
+                    "input_a_layout",
+                    "input_a_memory_config",
+                    "input_b_dtype",
+                    "input_b_layout",
+                    "input_b_memory_config",
+                    "input_c_dtype",
+                    "input_c_layout",
+                    "input_c_memory_config",
+                    "input_d_dtype",
+                    "input_d_layout",
+                    "input_d_memory_config",
+                    "output_memory_config",
+                    "update_idxs",
+                    "update_idxs_tensor",
+                    "page_table",
+                    "share_cache",
+                    "batch_offset",
+                    "traced_source",
+                    "traced_machine_info",
+                    "config_hash",  # Database config_hash for direct correlation with ttnn_ops.ttnn_configuration
+                ]
+
+                exact_configs = list(
+                    zip(
+                        input_shapes,
+                        input_a_dtypes,
+                        input_a_layouts,
+                        input_a_memory_configs,
+                        input_b_dtypes,
+                        input_b_layouts,
+                        input_b_memory_configs,
+                        input_c_dtypes,
+                        input_c_layouts,
+                        input_c_memory_configs,
+                        input_d_dtypes,
+                        input_d_layouts,
+                        input_d_memory_configs,
+                        output_memory_configs,
+                        update_idxs_list,
+                        update_idxs_tensor_list,
+                        page_table_list,
+                        share_cache_list,
+                        batch_offset_list,
+                        traced_source_list,
+                        traced_machine_info_list,
+                        config_hash_list,
+                    )
+                )
+
+                param_key = ",".join(param_names)
+                result = {param_key: exact_configs}
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name}")
+                print(f"   📊 Will generate {len(input_shapes)} test vectors")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+                return result
+            return {}
+        except Exception as e:
+            print(f"❌ Error extracting paged_fused_update_cache parameters: {e}")
             import traceback
 
             traceback.print_exc()

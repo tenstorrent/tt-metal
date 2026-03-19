@@ -4,24 +4,14 @@
 
 #pragma once
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::experimental::transformer {
-struct NLPConcatHeadsBoltzOperation {
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-};
-}  // namespace operations::experimental::transformer
+namespace ttnn::experimental {
 
-namespace experimental {
+ttnn::Tensor nlp_concat_heads_boltz(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<Tensor> optional_output_tensor = std::nullopt);
 
-constexpr auto nlp_concat_heads_boltz = ttnn::register_operation<
-    "ttnn::experimental::nlp_concat_heads_boltz",
-    ttnn::operations::experimental::transformer::NLPConcatHeadsBoltzOperation>();
-
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental

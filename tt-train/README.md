@@ -3,37 +3,40 @@
 ## Overview
 This repository contains a high-performance training framework developed in C++ designed to efficiently leverage the computational capabilities of Tenstorrent hardware. The framework is optimized to accelerate model training tasks, providing a seamless interface for training deep learning models on Tenstorrent's advanced hardware architecture.
 
-# Install
-1. Initialize and update submodules
-```
+# Prerequisites
+
+tt-train is built as part of tt-metal. Before building, ensure you have:
+
+1. Cloned the tt-metal repository with submodules:
+```bash
 git submodule update --init --recursive
 ```
-2. Install CMake 3.30
-3. Run setup script to configure env variables, direnv, clang-tidy and clang-format.
-```
-source ./init_repo.sh
-```
-4. Navigate to `tt-metal` folder and follow repository instructions to build it
 
+2. Followed the tt-metal setup instructions in the main repository README.
 
-# Building the project:
-You have two options for building the project:
+# Building the project
 
-## 1. VSCode
-* Install the [CMake](https://marketplace.visualstudio.com/items?itemName=twxs.cmake) and [direnv](https://marketplace.visualstudio.com/items?itemName=mkhl.direnv) extensions for VSCode.
-* Use UI to build all targets.
+tt-train is built using the `build_metal.sh` script from the tt-metal root directory.
 
-## 2. Terminal
-### Debug
+## Terminal
+
+```bash
+# Release build (default)
+./build_metal.sh --build-tt-train
+
+# Debug build
+./build_metal.sh --build-tt-train --debug
+
+# Development build (RelWithDebInfo)
+./build_metal.sh --build-tt-train --development
 ```
-cmake -DCMAKE_BUILD_TYPE=Debug -B build -GNinja
-cmake --build build --config Debug --clean-first
-```
-### Release
-```
-cmake -DCMAKE_BUILD_TYPE=Release -B build -GNinja
-cmake --build build --config Release --clean-first
-```
+
+## VSCode
+
+1. Open the tt-metal root directory in VSCode
+2. Install the [CMake](https://marketplace.visualstudio.com/items?itemName=twxs.cmake) extension
+3. Set `BUILD_TT_TRAIN=ON` in your CMake configure settings
+4. Build all targets using the CMake extension
 
 
 # Run
@@ -68,8 +71,8 @@ More information on available configuration options can be found in the [configs
 
 ### Nightly only tests
 If CI fails, but local tests pass as expected, please consider changing the
-is_nigthly_tt_train_tests_enabled in the nano_gpt_test.cpp
-TT-Train nightly tests are all tests with "NIGTHLY_" in the name.
+is_nightly_tt_train_tests_enabled in the nano_gpt_test.cpp
+TT-Train nightly tests are all tests with "NIGHTLY_" in the name.
 To run it in github please search for `Nightly tt-metal L2 tests`.
 
 ### wandb support

@@ -16,23 +16,17 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
-
-namespace tt::tt_metal {
-class CommandQueue;
-}  // namespace tt::tt_metal
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
@@ -43,10 +37,6 @@ using std::vector;
 using namespace tt::tt_metal;
 
 int main(int argc, char** /*argv*/) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     // Any arg means that we shouldn't do teardown.
     bool skip_teardown = (argc > 1);
     if (skip_teardown) {
@@ -70,13 +60,13 @@ int main(int argc, char** /*argv*/) {
     for (int device_id = 0; device_id < num_devices; device_id++) {
         try {
             /*
-            * Silicon accelerator setup
-            */
+             * Silicon accelerator setup
+             */
             auto device = devices[device_id];
 
             /*
-            * Setup program and command queue to execute along with its buffers and kernels to use
-            */
+             * Setup program and command queue to execute along with its buffers and kernels to use
+             */
             auto& cq = device->mesh_command_queue();
 
             constexpr uint32_t single_tile_size = 2 * (32 * 32);
@@ -116,8 +106,8 @@ int main(int argc, char** /*argv*/) {
                     .compile_args = compile_time_args});
 
             /*
-            * Create input data and runtime arguments, then execute
-            */
+             * Create input data and runtime arguments, then execute
+             */
             std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
             distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
@@ -129,12 +119,7 @@ int main(int argc, char** /*argv*/) {
                 l1_buffer->size(),
                 num_tiles};
 
-            SetRuntimeArgs(
-                program,
-                dram_copy_kernel_id,
-                core,
-                runtime_args
-            );
+            SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
             mesh_workload.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program));
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             log_info(tt::LogTest, "Started program");
@@ -142,14 +127,14 @@ int main(int argc, char** /*argv*/) {
             log_info(tt::LogTest, "Finished program");
 
             /*
-            * Validation & Teardown
-            */
+             * Validation & Teardown
+             */
             std::vector<uint32_t> result_vec;
             distributed::ReadShard(cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0));
 
             pass &= input_vec == result_vec;
 
-        } catch (const std::exception &e) {
+        } catch (const std::exception& e) {
             log_error(tt::LogTest, "Test failed with exception!");
             log_error(tt::LogTest, "{}", e.what());
 

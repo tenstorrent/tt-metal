@@ -1,0 +1,197 @@
+name: "Clang Tidy (Reusable)"
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        required: false
+        type: string
+        default: "Ubuntu 24.04"
+        description: "Platform to analyze"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built CI Build Docker image tag"
+      do-full-scan:
+        required: true
+        type: string
+        description: "Whether to do a full scan or incremental"
+      merge-base:
+        required: false
+        type: string
+        default: ""
+        description: "Merge base commit for incremental scans"
+      prereq-targets:
+        required: false
+        type: string
+        default: ""
+        description: "Prerequisite targets to build without analysis (space-separated, built after switching to current ref but before restoring shim)"
+      scan-targets:
+        required: false
+        type: string
+        default: ""
+        description: "Specific target(s) to scan (space-separated). If empty, scans all targets."
+
+jobs:
+  clang-tidy:
+    name: 🤖 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}
+    timeout-minutes: 240
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image }}
+      env:
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+      volumes:
+        - ${{ github.workspace }}:/work
+        # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache
+      # Group 1457 is for the shared ccache drive
+      # tmpfs is for efficiency
+      options: >
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+            exit 1
+          fi
+          # Conditionally set this here so that it remains unset on forks,
+          # otherwise it resolves an invalid URL and the job fails
+          REDIS_USER="${{ vars.REDIS_USER }}"
+          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
+          REDIS_HOST="${{ vars.REDIS_HOST }}"
+          REDIS_PORT="${{ vars.REDIS_PORT }}"
+          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
+          CCACHE_PARTS=(
+            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
+            "@${REDIS_HOST}:${REDIS_PORT}"
+            "|read-only=${REDIS_READONLY}"
+          )
+          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+
+      - name: Create ccache tmpdir
+        run: |
+          mkdir -p /tmp/ccache
+
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          clean: true
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: Check out baseline
+        if: ${{ inputs.do-full-scan != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.merge-base }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          clean: true
+
+      - name: Create shim
+        run: |
+          # Suppress clang-tidy to first get an up-to-date build tree
+          ln -sf /usr/bin/true ./clang-tidy-shim
+
+      - name: 🔧 CMake configure
+        run: |
+          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+          cmake --preset clang-tidy \
+            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
+            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
+
+      - name: Prepare baseline ccache summary
+        if: ${{ inputs.do-full-scan != 'true' }}
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+      - name: 🛠️ Baseline Build
+        if: ${{ inputs.do-full-scan != 'true' }}
+        timeout-minutes: 60
+        run: |
+          cmake --build --preset clang-tidy
+
+      - name: Publish Ccache summary
+        if: ${{ inputs.do-full-scan != 'true' }}
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          clean: false
+
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          ccache -z
+
+      - name: Build prerequisite targets (without analysis)
+        if: ${{ inputs.prereq-targets != '' }}
+        timeout-minutes: 30
+        run: |
+          echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
+          for target in ${{ inputs.prereq-targets }}; do
+            echo "Building target: $target"
+            cmake --build --preset clang-tidy --target "$target"
+          done
+
+      - name: Restore shim
+        run: |
+          # Restore shim to legit clang-tidy
+          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
+          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
+
+      - name: 🔍 Analyze code with clang-tidy
+        timeout-minutes: 120
+        run: |
+          if [ -n "${{ inputs.scan-targets }}" ]; then
+            echo "Scanning specific targets: ${{ inputs.scan-targets }}"
+            for target in ${{ inputs.scan-targets }}; do
+              echo "Scanning target: $target"
+              cmake --build --preset clang-tidy --target "$target"
+            done
+          else
+            echo "Scanning all targets"
+            cmake --build --preset clang-tidy
+          fi
+
+      - name: Publish Ccache summary
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY

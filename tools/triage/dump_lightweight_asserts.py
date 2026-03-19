@@ -29,6 +29,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.hardware.risc_debug import CallstackEntryVariable
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
 script_config = ScriptConfig(
@@ -65,7 +66,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
         with open(file, "r") as f:
             lines = f.readlines()
             if not (0 <= line - 1 < len(lines)):
-                return "?wrong line number?"
+                return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
             start_index = -1
             while True:
@@ -74,13 +75,13 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                     break
                 start_index = new_index
             if start_index == -1:
-                return "?ASSERT() not found?"
+                return "ASSERT() not found! Check the first code line in the stack trace."
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
                 start_index -= 1
             # Find the matching closing parenthesis for ASSERT(
             open_paren_index = code_line.find("(", start_index)
             if open_paren_index == -1:
-                return "?ASSERT() not opened?"
+                return "ASSERT() not opened! Check the first code line in the stack trace."
             paren_count = 1
             i = open_paren_index + 1
             while i < len(code_line):
@@ -92,7 +93,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                         break
                 i += 1
             if paren_count != 0:
-                return "?ASSERT() not closed?"
+                return "ASSERT() is multi line. Check the first code line in the stack trace."
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
@@ -148,15 +149,16 @@ def dump_lightweight_asserts(
             if pc >= 4:
                 previous_instruction = read_word_from_device(location, pc - 4)
 
-        # Check if core hit ebreak
+        # Check if core hit ebreak or is spinning in a while(true) loop after an assert failure
+        while_true_instruction = 0x0000006F
         ebreak_instruction = 0x00100073
         rewind_pc_for_ebreak = False
         if previous_instruction == ebreak_instruction:
             rewind_pc_for_ebreak = True
-        elif current_instruction != ebreak_instruction:
+        elif current_instruction != ebreak_instruction and current_instruction != while_true_instruction:
             return None
 
-        callstack_data = callstack_provider.get_callstacks(
+        callstack_data = callstack_provider.get_cached_callstacks(
             location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
         )
         arguments_and_locals = None
@@ -192,6 +194,8 @@ def dump_lightweight_asserts(
             arguments_and_locals=arguments_and_locals,
         )
 
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         log_check_risc(
             risc_name,

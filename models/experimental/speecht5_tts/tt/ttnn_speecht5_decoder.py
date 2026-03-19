@@ -39,7 +39,7 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, encoder_seq_len):
     """
     Initialize KV cache for decoder self-attention and cross-attention.
 
-    Following Whisper pattern from models/demos/whisper/tt/ttnn_optimized_functional_whisper.py
+    Following Whisper pattern from models/demos/audio/whisper/tt/ttnn_optimized_functional_whisper.py
 
     Args:
         config: TTNNDecoderConfig
@@ -71,14 +71,14 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len, encoder_seq_len):
 
         k_cache_ttnn = ttnn.from_torch(
             k_cache,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,  # Use bfloat16 for better precision over long autoregressive sequences
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         v_cache_ttnn = ttnn.from_torch(
             v_cache,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,  # Use bfloat16 for better precision over long autoregressive sequences
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -142,11 +142,19 @@ def get_decode_sdpa_configs(config, bsz, device, max_seq_len=256):
     )
 
     # Compute appropriate chunk sizes based on max_seq_len
-    # Chunk sizes must divide evenly into padded sequence length
-    padded_seq_len = nearest_32(max_seq_len)
-    # Use smaller of 256 or padded_seq_len to ensure divisibility
-    k_chunk_size = min(256, padded_seq_len)
-    q_chunk_size = min(256, padded_seq_len)
+    # CRITICAL: Chunk sizes must be powers of 2 for SDPA decode
+    # Use the largest power of 2 that doesn't exceed max_seq_len (capped at 256)
+    def next_power_of_2(n):
+        """Find the largest power of 2 <= n, capped at 256."""
+        if n >= 256:
+            return 256
+        power = 1
+        while power * 2 <= n:
+            power *= 2
+        return power
+
+    k_chunk_size = next_power_of_2(max_seq_len)
+    q_chunk_size = next_power_of_2(max_seq_len)
 
     compute_grid_size = device.compute_with_storage_grid_size()
     sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
@@ -210,10 +218,10 @@ def l1_width_sharded_memory(hidden_states):
 def get_high_perf_compute_config():
     """
     Get compute kernel config optimized for maximum core utilization and performance.
-    Uses HiFi4 for speed while maintaining L1 memory optimization.
+    Uses HiFi4 for maximum precision in attention operations.
     """
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,  # Upgraded from HiFi2 for better precision
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,  # Keep L1 accumulation for memory efficiency
@@ -228,7 +236,7 @@ class TTNNDecoderConfig:
     num_layers: int = 6
     num_heads: int = 12
     ffn_dim: int = 3072
-    dropout: float = 0.1
+    dropout: float = 0.0  # Disabled for inference - prevents error accumulation
     layer_norm_eps: float = 1e-5
     max_position_embeddings: int = 4000
 
@@ -237,8 +245,11 @@ class TTNNDecoderConfig:
     reduction_factor: int = 2
     speech_decoder_prenet_units: int = 256
     speech_decoder_prenet_layers: int = 2
-    speech_decoder_prenet_dropout: float = 0.5
+    speech_decoder_prenet_dropout: float = 0.0  # Disabled for inference - static masks cause noise accumulation
     speaker_embedding_dim: int = 512
+
+    # Precision control
+    use_fp32: bool = False  # If True, use FP32 for all decoder operations including weights
 
 
 class TTNNSpeechDecoderPrenet:
@@ -431,6 +442,8 @@ class TTNNSpeechT5FeedForward:
         self.parameters = parameters
         self.config = config
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+        # Cache compute config to avoid repeated creation during inference
+        self.compute_config = get_high_perf_compute_config()
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -445,7 +458,7 @@ class TTNNSpeechT5FeedForward:
             self.parameters["intermediate_dense"]["weight"],
             bias=self.parameters["intermediate_dense"]["bias"],
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=self.compute_config,
         )
 
         # GELU activation (L1 output)
@@ -457,7 +470,7 @@ class TTNNSpeechT5FeedForward:
             self.parameters["output_dense"]["weight"],
             bias=self.parameters["output_dense"]["bias"],
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=self.compute_config,
         )
 
         # PHASE 2: Final output must be in L1
@@ -474,17 +487,24 @@ class TTNNSpeechT5Attention:
     Cross-Attention: Q from hidden_states, K/V from encoder_hidden_states, no causal mask
     """
 
-    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_seq_len: int = 256):
+    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_seq_len: int = 256, max_batch_size: int = 1):
         self.device = device
         self.parameters = parameters
         self.config = config
         self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
 
         self.num_heads = config.num_heads
         self.hidden_size = config.hidden_size
         self.head_dim = config.hidden_size // config.num_heads
         self.scaling = 1.0 / math.sqrt(self.head_dim)
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+
+        # Cache compute config to avoid repeated creation during inference
+        self.compute_config = get_high_perf_compute_config()
+
+        # Cache SDPA decode configs (for decode mode with fixed batch size)
+        self.sdpa_configs = get_decode_sdpa_configs(config, max_batch_size, device, max_seq_len)
 
     def _reshape_for_multihead(self, tensor: ttnn.Tensor, batch: int, seq_len: int) -> ttnn.Tensor:
         """
@@ -580,7 +600,7 @@ class TTNNSpeechT5Attention:
                 self.parameters["qkv_proj"]["weight"],
                 bias=self.parameters["qkv_proj"]["bias"],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=get_high_perf_compute_config(),
+                compute_kernel_config=self.compute_config,
             )
             # Only unsqueeze if 3D (from decode mode output might already be 4D)
             if len(qkv_states.shape) == 3:
@@ -603,10 +623,8 @@ class TTNNSpeechT5Attention:
                 # Decode mode: update KV cache and use SDPA decode
                 k_cache, v_cache = kv_cache
 
-                # Get sharded config for SDPA decode
-                sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_cfg = get_decode_sdpa_configs(
-                    self.config, batch, self.device, self.max_seq_len
-                )
+                # Use cached SDPA decode configs
+                sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_cfg = self.sdpa_configs
 
                 # CRITICAL: Transpose from [B, H, S, d] to [S, B, H, d] for SDPA decode
                 query = ttnn.transpose(query, 0, 2)  # [B, H, S, d] -> [S, H, B, d]
@@ -615,6 +633,13 @@ class TTNNSpeechT5Attention:
                 key = ttnn.transpose(key, 1, 2)
                 value = ttnn.transpose(value, 0, 2)
                 value = ttnn.transpose(value, 1, 2)
+
+                # SDPA decode only supports bfloat16 — cast if running in FP32 mode
+                original_dtype = query.dtype
+                if original_dtype != ttnn.bfloat16:
+                    query = ttnn.typecast(query, ttnn.bfloat16)
+                    key = ttnn.typecast(key, ttnn.bfloat16)
+                    value = ttnn.typecast(value, ttnn.bfloat16)
 
                 # CRITICAL: Convert to sharded (required by paged_update_cache)
                 query = ttnn.interleaved_to_sharded(query, sdpa_batch_sharded_memcfg)
@@ -648,6 +673,10 @@ class TTNNSpeechT5Attention:
                 # Concatenate heads
                 attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+                # Cast back to original dtype if we downcast for SDPA
+                if original_dtype != ttnn.bfloat16:
+                    attn_output = ttnn.typecast(attn_output, original_dtype)
+
             else:
                 # Standard self-attention (prefill mode)
                 # K is already transposed by nlp_create_qkv_heads
@@ -659,7 +688,7 @@ class TTNNSpeechT5Attention:
                     query,
                     key,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
 
                 # Apply attention mask if provided
@@ -673,7 +702,7 @@ class TTNNSpeechT5Attention:
                 attn_output = ttnn.matmul(
                     attn_weights,
                     value,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
 
                 attn_output = ttnn.transformer.concatenate_heads(
@@ -695,7 +724,7 @@ class TTNNSpeechT5Attention:
                     self.parameters["q_proj"]["weight"],
                     bias=self.parameters["q_proj"]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
                 # Only unsqueeze if 3D (from decode mode it might be 4D)
                 if len(query.shape) == 3:
@@ -714,7 +743,7 @@ class TTNNSpeechT5Attention:
                     self.parameters["q_proj"]["weight"],
                     bias=self.parameters["q_proj"]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
 
                 # Compute K, V from encoder
@@ -723,7 +752,7 @@ class TTNNSpeechT5Attention:
                     self.parameters["kv_proj"]["weight"],
                     bias=self.parameters["kv_proj"]["bias"],
                     memory_config=ttnn.L1_MEMORY_CONFIG,
-                    compute_kernel_config=get_high_perf_compute_config(),
+                    compute_kernel_config=self.compute_config,
                 )
                 # Only unsqueeze if 3D (encoder output is usually 3D)
                 if len(kv_states.shape) == 3:
@@ -771,7 +800,7 @@ class TTNNSpeechT5Attention:
             query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             attn_weights = ttnn.matmul(
-                query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=get_high_perf_compute_config()
+                query, key, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=self.compute_config
             )
 
             # Apply encoder attention mask if provided (for padding)
@@ -786,7 +815,7 @@ class TTNNSpeechT5Attention:
             attn_output = ttnn.matmul(
                 attn_weights,
                 value,
-                compute_kernel_config=get_high_perf_compute_config(),
+                compute_kernel_config=self.compute_config,
             )
 
             attn_output = ttnn.transformer.concatenate_heads(
@@ -800,7 +829,7 @@ class TTNNSpeechT5Attention:
             self.parameters["out_proj"]["weight"],
             bias=self.parameters["out_proj"]["bias"],
             memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=get_high_perf_compute_config(),
+            compute_kernel_config=self.compute_config,
         )
         # PHASE 11: Final output must be in L1
         return output
@@ -1382,7 +1411,7 @@ def preprocess_decoder_parameters(
     Converts all weights to TTNN format with proper:
     - Transposition for linear layers
     - Memory configuration (DRAM for weights)
-    - Data type (bfloat16)
+    - Data type (bfloat16 or float32 based on config.use_fp32)
     - Layout (TILE_LAYOUT)
 
     Also precomputes constant values for performance:
@@ -1404,6 +1433,9 @@ def preprocess_decoder_parameters(
     DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
     L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
+    # Select dtype based on config
+    DTYPE = ttnn.float32 if config.use_fp32 else ttnn.bfloat16
+
     # Helper to convert linear weights
 
     def convert_linear_from_dict(torch_linear):
@@ -1416,14 +1448,14 @@ def preprocess_decoder_parameters(
         return {
             "weight": ttnn.from_torch(
                 weight.T,  # Transpose for TTNN
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 bias.unsqueeze(0).unsqueeze(0),  # [256] -> [1, 1, 256] for proper broadcasting
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -1439,14 +1471,14 @@ def preprocess_decoder_parameters(
         return {
             "weight": ttnn.from_torch(
                 weight.T,  # Transpose for TTNN
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 bias.unsqueeze(0).unsqueeze(0),  # [256] -> [1, 1, 256] for proper broadcasting
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -1460,14 +1492,14 @@ def preprocess_decoder_parameters(
         return {
             "weight": ttnn.from_torch(
                 torch_ln.weight.data,
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
             ),
             "bias": ttnn.from_torch(
                 torch_ln.bias.data,
-                dtype=ttnn.bfloat16,
+                dtype=DTYPE,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=DRAM_MEMCFG,
@@ -1488,7 +1520,7 @@ def preprocess_decoder_parameters(
     # Positional encoding (buffer)
     prenet_params["positional_encoding"] = ttnn.from_torch(
         torch_model.prenet.encode_positions.pe,
-        dtype=ttnn.bfloat16,
+        dtype=DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=DRAM_MEMCFG,
@@ -1497,7 +1529,7 @@ def preprocess_decoder_parameters(
     # Positional encoding alpha (scalar parameter)
     prenet_params["encode_positions_alpha"] = ttnn.from_torch(
         torch_model.prenet.encode_positions.alpha.data,
-        dtype=ttnn.bfloat16,
+        dtype=DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=DRAM_MEMCFG,
@@ -1517,7 +1549,7 @@ def preprocess_decoder_parameters(
     # Convert to TTNN and store in DRAM (weights memory)
     prenet_params["speaker_embeddings_normalized"] = ttnn.from_torch(
         speaker_embeddings_normalized,
-        dtype=ttnn.bfloat16,
+        dtype=DTYPE,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=DRAM_MEMCFG,
@@ -1552,7 +1584,7 @@ def preprocess_decoder_parameters(
         # Convert to TTNN
         mask_ttnn = ttnn.from_torch(
             mask,
-            dtype=ttnn.bfloat16,
+            dtype=DTYPE,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=DRAM_MEMCFG,  # Store masks in DRAM like weights

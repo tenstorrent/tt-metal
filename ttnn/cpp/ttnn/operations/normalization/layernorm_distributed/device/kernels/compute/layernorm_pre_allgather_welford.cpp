@@ -10,37 +10,32 @@
  */
 
 #include <cstdint>
+#include <cstring>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/welford.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "compute_kernel_api/compute_kernel_hw_startup.h"
-#include "compute_kernel_api/transpose_wh_dest.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/transpose_wh_dest.h"
 
-namespace NAMESPACE {
 template <typename To, typename From>
 inline To _bit_cast_(const From& from) noexcept {
     static_assert(sizeof(To) == sizeof(From), "Types must have same size");
     static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
     static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
+    To to;
+    std::memcpy(&to, &from, sizeof(To));
+    return to;
 }
-void MAIN {
+void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     namespace kutil = norm::kernel_util;
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -55,7 +50,9 @@ void MAIN {
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, W>;
     auto p_reciprocals = kutil::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
     constexpr uint32_t last_tile_rows = (W % 32) == 0 ? 32 : W % 32;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -113,4 +110,3 @@ void MAIN {
         tile_regs_release();
     }
 }
-}  // namespace NAMESPACE

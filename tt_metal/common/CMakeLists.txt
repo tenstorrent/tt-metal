@@ -1,25 +1,13 @@
+include(sources.cmake)
+
 add_library(common OBJECT)
 add_library(TT::Metalium::Common ALIAS common)
 
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(common)
+target_precompile_headers(common REUSE_FROM metal_common_pch)
 
-target_sources(
-    common
-    PRIVATE
-        core_assignment.cpp
-        core_coord.cpp
-        mesh_coord.cpp
-        metal_soc_descriptor.cpp
-        shape.cpp
-        shape2d.cpp
-        shape_base.cpp
-        tt_backend_api_types.cpp
-        work_split.cpp
-        thread_pool.cpp
-        host_buffer.cpp
-        memory_pin.cpp
-)
+target_sources(common PRIVATE ${COMMON_SOURCES})
 
 target_include_directories(
     common
@@ -27,7 +15,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tt_metal/llrt # Hack - circular dep, generated dev_msgs.hpp
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        .
 )
 
 target_link_libraries(

@@ -11,20 +11,20 @@
 #include "tt-metalium/work_split.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 
-namespace ttnn::operations::sparse_matmul::program {
+namespace ttnn::prim {
 
 SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t
 SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::SparseMatmulParams& operation_attributes,
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::Program program{}; /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
     using namespace tt;
-    using namespace matmul::utilities;
+    using namespace operations::matmul::utilities;
 
     // from create_mesh-workload
-    auto matmul_attributes = ttnn::operations::matmul::operation_attributes_t{
+    auto matmul_attributes = ttnn::prim::MatmulParams{
         operation_attributes.program_config,
         /*bcast_batch=*/std::nullopt,
         operation_attributes.output_mem_config,
@@ -40,7 +40,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         operation_attributes.global_cb,
         operation_attributes.sub_device_id};
 
-    auto chosen_program_config = get_program_config(
+    auto chosen_program_config = operations::matmul::get_program_config(
         tensor_args.input_tensors.at(0),
         tensor_args.input_tensors.at(1),
         /*transpose_a=*/false,
@@ -52,7 +52,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     const auto& b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
     const auto& output_tensor = tensor_return_value.at(0);
-    auto program_config = std::get<matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+    auto program_config =
+        std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
     auto compute_with_storage_grid_size = program_config.compute_with_storage_grid_size;
     auto in0_block_w = program_config.in0_block_w;
     auto out_subblock_h = program_config.out_subblock_h;
@@ -271,6 +272,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_block_h,          // in0_block_h
         (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)0,  // in0_last_ktile_h (transpose not supported for sparse)
 
         (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
         (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
@@ -433,7 +435,13 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_writer_defines});
+            .defines = mm_kernel_in0_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in0_sharded", tt::CBIndex::c_2},
+                {"cb_sparsity", tt::CBIndex::c_6},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
     if (in0_mcast_receivers.num_cores() > 0) {
@@ -444,7 +452,10 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -456,7 +467,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     // Compute kernel compile time args
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -505,7 +523,17 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -758,16 +786,16 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         start_core,
         cores,
         num_cores_with_work,
-        ttnn::operations::matmul::Matmul1DType::MCAST_IN0};
+        ttnn::prim::Matmul1DType::MCAST_IN0};
 
     return {std::move(program), std::move(shared_vars)};
 }
 
 void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::SparseMatmulParams& /*operation_attributes*/,
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
@@ -802,10 +830,10 @@ void SparseMatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments
 
 SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::cached_mesh_workload_t
 SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::SparseMatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -822,9 +850,9 @@ SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::create_mesh_workload(
 
 void SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::SparseMatmulParams& attributes,
+    const ttnn::prim::SparseMatmulInputs& tensor_args,
+    std::vector<Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = SparseMatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
@@ -833,4 +861,4 @@ void SparseMatmulMeshWorkloadMultiCoreReuseMcast1DFactory::override_runtime_argu
     }
 }
 
-}  // namespace ttnn::operations::sparse_matmul::program
+}  // namespace ttnn::prim

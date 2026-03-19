@@ -16,16 +16,14 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::program {
+namespace ttnn::prim {
 
 TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSingleCoreFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const Tensor& a = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    const Tensor& a = input_tensor;
+    const Tensor& output = output_tensor;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
@@ -101,7 +99,7 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
     const uint32_t num_leftover_Y = input_y - (input_y / TILE_HEIGHT * TILE_HEIGHT);
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -165,12 +163,18 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
     std::vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
+        "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         core,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_kernel_args,
         });
 
@@ -188,14 +192,14 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
 void TilizeWithValPaddingSingleCoreFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    const tensor_return_value_t& output) {
+    const Tensor& input_tensor,
+    const Tensor& output_tensor) {
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
     const auto& core = shared_variables.core;
 
-    auto* src_buffer = tensor_args.input_tensor.buffer();
-    auto* dst_buffer = output.buffer();
+    auto* src_buffer = input_tensor.buffer();
+    auto* dst_buffer = output_tensor.buffer();
 
     CoreCoord core_0 = corerange_to_cores(core).at(0);
 
@@ -210,4 +214,4 @@ void TilizeWithValPaddingSingleCoreFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::program
+}  // namespace ttnn::prim

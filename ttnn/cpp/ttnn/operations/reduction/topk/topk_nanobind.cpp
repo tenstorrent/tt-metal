@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/topk/topk.hpp"
-#include "ttnn-nanobind/decorators.hpp"
 
 namespace ttnn::operations::reduction::detail {
 
@@ -31,10 +32,10 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
             .. code-block:: python
 
-                return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted, *, out=None)
+                return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted, *, output_tensor=None)
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor. Must be on the device.
                 k (number): the number of top elements to look for.
                 dim (number): the dimension to reduce.
                 largest (bool): whether to return the largest or the smallest elements. Defaults to `True`.
@@ -42,12 +43,12 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                output_tensor (tuple[ttnn.Tensor, ttnn.Tensor], optional): A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as :attr:`input_tensor`. Defaults to (`None`, `None`).
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
-                indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor. Defaults to `None`.
+                indices_tensor (ttnn.Tensor, optional): Input tensor containing pre-computed index values. When provided, the operation reads indices from this tensor instead of generating them. Defaults to `None`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                tuple[ttnn.Tensor, ttnn.Tensor]: a tuple of (values_tensor, indices_tensor).
 
             Note:
                 The :attr:`input_tensor` supports the following data type and layout:
@@ -69,7 +70,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                       - TILE
 
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
-                The :attr:`output_index_tensor` will be UINT16 and will be in TILE layout.
+                The :attr:`output_index_tensor` will be UINT16 if the dimension size is less than or equal to 65535, otherwise it will be UINT32. It will be in TILE layout.
 
             Memory Support:
                 - Interleaved: DRAM and L1
@@ -86,43 +87,21 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 - Sharded output memory configs are not supported for this operation.
         )doc";
 
-    using OperationType = decltype(ttnn::topk);
-    bind_registered_operation(
+    ttnn::bind_function<"topk">(
         mod,
-        ttnn::topk,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const uint32_t k,
-               const int8_t dim,
-               const bool largest,
-               const bool sorted,
-               const std::optional<std::tuple<ttnn::Tensor, ttnn::Tensor>>& preallocated_output_tensors,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
-               const std::optional<ttnn::Tensor>& indices_tensor) {
-                return self(
-                    input_tensor,
-                    k,
-                    dim,
-                    largest,
-                    sorted,
-                    memory_config,
-                    sub_core_grids,
-                    indices_tensor,
-                    preallocated_output_tensors);
-            },
+        ttnn::overload_t(
+            &ttnn::topk,
             nb::arg("input_tensor").noconvert(),
             nb::arg("k") = 32,
             nb::arg("dim") = -1,
             nb::arg("largest") = true,
             nb::arg("sorted") = true,
             nb::kw_only(),
-            nb::arg("out") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("indices_tensor") = nb::none()});
+            nb::arg("indices_tensor") = nb::none(),
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

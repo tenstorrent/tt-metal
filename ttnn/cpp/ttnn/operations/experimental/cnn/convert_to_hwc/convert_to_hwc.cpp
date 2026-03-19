@@ -5,9 +5,9 @@
 #include "convert_to_hwc.hpp"
 #include "device/convert_to_hwc_device_operation.hpp"
 
-namespace ttnn::operations::experimental::cnn {
+namespace {
 
-static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Tensor& input_tensor) {
+tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Tensor& input_tensor) {
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded to infer output memory config");
 
     const auto& input_memory_config = input_tensor.memory_config();
@@ -24,7 +24,7 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
 
     // Per-core output height is B times the per-core HW width (i.e., sticks)
     const int output_shard_height = B * input_shard_width;
-    const int alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensor);
+    const int alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(input_tensor);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     const int output_shard_width = tt::round_up(C, alignment_elements);
 
@@ -39,9 +39,13 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
         output_shard_spec);
 }
 
-ttnn::Tensor ExecuteConvertToHWC::invoke(
-    const Tensor& a, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
-    const auto& input_memory_config = a.memory_config();
+}  // namespace
+
+namespace ttnn::experimental {
+
+ttnn::Tensor convert_to_hwc(
+    const Tensor& input, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
+    const auto& input_memory_config = input.memory_config();
     const bool is_dram_input = input_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     tt::tt_metal::MemoryConfig output_memory_config;
@@ -54,10 +58,10 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
         if (memory_config.has_value()) {
             output_memory_config = memory_config.value();
         } else {
-            output_memory_config = infer_hwc_output_memory_config(a);
+            output_memory_config = infer_hwc_output_memory_config(input);
         }
     }
-    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(a);
+    const auto alignment_elements = ttnn::experimental::prim::compute_alignment_requirement_in_elements(input);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
         output_memory_config.shard_spec()->shape[1] % alignment_elements == 0,
@@ -65,7 +69,7 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
         alignment_elements,
         output_memory_config.shard_spec()->shape[1]);
 
-    return ttnn::prim::convert_to_hwc(a, output_memory_config, dtype.value_or(a.dtype()));
+    return ttnn::prim::convert_to_hwc(input, output_memory_config, dtype.value_or(input.dtype()));
 }
 
-}  // namespace ttnn::operations::experimental::cnn
+}  // namespace ttnn::experimental

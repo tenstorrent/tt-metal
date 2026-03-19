@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 /**
  * @file addrgen_api.hpp
  * @brief Hardware Address Generator API for Overlay Command Buffers
@@ -99,7 +100,7 @@ struct LoopConfig {
      * @def reset_addrgen_0()                                                                                        \
      * @def reset_addrgen_1()                                                                                        \
      *                                                                                                               \
-     * @brief Defines an inline reset functions for reseting address generator state                                 \
+     * @brief Defines an inline reset functions for resetting address generator state                                \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \
      */                                                                                                              \
@@ -145,7 +146,7 @@ struct LoopConfig {
      * @example                                                                                                      \
      * If we have 3 banks (common scenario is to define bank 0 as local L1):                                         \
      * (0, 0, 0), (1, 2, 0),(2, 2, 1)                                                                                \
-     * Since first bank is local L1 we want to skip it in this example and only iterate trough other 2 banks,        \
+     * Since first bank is local L1 we want to skip it in this example and only iterate through other 2 banks,       \
      * this can be done with following configuration                                                                 \
      * size = 2                                                                                                      \
      * skip = 1                                                                                                      \
@@ -251,8 +252,8 @@ struct LoopConfig {
      * @example                                                                                                      \
      * If we have 3 banks (common scenario is to define bank 0 as local L1):                                         \
      * (0, 0, 0), (1, 2, 0),(2, 2, 1)                                                                                \
-     * Since first bank is local L1 we want to skip it in this example and only iterate trough other 2 banks,        \
-     * this can be done with following configuraiton                                                                 \
+     * Since first bank is local L1 we want to skip it in this example and only iterate through other 2 banks,       \
+     * this can be done with following configuration                                                                 \
      * size = 2                                                                                                      \
      * skip = 1                                                                                                      \
      * base = 1                                                                                                      \
@@ -308,7 +309,7 @@ struct LoopConfig {
      *                                                                                                               \
      * @brief Function for setting destination base start (outer most loop)                                          \
      *                                                                                                               \
-     * @param Base start address for most outer loop of destionation                                                 \
+     * @param Base start address for most outer loop of destination                                                  \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \
      */                                                                                                              \
@@ -370,7 +371,7 @@ struct LoopConfig {
      * @def peek_src_addrgen_0()                                                                                     \
      * @def peek_src_addrgen_1()                                                                                     \
      *                                                                                                               \
-     * @brief Reads current generated address for source without poping                                              \
+     * @brief Reads current generated address for source without popping                                             \
      * and triggering new address to be generated                                                                    \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \
@@ -403,7 +404,7 @@ struct LoopConfig {
      * @def peek_dest_addrgen_0()                                                                                    \
      * @def peek_dest_addrgen_1()                                                                                    \
      *                                                                                                               \
-     * @brief Reads current generated address for destination without poping                                         \
+     * @brief Reads current generated address for destination without popping                                        \
      * and triggering new address to be generated                                                                    \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \
@@ -414,7 +415,7 @@ struct LoopConfig {
      * @def pop_dest_addrgen_0()                                                                                     \
      * @def pop_dest_addrgen_1()                                                                                     \
      *                                                                                                               \
-     * @brief Reads current generated address for destination poping it                                              \
+     * @brief Reads current generated address for destination popping it                                             \
      * and triggering new address to be generated                                                                    \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \
@@ -425,7 +426,7 @@ struct LoopConfig {
      * @def pop_dest_addrgen_0()                                                                                     \
      * @def pop_dest_addrgen_1()                                                                                     \
      *                                                                                                               \
-     * @brief Reads current generated address for destination poping it                                              \
+     * @brief Reads current generated address for destination popping it                                             \
      * and triggering new pop_amount-1 address to be generated and trown away                                        \
      *                                                                                                               \
      * @note This macro creates 2 inline functions, 1 per each address generator                                     \

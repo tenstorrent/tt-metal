@@ -444,3 +444,82 @@ def test_with_prepare_weights(
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.995)
     print(pcc_msg)
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_length, kernel_size, stride, padding, dilation",
+    (
+        (1, 128, 128, 8192, 3, 1, 3, 3),
+        (1, 128, 128, 8192, 3, 1, 2, 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "shard_layout",
+    [ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED],
+)
+def test_conv1d_dilation(
+    device,
+    batch_size,
+    input_channels,
+    output_channels,
+    input_length,
+    kernel_size,
+    stride,
+    padding,
+    dilation,
+    shard_layout,
+):
+    """Regression test for #37716: block-sharded conv1d with dilation>1 produced wrong results
+    due to missing act_block_w_extra_align_bytes in read_dilated_channels path."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(batch_size, input_channels, input_length, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(output_channels, input_channels, kernel_size, dtype=torch.bfloat16).float()
+
+    golden = torch.nn.functional.conv1d(
+        torch_input,
+        torch_weight,
+        bias=None,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+    )
+
+    input_tt = ttnn.from_torch(
+        torch_input.permute(0, 2, 1),
+        layout=ttnn.Layout.ROW_MAJOR,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    weight_tt = ttnn.from_torch(torch_weight, layout=ttnn.Layout.ROW_MAJOR)
+
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=shard_layout,
+        deallocate_activation=True,
+        config_tensors_in_dram=True,
+    )
+
+    tt_out, out_len = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=input_channels,
+        out_channels=output_channels,
+        batch_size=batch_size,
+        input_length=input_length,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        bias_tensor=None,
+        conv_config=conv_config,
+        dtype=ttnn.bfloat16,
+        return_output_dim=True,
+    )
+
+    tt_output = ttnn.to_torch(tt_out).reshape(batch_size, out_len, output_channels).permute(0, 2, 1)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(tt_output, golden, pcc=0.999)
+    print(pcc_msg)
+    assert passing

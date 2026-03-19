@@ -427,7 +427,8 @@ std::vector<MuxConnectionInfo> FabricTensixDatamoverMuxConfig::get_all_mux_conne
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
-    auto downstream_dirs = builder::get_all_other_directions(direction);
+    // Exclude Z direction - UDM MUX mode only supports mesh directions (E/W/N/S)
+    auto downstream_dirs = builder::get_all_other_directions(direction, /*exclude_z=*/true);
 
     std::vector<MuxConnectionInfo> mux_infos;
 
@@ -967,14 +968,15 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(Ch
                     break;
                 case tt::tt_fabric::Topology::Linear:
                 case tt::tt_fabric::Topology::Ring:
-                    fabric_stream_ids = {tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};
+                    fabric_stream_ids = {
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id};
                     break;
                 case tt::tt_fabric::Topology::Mesh:
                 case tt::tt_fabric::Topology::Torus:
                     fabric_stream_ids = {
-                        tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,
-                        tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id};
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id,
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id,
+                        tt::tt_fabric::StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id};
                     break;
                 default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
             }
@@ -1040,7 +1042,8 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_f
             // Mux-to-Mux channels: check if muxes exist in other directions (UDM mode only)
             TT_FATAL(num_channels == 3, "MUX_TO_MUX_CHANNEL should have exactly 3 channels (got {})", num_channels);
 
-            auto upstream_mux_dirs = builder::get_all_other_directions(direction_);
+            // Exclude Z direction - MUX mode only supports mesh directions (E/W/N/S)
+            auto upstream_mux_dirs = builder::get_all_other_directions(direction_, /*exclude_z=*/true);
             // for mux to mux channel, we need to check all the tensix cores, since there are mux kernel in the
             // non-active tensix cores as well
             for (auto upstream_dir : upstream_mux_dirs) {

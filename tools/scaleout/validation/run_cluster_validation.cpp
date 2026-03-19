@@ -12,7 +12,8 @@
 
 #include <cxxopts.hpp>
 #include <factory_system_descriptor/utils.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <cabling_generator/cabling_generator.hpp>
@@ -80,9 +81,14 @@ cxxopts::Options create_validation_options() {
         "Usage:\n"
         "  run_cluster_validation [OPTIONS]                # Run validation (default)\n"
         "  run_cluster_validation link_reset [OPTIONS]     # Restart a specific cable/link\n\n"
+        "The cabling-descriptor-path can be a single .textproto file or a directory containing\n"
+        "multiple .textproto files that will be merged together.\n\n"
         "To run on a multi-node cluster, use mpirun with a --hostfile option.");
 
-    options.add_options()("cabling-descriptor-path", "Path to cabling descriptor", cxxopts::value<std::string>())(
+    options.add_options()(
+        "cabling-descriptor-path",
+        "Path to cabling descriptor file or directory containing multiple descriptors",
+        cxxopts::value<std::string>())(
         "deployment-descriptor-path", "Path to deployment descriptor", cxxopts::value<std::string>())(
         "factory-descriptor-path", "Path to factory descriptor", cxxopts::value<std::string>())(
         "global-descriptor-path", "Path to global descriptor", cxxopts::value<std::string>())(
@@ -277,11 +283,11 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
         return physical_system_descriptor;
     }
     log_output_rank0("Running Physical Discovery");
-    constexpr bool run_discovery = true;
     auto& context = tt::tt_metal::MetalContext::instance();
     const auto& driver = context.get_cluster().get_driver();
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver, context.get_distributed_context_ptr(), &context.hal(), context.rtoptions(), run_discovery);
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
+    auto physical_system_descriptor = tt::tt_metal::run_physical_system_discovery(
+        driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device());
     log_output_rank0("Physical Discovery Complete");
     log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
     return physical_system_descriptor;
@@ -367,8 +373,12 @@ int main(int argc, char* argv[]) {
     AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
 
     bool links_reset = false;
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool link_retrain_supported =
+        (cluster.arch() == tt::ARCH::WORMHOLE_B0 ||
+         (cluster.arch() == tt::ARCH::BLACKHOLE &&
+          cluster.get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0)));
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
@@ -376,15 +386,27 @@ int main(int argc, char* argv[]) {
         reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
         links_reset = true;
         num_retrains++;
-        physical_system_descriptor.run_discovery(true, true);
+        // Re-run discovery
+        auto& context_ref = tt::tt_metal::MetalContext::instance();
+        physical_system_descriptor.clear();
+        auto& driver_ref = const_cast<tt::umd::Cluster&>(*context_ref.get_cluster().get_driver());
+        auto new_psd = tt::tt_metal::run_physical_system_discovery(
+            driver_ref,
+            context_ref.get_distributed_context_ptr(),
+            context_ref.rtoptions().get_target_device(),
+            true,
+            true);
+        physical_system_descriptor.merge(std::move(new_psd));
         missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
     }
 
+    distributed_context.barrier();
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
         TT_THROW("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
+        // Return and ask user to run again, otherwise some incorrect HW states might persist and cause hangs
         log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
         return 0;
     }

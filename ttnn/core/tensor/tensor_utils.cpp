@@ -12,22 +12,37 @@
 
 namespace tt::tt_metal {
 
+bool logical_matches_physical(const TensorSpec& tensor_spec) {
+    return tensor_spec.layout() == Layout::ROW_MAJOR && tensor_spec.logical_2d_shape() == tensor_spec.physical_shape();
+}
+
 bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::HOST; }
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
-CBDescriptor cb_descriptor_from_sharded_tensor(uint8_t cb_index, const Tensor& tensor) {
+CBDescriptor cb_descriptor_from_sharded_tensor(
+    uint8_t cb_index,
+    const Tensor& tensor,
+    uint32_t address_offset,
+    uint32_t total_size,
+    const std::optional<CoreRangeSet>& core_ranges) {
     TT_FATAL(tensor.is_sharded(), "Tensor must be sharded to automatically create a CBDescriptor");
+    TT_FATAL(
+        (address_offset + total_size) <= tensor.buffer()->aligned_size_per_bank(),
+        "Address offset + total size exceeds buffer size");
+
+    uint32_t effective_total_size = (total_size != 0) ? total_size : tensor.buffer()->aligned_size_per_bank();
 
     return CBDescriptor{
-        .total_size = tensor.buffer()->aligned_size_per_bank(),
-        .core_ranges = tensor.shard_spec()->grid,
+        .total_size = effective_total_size,
+        .core_ranges = core_ranges.value_or(tensor.shard_spec()->grid),
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = cb_index,
             .data_format = datatype_to_dataformat_converter(tensor.tensor_spec().tensor_layout().get_data_type()),
             .page_size = tensor.buffer()->aligned_page_size(),
             .tile = TileDescriptor(tensor.tensor_spec().tile())}},
         .buffer = tensor.buffer(),
+        .address_offset = address_offset,
         .global_circular_buffer = nullptr};
 }
 

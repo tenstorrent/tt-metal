@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "device/interleaved_to_sharded_op.hpp"
 #include "interleaved_to_sharded.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor InterleavedToShardedOperation::invoke(
+ttnn::Tensor interleaved_to_sharded(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& sharded_memory_config,
     const std::optional<DataType>& data_type_arg,
@@ -25,7 +25,7 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
         preallocated_output);
 }
 
-ttnn::Tensor InterleavedToShardedOperation::invoke(
+ttnn::Tensor interleaved_to_sharded(
     const ttnn::Tensor& input_tensor,
     const std::variant<CoreCoord, CoreRangeSet>& grid,
     const std::array<uint32_t, 2> shard_shape,
@@ -72,4 +72,4 @@ ttnn::Tensor InterleavedToShardedOperation::invoke(
         keep_l1_aligned.value_or(false));
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import Any
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -18,7 +19,13 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_state_dicts, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import (
+    COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+    USERS_PER_ROW,
+    even_int_div,
+    get_state_dicts,
+    shard_and_save,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -93,7 +100,7 @@ class DistributedRMSNorm(RMSNormBase):
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                USERS_PER_ROW,
+                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
                 ttnn.core.roundup(
                     even_int_div(hf_config.hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
                     ttnn.TILE_SIZE,
@@ -129,18 +136,19 @@ class DistributedRMSNorm(RMSNormBase):
             "input_memory_config": memory_config,
             "rms_norm_pre_all_gather": RMSNormPreAllGatherConfig(
                 dtype=ttnn.bfloat16,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
             ),
             "all_gather": AllGatherAsyncConfig(
                 dim=3,
                 cluster_axis=1,
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 memory_config=rms_norm_stats_memory_config,
-                topology=ttnn.Topology.Linear,
             ),
             "rms_norm_post_all_gather": RMSNormPostAllGatherConfig(
                 epsilon=hf_config.rms_norm_eps,
                 weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 dtype=ttnn.bfloat16,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
             ),
         }
 
@@ -161,6 +169,51 @@ class DistributedRMSNorm(RMSNormBase):
             "ccl": ccl,
         }
 
+    @staticmethod
+    def _fwd_rms_norm_pre_all_gather(x: ttnn.Tensor, cfg: dict, program_config: Any) -> ttnn.Tensor:
+        """Wrapper for distributed RMS norm part 1: compute local statistics.
+
+        Args:
+            x: Input tensor
+            cfg: Config for rms_norm_pre_all_gather (cfg["rms_norm_pre_all_gather"])
+            program_config: Program config (computed externally via _get_pc)
+
+        Returns:
+            Local statistics tensor
+        """
+        return ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
+
+    @staticmethod
+    def _fwd_all_gather_stats(stats: ttnn.Tensor, cfg: dict, ccl) -> ttnn.Tensor:
+        """Wrapper for all-gather statistics.
+
+        Args:
+            stats: Local statistics tensor
+            cfg: Config containing all_gather settings (cfg["all_gather"])
+            ccl: CCL runtime object
+
+        Returns:
+            Gathered statistics tensor
+        """
+        return ttnn.experimental.all_gather_async(stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+
+    @staticmethod
+    def _fwd_rms_norm_post_all_gather(
+        x: ttnn.Tensor, stats: ttnn.Tensor, cfg: dict, program_config: Any
+    ) -> ttnn.Tensor:
+        """Wrapper for distributed RMS norm part 2: apply normalization with gathered stats.
+
+        Args:
+            x: Input tensor (same as input to pre_all_gather)
+            stats: Gathered statistics tensor
+            cfg: Config for rms_norm_post_all_gather (cfg["rms_norm_post_all_gather"])
+            program_config: Program config (computed externally via _get_pc)
+
+        Returns:
+            Normalized output tensor
+        """
+        return ttnn.rms_norm_post_all_gather(x, stats, program_config=program_config, **cfg["rms_norm_post_all_gather"])
+
     @classmethod
     def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
         """Forward pass of the embedding.
@@ -175,22 +228,15 @@ class DistributedRMSNorm(RMSNormBase):
 
         program_config = cls._get_pc(x.memory_config())
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
+        tt_stats = cls._fwd_rms_norm_pre_all_gather(x, cfg, program_config=program_config)
 
         # AllGather stats
         ccl = cfg["ccl"]
-        tt_gathered_stats = ttnn.experimental.all_gather_async(
-            tt_stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
-        )
+        tt_gathered_stats = cls._fwd_all_gather_stats(tt_stats, cfg, ccl)
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2
-        tt_out = ttnn.rms_norm_post_all_gather(
-            x,
-            tt_gathered_stats,
-            program_config=program_config,
-            **cfg["rms_norm_post_all_gather"],
-        )
+        tt_out = cls._fwd_rms_norm_post_all_gather(x, tt_gathered_stats, cfg, program_config=program_config)
         ttnn.deallocate(tt_gathered_stats)
 
         return tt_out

@@ -2,13 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
+// This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     auto src0_addr = get_arg_val<uint32_t>(0);
@@ -30,14 +33,14 @@ void kernel_main() {
     // single-tile ublocks
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
 
 #ifndef IN0_SHARDED
     const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
 #else
-    cb_reserve_back(cb_id_in0, num_tiles);
-    cb_push_back(cb_id_in0, num_tiles);
+    cb0.reserve_back(num_tiles);
+    cb0.push_back(num_tiles);
 #endif
 
     generate_bcast_unary_scalar(cb_id_in1, packed_scalar);
@@ -46,11 +49,10 @@ void kernel_main() {
         uint32_t curr_id = base_start_id_HtWt + curr_id_from_base;
 
 #ifndef IN0_SHARDED
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(curr_id, s0, l1_write_addr_in0);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb0.reserve_back(onetile);
+        noc.async_read(s0, cb0, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb0.push_back(onetile);
 #endif
 
         curr_id_from_base++;

@@ -11,12 +11,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 
-namespace ttnn::operations::data_movement::concat::program {
+namespace ttnn::prim {
 
 ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
@@ -161,6 +159,16 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
     const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
 
+    // Calculate stride sizes to determine if we can use single-packet NOC reads
+    // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
+    const uint32_t stride_tile_size = is_bf8 ? cb_tile_size : tile_size;
+    const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
+    const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
+
+    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384
+    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384 : 8192;
+    const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
+
     std::vector<uint32_t> compile_time_args_0 = {
         0,
         1,
@@ -180,6 +188,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     std::map<std::string, std::string> reader_defines;
     if (is_bf8) {
         reader_defines["BF8"] = "1";
+    }
+    if (use_single_packet_read) {
+        reader_defines["USE_SINGLE_PACKET_READ"] = "1";
     }
     CreateKernel(
         program,
@@ -215,9 +226,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
 
 void ConcatS2STiledProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ConcatParams& /*operation_attributes*/,
+    const ConcatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
@@ -228,4 +239,4 @@ void ConcatS2STiledProgramFactory::override_runtime_arguments(
     UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
 }
 
-}  // namespace ttnn::operations::data_movement::concat::program
+}  // namespace ttnn::prim

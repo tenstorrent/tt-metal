@@ -69,7 +69,8 @@ ttnn::Tensor composite_reduce_scatter(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     bool is_row_major = input_tensor.layout() == ttnn::Layout::ROW_MAJOR;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -146,7 +147,8 @@ ttnn::Tensor composite_reduce_scatter(
                                                       topology_,
                                                       chunks_per_sync,
                                                       num_workers_per_link,
-                                                      num_buffers_per_channel)
+                                                      num_buffers_per_channel,
+                                                      compute_kernel_config)
                                                       .at(1);  // first is the intermediate tensor
     // remove the padding we previously inserted
     ttnn::Tensor rs_output_tensor;
@@ -161,7 +163,7 @@ ttnn::Tensor composite_reduce_scatter(
     } else {
         const ttnn::SmallVector<int32_t> steps(output_shape.rank(), 1);
         ttnn::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
-        const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
+        const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
         rs_output_tensor =
             ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
     }

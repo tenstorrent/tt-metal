@@ -4,11 +4,13 @@
 
 #include "linear_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/compute_kernel_config.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -90,6 +92,9 @@ autograd::TensorPtr linear_op(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight, const autograd::TensorPtr& bias) {
     auto out = autograd::create_tensor();
 
+    const auto grid_size = tensor->get_value().device()->compute_with_storage_grid_size();
+    auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
+
     out->set_value(ttnn::linear(
         tensor->get_value(),
         weight->get_value(),
@@ -102,7 +107,7 @@ autograd::TensorPtr linear_op(
         /* program_config */ std::nullopt,
         /* activation */ std::nullopt,
         /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
-        /* core_grid */ ttnn::CoreGrid{7, 8}));
+        /* core_grid */ core_grid));
 
     autograd::GradFunction grad = [weight, bias, tensor, out]() {
         auto tensor_shape = tensor->get_value().logical_shape();
@@ -110,8 +115,7 @@ autograd::TensorPtr linear_op(
         ttnn_linear_backward(tensor, weight, bias, out);
     };
 
-    auto links = autograd::get_links(weight, tensor, bias);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, weight, tensor, bias));
     return out;
 }
 

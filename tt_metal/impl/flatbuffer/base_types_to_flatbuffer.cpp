@@ -7,11 +7,17 @@
 
 namespace tt::tt_metal {
 
-// Original types defined in data_types.hpp
+// Original types defined in kernel_types.hpp
 flatbuffer::DataMovementProcessor to_flatbuffer(DataMovementProcessor in) {
     switch (in) {
         case DataMovementProcessor::RISCV_0: return flatbuffer::DataMovementProcessor::RISCV_0;
         case DataMovementProcessor::RISCV_1: return flatbuffer::DataMovementProcessor::RISCV_1;
+        case DataMovementProcessor::RISCV_2: return flatbuffer::DataMovementProcessor::RISCV_2;
+        case DataMovementProcessor::RISCV_3: return flatbuffer::DataMovementProcessor::RISCV_3;
+        case DataMovementProcessor::RISCV_4: return flatbuffer::DataMovementProcessor::RISCV_4;
+        case DataMovementProcessor::RISCV_5: return flatbuffer::DataMovementProcessor::RISCV_5;
+        case DataMovementProcessor::RISCV_6: return flatbuffer::DataMovementProcessor::RISCV_6;
+        case DataMovementProcessor::RISCV_7: return flatbuffer::DataMovementProcessor::RISCV_7;
     }
     TT_THROW("Unsupported DataMovementProcessor to flatbuffer.");
 }

@@ -7,15 +7,15 @@
 #include "nlp_concat_heads_decode_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
 
-namespace ttnn::operations::experimental::nlp_concat_heads_decode::program {
+namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
 
 NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgramFactory::create(
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
+    const NlpConcatHeadsDecodeInputs& tensor_args,
+    Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     tt_metal::Program program = tt_metal::CreateProgram();
 
@@ -70,8 +70,8 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
         noc_y_coords.push_back(device->worker_core_from_logical_core({0, y}).y);
     }
 
-    // We parallize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of a
-    // tile respectively)
+    // We parallelize the reader on risc0 and risc1, where each risc reads a sub-tile of the input (phase1 and phase2 of
+    // a tile respectively)
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)element_size,
         (std::uint32_t)sub_tile_line_bytes,
@@ -130,9 +130,9 @@ NLPConcatHeadsDecodeProgramFactory::cached_program_t NLPConcatHeadsDecodeProgram
 
 void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const NlpConcatHeadsDecodeParams& /*operation_attributes*/,
+    const NlpConcatHeadsDecodeInputs& tensor_args,
+    Tensor& output) {
     const auto& input_tensor = tensor_args.input;
     auto& program = cached_program.program;
     auto& shared_variables = cached_program.shared_variables;
@@ -158,4 +158,4 @@ void NLPConcatHeadsDecodeProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::experimental::nlp_concat_heads_decode::program
+}  // namespace ttnn::experimental::prim

@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 
 #include "moe_expert_token_remap.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-std::vector<ttnn::Tensor> ExecuteMoeExpertTokenRemap::invoke(
+std::vector<ttnn::Tensor> moe_expert_token_remap(
     const ttnn::Tensor& topk_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
@@ -26,4 +26,4 @@ std::vector<ttnn::Tensor> ExecuteMoeExpertTokenRemap::invoke(
         reduction_size);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

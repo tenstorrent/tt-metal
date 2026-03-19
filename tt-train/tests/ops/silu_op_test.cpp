@@ -5,12 +5,12 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
-#include <core/ttnn_all_includes.hpp>
 #include <numeric>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
@@ -91,8 +91,10 @@ void CompareKernelVsReference(const xt::xarray<float>& input_data) {
     using namespace ttml;
 
     // Create input tensors for kernel and reference implementations
-    auto input_kernel = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
-    auto input_reference = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+    auto input_kernel = autograd::create_tensor(
+        core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto input_reference = autograd::create_tensor(
+        core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
 
     // Forward pass - kernel implementation
     auto result_kernel = ops::silu(input_kernel);
@@ -277,8 +279,10 @@ TEST_F(SiLUOpTest, SiLU_Precision_Comparison) {
             /* seed */ rng());
 
         // Create input tensors
-        auto input_kernel = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
-        auto input_composite = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+        auto input_kernel = autograd::create_tensor(
+            core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
+        auto input_composite = autograd::create_tensor(
+            core::from_xtensor(input_data, &autograd::ctx().get_device()), /* requires_grad */ true);
 
         // Forward pass - kernel implementation
         auto result_kernel = ops::silu(input_kernel, /*use_composite_bw=*/false);

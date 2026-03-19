@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
@@ -36,6 +35,7 @@ void MAIN {
     // signal the packer
     tile_regs_commit();  // Math
 
+    // Padding to maintain line number for triage test
     // Cause intentional hang for triage testing
     asm volatile("ebreak");
 
@@ -52,4 +52,3 @@ void MAIN {
 
     cb_push_back(cb_out0, 1);  // Pack
 }
-}  // namespace NAMESPACE

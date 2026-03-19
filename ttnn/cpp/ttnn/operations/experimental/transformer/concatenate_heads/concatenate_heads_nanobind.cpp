@@ -4,13 +4,10 @@
 
 #include "concatenate_heads_nanobind.hpp"
 
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/transformer/concatenate_heads/concatenate_heads.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
@@ -28,24 +25,15 @@ void bind_concatenate_heads(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input_tensor.memory_config()
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::concatenate_heads);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"concatenate_heads", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::concatenate_heads,
         concatenate_heads_doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const CoreCoord& compute_with_storage_grid_size,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               std::optional<ttnn::Tensor> optional_output_tensor) {
-                return self(input_tensor, compute_with_storage_grid_size, memory_config, optional_output_tensor);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("compute_with_storage_grid_size").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        &ttnn::experimental::concatenate_heads,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("compute_with_storage_grid_size").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

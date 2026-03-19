@@ -13,7 +13,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "pad.hpp"
 
@@ -32,47 +32,46 @@ void bind_pad(nb::module_& mod) {
         Keyword Args:
             * :attr:`use_multicore`: (Optional[bool]) switch to use multicore implementation
             * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
+            * :attr:`sub_core_grids`: (Optional[ttnn.CoreRangeSet]): Sub core grids to run the operation on. Defaults to `None`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::pad);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"pad">(
         mod,
-        ttnn::pad,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               ttnn::SmallVector<std::array<uint32_t, 2>> padding,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, padding, value, use_multicore, memory_config);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::SmallVector<std::array<uint32_t, 2>>&,
+                float,
+                bool,
+                const std::optional<MemoryConfig>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("padding"),
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = true,
-            nb::arg("memory_config") = nb::none()},
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::Array4D& output_padded_shape,
-               const tt::tt_metal::Array4D& input_tensor_start,
-               const float value,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config) -> ttnn::Tensor {
-                return self(input_tensor, output_padded_shape, input_tensor_start, value, use_multicore, memory_config);
-            },
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const tt::tt_metal::Array4D&,
+                const tt::tt_metal::Array4D&,
+                float,
+                bool,
+                const std::optional<MemoryConfig>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::pad),
             nb::arg("input_tensor"),
             nb::arg("output_padded_shape"),
             nb::arg("input_tensor_start"),
             nb::arg("value"),
             nb::kw_only(),
             nb::arg("use_multicore") = false,
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 }  // namespace ttnn::operations::data_movement::detail

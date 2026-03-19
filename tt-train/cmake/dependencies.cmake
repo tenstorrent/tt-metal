@@ -1,7 +1,7 @@
 ############################################################################################################################
 # CPM
 ############################################################################################################################
-include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/CPM.cmake)
 
 ############################################################################################################################
 # Boost
@@ -91,7 +91,7 @@ CPMAddPackage(
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
-include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/fetch_cli11.cmake)
 
 ####################################################################################################################
 # spdlog
@@ -106,6 +106,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "SPDLOG_FMT_EXTERNAL_HO ON"
         "SPDLOG_INSTALL ON"
+        "BUILD_SHARED_LIBS OFF"
 )
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 
@@ -115,7 +116,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.6
+    VERSION 1.1.8
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
@@ -168,6 +169,16 @@ CPMAddPackage(
 
 if(flatbuffers_ADDED)
     # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    target_compile_options(flatc PRIVATE -Wno-restrict)
-    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+    target_compile_options(
+        flatc
+        PRIVATE
+            -Wno-restrict
+            -Wno-deprecated-declarations
+    )
+    target_compile_options(
+        flatbuffers
+        PRIVATE
+            -Wno-restrict
+            -Wno-deprecated-declarations
+    )
 endif()

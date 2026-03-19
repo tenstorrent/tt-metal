@@ -5,120 +5,148 @@
 
 """
 Usage:
-    dump_risc_debug_signals
+    dump_risc_debug_signals [--path=<path>]
 
 Description:
-    Goes through all tensix and idle_eth blocks and tries to halt every core inside them.
-    If halt is successful, does nothing. If it throws an exception, prints all debug bus
-    signals related to that core (e.g., for brisc, prints all signals matching brisc*).
+    Collects debug bus signal groups for blocks that contain broken RISC cores (as identified
+    during triage). Runs through run_checks. All collected data is written to a single JSON file.
 
 Owner:
     adjordjevic-TT
 """
 
-from dataclasses import dataclass
-from triage import ScriptConfig, collection_serializer, triage_field, run_script, log_check_risc
+from collections import defaultdict
+import json
+import os
+import subprocess
+
+from triage import ScriptConfig, log_warning, run_script, log_check_location
+from triage_session import get_triage_session
+from ttexalens.umd_device import TimeoutDeviceRegisterError
 from run_checks import run as get_run_checks
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
-import os
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dispatcher_data", "elfs_cache"],
+    depends=["run_checks", "check_broken_components", "dispatcher_data", "elfs_cache"],
     disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None,
 )
 
 
-@dataclass
-class DumpDebugBusSignals:
-    names: list[str] = triage_field("Debug Signals", collection_serializer("\n"))
-    values: list[str] = triage_field("Values", collection_serializer("\n"))
+def _get_git_commit_hash() -> str:
+    """Return current git commit hash (full SHA) or 'unknown' if not in a repo or git unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        )
+        if out.returncode == 0 and out.stdout:
+            return out.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return "unknown"
 
 
-def dump_risc_debug_signals(
+def get_firmware_text_address(
     location: OnChipCoordinate, risc_name: str, dispatcher_data: DispatcherData, elfs_cache: ElfsCache
-) -> DumpDebugBusSignals | None:
-    """
-    Try to halt a RISC core. If successful, return None.
-    If it throws an exception, collect and return debug bus signals.
-    """
+) -> int:
+    """Get the firmware text section address for a given RISC core."""
+    dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+    firmware_elf = elfs_cache[dispatcher_core_data.firmware_path]
+    firmware_text_address = firmware_elf.elf.get_section_by_name(".text")["sh_addr"]
+    # Make sure that l1 address we are using is in the first 1MiB of the L1 cache (required for reading groups)
+    assert firmware_text_address < 0x100000
+    return firmware_text_address
+
+
+def collect_debug_bus_signals(
+    location: OnChipCoordinate, failed_riscs: list[str], dispatcher_data: DispatcherData, elfs_cache: ElfsCache
+) -> dict | None:
+    """Collect debug bus signals for a block with known broken RISC cores."""
     noc_block = location._device.get_block(location)
 
+    debug_bus = noc_block.debug_bus
+    all_groups = debug_bus.group_names
+
+    # We are using first 16 bytes of the firmware text section to collect debug bus signals
+    # Use the first failed risc to get the firmware text address
+    risc_for_address = failed_riscs[0]
+    l1_address = get_firmware_text_address(location, risc_for_address, dispatcher_data, elfs_cache)
+
+    # Since we are rewriting the firmware text, we need to read the original data to restore it later
+    original_data = read_words_from_device(location, l1_address, word_count=4)
     try:
-        risc_debug = noc_block.get_risc_debug(risc_name)
-        # Try to halt the core
-        with risc_debug.ensure_halted():
-            pass
-        # If halt was successful, return None
+        # Collect all debug bus groups as group_name -> 128-bit hex value
+        debug_bus_data: dict[str, str] = {}
+        for group_name in sorted(all_groups):
+            # Read the signal group (this writes the 128-bit value to l1_address)
+            group_sample = debug_bus.read_signal_group(group_name, l1_address)
+            # Read the raw 128-bit value from l1_address
+            debug_bus_data[group_name] = f"0x{group_sample.raw_data:032x}"
+
+        return {
+            "failed_riscs": failed_riscs,
+            "debug_bus_signal_groups": debug_bus_data,
+        }
+    except TimeoutDeviceRegisterError:
+        raise
+    except Exception as e:
+        log_check_location(location, False, f"Failed to collect debug bus signals: {e}")
         return None
-    except:
-        # If halt failed, collect debug bus signals
-        debug_bus = noc_block.debug_bus
-        if debug_bus is not None:
-            # Filter groups that match the pattern risc_name*
-            matching_groups = [group_name for group_name in debug_bus.group_names if group_name.startswith(risc_name)]
-
-            if matching_groups:
-                # We are using first 16 bytes of the firmware text section to collect debug bus signals
-                dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
-                firmware_elf = elfs_cache[dispatcher_core_data.firmware_path]
-                firmware_text_address = firmware_elf.elf.get_section_by_name(".text")["sh_addr"]
-                # Make sure that l1 address we are using is in the first 1MiB of the L1 cache (required for reading groups)
-                assert firmware_text_address < 0x100000
-
-                # Since we are rewriting the firmware text, we need to read the original data to restore it later
-                original_data = read_words_from_device(location, firmware_text_address, word_count=4)
-                try:
-                    l1_address = firmware_text_address
-
-                    # Collect all signals from all matching groups
-                    signal_names_str: list[str] = []
-                    signal_values_hex: list[str] = []
-                    for group_name in sorted(matching_groups):
-                        # Read the signal group
-                        group_sample = debug_bus.read_signal_group(group_name, l1_address)
-                        # Iterate through all signals in the group
-                        for signal_name in sorted(group_sample.keys()):
-                            signal_names_str.append(f"{signal_name[len(risc_name)+1:]}")
-                            signal_values_hex.append(hex(group_sample[signal_name]))
-                except Exception as e:
-                    log_check_risc(location, risc_name, False, f"Failed to collect all debug bus signals: {e}")
-                finally:
-                    # Restoring the original data
-                    write_words_to_device(location, firmware_text_address, original_data)
-                    # Verifying that the original data was restored
-                    assert read_words_from_device(location, firmware_text_address, word_count=4) == original_data
-
-        log_check_risc(
-            risc_name,
-            location,
-            False,
-            f"Failed to halt core.",
-        )
-
-        # Return the collected debug bus signals
-        return DumpDebugBusSignals(
-            names=signal_names_str,
-            values=signal_values_hex,
-        )
+    finally:
+        # Restoring the original data
+        write_words_to_device(location, l1_address, original_data)
+        # Verifying that the original data was restored
+        assert read_words_from_device(location, l1_address, word_count=4) == original_data
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
-    CORE_TYPES_TO_CHECK = ["brisc", "trisc0", "trisc1", "trisc2", "erisc", "erisc0", "erisc1"]
-
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
 
-    return run_checks.run_per_core_check(
-        lambda location, risc_name: dump_risc_debug_signals(location, risc_name, dispatcher_data, elfs_cache),
-        block_filter=BLOCK_TYPES_TO_CHECK,
-        core_filter=CORE_TYPES_TO_CHECK,
-    )
+    all_debug_bus_data = defaultdict(dict)
+    session = get_triage_session()
+
+    def check_block(location: OnChipCoordinate) -> None:
+        broken_cores = session.get_location_broken_cores(location)
+        if not broken_cores:
+            return None
+
+        failed_riscs = [bc.risc_name for bc in broken_cores]
+        result = collect_debug_bus_signals(location, failed_riscs, dispatcher_data, elfs_cache)
+        if result is None:
+            return None
+
+        device = location.device
+        block_type = run_checks.get_block_type(location)
+        if "arch" not in all_debug_bus_data[f"Device {device.id}"]:
+            all_debug_bus_data[f"Device {device.id}"]["arch"] = str(device._arch)
+        if "block_types" not in all_debug_bus_data[f"Device {device.id}"]:
+            all_debug_bus_data[f"Device {device.id}"]["block_types"] = defaultdict(dict)
+        if block_type not in all_debug_bus_data[f"Device {device.id}"]["block_types"]:
+            all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type] = defaultdict(dict)
+        all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type][
+            f"location: {location.to_user_str()}"
+        ] = result
+        return None
+
+    run_checks.run_per_block_check(check_block)
+
+    if all_debug_bus_data:
+        all_debug_bus_data["git_commit"] = _get_git_commit_hash()
+        output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
+        with open(output_path, "w") as f:
+            json.dump(all_debug_bus_data, f, indent=2)
+        log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")
+
+    return None
 
 
 if __name__ == "__main__":

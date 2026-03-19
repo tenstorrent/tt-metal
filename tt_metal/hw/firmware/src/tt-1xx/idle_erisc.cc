@@ -20,10 +20,11 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-#include "api/dataflow/dataflow_api.h"
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
@@ -37,6 +38,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -58,6 +64,16 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAI
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
+    // Posting heartbeat at this address is only needed for Wormhole
+#if !defined(ARCH_BLACKHOLE)
+    invalidate_l1_cache();
+    volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+    heartbeat++;
+    ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
+#endif
+}
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -121,12 +137,13 @@ int main() {
         noc_local_state_init(n);
     }
 
+    DEVICE_PRINT_INITIALIZE_LOCK();
     deassert_all_reset();  // Bring all riscs on eth cores out of reset
     // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
     wait_subordinate_eriscs(heartbeat);
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
 
     DeviceProfilerInit();
     while (1) {
@@ -156,7 +173,7 @@ int main() {
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
-                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, PROCESSOR_INDEX);
+                firmware_config_init(mailboxes, ProgrammableCoreType::IDLE_ETH, internal_::get_hw_thread_idx());
 
             // Run the ERISC kernel
             int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
@@ -172,6 +189,7 @@ int main() {
             wait_subordinate_eriscs(heartbeat);
 
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

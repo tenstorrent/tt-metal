@@ -6,21 +6,11 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::experimental::matmul::group_attn_matmul {
-
-GroupAttnMatmulDeviceOperation::program_factory_t GroupAttnMatmulDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::GroupAttnMatmulProgramFactory{};
-}
-
-void GroupAttnMatmulDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
+namespace ttnn::experimental::prim {
 void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // input_a: [q_len, q_heads, batch, head_dim]
@@ -145,7 +135,7 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             (operation_attributes.num_tokens.has_value() and operation_attributes.transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(operation_attributes.num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL(operation_attributes.num_tokens.value() % 32 == 0, "Number of tokens must be divisible by 32!");
         read_from_kv_cache = true;
     }
 
@@ -214,24 +204,14 @@ GroupAttnMatmulDeviceOperation::tensor_return_value_t GroupAttnMatmulDeviceOpera
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
+    TT_FATAL(is_device_tensor(input_tensor_b), "Unexpected Tensor type {}", input_tensor_b.storage_type());
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
-        program_factory.index(),
         operation_attributes.transpose_hw,
         operation_attributes.out_subblock_w,
         operation_attributes.compute_with_storage_grid_size.str(),
@@ -250,12 +230,11 @@ tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
         input_tensor_b.device()->id());
 }
 
-}  // namespace ttnn::operations::experimental::matmul::group_attn_matmul
+}  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation::tensor_return_value_t
-group_attn_matmul(
+Tensor group_attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -267,9 +246,9 @@ group_attn_matmul(
     uint32_t out_subblock_w,
     bool row_major,
     std::optional<Tensor> preallocated_output) {
-    using OperationType = ttnn::operations::experimental::matmul::group_attn_matmul::GroupAttnMatmulDeviceOperation;
+    using OperationType = ttnn::experimental::prim::GroupAttnMatmulDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{
+    auto operation_attributes = ttnn::experimental::prim::GroupAttnMatmulParams{
         .num_tokens = num_tokens,
         .transpose_hw = transpose_hw,
         .out_subblock_w = out_subblock_w,
@@ -280,7 +259,7 @@ group_attn_matmul(
         .compute_kernel_config = compute_kernel_config.value_or(ttnn::DeviceComputeKernelConfig{}),
     };
 
-    auto tensor_args = OperationType::tensor_args_t{
+    auto tensor_args = ttnn::experimental::prim::GroupAttnMatmulInputs{
         .input_tensor_a = input_tensor_a,
         .input_tensor_b = input_tensor_b,
         .preallocated_output = std::move(preallocated_output),

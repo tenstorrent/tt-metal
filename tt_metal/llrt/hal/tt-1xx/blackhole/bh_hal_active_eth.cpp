@@ -98,8 +98,12 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] = MEM_ERISC_APP_ROUTING_INFO_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = MEM_RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = MEM_RETRAIN_FORCE_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = MEM_CORR_CW_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = MEM_UNCORR_CW_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = MEM_AERISC_FABRIC_ROUTER_STATE_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = MEM_AERISC_FABRIC_ROUTER_COMMAND_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] = MEM_SYSENG_ETH_MAILBOX_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = MEM_SYSENG_BOOT_RESULTS_BASE +
                                                                          offsetof(boot_results_t, eth_live_status) +
@@ -128,6 +132,8 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_TELEMETRY)] = MEM_AERISC_FABRIC_TELEMETRY_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTING_TABLE)] = MEM_AERISC_ROUTING_TABLE_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_STATE)] = sizeof(uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ROUTER_COMMAND)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_MAILBOX)] =
         sizeof(uint32_t) + (sizeof(uint32_t) * MEM_SYSENG_ETH_MAILBOX_NUM_ARGS);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
@@ -141,6 +147,10 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_RELEASE_CORE)] =
         MEM_SYSENG_ETH_MSG_RELEASE_CORE;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_PORT_REINIT_MACPCS)] =
+        MEM_SYSENG_ETH_MSG_PORT_REINIT_MACPCS;
+    fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::ETH_MSG_PORT_ACTION)] =
+        MEM_SYSENG_ETH_MSG_PORT_ACTION;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::HEARTBEAT)] = MEM_SYSENG_ETH_HEARTBEAT;
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::RETRAIN_COUNT)] =
         (uint64_t)&((eth_live_status_t*)MEM_SYSENG_ETH_LIVE_STATUS)->retrain_count;
@@ -151,12 +161,15 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes;
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names;
+    std::vector<uint8_t> processor_classes_num_fw_binaries;
     if (enable_2_erisc_mode) {
         processor_classes = configure_for_2erisc();
         processor_classes_names = {{{"ER0", "ERISC0"}, {"ER1", "ERISC1"}}};
+        processor_classes_num_fw_binaries = {/*DM*/ 2};
     } else {
         processor_classes = configure_for_1erisc();
         processor_classes_names = {{{"ER", "ERISC"}}};
+        processor_classes_num_fw_binaries = {/*DM*/ 1};
     }
 
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
@@ -164,11 +177,13 @@ HalCoreInfoType create_active_eth_mem_map(bool enable_2_erisc_mode) {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
         std::move(processor_classes),
+        std::move(processor_classes_num_fw_binaries),
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
         false /*supports_cbs*/,
+        false /*supports_dfbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory(),
         active_eth_fabric_telemetry::create_factory()};

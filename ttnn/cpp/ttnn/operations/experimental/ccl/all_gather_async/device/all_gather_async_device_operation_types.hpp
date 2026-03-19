@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -10,15 +11,14 @@
 
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl::all_gather_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct AllGatherAsyncParams {
     int32_t dim = 0;
     uint32_t num_links = 0;
     uint32_t ring_size = 0;
@@ -29,6 +29,7 @@ struct operation_attributes_t {
     std::optional<uint32_t> cluster_axis;
     bool use_all_gather_async_llama_sharded = false;
     bool use_optimal_ccl_for_llama = false;
+    bool use_all_gather_async_via_broadcast = true;
     std::optional<GlobalSemaphore> barrier_semaphore;
     bool using_persistent_buffers = false;
     std::optional<uint32_t> chunks_per_sync;
@@ -37,7 +38,7 @@ struct operation_attributes_t {
     bool reverse_order = false;
     std::optional<CoreRangeSet> sub_core_grid;
 
-    operation_attributes_t(
+    AllGatherAsyncParams(
         int32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -48,6 +49,7 @@ struct operation_attributes_t {
         std::optional<uint32_t> cluster_axis,
         bool use_all_gather_async_llama_sharded,
         bool use_optimal_ccl_for_llama,
+        bool use_all_gather_async_via_broadcast,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
         std::optional<uint32_t> chunks_per_sync,
@@ -65,6 +67,7 @@ struct operation_attributes_t {
         cluster_axis(cluster_axis),
         use_all_gather_async_llama_sharded(use_all_gather_async_llama_sharded),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
+        use_all_gather_async_via_broadcast(use_all_gather_async_via_broadcast),
         barrier_semaphore(barrier_semaphore),
         using_persistent_buffers(using_persistent_buffers),
         chunks_per_sync(chunks_per_sync),
@@ -75,7 +78,7 @@ struct operation_attributes_t {
 
     // Add attributes method for reflection
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
 
         attrs.emplace_back("dim", dim);
@@ -87,6 +90,7 @@ struct operation_attributes_t {
         attrs.emplace_back("sub_device_id", sub_device_id);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("use_all_gather_async_llama_sharded", use_all_gather_async_llama_sharded);
+        attrs.emplace_back("use_all_gather_async_via_broadcast", use_all_gather_async_via_broadcast);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
@@ -99,13 +103,9 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_args_t {
+struct AllGatherAsyncInputs {
     Tensor input_tensor;
     std::optional<Tensor> persistent_output_buffer;
 };
 
-using spec_return_value_t = TensorSpec;
-
-using tensor_return_value_t = Tensor;
-
-}  // namespace ttnn::operations::experimental::ccl::all_gather_async
+}  // namespace ttnn::experimental::prim

@@ -4,15 +4,14 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/pack_untilize.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     // X = output width
     // Y = output height
     // input shape = (..., H, W)
@@ -34,18 +33,14 @@ void MAIN {
     unary_op_init_common(cb_in, cb_out);
 
     for (uint32_t block = start_block; block < end_block; block++) {
-        // tilize input via unpack and then pack
-        tilize_init(cb_in, 1, cb_tilize);
-
-        cb_wait_front(cb_in, 1);
-        cb_reserve_back(cb_tilize, 1);
-
-        tilize_block(cb_in, 1, cb_tilize);
-
-        cb_push_back(cb_tilize, 1);
-        cb_pop_front(cb_in, 1);
-
-        tilize_uninit(cb_in, cb_tilize);
+        // Tilize input via unpack and then pack (standard symmetric: 1 tile in → 1 tile out)
+        compute_kernel_lib::tilize<
+            1,
+            cb_in,
+            cb_tilize,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 
         // transpose input
         cb_wait_front(cb_tilize, 1);
@@ -71,4 +66,3 @@ void MAIN {
         cb_pop_front(cb_tilize, 1);
     }
 }
-}  // namespace NAMESPACE

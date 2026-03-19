@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "dev_mem_map.h"
 #include "experimental/noc.h"
 
 namespace experimental {
@@ -37,7 +38,11 @@ namespace experimental {
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
 public:
-    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {}
+    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {
+#ifdef ARCH_QUASAR
+        local_l1_addr_ += MEM_L1_UNCACHED_BASE;
+#endif
+    }
 
     /**
      * @brief Increment the semaphore by the specified value.
@@ -60,7 +65,7 @@ public:
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
     void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_);
+        const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y);
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
 
@@ -131,18 +136,66 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-        uint64_t multicast_addr =
-            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
+        const uint64_t multicast_addr =
+            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
+#ifdef ARCH_QUASAR
+        const uintptr_t local_l1_addr = local_l1_addr_ - MEM_L1_UNCACHED_BASE;
+#else
+        const uintptr_t local_l1_addr = local_l1_addr_;
+#endif
         if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
             noc_semaphore_set_multicast_loopback_src(
-                local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+                local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
-            noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+            noc_semaphore_set_multicast(local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
     }
 
+    /**
+     * @brief Atomically increment the semaphore value on multiple cores in a specified rectangular region of the NoC.
+     * @note Sender cannot be part of the multicast destinations.
+     *
+     * @param noc The Noc object representing the NoC to use for the transaction.
+     * @param noc_x_start The starting X coordinate of the region (inclusive).
+     * @param noc_y_start The starting Y coordinate of the region (inclusive).
+     * @param noc_x_end The ending X coordinate of the region (inclusive).
+     * @param noc_y_end The ending Y coordinate of the region (inclusive).
+     * @param value The value to increment the semaphore by.
+     * @param num_dests The number of destination cores in the region.
+     */
+    void inc_multicast(
+        const Noc& noc,
+        uint32_t noc_x_start,
+        uint32_t noc_y_start,
+        uint32_t noc_x_end,
+        uint32_t noc_y_end,
+        uint32_t value,
+        uint32_t num_dests) {
+        const uint64_t multicast_addr =
+            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
+        noc_semaphore_inc_multicast(multicast_addr, value, num_dests, noc.get_noc_id());
+    }
+
 private:
-    uint32_t local_l1_addr_;
+    uintptr_t local_l1_addr_;
+
+    uint64_t get_noc_multicast_addr(
+        uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint8_t noc) const {
+#ifdef ARCH_QUASAR
+        return ::get_noc_multicast_addr(
+            noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_ - MEM_L1_UNCACHED_BASE, noc);
+#else
+        return ::get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc);
+#endif
+    }
+
+    uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y) const {
+#ifdef ARCH_QUASAR
+        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_ - MEM_L1_UNCACHED_BASE);
+#else
+        return ::get_noc_addr(noc_x, noc_y, local_l1_addr_);
+#endif
+    }
 };
 
 }  // namespace experimental

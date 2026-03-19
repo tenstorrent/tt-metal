@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -17,10 +18,10 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 
-namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
-    matmul::operation_attributes_t matmul_struct;
+struct LlamaAllGatherMatmulAsyncParams {
+    ttnn::prim::MatmulParams matmul_struct;
     std::vector<IDevice*> devices;
     uint32_t dim{};
     uint32_t num_links{};
@@ -32,8 +33,8 @@ struct operation_attributes_t {
     std::optional<uint32_t> cluster_axis;
 
     // Constructor required because GlobalSemaphore is not default constructible
-    operation_attributes_t(
-        matmul::operation_attributes_t matmul_struct,
+    LlamaAllGatherMatmulAsyncParams(
+        ttnn::prim::MatmulParams matmul_struct,
         std::vector<IDevice*> devices,
         uint32_t dim,
         uint32_t num_links,
@@ -55,7 +56,7 @@ struct operation_attributes_t {
         cluster_axis(cluster_axis) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("devices", devices);
         attrs.emplace_back("dim", dim);
@@ -74,20 +75,20 @@ struct operation_attributes_t {
     }
 };
 
-struct tensor_return_value_t {
+struct LlamaAllGatherMatmulAsyncResult {
     Tensor mm;
     Tensor aggregated;
 };
 
-struct spec_return_value_t {
+struct LlamaAllGatherMatmulAsyncResultSpec {
     TensorSpec mm;
     TensorSpec aggregated;
 };
 
-struct tensor_args_t {
+struct LlamaAllGatherMatmulAsyncInputs {
     Tensor input0;
     Tensor input1;
     Tensor intermediate;
 };
 
-}  // namespace ttnn::operations::experimental::ccl::llama_all_gather_matmul_async
+}  // namespace ttnn::experimental::prim

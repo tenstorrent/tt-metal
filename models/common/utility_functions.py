@@ -622,7 +622,7 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
 
     if not _comp_nonfinite(golden, calculated):
         return False, "Tensors are not finite at the same positions"
-    # nonfinite elments can intefere with ULP error calculation
+    # nonfinite elements can interfere with ULP error calculation
     # To avoid this, replace nan, +inf, -inf with 0
     # (we have already checked that both tensors have the same nonfinite elements)
     mask_finite = ~torch.isfinite(golden)
@@ -741,6 +741,12 @@ def calculate_detailed_ulp_stats(expected, actual):
 
 
 def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
+    # 0-volume tensors are special because they don't have elements, so we can't compute PCC, etc.
+    # If one of the tensors is a 0-volume tensor, simply call torch.equal to check if they are equal
+    # (i.e. that both are 0-volume tensors and they have equal shapes).
+    if golden.numel() == 0 or calculated.numel() == 0:
+        return torch.equal(golden, calculated), f"{golden} != {calculated}"
+
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
@@ -752,7 +758,7 @@ def comp_allclose_and_pcc(golden, calculated, rtol=1e-05, atol=1e-08, pcc=0.99):
     if torch.numel(golden) != 1:
         passing_pcc, output_pcc = comp_pcc(golden, calculated, pcc)
         passing &= passing_pcc
-        output += f", {output_pcc}"
+        output += f", pcc={output_pcc}"
 
     return passing, output
 
@@ -1017,12 +1023,6 @@ def is_conv_supported_on_device(conv_params):
     return True
 
 
-# detect E75 Grayskull card
-def is_e75(device):
-    compute_grid_size = device.compute_with_storage_grid_size()
-    return (device.arch() == Arch.GRAYSKULL) and (compute_grid_size.x * compute_grid_size.y == 88)
-
-
 def is_x2_harvested(device):
     grid = device.compute_with_storage_grid_size()
     return device.arch() == Arch.WORMHOLE_B0 and (grid.x, grid.y) == (8, 7)
@@ -1042,9 +1042,19 @@ def is_wormhole_b0():
     return "wormhole_b0" in ARCH_NAME
 
 
-def is_grayskull():
-    ARCH_NAME = ttnn.get_arch_name()
-    return "grayskull" in ARCH_NAME
+def is_watcher_enabled():
+    watcher = os.environ.get("TT_METAL_WATCHER")
+    lightweight_asserts = os.environ.get("TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS")
+    return (watcher is not None and watcher != "") or lightweight_asserts == "1"
+
+
+def is_llk_assert_enabled():
+    llk_assert = os.environ.get("TT_METAL_LLK_ASSERTS")
+    return llk_assert == "1"
+
+
+def is_n300():
+    return os.environ.get("MESH_DEVICE", "N150") == "N300"
 
 
 def is_slow_dispatch():
@@ -1063,16 +1073,20 @@ def skip_for_wormhole_b0(reason_str="not a wormhole test"):
     return ti_skip(is_wormhole_b0(), reason=reason_str)
 
 
+def skip_with_watcher(reason_str="Test is not passing with watcher enabled"):
+    return ti_skip(is_watcher_enabled(), reason=reason_str)
+
+
+def skip_with_llk_assert(reason_str="Test is not passing with LLK asserts enabled"):
+    return ti_skip(is_llk_assert_enabled(), reason=reason_str)
+
+
 def run_for_blackhole(reason_str="only runs for Blackhole"):
     return ti_skip(not is_blackhole(), reason=reason_str)
 
 
 def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
-
-
-def run_for_grayskull(reason_str="only runs for Grayskull"):
-    return ti_skip(not is_grayskull(), reason=reason_str)
 
 
 def run_for_n_dev(n, reason_str="Test is not meant for this number of devices"):

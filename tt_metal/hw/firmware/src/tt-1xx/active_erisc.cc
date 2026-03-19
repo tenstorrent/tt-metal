@@ -18,7 +18,6 @@
 #include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
-#include "api/dataflow/dataflow_api.h"
 #include "internal/ethernet/dataflow_api.h"
 #include "internal/ethernet/tunneling.h"
 #include "dev_mem_map.h"
@@ -26,7 +25,9 @@
 #include "internal/ethernet/erisc.h"
 
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/device_print.h"
 
 uint8_t noc_index;
 // Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
@@ -42,6 +43,11 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+#if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
+uint32_t rta_count __attribute__((used));
+uint32_t crta_count __attribute__((used));
+#endif
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -153,7 +159,7 @@ extern "C" __attribute__((naked, used)) void resume_from_reset() {
 
 // After running the base firmware, some core state (for erisc0) seems broken, so jumps into the kernel may occasionally
 // hang. Resetting the core fixes the issue. We need to save all the GPR and local memory to L1, because local memory is
-// cleared on reset. ERISC1 is responsible for triggering the reset, which willl start execution in resume_from_reset.
+// cleared on reset. ERISC1 is responsible for triggering the reset, which will start execution in resume_from_reset.
 extern "C" __attribute__((naked)) void enter_reset(void) {
     __asm__ volatile(
         // Save contents to stack
@@ -235,6 +241,7 @@ int __attribute__((noinline)) main(void) {
     WRITE_REG(AERISC_RESET_PC, (uint32_t)(void*)resume_from_reset);
     enter_reset();
 #endif
+    DEVICE_PRINT_INITIALIZE_LOCK();
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
@@ -320,7 +327,7 @@ int __attribute__((noinline)) main(void) {
 
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
-                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
+                    firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, internal_::get_hw_thread_idx());
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
@@ -330,6 +337,7 @@ int __attribute__((noinline)) main(void) {
 
             wait_subordinate_eriscs();
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

@@ -7,7 +7,7 @@
 #include <algorithm>
 #include "all_gather.hpp"
 #include "device/all_gather_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -15,9 +15,10 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
+using namespace ttnn::operations::ccl;
 
-ttnn::Tensor ExecuteAllGather::invoke(
+ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     std::optional<uint32_t> cluster_axis,
@@ -86,4 +87,4 @@ ttnn::Tensor ExecuteAllGather::invoke(
         sub_core_grid);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn

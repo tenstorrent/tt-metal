@@ -4,13 +4,14 @@
 
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <bit>
+
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::data_movement::tilize_with_val_padding::detail {
+namespace ttnn::prim::detail {
 
 uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
     return std::visit(
@@ -23,13 +24,16 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 }
                 if (tensor.dtype() == DataType::UINT16) {
                     uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
-                    return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
+                    return ttnn::operations::data_movement::pack_two_uint16_into_uint32(
+                        {uint16_pad_value, uint16_pad_value});
+                }
+                if (tensor.dtype() == DataType::FLOAT32) {
+                    return std::bit_cast<uint32_t>(static_cast<float>(pad_value));
                 }
                 TT_FATAL(
-                    tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32 or
-                        tensor.dtype() == DataType::INT32,
+                    tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::INT32,
                     "only supporting bfloat16, float32, and uint32/int32/uint16");
-                return (uint32_t)((pad_value));
+                return static_cast<uint32_t>(pad_value);
             }
             if constexpr (std::is_same_v<T, uint32_t>) {
                 if (tensor.dtype() == DataType::BFLOAT16) {
@@ -38,7 +42,8 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
                 }
                 if (tensor.dtype() == DataType::UINT16) {
                     uint16_t uint16_pad_value = static_cast<uint16_t>(pad_value);
-                    return pack_two_uint16_into_uint32({uint16_pad_value, uint16_pad_value});
+                    return ttnn::operations::data_movement::pack_two_uint16_into_uint32(
+                        {uint16_pad_value, uint16_pad_value});
                 }
                 TT_FATAL(
                     tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::INT32 or
@@ -51,4 +56,4 @@ uint32_t get_packed_value(const Tensor& tensor, const PadValue& pad_value) {
         pad_value);
 }
 
-}  // namespace ttnn::operations::data_movement::tilize_with_val_padding::detail
+}  // namespace ttnn::prim::detail

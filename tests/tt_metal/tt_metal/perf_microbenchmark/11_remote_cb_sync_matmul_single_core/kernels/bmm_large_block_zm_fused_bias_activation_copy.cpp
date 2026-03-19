@@ -4,11 +4,9 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
+#include "api/compute/matmul.h"
 
-namespace NAMESPACE {
-
-void MAIN {
+void kernel_main() {
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);  // inner block size in tiles
     constexpr uint32_t in0_block_num_tiles =
         get_compile_time_arg_val(1);  // out_subblock_h*in0_block_w*in0_num_subblocks;
@@ -77,4 +75,3 @@ void MAIN {
         cb_push_back(out_cb_id, out_block_num_tiles);
     }
 }
-}  // namespace NAMESPACE

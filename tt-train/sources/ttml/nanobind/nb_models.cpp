@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,8 +11,7 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
-#include <optional>
-
+#include "autograd/tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
@@ -34,8 +33,10 @@ using namespace ttml::models;
 void py_module_types(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::modules::py_module_types(m_modules);
 
-    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m);
-    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m);
+    ttml::nanobind::util::export_enum<models::common::transformer::RunnerType>(m).def_static(
+        "from_string", [](const std::string& s) { return models::common::transformer::read_runner_type(s); });
+    ttml::nanobind::util::export_enum<models::common::transformer::WeightTyingType>(m).def_static(
+        "from_string", [](const std::string& s) { return models::common::transformer::read_weight_tying_type(s); });
 
     // Export KvCacheConfig class
     {
@@ -132,9 +133,9 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
     {
         auto py_llama_module = m.def_submodule("llama");
-        nb::class_<models::llama::LlamaConfig>(py_llama_module, "LlamaConfig");
-        nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "Llama");
-        py_llama_module.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
+        nb::class_<models::llama::LlamaConfig>(py_llama_module, "CppLlamaConfig");
+        nb::class_<models::llama::Llama, models::BaseTransformer>(py_llama_module, "CppLlama");
+        py_llama_module.def("create_cpp_llama_model", [](const models::llama::LlamaConfig& config) {
             return models::llama::create(config);
         });
     }
@@ -149,6 +150,33 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
 void py_module(nb::module_& m, nb::module_& m_modules) {
     ttml::nanobind::modules::py_module(m_modules);
+
+    m.def(
+        "memory_efficient_runner",
+        [](nb::callable fw_callable,
+           const ttml::autograd::TensorPtr& input,
+           const ttml::autograd::TensorPtr& mask,
+           nb::args args,
+           nb::kwargs kwargs) {
+            std::optional<ttml::autograd::TensorPtr> mask_opt;
+            if (mask) {
+                mask_opt = mask;
+            }
+            auto fw_impl = [fw_callable, args, kwargs](
+                               const ttml::autograd::TensorPtr& model_input,
+                               const std::optional<ttml::autograd::TensorPtr>& model_mask) {
+                nb::gil_scoped_acquire guard;
+                nb::object tensor_obj = fw_callable(model_input, model_mask, *args, **kwargs);
+                return nb::cast<autograd::TensorPtr>(tensor_obj);
+            };
+            return models::common::transformer::memory_efficient_runner(fw_impl, input, mask_opt);
+        },
+        nb::arg("forward_impl"),
+        nb::arg("input"),
+        nb::arg("mask").none(),
+        nb::arg("args") = nb::tuple(),
+        nb::arg("kwargs") = nb::dict(),
+        "Memory-efficient forward/backward runner with gradient checkpointing.");
 
     {
         auto py_base_transformer =
@@ -199,6 +227,19 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_gpt2 = static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(
             py_gpt2_module.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
+
+        // Explicit __call__ binding: GPT-2 overrides operator()(TensorPtr, optional<TensorPtr>)
+        // which does not match the two-arg (TensorPtr, TensorPtr) binding on ModuleBase.
+        py_gpt2.def(
+            "__call__",
+            [](models::gpt2::Transformer& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask) {
+                return self(tensor, std::optional<ttml::autograd::TensorPtr>(mask));
+            },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            "Model forward pass with causal mask.");
     }
 
     {
@@ -255,7 +296,8 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
     {
         auto py_llama_module = static_cast<nb::module_>(m.attr("llama"));
 
-        auto py_llama_config = static_cast<nb::class_<models::llama::LlamaConfig>>(py_llama_module.attr("LlamaConfig"));
+        auto py_llama_config =
+            static_cast<nb::class_<models::llama::LlamaConfig>>(py_llama_module.attr("CppLlamaConfig"));
         py_llama_config.def(nb::init<>());
         py_llama_config.def_rw("num_heads", &models::llama::LlamaConfig::num_heads, "Number of heads");
         py_llama_config.def_rw("num_groups", &models::llama::LlamaConfig::num_groups, "Number of groups");
@@ -277,7 +319,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama_config.def_rw(
             "original_context_length", &models::llama::LlamaConfig::original_context_length, "Original context length");
 
-        auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
+        auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("CppLlama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());
 
         // Overload 1: Without KV cache

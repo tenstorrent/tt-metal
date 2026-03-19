@@ -13,7 +13,7 @@
 using namespace tt::constants;
 using namespace tt;
 
-namespace ttnn::operations::matmul::program {
+namespace ttnn::prim {
 
 static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
     tt_metal::IDevice* device,
@@ -124,20 +124,28 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, {{"cb_in0", tt::CBIndex::c_0}, {"cb_in1", tt::CBIndex::c_1}}));
 
     auto unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/writer_bmm_tile_layout.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, {{"cb_out", tt::CBIndex::c_16}}));
 
     // Create compute kernel
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
-        tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args});
+        tt_metal::ComputeConfig{
+            .math_fidelity = math_fidelity,
+            .compile_args = compute_kernel_args,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_out", tt::CBIndex::c_16},
+                {"cb_intermed0", (uint32_t)24}}});
 
     for (int output_idx_y = 0; output_idx_y < num_blocks_y; output_idx_y++) {
         for (int output_idx_x = 0; output_idx_x < num_blocks_x; output_idx_x++) {
@@ -206,9 +214,9 @@ static MatmulMultiCoreReuseProgramFactory::cached_program_t create_program(
 
 void MatmulMultiCoreReuseProgramFactory::override_runtime_arguments(
     MatmulMultiCoreReuseProgramFactory::cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& /*operation_attributes*/,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     constexpr uint32_t per_core_M = 16;
     constexpr uint32_t per_core_N = 16;
 
@@ -257,9 +265,9 @@ void MatmulMultiCoreReuseProgramFactory::override_runtime_arguments(
 }
 
 MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
 
@@ -347,10 +355,10 @@ MatmulMultiCoreReuseProgramFactory::cached_program_t MatmulMultiCoreReuseProgram
 
 MatmulMeshWorkloadMultiCoreReuseFactory::cached_mesh_workload_t
 MatmulMeshWorkloadMultiCoreReuseFactory::create_mesh_workload(
-    const operation_attributes_t& attributes,
+    const ttnn::prim::MatmulParams& attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
@@ -366,9 +374,9 @@ MatmulMeshWorkloadMultiCoreReuseFactory::create_mesh_workload(
 
 void MatmulMeshWorkloadMultiCoreReuseFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const ttnn::prim::MatmulParams& attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
         auto cached_program_proxy = MatmulMultiCoreReuseProgramFactory::cached_program_t::proxy(
             program, cached_workload.shared_variables.at(mesh_coord_range));
@@ -377,4 +385,4 @@ void MatmulMeshWorkloadMultiCoreReuseFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::matmul::program
+}  // namespace ttnn::prim

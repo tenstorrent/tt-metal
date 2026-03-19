@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moreh_adam_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <cstdint>
 
@@ -47,18 +48,7 @@ void MorehAdamOperation::validate_inputs(
     }
 }
 
-MorehAdamOperation::program_factory_t MorehAdamOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    // For now we litteraly don't care and return a single factory. Whatever
-    return ProgramFactory{};
-}
-
 void MorehAdamOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehAdamOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -112,11 +102,11 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
 
 auto MorehAdamOperation::compute_program_hash(
     const MorehAdamOperation::operation_attributes_t& operation_attributes,
-    const MorehAdamOperation::tensor_args_t& tensor_args) -> tt::stl::hash::hash_t {
+    const MorehAdamOperation::tensor_args_t& tensor_args) -> ttsl::hash::hash_t {
     auto operation_attributes_without_step_and_lr = operation_attributes;
     operation_attributes_without_step_and_lr.step = 0;
     operation_attributes_without_step_and_lr.lr = 0.0f;
-    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
 }  // namespace ttnn::operations::moreh::moreh_adam
 

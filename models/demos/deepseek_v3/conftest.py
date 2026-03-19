@@ -130,6 +130,14 @@ def mesh_device(request, device_params):
     updated_device_params.setdefault("mesh_shape", mesh_shape)
     mesh_device = ttnn.open_mesh_device(**updated_device_params)
 
+    # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
+    # torch inherits this setting, which makes CPU-side reference model computations extremely slow.
+    # We restore a reasonable thread count for torch.
+    if requested_system_name.upper() in ("DUAL", "QUAD"):
+        num_torch_threads = max(1, os.cpu_count())
+        logger.info(f"Restoring torch num_threads to {num_torch_threads}")
+        torch.set_num_threads(num_torch_threads)
+
     logger.debug(f"Mesh device with {mesh_device.get_num_devices()} devices is created with shape {mesh_device.shape}")
     yield mesh_device
 
@@ -145,12 +153,16 @@ def mesh_device(request, device_params):
 
 @pytest.fixture(scope="session")
 def model_path():
-    return Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+    """Get model path and resolve symlinks to ensure all operations can find files."""
+    path = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
+    # Resolve symlinks to ensure AutoConfig and other operations can find config.json and other files
+    return path.resolve()
 
 
 @pytest.fixture(scope="session")
 def hf_config(model_path):
     """Load DeepSeek config for testing"""
+    # model_path is already resolved in the fixture
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     return config
 
@@ -178,9 +190,21 @@ def clear_state_dict_cache(request):
 
 @pytest.fixture(scope="session")
 def hf_config_short(request, hf_config):
+    """
+    Build a shortened DeepSeek config for tests.
+
+    Environment variables:
+        DEEPSEEK_MAX_SEQ_LEN_OVERRIDE: Optional override for `hf_config_short.max_seq_len`.
+            When set (e.g. "32768"), tests that read `hf_config_short.max_seq_len`
+            can exercise longer sequence lengths without modifying code.
+    """
     hf_config_out = deepcopy(hf_config)
     hf_config_out.num_hidden_layers = getattr(request, "param", 1)
-    hf_config_out.max_seq_len = 4096
+    max_seq_len_override = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
+    if max_seq_len_override is not None:
+        hf_config_out.max_seq_len = int(max_seq_len_override)
+    else:
+        hf_config_out.max_seq_len = 512
     return hf_config_out
 
 
@@ -274,6 +298,10 @@ def pytest_configure(config):
         "requires_device(device_types): mark test to run only on specified device types. "
         "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
         "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
+    )
+    config.addinivalue_line(
+        "markers",
+        "ci_fused_op: mark curated DeepSeek fused-op functional tests used by CI folder-based execution",
     )
 
 

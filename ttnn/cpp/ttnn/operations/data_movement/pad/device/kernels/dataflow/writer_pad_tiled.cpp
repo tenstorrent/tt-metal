@@ -33,7 +33,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* input_id_per_dim = output_page_shape + num_dims;
     volatile tt_l1_ptr uint32_t* output_id_per_dim = input_id_per_dim + num_dims;
 
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     const auto s0 = TensorAccessor(dst_args, output_addr, page_size);
 
@@ -65,7 +65,7 @@ void kernel_main() {
 
         // We have two cases, if we are within the input region, we wait for the reader to send us the correct tile
         // Otherwise we simply write the padding tile we have in our circular buffer
-        uint64_t dst_noc_addr = get_noc_addr(output_page_offset, s0);
+        uint64_t dst_noc_addr = s0.get_noc_addr(output_page_offset);
         if (within_input_region) {
             cb_wait_front(input_cb_id, 1);
             uint32_t l1_read_addr = get_read_ptr(input_cb_id);

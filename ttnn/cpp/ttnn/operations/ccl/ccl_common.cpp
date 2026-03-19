@@ -248,26 +248,6 @@ size_t LineTopology::get_distance_to_end_of_line(ttnn::ccl::LineDirection direct
 
 ttnn::ccl::Topology LineTopology::topology() const { return ttnn::ccl::Topology::Linear; }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& /*input_tensors*/,
-    std::vector<Tensor>& /*output_tensors*/,
-    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
-    tt::tt_metal::operation::MeshWorkloadWithCallbacks workload_with_callbacks;
-    for (const auto& range : tensor_coords.ranges()) {
-        for (const auto& coord : range) {
-            const ttnn::MeshCoordinateRange program_range(coord, coord);
-            auto program_with_callbacks = create_program(coord);
-            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
-            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
-                workload_with_callbacks.per_program_callbacks.emplace(
-                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
-            }
-        }
-    }
-    return workload_with_callbacks;
-}
-
 SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
@@ -355,7 +335,8 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     IDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
@@ -379,19 +360,39 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     for (const auto& cr : available_cores.ranges()) {
         auto start = cr.start_coord;
         auto end = cr.end_coord;
-        for (size_t y = start.y; y <= end.y; y++) {
+
+        if (strategy == CoreAllocationStrategy::COL_MAJOR) {
+            // Column-major allocation: fill columns first (outer loop x, inner loop y)
             for (size_t x = start.x; x <= end.x; x++) {
-                sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
-                    CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                for (size_t y = start.y; y <= end.y; y++) {
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
                 if (sender_worker_core_range.num_cores() == num_workers_preferred) {
                     break;
                 }
             }
-            if (sender_worker_core_range.num_cores() == num_workers_preferred) {
-                break;
+        } else {
+            // Row-major allocation: fill rows first (outer loop y, inner loop x) - default behavior
+            for (size_t y = start.y; y <= end.y; y++) {
+                for (size_t x = start.x; x <= end.x; x++) {
+                    sender_worker_core_range = sender_worker_core_range.merge(CoreRangeSet(CoreRange(
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y),
+                        CoreCoord(x + core_grid_offset.x, y + core_grid_offset.y))));
+                    if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                        break;
+                    }
+                }
+                if (sender_worker_core_range.num_cores() == num_workers_preferred) {
+                    break;
+                }
             }
         }
+
         if (sender_worker_core_range.num_cores() == num_workers_preferred) {
             break;
         }
@@ -586,44 +587,6 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
-static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
-    Program& program,
-    const ccl::EriscDatamoverBuilder& edm_builder,
-    const std::string& kernel_path,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id,
-    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
-    edm_builder.dump_to_log();
-
-    const std::vector<uint32_t> edm_kernel_rt_args = edm_builder.get_runtime_args();
-    // Ethernet Kernels
-    const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
-    log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
-    log_trace(tt::LogOp, "CT ARGS:");
-    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
-        log_trace(tt::LogOp, "\t{}", s);
-    }
-
-    auto kernel_config =
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .processor = risc_id, .compile_args = eth_sender_ct_args};
-    if (opt_level.has_value()) {
-        kernel_config.opt_level = opt_level.value();
-    }
-    auto eth_sender_kernel = tt::tt_metal::CreateKernel(program, kernel_path, eth_core, kernel_config);
-
-    tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
-
-    std::stringstream ss;
-    ss << "EDM ARGS:\n";
-    for (const auto& s : edm_kernel_rt_args) {
-        ss << "\t" << s << "\n";
-    }
-    log_trace(tt::LogOp, "{}", ss.str());
-
-    return eth_sender_kernel;
-}
-
 tt::tt_metal::KernelHandle generate_edm_kernel(
     Program& program,
     const IDevice* /*device*/,
@@ -631,13 +594,18 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
     const CoreCoord& eth_core,
     const tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id) {
-    return generate_edm_kernel_impl(
-        program,
-        edm_builder,
-        "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
-        eth_core,
-        risc_id,
-        noc_id);
+    edm_builder.dump_to_log();
+    return tt::tt_fabric::generate_erisc_datamover_kernel(tt::tt_fabric::FabricEriscDatamoverKernelConfig{
+        .program = program,
+        .kernel_path = "ttnn/cpp/ttnn/operations/ccl/kernels/edm/erisc_datamover.cpp",
+        .eth_core = eth_core,
+        .risc_id = risc_id,
+        .noc_id = noc_id,
+        .compile_time_args = edm_builder.get_compile_time_args((uint32_t)risc_id),
+        .named_compile_time_args = {},
+        .runtime_args = edm_builder.get_runtime_args(),
+        .opt_level = std::nullopt,
+    });
 }
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
@@ -993,6 +961,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
             }
         }
 
+        TT_ASSERT(min_num_workers_per_row > 0);
         const uint32_t min_workers_row_min_cols_per_worker = tensor_slice_shape_in_tiles.x / min_num_workers_per_row;
         const uint32_t min_workers_row_max_col_worker_count = tensor_slice_shape_in_tiles.x % min_num_workers_per_row;
         const uint32_t min_workers_row_max_cols_per_worker = min_workers_row_max_col_worker_count != 0
@@ -1728,8 +1697,7 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
-void validate_fabric_2d_dynamic_config(Topology topology) {
-    TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+void validate_fabric_2d_dynamic_config() {
     auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
     TT_FATAL(
         physical_mesh_shapes.size() == 1,
@@ -1772,7 +1740,6 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 }
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
-    Topology topology,
     const MeshCoordinate& /*src_device_coord*/,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
@@ -1781,8 +1748,8 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        validate_fabric_2d_dynamic_config();
         if (forward_device_coord) {
             auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
@@ -1830,7 +1797,6 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 }
 
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
-    Topology topology,
     const MeshCoordinate& src_device_coord,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
@@ -1843,8 +1809,8 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     // May be uplifted to an op parameter if needed
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        validate_fabric_2d_dynamic_config(topology);
+    if (tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
+        validate_fabric_2d_dynamic_config();
         auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
         auto set_mcast_args = [&src_fabric_node_id](
                                   std::array<uint32_t, 6>& args,
@@ -1876,6 +1842,58 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
         TT_THROW("Unsupported fabric config");
     }
     return std::make_tuple(forward_args, backward_args);
+}
+
+void fabric_mux_connection_ct_args(
+    const uint32_t num_workers_per_direction,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args) {
+    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel 0
+    worker_ct_args.push_back(
+        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes 1
+    worker_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address 2
+    worker_ct_args.push_back(
+        mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address 3
+    worker_ct_args.push_back(num_workers_per_direction);      // num_mux_clients 4
+}
+
+void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const tt::tt_fabric::FabricMuxChannelType channel_type,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    CoreCoord termination_master_virtual_core,
+    std::vector<uint32_t>& worker_rt_args,
+    std::optional<uint32_t> termination_master_semaphore_id) {
+    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid 0
+    worker_rt_args.push_back(is_termination_master);  // is_termination_master 1
+    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x 2
+    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y 3
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address 4
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(
+        channel_type, worker_id));  // fabric_mux_connection_info_address 5
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
+        channel_type, worker_id));  // fabric_mux_connection_handshake_address 6
+    worker_rt_args.push_back(
+        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address 7
+    worker_rt_args.push_back(
+        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
+    worker_rt_args.push_back(
+        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
+    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
+        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address 14
+    worker_rt_args.push_back(termination_master_virtual_core.x);                   // termination_master_noc_x 15
+    worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
 }  // namespace ttnn::ccl

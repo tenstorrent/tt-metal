@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Union
 
 import ttnn
+
+optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
 
 # Union type for all possible program configs used with ttnn.linear
 ProgramConfig = Union[
@@ -39,6 +42,17 @@ class MeshDeviceStub:
 class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 is resolved
     path: Path
     memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class DeepseekSamplingArgs:
+    vocab_size: int
+    padded_vocab_size: int
+    max_top_k: int
+    max_batch_size: int
+    sampling_dp: int
+    cluster_shape: tuple[int, int]
+    sampling_all_gather_axis: int = 1
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
@@ -75,6 +89,7 @@ class LinearConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
     program_config: ProgramConfig | None = None
+    output_tile: "tt.tt_metal.Tile | None" = None
 
 
 @dataclass
@@ -115,14 +130,27 @@ class AllGatherAsyncConfig(OpConfigBase):
     dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
     multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     use_optimal_ccl_for_llama: bool | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_workers_per_link: int | None = None
+    use_broadcast: bool | None = None
+
+
+@dataclass
+class AllBroadcastAsyncConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_broadcast_async op"""
+
+    num_links: int | None = 4
+    cluster_axis: int | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
 
 
 @dataclass
@@ -133,11 +161,26 @@ class AllToAllAsyncGenericConfig(OpConfigBase):
     out_dim: int | None = None
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
-    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+
+
+@dataclass
+class SliceConfig(OpConfigBase):
+    """Common parameters for a ttnn.slice op"""
+
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class ConcatConfig(OpConfigBase):
+    """Common parameters for a ttnn.concat op"""
+
+    dim: int
+    memory_config: ttnn.MemoryConfig | None = None
 
 
 @dataclass
@@ -146,12 +189,12 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
 
     dim: int
     multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
-    num_links: int | None = None
+    num_links: int | None = 4
     persistent_output_buffers: ttnn.Tensor | None = None
     barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
     intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
+    topology: ttnn.Topology = optimal_topology
     subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
     cluster_axis: int | None = None
     chunks_per_sync: int | None = None
@@ -160,12 +203,61 @@ class ReduceScatterAsyncMinimalConfig(OpConfigBase):
 
 
 @dataclass
+class DeepseekMoEReduceScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.deepseek_moe_reduce_scatter op"""
+
+    @classmethod
+    def create_default_input_memory_config(
+        cls, users_per_row: int, hidden_size: int, tp_size: int
+    ) -> ttnn.MemoryConfig:
+        NUM_DECODE_RS_SHARD_CORES = 7
+
+        if hidden_size % tp_size != 0:
+            raise ValueError(
+                f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: hidden_size ({hidden_size}) must be divisible by tp_size ({tp_size})"
+            )
+        slice_size = hidden_size // tp_size
+
+        if slice_size % NUM_DECODE_RS_SHARD_CORES != 0:
+            raise ValueError(
+                f"DeepseekMoEReduceScatterConfig.create_default_input_memory_config: slice_size ({slice_size}) must be divisible by number of op worker cores ({NUM_DECODE_RS_SHARD_CORES})"
+            )
+        per_core_shard_width = slice_size // NUM_DECODE_RS_SHARD_CORES
+
+        return ttnn.MemoryConfig(
+            ttnn.BufferType.L1,
+            ttnn.NdShardSpec(
+                ttnn.Shape([1, 1, users_per_row, per_core_shard_width]),
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(2, 5), ttnn.CoreCoord(2, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 5), ttnn.CoreCoord(3, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 0), ttnn.CoreCoord(6, 0)),
+                        ttnn.CoreRange(ttnn.CoreCoord(6, 5), ttnn.CoreCoord(6, 5)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                    ]
+                ),
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+        )
+
+    output_memory_config: ttnn.MemoryConfig
+    dim: int
+    num_links: int = 4
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    cluster_axis: int | None = None
+
+
+@dataclass
 class PointToPointConfig(OpConfigBase):
     """Common parameters for a ttnn.point_to_point op"""
 
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = optimal_topology
     output_tensor: ttnn.Tensor | None = None
 
 
@@ -177,8 +269,8 @@ class AllGatherConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig | None = None
     num_workers: int | None = None
     num_buffers_per_channel: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 1
+    topology: ttnn.Topology = optimal_topology
+    num_links: int = 4
 
 
 @dataclass
@@ -190,8 +282,8 @@ class ReduceScatterConfig(OpConfigBase):
     mesh_device: ConfigDevice | None = None
     cluster_axis: int | None = None
     memory_config: ttnn.MemoryConfig = None
-    topology: ttnn.Topology = ttnn.Topology.Ring
-    num_links: int = 1
+    topology: ttnn.Topology = optimal_topology
+    num_links: int = 4
 
 
 @dataclass
@@ -200,6 +292,14 @@ class ReshardConfig(OpConfigBase):
 
     memory_config: ttnn.MemoryConfig
     dtype: ttnn.DataType | None = None
+
+
+@dataclass
+class PermuteConfig(OpConfigBase):
+    """Common parameters for a ttnn.permute op"""
+
+    dims: tuple[int, int, int, int]
+    memory_config: ttnn.MemoryConfig | None = None
 
 
 @dataclass
@@ -282,7 +382,7 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = optimal_topology
     subdevice_id: int | None = None
 
 
@@ -293,7 +393,7 @@ class AllToAllCombineConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    topology: ttnn.Topology = optimal_topology
 
 
 @dataclass
@@ -328,21 +428,6 @@ class TypecastConfig(OpConfigBase):
     dtype: ttnn.DataType
     memory_config: ttnn.MemoryConfig | None = None
     sub_core_grids: ttnn.CoreRangeSet | None = None
-
-
-@dataclass
-class SparseMatmulConfig(OpConfigBase):
-    """Common parameters for a ttnn.sparse_matmul op"""
-
-    input_tensor_b: ConfigWeight
-    memory_config: ttnn.MemoryConfig | None = None
-    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
-    program_config: ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig | None = None
-    is_input_a_sparse: bool | None = None
-    is_input_b_sparse: bool | None = None
-    output_tile: ttnn.Tile | None = None
-    sparsity: ttnn.Tensor | None = None
-    nnz: int | None = None
 
 
 @dataclass

@@ -29,12 +29,11 @@
 #include <tt_stl/assert.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "test_common.hpp"
@@ -215,27 +214,27 @@ int main(int argc, char** argv) {
         } catch (const std::exception& e) {
             log_error(tt::LogTest, "Command line arguments found exception", e.what());
         }
-        TT_ASSERT(
+        TT_FATAL(
             (addr_align >= 4 && (addr_align & (addr_align - 1)) == 0), "Address alignment must be a power of 2 >= 4");
-        TT_ASSERT(
+        TT_FATAL(
             copy_mode <= 8,
             "Invalid --copy-mode arg! Only eight modes to copy data data from host into hugepages support!");
         if (copy_mode >= 2 && copy_mode <= 7) {
             if (copy_mode == 2 || copy_mode == 3) {
-                TT_ASSERT(
+                TT_FATAL(
                     addr_align % sizeof(__m128) == 0,
                     "Address alignment must be a multiple of 16 when using nt_memcpy");
             } else if (copy_mode == 5 || copy_mode == 6) {
-                TT_ASSERT(
+                TT_FATAL(
                     addr_align % sizeof(__m256) == 0,
                     "Address alignment must be a multiple of 32 when using nt_memcpy");
             }
             if (copy_mode >= 2 && copy_mode <= 4) {
-                TT_ASSERT(
+                TT_FATAL(
                     transfer_size % (INNER_LOOP * sizeof(__m128)) == 0,
                     "Each copy to hugepage must be mod32==0 when using nt_memcpy");
             } else if (copy_mode >= 5 && copy_mode <= 7) {
-                TT_ASSERT(
+                TT_FATAL(
                     transfer_size % (INNER_LOOP * sizeof(__m256)) == 0,
                     "Each copy to hugepage must be mod64==0 when using nt_memcpy");
             }
@@ -249,7 +248,7 @@ int main(int argc, char** argv) {
 
         ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
-        TT_ASSERT(device_id == mmio_device_id, "This test can only be run on MMIO device!");
+        TT_FATAL(device_id == mmio_device_id, "This test can only be run on MMIO device!");
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
         void* host_hugepage_start =
@@ -359,29 +358,37 @@ int main(int argc, char** argv) {
                     }
 
                 } else if (copy_mode == 2) {
-                    TT_ASSERT(host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0);
+                    TT_FATAL(
+                        host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0,
+                        "Alignment requirement not met for copy_mode 2");
                     nt_memcpy_128b<true, true>(host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 3) {
-                    TT_ASSERT(host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0);
+                    TT_FATAL(
+                        host_write_ptr % 16 == 0 and data_written_bytes % 16 == 0,
+                        "Alignment requirement not met for copy_mode 3");
                     nt_memcpy_128b<false, true>(
                         host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 4) {
-                    TT_ASSERT(host_write_ptr % 16 == 0);
+                    TT_FATAL(host_write_ptr % 16 == 0, "Alignment requirement not met for copy_mode 4");
                     nt_memcpy_128b<false, false>(
                         host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 5) {
-                    TT_ASSERT(host_write_ptr % 32 == 0 and data_written_bytes % 32 == 0);
+                    TT_FATAL(
+                        host_write_ptr % 32 == 0 and data_written_bytes % 32 == 0,
+                        "Alignment requirement not met for copy_mode 5");
                     nt_memcpy_256b<true, true>(host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 6) {
-                    TT_ASSERT(host_write_ptr % 32 == 0 and data_written_bytes % 32 == 0);
+                    TT_FATAL(
+                        host_write_ptr % 32 == 0 and data_written_bytes % 32 == 0,
+                        "Alignment requirement not met for copy_mode 6");
                     nt_memcpy_256b<false, true>(
                         host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 7) {
-                    TT_ASSERT(host_write_ptr % 32 == 0);
+                    TT_FATAL(host_write_ptr % 32 == 0, "Alignment requirement not met for copy_mode 7");
                     nt_memcpy_256b<false, false>(
                         host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 } else if (copy_mode == 8) {
-                    TT_ASSERT(host_write_ptr % 16 == 0);
+                    TT_FATAL(host_write_ptr % 16 == 0, "Alignment requirement not met for copy_mode 8");
                     memcpy_to_device<true>(host_mem_ptr, (uint8_t*)(start_ptr + src_data_offset), write_size_bytes);
                 }
 
@@ -435,7 +442,7 @@ int main(int argc, char** argv) {
 
     if (pass) {
         // goal is 70% of PCI-e Gen3 x16 for grayskull
-        // TODO: check the theoritical peak of wormhole
+        // TODO: check the theoretical peak of wormhole
         double target_bandwidth = 16.0 * 0.7;
 
         if (avg_h2d_bandwidth < target_bandwidth) {

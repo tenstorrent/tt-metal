@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// Version: FFN1.3.0
 /**
  * @file cmdbuff_api.hpp
  * @brief Command Buffer API for Overlay Data Movement Operations
@@ -34,17 +35,17 @@
 
 /* Default transaction ID for both command buffers */
 constexpr uint32_t CMDBUF_DEF_TRID = 0;
-/* Static(starting) transcation ID for command buffer 0 */
+/* Static(starting) transaction ID for command buffer 0 */
 constexpr uint32_t CMDBUF_0_TRID_STATIC = 1;
-/* Start transcation ID for command buffer 0 when using TID wrapping */
+/* Start transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_0_TRID_START = 2;
-/* End transcation ID for command buffer 0 when using TID wrapping */
+/* End transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_0_TRID_END = 6;
-/* Static(starting) transcation ID for command buffer 0 */
+/* Static(starting) transaction ID for command buffer 0 */
 constexpr uint32_t CMDBUF_1_TRID_STATIC = 7;
-/* Start transcation ID for command buffer 0 when using TID wrapping */
+/* Start transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_1_TRID_START = 8;
-/* End transcation ID for command buffer 0 when using TID wrapping */
+/* End transaction ID for command buffer 0 when using TID wrapping */
 constexpr uint32_t CMDBUF_1_TRID_END = 12;
 
 /* Read request virtual channel - used by both command buffers */
@@ -66,7 +67,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def reset_cmdbuf_0()                                                                                           \
      * @def reset_cmdbuf_1()                                                                                           \
      *                                                                                                                 \
-     * @brief Defines an inline reset functions for reseting command buffers state                                     \
+     * @brief Defines an inline reset functions for resetting command buffers state                                    \
      * Should be called before any other command buffer setup functions.                                               \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
@@ -119,7 +120,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @param wr Indicates if the operation is a write (true) or read (false).                                         \
      * @param apply_scatter_to_dest Indicates if scatter list should be applied to the destination address.            \
      * @param mcast Enables multicast if true; default is false.                                                       \
-     * @param linked Enables linked transcation                                                                        \
+     * @param linked Enables linked transaction                                                                        \
      * @param mcast_exclude A `TT_ROCC_CMD_BUF_MCAST_EXCLUDE_reg_u` structure specifying which cores to exclude        \
      *                      from multicast. Defaults to no exclusions.                                                 \
      * @param scatter_list_contains_size Specifies if the scatter list includes size information.                      \
@@ -239,11 +240,11 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def setup_ongoing_cmdbuf_1                                                                                     \
      *                                                                                                                 \
      * @brief Function for configuring incrementing logic for command buffer                                           \
-     * Addresses, vcs and transcation ids can be configure to be self incrementing after each transactions             \
+     * Addresses, vcs and transaction ids can be configure to be self incrementing after each transactions             \
      *                                                                                                                 \
      * @param src_addr_inc_en If enabled source address will increment after issue                                     \
      * @param dest_addr_inc_en If enabled destination address will increment after issue                               \
-     * @param trid_inc_en If enabled transcation ID will increment after issue                                         \
+     * @param trid_inc_en If enabled transaction ID will increment after issue                                         \
      * @param req_vc_inc_en If enabled request VC will increment after issue                                           \
      * @param resp_vc_inc_en If enabled response VC will increment after issue                                         \
      * @param req_vc_inc_on_entire_trans Request VC increment on entire transaction                                    \
@@ -338,11 +339,11 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def setup_trids_static_cmdbuf_0                                                                                \
      * @def setup_trids_static_cmdbuf_1                                                                                \
      *                                                                                                                 \
-     * @brief Function for configuring transcation ID based on macros defined in this file                             \
-     * If wrapping feature for transaction ID is enabled, specifed ID is used as offset                                \
+     * @brief Function for configuring transaction ID based on macros defined in this file                             \
+     * If wrapping feature for transaction ID is enabled, specified ID is used as offset                               \
      *                                                                                                                 \
-     * @param trid_offset Transaction ID, if wrapping is enabled this serves as transcation ID offset                  \
-     * @param wrapping Enables wrapping feature for transcation IDs                                                    \
+     * @param trid_offset Transaction ID, if wrapping is enabled this serves as transaction ID offset                  \
+     * @param wrapping Enables wrapping feature for transaction IDs                                                    \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
@@ -431,7 +432,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      *                                                                                                                 \
      * @brief Function for configuring snoop and flush bit of transaction                                              \
      *                                                                                                                 \
-     * @param snoop_bit Enables destination NIU for cache snoop mechanims                                              \
+     * @param snoop_bit Enables destination NIU for cache snoop mechanisms                                             \
      * @param flush_bit Enables destination NIU to commit all parts of the flit before committing the next packet      \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
@@ -760,6 +761,437 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
         val.val = ~(1 << id);                                                                                          \
         CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
     }                                                                                                                  \
+    /* Per-TRID Count Zero Interrupts (IE_0[31:0], IP_0[31:0]) */                                                      \
+    inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_enable_##buf_name(int trid) {             \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
+        val |= (1ULL << trid);                                                                                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_disable_##buf_name(int trid) {            \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
+        val &= ~(1ULL << trid);                                                                                        \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_count_zero_get_interrupt_enable_##buf_name() {             \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_count_zero_set_interrupt_enable_##buf_name(uint32_t val) {     \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);               \
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_trid_count_zero_interrupts_pending_##buf_name() {               \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_count_zero_get_interrupt_pending_##buf_name() {            \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_count_zero_set_interrupt_pending_##buf_name(uint32_t val) {    \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);               \
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_count_zero_interrupt_clear_##buf_name(int trid) {              \
+        uint64_t val;                                                                                                  \
+        val = ~(1ULL << trid);                                                                                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-TRID Write Count Zero Interrupts (IE_0[63:32], IP_0[63:32]) */                                              \
+    inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_enable_##buf_name(int trid) {          \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
+        val |= (1ULL << (trid + 32));                                                                                  \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_disable_##buf_name(int trid) {         \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
+        val &= ~(1ULL << (trid + 32));                                                                                 \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_wr_count_zero_get_interrupt_enable_##buf_name() {          \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_count_zero_set_interrupt_enable_##buf_name(uint32_t val) {  \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET);               \
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(val & 0xFFFFFFFFULL) << 32);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_0_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_trid_wr_count_zero_interrupts_pending_##buf_name() {            \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_wr_count_zero_get_interrupt_pending_##buf_name() {         \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_count_zero_set_interrupt_pending_##buf_name(uint32_t val) { \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET);               \
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(val & 0xFFFFFFFFULL) << 32);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_count_zero_interrupt_clear_##buf_name(int trid) {           \
+        uint64_t val;                                                                                                  \
+        val = ~(1ULL << (trid + 32));                                                                                  \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_0_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-TRID iDMA Count Zero Interrupts (IE_1[31:0], IP_1[31:0]) */                                                 \
+    inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_enable_##buf_name(int trid) {        \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
+        val |= (1ULL << trid);                                                                                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_disable_##buf_name(int trid) {       \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
+        val &= ~(1ULL << trid);                                                                                        \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_idma_count_zero_get_interrupt_enable_##buf_name() {        \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline                                                                                                             \
+        __attribute__((always_inline)) void per_trid_idma_count_zero_set_interrupt_enable_##buf_name(uint32_t val) {   \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);               \
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_trid_idma_count_zero_interrupts_pending_##buf_name() {          \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL;                                                                                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_idma_count_zero_get_interrupt_pending_##buf_name() {       \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline                                                                                                             \
+        __attribute__((always_inline)) void per_trid_idma_count_zero_set_interrupt_pending_##buf_name(uint32_t val) {  \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);               \
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_idma_count_zero_interrupt_clear_##buf_name(int trid) {         \
+        uint64_t val;                                                                                                  \
+        val = ~(1ULL << trid);                                                                                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-TRID Tiles-to-Process TR_ACK Threshold Interrupts (IE_1[63:32], IP_1[63:32]) */                             \
+    inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_enable_##buf_name(int trid) {       \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
+        val |= (1ULL << (trid + 32));                                                                                  \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_disable_##buf_name(int trid) {      \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
+        val &= ~(1ULL << (trid + 32));                                                                                 \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_tiles_to_process_get_interrupt_enable_##buf_name() {       \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline                                                                                                             \
+        __attribute__((always_inline)) void per_trid_tiles_to_process_set_interrupt_enable_##buf_name(uint32_t val) {  \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);               \
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(val & 0xFFFFFFFFULL) << 32);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_trid_tiles_to_process_interrupts_pending_##buf_name() {         \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL;                                                                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_tiles_to_process_get_interrupt_pending_##buf_name() {      \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline                                                                                                             \
+        __attribute__((always_inline)) void per_trid_tiles_to_process_set_interrupt_pending_##buf_name(uint32_t val) { \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET);               \
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(val & 0xFFFFFFFFULL) << 32);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_tiles_to_process_interrupt_clear_##buf_name(int trid) {        \
+        uint64_t val;                                                                                                  \
+        val = ~(1ULL << (trid + 32));                                                                                  \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-TRID Write Tiles-to-Process WR_SENT Threshold Interrupts (IE_2[31:0], IP_2[31:0]) */                        \
+    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_enable_##buf_name(int trid) {    \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
+        val |= (1ULL << trid);                                                                                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_disable_##buf_name(int trid) {   \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
+        val &= ~(1ULL << trid);                                                                                        \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_wr_tiles_to_process_get_interrupt_enable_##buf_name() {    \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_set_interrupt_enable_##buf_name(           \
+        uint32_t val) {                                                                                                \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);               \
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_trid_wr_tiles_to_process_interrupts_pending_##buf_name() {      \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL;                                                                                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_wr_tiles_to_process_get_interrupt_pending_##buf_name() {   \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
+        return val & 0xFFFFFFFFULL; /* Lower 32 bits */                                                                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_set_interrupt_pending_##buf_name(          \
+        uint32_t val) {                                                                                                \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);               \
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (val & 0xFFFFFFFFULL);                                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_wr_tiles_to_process_interrupt_clear_##buf_name(int trid) {     \
+        uint64_t val;                                                                                                  \
+        val = ~(1ULL << trid);                                                                                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-TRID iDMA Tiles-to-Process IDMA_TR_ACK Threshold Interrupts (IE_2[63:32], IP_2[63:32]) */                   \
+    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_enable_##buf_name(int trid) {  \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
+        val |= (1ULL << (trid + 32));                                                                                  \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_disable_##buf_name(int trid) { \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
+        val &= ~(1ULL << (trid + 32));                                                                                 \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_idma_tiles_to_process_get_interrupt_enable_##buf_name() {  \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_set_interrupt_enable_##buf_name(         \
+        uint32_t val) {                                                                                                \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);               \
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(val & 0xFFFFFFFFULL) << 32);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_trid_idma_tiles_to_process_interrupts_pending_##buf_name() {    \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL;                                                                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint32_t per_trid_idma_tiles_to_process_get_interrupt_pending_##buf_name() { \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);                   \
+        return (val >> 32) & 0xFFFFFFFFULL; /* Upper 32 bits */                                                        \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_set_interrupt_pending_##buf_name(        \
+        uint32_t val) {                                                                                                \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET);               \
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(val & 0xFFFFFFFFULL) << 32);                         \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, reg_val);                \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_trid_idma_tiles_to_process_interrupt_clear_##buf_name(int trid) {   \
+        uint64_t val;                                                                                                  \
+        val = ~(1ULL << (trid + 32));                                                                                  \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET, val);                    \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-VC Has Space Interrupts (IE[47:32], IP[47:32]) */                                                           \
+    inline __attribute__((always_inline)) void per_vc_has_space_interrupt_enable_##buf_name(int vc) {                  \
+        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
+        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
+        val.val |= (1ULL << (vc + 32));                                                                                \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_vc_has_space_interrupt_disable_##buf_name(int vc) {                 \
+        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
+        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
+        val.val &= ~(1ULL << (vc + 32));                                                                               \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint16_t per_vc_has_space_get_interrupt_enable_##buf_name() {                \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                               \
+        return (val >> 32) & 0xFFFFULL; /* Bits [47:32] */                                                             \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_vc_has_space_set_interrupt_enable_##buf_name(uint16_t val) {        \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
+        reg_val = (reg_val & 0xFFFF0000FFFFFFFFULL) | (((uint64_t)(val & 0xFFFFULL)) << 32);                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, reg_val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_vc_has_space_interrupts_pending_##buf_name() {                  \
+        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
+        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
+        return (val.val >> 32) & 0xFFFFULL; /* Bits [47:32] shifted to [15:0] */                                       \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint16_t per_vc_has_space_get_interrupt_pending_##buf_name() {               \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                               \
+        return (val >> 32) & 0xFFFFULL; /* Bits [47:32] */                                                             \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_vc_has_space_set_interrupt_pending_##buf_name(uint16_t val) {       \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
+        reg_val = (reg_val & 0xFFFF0000FFFFFFFFULL) | (((uint64_t)(val & 0xFFFFULL)) << 32);                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, reg_val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_vc_has_space_interrupt_clear_##buf_name(int vc) {                   \
+        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
+        val.val = ~(1ULL << (vc + 32));                                                                                \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    /* Per-iDMA-VC Has Space Interrupts (IE[63:48], IP[63:48]) */                                                      \
+    inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_enable_##buf_name(int vc) {             \
+        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
+        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
+        val.val |= (1ULL << (vc + 48));                                                                                \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_disable_##buf_name(int vc) {            \
+        TT_ROCC_CMD_BUF_IE_reg_u val;                                                                                  \
+        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
+        val.val &= ~(1ULL << (vc + 48));                                                                               \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, val.val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint16_t per_idma_vc_has_space_get_interrupt_enable_##buf_name() {           \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                               \
+        return (val >> 48) & 0xFFFFULL; /* Bits [63:48] */                                                             \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_idma_vc_has_space_set_interrupt_enable_##buf_name(uint16_t val) {   \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET);                           \
+        reg_val = (reg_val & 0x0000FFFFFFFFFFFFULL) | (((uint64_t)(val & 0xFFFFULL)) << 48);                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IE_REG_OFFSET, reg_val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint64_t per_idma_vc_has_space_interrupts_pending_##buf_name() {             \
+        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
+        val.val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
+        return (val.val >> 48) & 0xFFFFULL; /* Bits [63:48] shifted to [15:0] */                                       \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) uint16_t per_idma_vc_has_space_get_interrupt_pending_##buf_name() {          \
+        uint64_t val;                                                                                                  \
+        val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                               \
+        return (val >> 48) & 0xFFFFULL; /* Bits [63:48] */                                                             \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_idma_vc_has_space_set_interrupt_pending_##buf_name(uint16_t val) {  \
+        uint64_t reg_val;                                                                                              \
+        reg_val = CMDBUF_RD_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET);                           \
+        reg_val = (reg_val & 0x0000FFFFFFFFFFFFULL) | (((uint64_t)(val & 0xFFFFULL)) << 48);                           \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, reg_val);                            \
+    }                                                                                                                  \
+                                                                                                                       \
+    inline __attribute__((always_inline)) void per_idma_vc_has_space_interrupt_clear_##buf_name(int vc) {              \
+        TT_ROCC_CMD_BUF_IP_reg_u val;                                                                                  \
+        val.val = ~(1ULL << (vc + 48));                                                                                \
+        CMDBUF_WR_REG(cmdbuf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_IP_REG_OFFSET, val.val);                            \
+    }                                                                                                                  \
                                                                                                                        \
     /*                                                                                                                 \
      * @def noc_fast_read_cmdbuf_0                                                                                     \
@@ -1038,7 +1470,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @brief Checks if transaction with argument trid is completed                                                    \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
-     * @return True if all transcation is complected                                                                   \
+     * @return True if all transaction is complected                                                                   \
      *                                                                                                                 \
      * @note This macro creates 2 inline functions, 1 per each cmd buffer                                              \
      */                                                                                                                \
@@ -1084,7 +1516,7 @@ constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
      * @def noc_writes_sent_cmdbuf_0                                                                                   \
      * @def noc_writes_sent_cmdbuf_1                                                                                   \
      *                                                                                                                 \
-     * @brief Checks if write with provided transcation ID is completed                                                \
+     * @brief Checks if write with provided transaction ID is completed                                                \
      *                                                                                                                 \
      * @param transaction_id Transaction id to check                                                                   \
      * @return True if write is complected                                                                             \
@@ -1192,7 +1624,7 @@ DEFINE_CMD_BUFS(cmdbuf_1, CMDBUF_1)
 
 //////////////////////
 /// Simple CMD Buf ///
-// Bellow are all the functions for simple command buffer. This third command buffer,
+// Below are all the functions for simple command buffer. This third command buffer,
 //
 //////////////////////
 

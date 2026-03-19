@@ -195,7 +195,7 @@ class CMakeBuild(build_ext):
     def get_build_env():
         return {
             **os.environ.copy(),
-            "CXX": "clang++-17",
+            "CXX": "clang++-20",
         }
 
     @staticmethod
@@ -265,6 +265,14 @@ class CMakeBuild(build_ext):
                         ]
                     )
 
+                # Add LTO flags if enabled
+                if os.environ.get("CIBW_ENABLE_LTO") == "ON":
+                    cmake_args.extend(
+                        [
+                            "-DTT_ENABLE_LTO=ON",
+                        ]
+                    )
+
                 cmake_args.extend(["-S", source_dir])
 
                 subprocess.check_call(cmake_args)
@@ -324,7 +332,7 @@ class CMakeBuild(build_ext):
             "api/ttnn/tensor/enum_types.hpp",
         ]
         ttnn_cpp_patterns = [
-            "ttnn/deprecated/**/kernels/**/*",
+            "ttnn/kernel/**/*",
             "ttnn/operations/**/kernels/**/*",
             "ttnn/operations/**/kernels_ng/**/*",
             "ttnn/operations/kernel_helper_functions/*",
@@ -332,6 +340,7 @@ class CMakeBuild(build_ext):
             "ttnn/operations/data_movement/**/*",
             "ttnn/operations/moreh/**/*",
             "ttnn/kernel/*",
+            "ttnn/kernel_lib/*",
             "ttnn/operations/normalization/kernel_util/**/*",
         ]
         tt_metal_patterns = [
@@ -357,6 +366,8 @@ class CMakeBuild(build_ext):
             "third_party/tt_llk/**/*",
             "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
+            "sfpi-version",
+            "pre-compiled/**/*",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)
         copy_tree_with_patterns(build_dir, self.build_lib + "/ttnn/build/lib", ["sfpi-version.json"])

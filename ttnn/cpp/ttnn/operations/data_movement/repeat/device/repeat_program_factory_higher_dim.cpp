@@ -9,7 +9,6 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/core.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -20,12 +19,10 @@
 
 #include "ttnn/operations/data_movement/repeat/device/repeat_program_factory_higher_dim.hpp"
 
-namespace ttnn::operations::data_movement::repeat::program {
+namespace ttnn::prim {
 
 RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const uint32_t num_repeats = operation_attributes.m_num_repeats;
@@ -81,7 +78,7 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     uint32_t done = 0;
-    // Determine runtime argumens
+    // Determine runtime arguments
     bool divide_on_higher = number_of_higher_pages > number_of_lower_pages;
 
     uint32_t responsibility_chunk =
@@ -142,9 +139,9 @@ RepeatProgramFactoryHigherDim::cached_program_t RepeatProgramFactoryHigherDim::c
 
 void RepeatProgramFactoryHigherDim::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const RepeatParams& /*operation_attributes*/,
+    const RepeatInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& shared_vars = cached_program.shared_variables;
 
@@ -162,4 +159,4 @@ void RepeatProgramFactoryHigherDim::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::data_movement::repeat::program
+}  // namespace ttnn::prim

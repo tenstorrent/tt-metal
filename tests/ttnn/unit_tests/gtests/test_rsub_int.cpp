@@ -15,7 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -32,7 +32,8 @@ struct RsubUnaryParam {
     uint32_t w;
 };
 
-class RsubUnaryFixture : public TTNNFixtureWithDevice, public testing::WithParamInterface<RsubUnaryParam> {};
+class RsubUnaryFixture : public TTNNFixtureWithSuiteDevice<RsubUnaryFixture>,
+                         public testing::WithParamInterface<RsubUnaryParam> {};
 
 TEST_P(RsubUnaryFixture, CompareWithTorchReference) {
     auto param = GetParam();

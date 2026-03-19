@@ -7,12 +7,11 @@
 #include <cstdlib>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <cstdint>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "eth_test_common.hpp"
 #include "mesh_dispatch_fixture.hpp"
@@ -154,7 +153,7 @@ static void run_multi_txq_rxq_test(
     }
 
     // Verify we found a connection
-    TT_ASSERT(
+    TT_FATAL(
         sender_core_0.has_value() && receiver_core_0.has_value(),
         "No ethernet connection found between device_0 and device_1");
 

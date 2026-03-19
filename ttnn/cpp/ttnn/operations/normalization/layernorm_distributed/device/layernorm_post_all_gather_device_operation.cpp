@@ -3,15 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_post_all_gather_device_operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/constants.hpp>
-
 using namespace tt::tt_metal;
-using namespace tt::constants;
 
-namespace ttnn::operations::normalization {
+namespace ttnn::prim {
 
 LayerNormPostAllGatherDeviceOperation::program_factory_t LayerNormPostAllGatherDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
@@ -19,17 +17,12 @@ LayerNormPostAllGatherDeviceOperation::program_factory_t LayerNormPostAllGatherD
     if (std::holds_alternative<LayerNormDefaultProgramConfig>(args.program_config)) {
         const auto& program_config = std::get<LayerNormDefaultProgramConfig>(args.program_config);
         if (program_config.use_welford) {
-            return program::LayerNormPostAllGatherWelfordProgramFactory{};
+            return LayerNormPostAllGatherWelfordProgramFactory{};
         }
     }
 
     // Default to normal program factory
-    return program::LayerNormPostAllGatherProgramFactory{};
-}
-
-void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
+    return LayerNormPostAllGatherProgramFactory{};
 }
 
 void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
@@ -38,6 +31,8 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& stats = tensor_args.stats;
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
 
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
     TT_FATAL(
@@ -57,8 +52,9 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // stats has 2 or 1 tile columns per device if layernorm or rmsnorm
     TT_FATAL(
-        stats.padded_shape()[-1] % TILE_WIDTH == 0,
-        "Stats inner dimension must be divisible by TILE_WIDTH (32), got: {}",
+        stats.padded_shape()[-1] % tile_width == 0,
+        "Stats inner dimension must be divisible by tile_width ({}), got: {}",
+        tile_width,
         stats.padded_shape()[-1]);
     TT_FATAL(
         stats.padded_shape()[0] == a.padded_shape()[0],
@@ -89,8 +85,9 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma_tensor.device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
-                gamma_tensor.padded_shape()[-2] == TILE_HEIGHT,
-                "Gamma tensor height must be TILE_HEIGHT (32), got: {}",
+                gamma_tensor.padded_shape()[-2] == tile_height,
+                "Gamma tensor height must equal tile height ({}), got: {}",
+                tile_height,
                 gamma_tensor.padded_shape()[-2]);
         } else {
             TT_FATAL(
@@ -98,14 +95,14 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor must have ROW_MAJOR layout, got: {}",
                 gamma_tensor.layout());
             TT_FATAL(
-                (gamma_tensor.padded_shape()[-1] == TILE_WIDTH &&
-                 gamma_tensor.physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                (gamma_tensor.padded_shape()[-1] == tile_width &&
+                 gamma_tensor.physical_volume() / tile_width == a.padded_shape()[-1] / tile_width),
                 "Gamma tensor dimensions must align with input tensor. Got gamma padded shape: {}, physical volume: "
-                "{}, input padded shape: {}, TILE_WIDTH: {}",
+                "{}, input padded shape: {}, tile_width: {}",
                 gamma_tensor.padded_shape()[-1],
                 gamma_tensor.physical_volume(),
                 a.padded_shape()[-1],
-                TILE_WIDTH);
+                tile_width);
             TT_FATAL(
                 gamma_tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma_tensor.device(), "Input and gamma tensors must be on same device");
@@ -131,8 +128,9 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                     "Operands to layernorm need to be allocated in buffers on device!");
                 TT_FATAL(a.device() == beta_tensor.device(), "Input and beta tensors must be on same device");
                 TT_FATAL(
-                    beta_tensor.padded_shape()[-2] == TILE_HEIGHT,
-                    "Beta tensor height must be TILE_HEIGHT (32), got: {}",
+                    beta_tensor.padded_shape()[-2] == tile_height,
+                    "Beta tensor height must equal tile height ({}), got: {}",
+                    tile_height,
                     beta_tensor.padded_shape()[-2]);
             } else {
                 TT_FATAL(
@@ -140,14 +138,14 @@ void LayerNormPostAllGatherDeviceOperation::validate_on_program_cache_miss(
                     "Beta tensor must have ROW_MAJOR layout, got: {}",
                     beta_tensor.layout());
                 TT_FATAL(
-                    (beta_tensor.padded_shape()[-1] == TILE_WIDTH &&
-                     beta_tensor.physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
+                    (beta_tensor.padded_shape()[-1] == tile_width &&
+                     beta_tensor.physical_volume() / tile_width == a.padded_shape()[-1] / tile_width),
                     "Beta tensor dimensions must align with input tensor. Got beta padded shape: {}, physical volume: "
-                    "{}, input padded shape: {}, TILE_WIDTH: {}",
+                    "{}, input padded shape: {}, tile_width: {}",
                     beta_tensor.padded_shape()[-1],
                     beta_tensor.physical_volume(),
                     a.padded_shape()[-1],
-                    TILE_WIDTH);
+                    tile_width);
                 TT_FATAL(
                     beta_tensor.buffer() != nullptr,
                     "Operands to layernorm need to be allocated in buffers on device!");
@@ -183,14 +181,14 @@ LayerNormPostAllGatherDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn::prim
 
 namespace ttnn::prim {
 
 Tensor layer_norm_post_all_gather(
     const Tensor& input,
     const Tensor& stats,
-    ttnn::operations::normalization::LayerNormDistributedType norm_type,
+    LayerNormDistributedType norm_type,
     float eps,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -198,8 +196,8 @@ Tensor layer_norm_post_all_gather(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config) {
-    using OperationType = ttnn::operations::normalization::LayerNormPostAllGatherDeviceOperation;
+    const LayerNormProgramConfig& program_config) {
+    using OperationType = LayerNormPostAllGatherDeviceOperation;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,

@@ -38,6 +38,11 @@ on:
         default: "*"
         type: string
         description: "Filter for gtest"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
 
 jobs:
   models:
@@ -53,8 +58,7 @@ jobs:
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'N300') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        ((inputs.runner-label == 'N300') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
@@ -77,6 +81,7 @@ jobs:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           path: docker-job
       - name: ⬇️  Setup Job

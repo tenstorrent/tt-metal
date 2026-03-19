@@ -51,7 +51,11 @@ std::vector<std::vector<T>> move_act_dram_to_l1(tt::deprecated::Tensor<T>& input
                     for (int z = 0; z < in_shape[3]; z++) {
                         auto idx = z + x_new * in_shape[3] + y_new * in_shape[3] * in_shape[2] +
                                    w * in_shape[3] * in_shape[2] * in_shape[1];
-                        assert(idx >= 0 and idx < input_values.size());
+                        TT_FATAL(
+                            idx >= 0 and idx < input_values.size(),
+                            "Index {} out of bounds for input_values of size {}",
+                            idx,
+                            input_values.size());
                         row.push_back(input_values[idx]);
                     }
                 }
@@ -68,10 +72,10 @@ std::vector<T> move_act_dram_to_l1_tilized(
     tt::deprecated::Tensor<T>& input_nhwc, uint32_t dram_read_size_bytes, std::vector<uint32_t> address_map) {
     const auto& input_nhwc_values = input_nhwc.get_values();
     std::vector<T> l1_tilized_act;
-    assert(dram_read_size_bytes % sizeof(T) == 0);
+    TT_FATAL(dram_read_size_bytes % sizeof(T) == 0, "dram_read_size_bytes must be divisible by sizeof(T)");
     uint32_t dram_read_size = dram_read_size_bytes / sizeof(T);
     for (int i = 0; i < address_map.size(); i++) {
-        assert(address_map[i] % sizeof(T) == 0);
+        TT_FATAL(address_map[i] % sizeof(T) == 0, "address_map[{}] must be divisible by sizeof(T)", i);
         std::uint32_t dram_address = address_map[i] / sizeof(T);
         for (uint32_t j = 0; j < dram_read_size; j++) {
             l1_tilized_act.push_back(input_nhwc_values[dram_address + j]);
@@ -98,7 +102,11 @@ std::vector<T> untilize_act(std::vector<T> tilized_act, std::uint32_t output_row
                             // major order within the tile
                             uint32_t index = c * TILE_HEIGHT * TILE_WIDTH * num_tiles_r + r * TILE_WIDTH * TILE_HEIGHT +
                                              fi * 16 * 16 * 2 + fj * 16 * 16 + i * 16 + j;
-                            assert(index < tilized_act.size());
+                            TT_FATAL(
+                                index < tilized_act.size(),
+                                "Index {} out of bounds for tilized_act of size {}",
+                                index,
+                                tilized_act.size());
                             untilized_act.push_back(tilized_act.at(index));
                         }
                     }
@@ -161,7 +169,8 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
                         for (auto j = 0; j < 16; j++) {
                             uint32_t index = r * TILE_HEIGHT * TILE_WIDTH * num_tiles_c + c * TILE_HEIGHT * TILE_WIDTH +
                                              fi * 16 * 16 * 2 + fj * 16 * 16 + i * 16 + j;
-                            assert(index < data.size());
+                            TT_FATAL(
+                                index < data.size(), "Index {} out of bounds for data of size {}", index, data.size());
                             result.push_back(data.at(index));
                         }
                     }
@@ -297,8 +306,10 @@ std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addre
 
     std::uint32_t output_rows = (((H - R) / U) + 1) * (((W - S) / V) + 1);
     std::uint32_t output_cols = R * S * C;
-    assert(output_rows % TILE_HEIGHT == 0);
-    assert(output_cols % TILE_WIDTH == 0);
+    TT_FATAL(
+        output_rows % TILE_HEIGHT == 0, "output_rows {} must be divisible by TILE_HEIGHT {}", output_rows, TILE_HEIGHT);
+    TT_FATAL(
+        output_cols % TILE_WIDTH == 0, "output_cols {} must be divisible by TILE_WIDTH {}", output_cols, TILE_WIDTH);
     std::uint32_t num_tiles_rows = output_rows / TILE_HEIGHT;
     std::uint32_t num_tiles_cols = output_cols / TILE_WIDTH;
     std::map<uint32_t, std::vector<std::vector<uint32_t>>> tiles_address_map;
@@ -322,7 +333,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addre
                                 uint32_t face_row_index = (out_row_index % TILE_HEIGHT) / 16;
                                 uint32_t face_col_index = (out_col_index % TILE_WIDTH) / 16;
                                 uint32_t face_index = face_col_index + face_row_index * 2;
-                                assert(face_index < 4);
+                                TT_FATAL(face_index < 4, "face_index {} must be less than 4", face_index);
                                 if (tiles_address_map.find(tile_index) == tiles_address_map.end()) {
                                     std::vector<std::vector<uint32_t>> faces(4, std::vector<uint32_t>());
                                     tiles_address_map[tile_index] = faces;
@@ -345,9 +356,9 @@ std::tuple<uint32_t, uint32_t, uint32_t, std::vector<uint32_t>> gen_source_addre
     uint32_t num_addresses_per_tile = 64;  // one address per row of face. There are 4 16x16 faces in tile.
     for (auto const& t : tiles_address_map) {
         num_tiles++;
-        assert(t.second.size() == 4);
+        TT_FATAL(t.second.size() == 4, "Expected 4 faces per tile, got {}", t.second.size());
         for (auto& v : t.second) {
-            assert(v.size() == 16);
+            TT_FATAL(v.size() == 16, "Expected 16 addresses per face, got {}", v.size());
             for (auto& a : v) {
                 address_map.push_back(a);
             }

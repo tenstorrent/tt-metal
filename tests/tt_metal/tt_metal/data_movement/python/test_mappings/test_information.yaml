@@ -1,6 +1,38 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Data Movement Test Information
+#
+# This file contains metadata for all data movement tests including:
+# - name: Human-readable test name
+# - comment: (optional) Additional notes about test behavior and performance
+#
+# Required fields for packet sizes tests:
+#   - memory_type: Memory type being accessed
+#       Values: "l1" | "dram"
+#   - mechanism: How data is transmitted over NOC
+#       Values: "unicast" | "multicast"
+#   - pattern: Communication pattern between cores
+#       Values: "one_to_one" | "one_from_one" | "one_to_all" | "one_from_all" | "all_to_all" | "all_from_all"
+#
+# Bandwidth calculation mode:
+#   - bandwidth_mode: How bandwidth is calculated and reported
+#       Values: "per_core" (default) | "combined"
+#       - "per_core": Reports median/average bandwidth per individual core
+#       - "combined": Reports aggregate bandwidth across all cores
+#           combined_bandwidth = total_bytes / wall_clock_time
+#           where wall_clock_time = max(duration) across all cores
+#           Use this for multi-core DRAM tests where cores are synchronized
+#
+# These metadata fields are automatically injected into CSV files when using the --report flag.
+
 tests:
   0:
     name: "DRAM Packet Sizes"
+    memory_type: "dram"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   1:
     name: "DRAM Core Locations"
@@ -20,39 +52,75 @@ tests:
 
   4:
     name: "One to One Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_one"
 
   5:
     name: "One from One Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "one_from_one"
 
   6:
     name: "One to All Unicast 2x2 Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
 
   7:
     name: "One to All Unicast 5x5 Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
 
   8:
     name: "One to All Unicast Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "one_to_all"
 
   9:
     name: "One to All Multicast 2x2 Packet Sizes"
+    memory_type: "l1"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   10:
     name: "One to All Multicast 5x5 Packet Sizes"
+    memory_type: "l1"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   11:
     name: "One to All Multicast Packet Sizes"
+    memory_type: "l1"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
+    memory_type: "l1"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   13:
     name: "One to All Multicast Linked 5x5 Packet Sizes"
+    memory_type: "l1"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   14:
     name: "One to All Multicast Linked Packet Sizes"
+    memory_type: "l1"
+    mechanism: "multicast"
+    pattern: "one_to_all"
 
   15:
     name: "One from All Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "one_from_all"
 
   16:
     name: "Loopback Packet Sizes"
@@ -116,6 +184,30 @@ tests:
       transactions and the transaction size, but with extra degradation due to needing to read
       parameters from L1.
 
+  24:
+    name: "One to All Multicast Linked Semaphore 2x2 Packet Sizes"
+    comment: |
+      Unlike other One to All tests, we measure performance using the receiver cores.
+      This is because we no longer use write barriers to wait for all cores to finish writing.
+      Instead we use semaphores to wait for the receiver cores to finish receiving the data.
+      Transaction size limit is also extended to observe the saturation bandwidth.
+
+  25:
+    name: "One to All Multicast Linked Semaphore 5x5 Packet Sizes"
+    comment: |
+      Unlike other One to All tests, we measure performance using the receiver cores.
+      This is because we no longer use write barriers to wait for all cores to finish writing.
+      Instead we use semaphores to wait for the receiver cores to finish receiving the data.
+      Transaction size limit is also extended to observe the saturation bandwidth.
+
+  26:
+    name: "One to All Multicast Linked Semaphore Packet Sizes"
+    comment: |
+      Unlike other One to All tests, we measure performance using the receiver cores.
+      This is because we no longer use write barriers to wait for all cores to finish writing.
+      Instead we use semaphores to wait for the receiver cores to finish receiving the data.
+      Transaction size limit is also extended to observe the saturation bandwidth.
+
   30:
     name: "One from All Directed Ideal"
 
@@ -139,6 +231,9 @@ tests:
 
   55:
     name: "Loopback Directed Ideal"
+
+  56:
+    name: "One to All Multicast Linked Semaphore Directed Ideal"
 
   61:
     name: "DRAM Interleaved Page Numbers"
@@ -217,57 +312,78 @@ tests:
 
   110:
     name: "Multi Interleaved Directed Ideal"
+    bandwidth_mode: "combined"
 
   111:
     name: "Multi Interleaved Sizes"
+    bandwidth_mode: "combined"
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   113:
     name: "Multi Interleaved Read Sizes"
+    memory_type: "dram"
+    mechanism: "unicast"
+    pattern: "one_from_one"
+    bandwidth_mode: "combined"
 
   114:
     name: "Multi Interleaved Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   115:
     name: "Multi Interleaved Write Sizes"
+    bandwidth_mode: "combined"
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
+    bandwidth_mode: "combined"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
+    bandwidth_mode: "combined"
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
+    bandwidth_mode: "combined"
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
+    bandwidth_mode: "combined"
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
+    bandwidth_mode: "combined"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
+    bandwidth_mode: "combined"
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
+    bandwidth_mode: "combined"
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
+    bandwidth_mode: "combined"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -319,6 +435,12 @@ tests:
 
   157:
     name: "One from All Custom"
+
+  158:
+    name: "One to One Packet Sizes 2.0"
+
+  159:
+    name: "One from One Packet Sizes 2.0"
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
@@ -373,6 +495,9 @@ tests:
 
   301:
     name: "All to All Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_to_all"
 
   302:
     name: "All to All 2x2 To 1x1 Directed Ideal"
@@ -400,6 +525,9 @@ tests:
 
   311:
     name: "All from All Packet Sizes"
+    memory_type: "l1"
+    mechanism: "unicast"
+    pattern: "all_from_all"
 
   312:
     name: "All from All 2x2 From 1x1 Directed Ideal"
@@ -427,6 +555,30 @@ tests:
 
   320:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
+  321:
+    name: "Single source Multicast Atomic Increment"
+
+  322:
+    name: "Multi source Multicast Atomic Increment"
+
+  323:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  324:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
+  325:
+    name: "Multicast Atomic Larger Increment"
+
+  326:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
+  327:
+    name: "Single source Multicast Atomic Increment 2.0 API"
+
+  328:
+    name: "Multicast Atomic Larger Increment 2.0 API"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
@@ -486,6 +638,14 @@ tests:
     comment: |
       Evaluates the performance impact of stateful versus stateless approaches under scenarios
       involving both identical and differing values and destinations.
+
+  503:
+    name: "Number of Pages Sweep for DRAM Closest Neighbour"
+    bandwidth_mode: "combined"
+
+  505:
+    name: "Number of Pages Sweep for Single Row DRAM"
+    bandwidth_mode: "combined"
 
   600:
     name: "Transaction ID - Read After Write"
@@ -573,3 +733,61 @@ tests:
       covering all compute cores in the device.
       Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
       Because of this, for larger number of transactions, the noc api latency is increasing.
+
+  800:
+    name: "Noc Estimator - L1 One to One"
+
+  801:
+    name: "Noc Estimator - L1 One from One"
+
+  802:
+    name: "Noc Estimator - L1 One to All"
+
+  803:
+    name: "Noc Estimator - L1 One from All"
+
+  804:
+    name: "Noc Estimator - L1 All to All"
+
+  805:
+    name: "Noc Estimator - L1 All from All"
+
+  806:
+    name: "Noc Estimator - L1 One to Row"
+
+  807:
+    name: "Noc Estimator - L1 Row to Row"
+
+  808:
+    name: "Noc Estimator - L1 One to Column"
+
+  809:
+    name: "Noc Estimator - L1 Column to Column"
+
+  810:
+    name: "Noc Estimator - DRAM Sharded One from One"
+
+  811:
+    name: "Noc Estimator - DRAM Sharded All from All"
+    bandwidth_mode: "combined"
+
+  812:
+    name: "Noc Estimator - DRAM Interleaved One from All"
+
+  813:
+    name: "Noc Estimator - DRAM Interleaved All from All"
+    bandwidth_mode: "combined"
+
+  814:
+    name: "Noc Estimator - DRAM Sharded One to One"
+
+  815:
+    name: "Noc Estimator - DRAM Sharded All to All"
+    bandwidth_mode: "combined"
+
+  816:
+    name: "Noc Estimator - DRAM Interleaved One to All"
+
+  817:
+    name: "Noc Estimator - DRAM Interleaved All to All"
+    bandwidth_mode: "combined"

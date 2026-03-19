@@ -15,6 +15,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -25,12 +26,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
@@ -39,6 +39,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -57,6 +58,7 @@ enum watcher_features_t {
     SanitizeL1Overflow,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
+    SanitizeNOCMulticastInvalidRange,
 };
 
 tt::tt_metal::HalMemType get_buffer_mem_type_for_test(watcher_features_t feature) {
@@ -97,12 +99,23 @@ void RunTestOnCore(
     CoreCoord& core,
     bool is_eth_core,
     watcher_features_t feature,
-    bool use_ncrisc = false) {
-    // It's not simple to check the watcher server status from the finish loop for slow dispatch, so just run these
-    // tests in FD.
-    if (fixture->IsSlowDispatch()) {
-        GTEST_SKIP();
+    bool use_ncrisc = false,
+    bool is_idle_eth_core = false,
+    bool multi_dm_race = false) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+
+    // IDLE_ETH cores only support SD (FD not yet implemented)
+    // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
+    if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
+        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
     }
+    if (multi_dm_race && !is_quasar) {
+        GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
+    }
+
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
+    uint32_t dm_id = use_ncrisc ? 1 : 0;
 
     // Set up program
     distributed::MeshWorkload workload;
@@ -167,26 +180,44 @@ void RunTestOnCore(
     KernelHandle dram_copy_kernel;
     int noc = 0;
     if (is_eth_core) {
-        std::map<std::string, std::string> dram_copy_kernel_defines = {
-            {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
-        };
-        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .defines = dram_copy_kernel_defines};
+        tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
+        if (is_idle_eth_core) {
+            config.eth_mode = Eth::IDLE;
+        }
         eth_test_common::set_arch_specific_eth_config(config);
         noc = static_cast<int>(config.noc);
-        dram_copy_kernel = tt_metal::CreateKernel(
-            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
+        dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
     } else {
-        std::map<std::string, std::string> dram_copy_kernel_defines = {
-            {"SIGNAL_COMPLETION_TO_DISPATCHER", "1"},
-        };
-        tt_metal::DataMovementConfig config{
-            .processor =
-                (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default,
-            .defines = dram_copy_kernel_defines};
-        dram_copy_kernel = tt_metal::CreateKernel(
-            program_, "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp", core, config);
-        noc = static_cast<int>(config.noc);
+        if (is_quasar) {
+            // Quasar: all DMs run kernel; multi_dm_race syncs them to race, else only dm_id executes
+            uint32_t num_dms =
+                MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig config{.num_threads_per_cluster = num_dms};
+            if (multi_dm_race) {
+                constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
+                constexpr uint32_t multi_dm_base_size = 0x1000;
+                // Allocate dedicated L1 region for the DM barrier counter (avoid overlap with scratch buffer)
+                distributed::ReplicatedBufferConfig sync_cfg{.size = 32};
+                distributed::DeviceLocalBufferConfig sync_lcl{
+                    .page_size = 32, .buffer_type = tt::tt_metal::BufferType::L1};
+                auto sync_buf = distributed::MeshBuffer::create(sync_cfg, sync_lcl, mesh_device.get());
+                uint32_t l1_sync_addr = sync_buf->address();
+                std::vector<uint32_t> init{0, 0};  // 8 bytes: Quasar barrier uses 64-bit atomics
+                tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_sync_addr, init);
+                config.compile_args = {num_dms, multi_dm_base_addr, multi_dm_base_size, l1_sync_addr};
+                config.defines = {{"TEST_MULTI_DM_SANITIZE_RACE", "1"}};
+            } else {
+                config.compile_args = {dm_id};
+            }
+            dram_copy_kernel = tt::tt_metal::experimental::quasar::CreateKernel(program_, kernel, core, config);
+        } else {
+            tt_metal::DataMovementConfig config{
+                .processor =
+                    (use_ncrisc) ? tt_metal::DataMovementProcessor::RISCV_1 : tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = (use_ncrisc) ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default};
+            dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
+            noc = static_cast<int>(config.noc);
+        }
     }
 
     // Write to the input buffer
@@ -201,6 +232,9 @@ void RunTestOnCore(
     uint32_t l1_overflow_addr = 0;
     uint32_t eth_src_overflow_addr_words = 0;
     uint32_t eth_dest_overflow_addr_words = 0;
+    bool use_multicast_semaphore_inc = false;
+    uint32_t mcast_dst_end_x = 0;
+    uint32_t mcast_dst_end_y = 0;
     switch (feature) {
         case SanitizeNOCAddress:
             output_buf_noc_xy.x = 26;
@@ -225,6 +259,37 @@ void RunTestOnCore(
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
+        case SanitizeNOCMulticastInvalidRange: {
+            // This test requires at least 2 DRAM channels to create an invalid multicast range
+            if (device->num_dram_channels() < 2) {
+                log_info(
+                    LogTest,
+                    "Skipping SanitizeNOCMulticastInvalidRange: requires at least 2 DRAM channels, device has {}",
+                    device->num_dram_channels());
+                GTEST_SKIP();
+            }
+            // Use invalid multicast range with actual DRAM cores: start > end
+            // Wrap-around is only allowed for Tensix cores, not DRAM
+            use_multicast_semaphore_inc = true;
+
+            // Get actual DRAM NOC coordinates
+            auto dram_logical_0 = device->logical_core_from_dram_channel(0);
+            auto dram_logical_1 = device->logical_core_from_dram_channel(1);
+            auto dram_noc_0 = device->virtual_core_from_logical_core(dram_logical_0, CoreType::DRAM);
+            auto dram_noc_1 = device->virtual_core_from_logical_core(dram_logical_1, CoreType::DRAM);
+
+            // Ensure start > end to trigger wrap-around check (which should fail for DRAM)
+            if (dram_noc_0.x > dram_noc_1.x || dram_noc_0.y > dram_noc_1.y) {
+                output_buf_noc_xy = dram_noc_0;
+                mcast_dst_end_x = dram_noc_1.x;
+                mcast_dst_end_y = dram_noc_1.y;
+            } else {
+                output_buf_noc_xy = dram_noc_1;
+                mcast_dst_end_x = dram_noc_0.x;
+                mcast_dst_end_y = dram_noc_0.y;
+            }
+            break;
+        }
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -247,7 +312,10 @@ void RunTestOnCore(
          bad_linked_transaction,
          l1_overflow_addr,
          eth_src_overflow_addr_words,
-         eth_dest_overflow_addr_words});
+         eth_dest_overflow_addr_words,
+         use_multicast_semaphore_inc,
+         mcast_dst_end_x,
+         mcast_dst_end_y});
 
     // Run the kernel, expect an exception here
     try {
@@ -265,10 +333,19 @@ void RunTestOnCore(
     std::string expected;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
-    if (use_ncrisc) {
-        risc_name = "ncrisc";
+    // TODO: replace ierisc and erisc with hal.get_processor_class_name() after
+    // unifying all tests + watcher_device_reader::get_riscv_name() with same method
+    std::string risc_name;
+    if (is_eth_core) {
+        risc_name = is_idle_eth_core ? "ierisc" : "erisc";
+    } else {
+        risc_name = hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, dm_id, false);
     }
+    const char* core_name = "worker";
+    if (is_eth_core) {
+        core_name = is_idle_eth_core ? "idleth" : "acteth";
+    }
+    // Note: for multi_dm_race, expected string is built but not used - verification uses regex instead
     switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
@@ -276,7 +353,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Unknown core w/ virtual coords {} [addr=0x{:08x}] (NOC target "
                 "address did not map to any known Tensix/Ethernet/DRAM/PCIE core).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -294,7 +371,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -313,7 +390,7 @@ void RunTestOnCore(
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (invalid address "
                 "alignment in NOC transaction).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -331,7 +408,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (NOC target "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -349,7 +426,7 @@ void RunTestOnCore(
                 "bytes to local L1[{:#08x}] from Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (Local L1 "
                 "overwrites mailboxes).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -367,7 +444,7 @@ void RunTestOnCore(
                 "from local L1[{:#08x}] to DRAM core w/ virtual coords {} DRAM[addr=0x{:08x}] (inline dw writes do not "
                 "support DRAM destination addresses).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -383,7 +460,7 @@ void RunTestOnCore(
                 "bytes from local L1[{:#08x}] to Tensix core w/ virtual coords {} L1[addr=0x{:08x}] (submitting a "
                 "non-mcast transaction when there's a linked transaction).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
@@ -400,13 +477,13 @@ void RunTestOnCore(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
                 "of length {} (read or write past the end of local memory).",
                 device->id(),
-                (is_eth_core) ? "acteth" : "worker",
+                core_name,
                 core.x,
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr + sizeof(std::uint32_t),
+                l1_overflow_addr,
                 sizeof(std::uint32_t));
         } break;
         case SanitizeEthSrcL1Overflow: {
@@ -433,19 +510,62 @@ void RunTestOnCore(
                 virtual_core.y,
                 (eth_dest_overflow_addr_words << 4));
         } break;
+        case SanitizeNOCMulticastInvalidRange: {
+            expected = fmt::format(
+                "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
+                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "DRAM[addr=0x{:08x}] (multicast invalid range).",
+                device->id(),
+                core_name,
+                core.x,
+                core.y,
+                virtual_core.x,
+                virtual_core.y,
+                risc_name,
+                noc,
+                0,  // l1_addr is 0 for address-only sanitization
+                output_buf_noc_xy.x,
+                output_buf_noc_xy.y,
+                mcast_dst_end_x,
+                mcast_dst_end_y,
+                output_buffer_addr);
+        } break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
             break;
     }
 
-    log_info(LogTest, "Expected error: {}", expected);
+    if (!multi_dm_race) {
+        log_info(LogTest, "Expected error: {}", expected);
+    }
     std::string exception;
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_EQ(MetalContext::instance().watcher_server()->exception_message(), expected);
+
+    if (multi_dm_race) {
+        // Verify CAS atomicity: addr and size low bits must match (same DM wrote both)
+        std::regex addr_regex("addr=0x([0-9a-fA-F]+)");
+        std::regex size_regex("write ([0-9]+) bytes");
+        std::smatch addr_match, size_match;
+
+        ASSERT_TRUE(std::regex_search(exception, addr_match, addr_regex)) << "Could not find addr in error";
+        ASSERT_TRUE(std::regex_search(exception, size_match, size_regex)) << "Could not find size in error";
+
+        uint32_t reported_addr = std::stoul(addr_match[1].str(), nullptr, 16);
+        uint32_t reported_size = std::stoul(size_match[1].str());
+        uint32_t addr_dm_id = reported_addr & 0xF;
+        uint32_t size_dm_id = reported_size & 0xF;
+
+        EXPECT_EQ(addr_dm_id, size_dm_id)
+            << "CAS race corruption: addr dm_id=" << addr_dm_id << " but size dm_id=" << size_dm_id;
+        log_info(
+            LogTest, "Multi-DM race: DM{} won CAS with addr=0x{:x} size={}", addr_dm_id, reported_addr, reported_size);
+    } else {
+        EXPECT_EQ(exception, expected);
+    }
 }
 
 void RunTestEth(
@@ -470,16 +590,13 @@ void RunTestIEth(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     watcher_features_t feature) {
     auto* device = mesh_device->get_devices()[0];
-    if (fixture->IsSlowDispatch()) {
-        GTEST_SKIP();
-    }
     // Run on the first ethernet core (if there are any).
     if (device->get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
     CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
-    RunTestOnCore(fixture, mesh_device, core, true, feature);
+    RunTestOnCore(fixture, mesh_device, core, true, feature, false /*use_ncrisc*/, true /*is_idle_eth_core*/);
 }
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
@@ -652,6 +769,34 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherSanitizeEthDestL1Overflow) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestEth(fixture, mesh_device, SanitizeEthDestL1Overflow);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMulticastInvalidRange);
+        },
+        this->devices_[0]);
+}
+
+// Quasar multi-DM race test: all DMs sync then race to trigger sanitize error
+// Each DM uses unique identifiable data (addr/size). Verifies CAS ensures consistent error reporting
+TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(
+                fixture,
+                mesh_device,
+                core,
+                false,
+                SanitizeNOCAddress,
+                false,
+                false /*is_idle_eth_core*/,
+                true /*multi_dm_race*/);
         },
         this->devices_[0]);
 }

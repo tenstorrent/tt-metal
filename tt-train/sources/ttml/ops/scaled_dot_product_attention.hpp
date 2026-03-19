@@ -8,7 +8,17 @@
 
 namespace ttml::ops {
 
+// Fused implementation using custom sdpa_fw and sdpa_bw kernels (default)
+// When no mask is provided, uses on-device causal mask generation
 autograd::TensorPtr scaled_dot_product_attention(
+    const autograd::TensorPtr& query,
+    const autograd::TensorPtr& key,
+    const autograd::TensorPtr& value,
+    const std::optional<autograd::TensorPtr>& mask = std::nullopt,
+    float dropout_probability = 0.0F);
+
+// Composite implementation using individual TTNN ops (fallback)
+autograd::TensorPtr scaled_dot_product_attention_composite(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,

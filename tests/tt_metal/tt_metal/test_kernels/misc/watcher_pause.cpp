@@ -7,26 +7,18 @@
 /*
  * A test for the watcher pausing feature.
 */
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
-void kernel_main() {
+#ifdef COMPILE_FOR_TRISC
+#include "api/compute/common.h"
 #else
-#include "compute_kernel_api/common.h"
-namespace NAMESPACE {
-void MAIN {
+#include "api/dataflow/dataflow_api.h"
 #endif
-    uint32_t wait_cycles = get_arg_val<uint32_t>(0);
-#if defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
-    wait_cycles = 0x5f5e1000U;
-#endif
+
+void kernel_main() {
+    uint32_t wait_cycles = get_common_arg_val<uint32_t>(0);
 
     // Do a wait followed by a pause, triscs can't wait.
 #ifndef COMPILE_FOR_TRISC
     riscv_wait(wait_cycles);
 #endif
     PAUSE();
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 }
-#else
-}
-}
-#endif

@@ -9,15 +9,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "rotary_embedding_llama.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 void bind_rotary_embedding_llama(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"rotary_embedding_llama", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::rotary_embedding_llama,
         R"doc(
             Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
 
@@ -35,15 +34,15 @@ void bind_rotary_embedding_llama(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor = DEFAULT_OUTPUT_MEMORY_CONFIG
                 * :attr:`compute_kernel_config`: Optional[DeviceComputeKernelConfig] = None
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("input_tensor"),
-            nb::arg("cos_cache"),
-            nb::arg("sin_cache"),
-            nb::arg("trans_mat"),
-            nb::kw_only(),
-            nb::arg("is_decode_mode") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::experimental::rotary_embedding_llama,
+        nb::arg("input_tensor"),
+        nb::arg("cos_cache"),
+        nb::arg("sin_cache"),
+        nb::arg("trans_mat"),
+        nb::kw_only(),
+        nb::arg("is_decode_mode") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

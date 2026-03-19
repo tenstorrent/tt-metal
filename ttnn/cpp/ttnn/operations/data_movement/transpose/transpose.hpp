@@ -8,26 +8,14 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn {
-namespace operations::data_movement::transpose {
 
-struct ExecuteTranspose {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int64_t dim1,
-        int64_t dim2,
-        const std::optional<MemoryConfig>& memory_config_arg,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
+ttnn::Tensor transpose(
+    const ttnn::Tensor& input_tensor,
+    int64_t dim1,
+    int64_t dim2,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    float pad_value = 0.0f);
 
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        int64_t dim1,
-        int64_t dim2,
-        const std::optional<float>& pad_value = std::nullopt);  // TODO(#34353)
-};
-
-}  // namespace operations::data_movement::transpose
-
-constexpr auto transpose =
-    ttnn::register_operation<"ttnn::transpose", ttnn::operations::data_movement::transpose::ExecuteTranspose>();
+ttnn::Tensor transpose(const ttnn::Tensor& input_tensor, int64_t dim1, int64_t dim2, float pad_value = 0.0f);
 
 }  // namespace ttnn

@@ -6,7 +6,6 @@
 
 // #include <fmt/base.h>
 // #include <stddef.h>
-// #include "impl/dispatch/command_queue.hpp"
 // #include <tt-metalium/host_api.hpp>
 // #include <tt-logger/tt-logger.hpp>
 // #include <tt-metalium/program.hpp>
@@ -26,12 +25,11 @@
 // #include <tt-metalium/buffer_types.hpp>
 // #include <tt-metalium/circular_buffer_config.hpp>
 // // #include <tt-metalium/core_coord.hpp>
-// #include <tt-metalium/data_types.hpp>
+// #include <tt-metalium/kernel_types.hpp>
 // #include <tt-metalium/device.hpp>
 // #include <tt-metalium/tensor_accessor_args.hpp>
 // #include "gtest/gtest.h"
 // #include "hostdevcommon/kernel_structs.h"
-// #include <tt-metalium/kernel_types.hpp>
 // #include "lightmetal/host_api_capture_helpers.hpp"
 // #include <tt-metalium/lightmetal_capture_utils.hpp>
 // #include "lightmetal_fixture.hpp"

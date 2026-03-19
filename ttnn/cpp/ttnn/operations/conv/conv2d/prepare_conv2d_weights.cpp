@@ -27,6 +27,10 @@
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
+
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 
 namespace ttnn::operations::conv {
 using namespace tt;
@@ -743,7 +747,7 @@ Converts convolution weights to grouped layout with padded zeros
 This function will take in a weight tensor with shape [out_channels, in_channels // groups, H, W] and return a newly
 allocated output tensor with shape [out_channels, in_channels, H, W] The extra channels in shape[1] will be padded with
 0 - then the entire weight tensor is convolved with the input tensor - equivalent to convolution if the input tensor was
-divided into num_groups for each groupped filter
+divided into num_groups for each grouped filter
 */
 Tensor convert_conv_weight_tensor_to_grouped_layout(
     const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype) {
@@ -1557,7 +1561,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
         original_weights_out_channels,
         out_channels);
 
-    uint32_t in_channels_padded = tt::round_up(in_channels, params.input_channels_alignment);
     uint32_t out_channels_padded = tt::round_up(out_channels, constants::TILE_WIDTH);
 
     uint32_t out_channel_padding = out_channels_padded - out_channels;
@@ -1571,7 +1574,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         auto output_parallel_config = params.output_parallel_config.value();
         uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(input_parallel_config);
         uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(output_parallel_config);
-        in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
+        uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
         out_channels_padded = calculate_out_channels_padded(out_channels, output_parallel_config);
         out_channel_padding = out_channels_padded - out_channels;
         ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});

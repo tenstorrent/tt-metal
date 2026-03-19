@@ -6,12 +6,11 @@
 
 #include <utility>
 #include "device/create_qkv_heads_from_separate_tensors_device_operation.hpp"
-#include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads_from_separate_tensors(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_kv,
     const uint32_t num_q_heads,
@@ -38,4 +37,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTenso
         optional_output_tensors);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

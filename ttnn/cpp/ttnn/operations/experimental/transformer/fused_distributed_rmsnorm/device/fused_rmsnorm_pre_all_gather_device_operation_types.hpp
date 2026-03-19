@@ -9,19 +9,15 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather {
+namespace ttnn::experimental::prim {
 
-struct operation_attributes_t {
+struct FusedRmsnormPreAllGatherParams {
     tt::tt_metal::DataType dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
-struct tensor_args_t {
+struct FusedRmsnormPreAllGatherInputs {
     Tensor input_tensor;
 };
 
-using tensor_return_value_t = Tensor;
-
-using spec_return_value_t = TensorSpec;
-
-}  // namespace ttnn::operations::experimental::transformer::fused_rmsnorm_pre_all_gather
+}  // namespace ttnn::experimental::prim

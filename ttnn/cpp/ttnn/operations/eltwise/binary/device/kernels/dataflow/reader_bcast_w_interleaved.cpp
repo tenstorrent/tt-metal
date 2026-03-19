@@ -2,12 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
+// This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -31,9 +34,6 @@ void kernel_main() {
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
-
     uint32_t num_tiles = src0_num_tiles;
     uint32_t i = 0;
     uint32_t i_bcast = 0;
@@ -41,25 +41,27 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
     const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
+
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {
             {
                 // only read one tile in H per W-line of tiles
                 // So we push a total of NC*H tiles from src1
-                cb_reserve_back(cb_id_in1, onetile);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(i_bcast, s1, l1_write_addr_in1);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, onetile);
+                cb1.reserve_back(onetile);
+                noc.async_read(s1, cb1, in1_tile_bytes, {.page_id = i_bcast}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb1.push_back(onetile);
                 i_bcast++;
             }
 
             for (uint32_t wt = 0; wt < Wt; wt++) {
-                cb_reserve_back(cb_id_in0, onetile);
-                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(i, s0, l1_write_addr_in0);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                cb0.reserve_back(onetile);
+                noc.async_read(s0, cb0, in0_tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb0.push_back(onetile);
                 i++;
             }  // Wt loop
         }  // Ht loop

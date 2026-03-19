@@ -62,3 +62,16 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - 2x2 To 1x1: 2x2 master grid sending to 1x1 subordinate grid
    - 4x4 To 1x1: 4x4 master grid sending to 1x1 subordinate grid
    - 2x2 To 2x2: 2x2 master grid sending to 2x2 subordinate grid
+
+## Device 2.0 API Tests
+This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
+
+### Key Features of Device 2.0 API Tests:
+- **Experimental NOC API**: Uses `experimental::Noc` and `experimental::UnicastEndpoint` for structured NOC operations
+- **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
+
+### Device 2.0 Kernels:
+- `sender_2_0.cpp`: Implements the sender functionality using the experimental NOC API
+- `sender.cpp`: Original sender kernel for comparison
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new experimental API.

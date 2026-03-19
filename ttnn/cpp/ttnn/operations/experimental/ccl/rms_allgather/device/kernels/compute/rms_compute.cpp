@@ -8,15 +8,14 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
 
 // SPLIT REDUCE across Cores
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(0);
     constexpr uint32_t block_w = get_compile_time_arg_val(1);
     constexpr uint32_t subblock_w_const = get_compile_time_arg_val(2);
@@ -142,6 +141,8 @@ void MAIN {
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+        // TODO(#38448): Temporary workaround pending further debug; do not copy this pattern elsewhere.
+        tensix_sync();
         reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
 
@@ -305,5 +306,3 @@ void MAIN {
     index_h_offset += block_w;
     cb_pop_front(cb_im, num_tiles_per_block);
 }
-
-}  // namespace NAMESPACE

@@ -10,14 +10,15 @@ Usage:
 Options:
 
 Description:
-    Read important variables from fast dispatch kernels.
+    Read important variables from fast dispatch kernels. These can help identify the state the dispatcher is in, to help
+    determine the cause of any hangs.
 
 Owner:
     jbaumanTT
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, run_script, log_check
+from triage import ScriptConfig, log_warning, triage_field, run_script, log_check
 from ttexalens.memory_access import MemoryAccess, RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
 from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
@@ -28,12 +29,16 @@ from ttexalens.tt_exalens_lib import read_word_from_device
 from inspector_data import run as get_inspector_data, InspectorData
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from typing import Optional, Any
+from ttexalens.umd_device import TimeoutDeviceRegisterError
+
 
 # Dumping dispatch debug information for triage purposes
 # Shows dispatcher core info and purpose to help with issue diagnosis
 script_config = ScriptConfig(
     depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data", "metal_device_id_mapping"],
 )
+
+BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
 
 
 @dataclass
@@ -67,6 +72,8 @@ def _read_symbol_value(
     """
     try:
         return int(elf_obj.get_global(symbol, mem_access).read_value())
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception as e:
         if check_value:
             log_check(False, f"Failed to read symbol {symbol} from kernel {elf_obj.elf_file_path} with error {str(e)}")
@@ -173,7 +180,8 @@ def read_wait_globals(
     """
 
     # Skipping because we cannot read NCRISC private memory on wormhole
-    if risc_name == "ncrisc" and location.device.is_wormhole():
+    # On blackhole there's an issue where triage can break the device when reading from NCRISC tt-exalens:#895
+    if risc_name == "ncrisc":
         return None
 
     # If no kernel loaded, nothing to read
@@ -200,6 +208,8 @@ def read_wait_globals(
     )
     try:
         circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
         if dispatcher_core_data.kernel_name == "cq_dispatch":
             log_check(False, f"Failed to read circular_buffer_fence for kernel {dispatcher_core_data.kernel_name}")
@@ -211,6 +221,8 @@ def read_wait_globals(
             value = kernel_elf.get_constant(name)
             assert isinstance(value, int)
             return value
+        except TimeoutDeviceRegisterError:
+            raise
         except Exception:
             if check_value:
                 log_check(False, f"Failed to read constant {name} for kernel {dispatcher_core_data.kernel_name}")
@@ -231,7 +243,7 @@ def read_wait_globals(
         if is_dispatcher_kernel:
             log_check(
                 wait_stream_value is not None,
-                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}",
+                f"Failed to read wait_stream_value for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
             )
 
     if last_wait_count is not None and stream_width is not None:
@@ -253,14 +265,19 @@ def read_wait_globals(
             # Two's-complement 32-bit wrapping difference
             delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
             sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
+    except TimeoutDeviceRegisterError:
+        raise
     except Exception:
-        log_check(False, f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}")
+        log_check(
+            False,
+            f"Failed to read sem_minus_local for kernel {dispatcher_core_data.kernel_name}. There may be a problem with the dispatcher kernel.",
+        )
         # Leave as None if any lookups fail
         sem_minus_local = None
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
-    # Use unique_id instead of device._id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
+    # Use unique_id instead of device.id to avoid mapping issues with TT_METAL_VISIBLE_DEVICES
     chip_id = location._device.unique_id
     x, y = virtual_coord
 
@@ -308,13 +325,12 @@ def run(args, context: Context):
     # Build lookup map for core info for a given kernel name
     core_lookup = build_core_lookup_map(inspector_data, metal_device_id_mapping)
 
-    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
-    dispatch_core_pairs = []
     # Relevant dispatcher kernel names
     dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
 
     # Go through all cores in the core_lookup (now keyed by unique_id)
     # And check if they have dispatcher kernels loaded
+    locations_to_check = set()
     for (chip_unique_id, x, y), info in core_lookup.items():
         if not info.has_any_info():
             continue
@@ -323,8 +339,16 @@ def run(args, context: Context):
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 
-        # Check all RISC cores at this location for dispatcher kernels
+        locations_to_check.add(location)
+
+    def get_dispatch_core_pairs(
+        location: OnChipCoordinate, locations_to_check: set[OnChipCoordinate]
+    ) -> list[tuple[OnChipCoordinate, str]] | None:
+        # Check RISC core with risc_name at this location for dispatcher kernels
+        if location not in locations_to_check:
+            return None
         noc_block = location._device.get_block(location)
+        dispatch_core_pairs = []
         for risc_name in noc_block.risc_names:
             dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
             if (
@@ -332,6 +356,19 @@ def run(args, context: Context):
                 and dispatcher_core_data.kernel_name in dispatcher_kernel_names
             ):
                 dispatch_core_pairs.append((location, risc_name))
+        return dispatch_core_pairs
+
+    # Getting dispatch core pairs needs to be run through RunChecks since there we handle TimeoutDeviceRegisterError that otherwise would break triage
+    results = run_checks.run_per_block_check(
+        lambda location: get_dispatch_core_pairs(location, locations_to_check),
+        block_filter=BLOCK_TYPES_TO_CHECK,
+    )
+
+    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
+    dispatch_core_pairs = []
+    if results:
+        for result in results:
+            dispatch_core_pairs.append(result.result)
 
     # Convert to set for fast lookup
     dispatch_cores_set = set(dispatch_core_pairs)
@@ -344,7 +381,6 @@ def run(args, context: Context):
             return None
         return read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, core_lookup)
 
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     return run_checks.run_per_core_check(
         filtered_read_wait_globals,
         block_filter=BLOCK_TYPES_TO_CHECK,

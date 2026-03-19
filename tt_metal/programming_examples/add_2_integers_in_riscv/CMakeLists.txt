@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22...3.30)
+cmake_minimum_required(VERSION 3.22...4.2)
 project(metal_example_add_2_integers_in_riscv)
 
 add_executable(metal_example_add_2_integers_in_riscv)
@@ -8,3 +8,6 @@ if(NOT TARGET TT::Metalium)
     find_package(TT-Metalium REQUIRED)
 endif()
 target_link_libraries(metal_example_add_2_integers_in_riscv PUBLIC TT::Metalium)
+if(TARGET TT::CommonPCH)
+    tt_reuse_precompile_headers(metal_example_add_2_integers_in_riscv TT::CommonPCH)
+endif()

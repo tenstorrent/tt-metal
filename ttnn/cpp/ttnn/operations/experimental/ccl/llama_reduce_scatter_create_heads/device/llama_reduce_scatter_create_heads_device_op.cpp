@@ -8,16 +8,10 @@
 #include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
-
-LlamaReduceScatterCreateHeadsDeviceOperation::program_factory_t
-LlamaReduceScatterCreateHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return LlamaReduceScatterCreateHeads{};
-}
-
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     auto input_tensor = tensor_args.input_tensor;
@@ -54,7 +48,7 @@ void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_mis
 }
 
 void LlamaReduceScatterCreateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& /*attributes*/, const tensor_args_t& /*tensor_args*/) {}
 
 LlamaReduceScatterCreateHeadsDeviceOperation::spec_return_value_t
 LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
@@ -126,8 +120,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
 
 tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<LlamaReduceScatterCreateHeadsDeviceOperation>(
         attributes.dim,
         attributes.cluster_axis,
@@ -142,8 +134,7 @@ tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::comp
         attributes.use_optimal_ccl_for_llama,
         tensor_args.input_tensor.dtype(),
         tensor_args.input_tensor.memory_config(),
-        tensor_args.input_tensor.device()->id(),
-        program_factory.index());
+        tensor_args.input_tensor.device()->id());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

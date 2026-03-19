@@ -18,7 +18,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "gtest/gtest.h"
@@ -26,7 +25,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/graph/graph_operation_queries.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -52,7 +51,7 @@ struct AddOpGraphTestParam {
 };
 
 class AddOpGraphTestFixture
-    : public TTNNFixtureWithDevice,
+    : public TTNNFixtureWithSuiteDevice<AddOpGraphTestFixture>,
       public testing::WithParamInterface<std::tuple<AddOpGraphTestParam, tt::tt_metal::IGraphProcessor::RunMode>> {};
 
 TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
@@ -145,7 +144,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace = {"ttnn::add", "BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                // Note: High-level function tracing (ttnn::add) was removed, now only device operations are captured
+                .expected_calltrace = {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 30720,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -159,7 +159,8 @@ INSTANTIATE_TEST_SUITE_P(
                 .a_Shape = ttnn::Shape(tt::tt_metal::Array4D{4, 3, 32, 32}),
                 .b_Shape = ttnn::Shape(tt::tt_metal::Array4D{1, 3, 32, 32}),
                 .memory_config = ttnn::L1_MEMORY_CONFIG,
-                .expected_calltrace = {"ttnn::add", "BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                // Note: High-level function tracing (ttnn::add) was removed, now only device operations are captured
+                .expected_calltrace = {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 67584,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 3 * 4096,
@@ -181,7 +182,8 @@ INSTANTIATE_TEST_SUITE_P(
                             CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{3, 3}}}},
                             {6 * 32, 32 * 32},
                             ShardOrientation::COL_MAJOR}},
-                .expected_calltrace = {"ttnn::add", "BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
+                // Note: High-level function tracing (ttnn::add) was removed, now only device operations are captured
+                .expected_calltrace = {"BinaryNgDeviceOperation", "tt::tt_metal::create_device_tensor"},
                 .expected_peak_L1_memory_usage = 20054016,
                 .expected_intermediate_tensors_count = 0,
                 .expected_cb_peak_per_core = 0,

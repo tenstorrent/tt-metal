@@ -32,7 +32,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
+
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -179,6 +179,11 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                     static_cast<std::size_t>(core_coord.get<0>()), static_cast<std::size_t>(core_coord.get<1>()));
             })
         .def("__repr__", [](const CoreCoord& self) -> std::string { return self.str(); })
+        .def(
+            "__eq__", [](const CoreCoord& a, const CoreCoord& b) { return a == b; }, nb::arg("other"))
+        .def(
+            "__ne__", [](const CoreCoord& a, const CoreCoord& b) { return a != b; }, nb::arg("other"))
+        .def("__hash__", [](const CoreCoord& self) { return std::hash<CoreCoord>{}(self); })
         .def_ro("x", &CoreCoord::x)
         .def_ro("y", &CoreCoord::y);
     nb::implicitly_convertible<std::tuple<std::size_t, std::size_t>, CoreCoord>();
@@ -292,7 +297,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
-                return self.sharded_across_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+                return self.sharded_across_dims(ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -309,7 +314,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                CoreRangeSet grid,
                ShardOrientation orientation) {
                 return self.sharded_across_dims_except(
-                    tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+                    ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -442,8 +447,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             )doc")
         .def(
             "__hash__",
-            [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
-                return tt::stl::hash::detail::hash_object(memory_config);
+            [](const MemoryConfig& memory_config) -> ttsl::hash::hash_t {
+                return ttsl::hash::detail::hash_object(memory_config);
             })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
         .def(
@@ -472,14 +477,31 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("end"))
         .def_ro("start", &CoreRange::start_coord)
         .def_ro("end", &CoreRange::end_coord)
-        .def("grid_size", &CoreRange::grid_size);
+        .def("grid_size", &CoreRange::grid_size)
+        .def(
+            "contains",
+            nb::overload_cast<const CoreCoord&>(&CoreRange::contains, nb::const_),
+            nb::arg("core"),
+            "Check if a core coordinate is contained in this CoreRange")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRange&>(&CoreRange::contains, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range is contained in this CoreRange")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRange::contains, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if a core range set is contained in this CoreRange")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     auto pyCoreRangeSet = static_cast<nb::class_<CoreRangeSet>>(m_tensor.attr("CoreRangeSet"));
     pyCoreRangeSet
         .def(
             "__init__",
             [](CoreRangeSet* t, const std::vector<CoreRange>& core_ranges) {
-                new (t) CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges));
+                new (t) CoreRangeSet(ttsl::Span<const CoreRange>(core_ranges));
             },
             nb::arg("core_ranges"))
         .def(
@@ -501,10 +523,22 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("core"),
             "Check if a core coordinate is contained in this CoreRangeSet")
         .def(
+            "contains",
+            nb::overload_cast<const CoreRange&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core_range"),
+            "Check if a core range is contained in this CoreRangeSet")
+        .def(
+            "contains",
+            nb::overload_cast<const CoreRangeSet&>(&CoreRangeSet::contains, nb::const_),
+            nb::arg("core_range_set"),
+            "Check if a core range set is contained in this CoreRangeSet")
+        .def(
             "merge",
             &CoreRangeSet::merge<CoreRangeSet>,
             nb::arg("other"),
-            "Merge this CoreRangeSet with another CoreRangeSet and return the result");
+            "Merge this CoreRangeSet with another CoreRangeSet and return the result")
+        .def(nb::self == nb::self)
+        .def(nb::self != nb::self);
 
     m_tensor.def(
         "corerange_to_cores",

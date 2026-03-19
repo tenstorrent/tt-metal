@@ -2,22 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/common.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_unary/clamp.h"
-#include "compute_kernel_api/eltwise_unary/rsub.h"
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/eltwise_unary/where.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/clamp.h"
+#include "api/compute/eltwise_unary/rsub.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/copy_dest_values.h"
+#include "api/compute/compute_kernel_api.h"
 
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar2 = get_arg_val<uint32_t>(1);
 
@@ -73,7 +72,7 @@ void MAIN {
             log_tile(0);
 #ifdef WHERE  // Conditional negation: when eps > 0.5 and input < eps, negate the logit result (multiply by -1.0) to
               // ensure positive output. WHERE selects negated result (true) or original result (false).
-            copy_dest_values(2, 0);
+            copy_dest_values(0, 2);
 
             copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 1);
@@ -85,7 +84,7 @@ void MAIN {
             mul_unary_tile(0, 0xBF800000);  // multiply by -1.0
 
             where_tile_init();
-            where_tile(1, 0, 2, 0);
+            WHERE(1, 0, 2, 0);
 #endif
 
             tile_regs_commit();
@@ -102,4 +101,3 @@ void MAIN {
         cb_push_back(cb_output, per_core_block_dim);
     }
 }
-}  // namespace NAMESPACE

@@ -55,7 +55,6 @@ ThrottleLevel = ttnn._ttnn.operations.core.ThrottleLevel
 DeviceComputeKernelConfig = ttnn._ttnn.operations.core.DeviceComputeKernelConfig
 WormholeComputeKernelConfig = ttnn._ttnn.operations.core.WormholeComputeKernelConfig
 BlackholeComputeKernelConfig = WormholeComputeKernelConfig
-GrayskullComputeKernelConfig = ttnn._ttnn.operations.core.GrayskullComputeKernelConfig
 
 
 @dataclasses.dataclass
@@ -107,6 +106,11 @@ RuntimeArgs = ttnn._ttnn.program_descriptor.RuntimeArgs
 RuntimeArgsColProxy = ttnn._ttnn.program_descriptor.RuntimeArgsColProxy
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
+MeshProgramDescriptor = ttnn._ttnn.program_descriptor.MeshProgramDescriptor
+merge_program_descriptors = ttnn._ttnn.program_descriptor.merge_program_descriptors
 cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_from_sharded_tensor
+get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
+UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
+compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

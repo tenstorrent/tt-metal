@@ -7,11 +7,11 @@
 
 #include <ttnn/device.hpp>
 
-namespace ttnn::operations::fused::normalization {
+namespace ttnn {
 
-ttnn::Tensor ExecuteFusedRMSNorm::invoke(
+ttnn::Tensor fused_rms_minimal(
     const ttnn::Tensor& input_tensor,
-    const ttnn::operations::normalization::LayerNormProgramConfig& program_config,
+    const ttnn::prim::LayerNormProgramConfig& program_config,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const GlobalSemaphore& semaphore,
@@ -47,4 +47,4 @@ ttnn::Tensor ExecuteFusedRMSNorm::invoke(
         use_noc1_only);
 }
 
-}  // namespace ttnn::operations::fused::normalization
+}  // namespace ttnn

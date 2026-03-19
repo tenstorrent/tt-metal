@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// This code is temporarily copied from ttnn/cpp/ttnn/operations/datamovement/binary/device/ to demonstrate
+// This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.
 // When broadcating is properly supported we expect this code to be deleted or refactored substantially.
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -27,20 +30,19 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out(cb_id_out0);
+
     uint32_t tile_id = 0;
     uint32_t i_nc = 0;
     for (uint32_t nc = 0; nc < NC; nc++) {
         tile_id = i_nc + Wt_read;
         for (uint32_t i = 0; i < Ht; i++) {
             for (uint32_t j = 0; j < Wt; j++) {
-                cb_wait_front(cb_id_out0, onetile);
-                uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-
-                noc_async_write_tile(tile_id, s, l1_read_addr);
-
-                noc_async_write_barrier();
-
-                cb_pop_front(cb_id_out0, onetile);
+                cb_out.wait_front(onetile);
+                noc.async_write(cb_out, s, tile_bytes, {}, {.page_id = tile_id});
+                noc.async_write_barrier();
+                cb_out.pop_front(onetile);
 
                 tile_id++;
             }

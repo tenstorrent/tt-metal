@@ -3,17 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "experimental/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
 //
-namespace NAMESPACE {
-void MAIN {
+void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr uint32_t transpose_hw = get_compile_time_arg_val(0);
@@ -29,6 +31,13 @@ void MAIN {
     constexpr uint32_t cb_intermed2 = tt::CBIndex::c_4;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
 
+    experimental::CircularBuffer cb_in0_obj(cb_in0);
+    experimental::CircularBuffer cb_in1_obj(cb_in1);
+    experimental::CircularBuffer cb_intermed0_obj(cb_intermed0);
+    experimental::CircularBuffer cb_intermed1_obj(cb_intermed1);
+    experimental::CircularBuffer cb_intermed2_obj(cb_intermed2);
+    experimental::CircularBuffer cb_out_obj(out_cb_id);
+
     constexpr uint32_t num_rows_in_one_tile = 32;
 
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
@@ -41,55 +50,42 @@ void MAIN {
                     tile_regs_acquire();
                     for (uint32_t kt = 0; kt < Kt; ++kt) {
                         if (tile_row_id == 0) {
-                            cb_wait_front(cb_in0, kt + 1);
+                            cb_in0_obj.wait_front(kt + 1);
                         }
-                        cb_wait_front(cb_in1, onetile);
+                        cb_in1_obj.wait_front(onetile);
 
                         matmul_tiles(cb_in0, cb_in1, kt, 0, 0);
 
-                        cb_pop_front(cb_in1, onetile);
+                        cb_in1_obj.pop_front(onetile);
                     }
                     tile_regs_commit();
 
-                    cb_reserve_back(cb_intermed0, onetile);
+                    cb_intermed0_obj.reserve_back(onetile);
                     tile_regs_wait();
                     pack_tile(0, cb_intermed0);
                     tile_regs_release();
-                    cb_push_back(cb_intermed0, onetile);
+                    cb_intermed0_obj.push_back(onetile);
 
-                    // untilize tile and write to CBIndex::c_25
-                    reconfig_data_format_srca(cb_in1, cb_intermed0);
-                    cb_wait_front(cb_intermed0, onetile);
-                    untilize_init(cb_intermed0);
-                    cb_reserve_back(cb_intermed1, onetile);
-                    untilize_block(cb_intermed0, onetile, cb_intermed1);
-                    cb_push_back(cb_intermed1, onetile);
+                    // untilize tile and write to CBIndex::c_25 with reconfiguration
+                    compute_kernel_lib::untilize<
+                        onetile,
+                        cb_intermed0,
+                        cb_intermed1,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
 
-                    cb_pop_front(cb_intermed0, onetile);
-                    untilize_uninit(cb_intermed0);
-
-                    reconfig_data_format_srca(cb_intermed0, cb_in1);
-                    mm_init_short(cb_in0, cb_in1, transpose_hw);
+                    mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed0, transpose_hw);
                 }
-                cb_pop_front(cb_in0, Kt);
+                cb_in0_obj.pop_front(Kt);
 
                 // cb_intermed2 comes from reader; untilized row-major tile
-                pack_reconfig_data_format(cb_intermed1, out_cb_id);
-                cb_wait_front(cb_intermed2, onetile);
-                cb_reserve_back(out_cb_id, onetile);
-
-                // tilize CB::intermed2 and write to CBIndex::c_16
-                tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
-                tilize_block(cb_intermed2, onetile, out_cb_id);
-                cb_push_back(out_cb_id, onetile);
-
-                cb_pop_front(cb_intermed2, onetile);
-                tilize_uninit_with_dt(cb_intermed2, cb_in1, out_cb_id);
+                // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
+                compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                mm_block_init_short_with_both_dt(cb_in0, cb_in1, cb_intermed2, cb_intermed2, transpose_hw);
             }
         }
     }
 }
-}  // namespace NAMESPACE
