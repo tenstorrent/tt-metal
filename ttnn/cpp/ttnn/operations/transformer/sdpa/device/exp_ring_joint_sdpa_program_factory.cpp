@@ -1159,8 +1159,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     // ---- Fabric MUX config (needed for writer kernel CT args below) ----
     // Hardcoded positions: backward-direction MUX at (11,0), (11,5); forward-direction MUX at (11,4), (11,9).
-    const std::vector<CoreCoord> mux_backward_logical_cores = {{11, 0}, {11, 5}};
-    const std::vector<CoreCoord> mux_forward_logical_cores = {{11, 4}, {11, 9}};
+    const std::vector<CoreCoord> mux_backward_logical_cores = {{11, 0}, {11, 9}};
+    const std::vector<CoreCoord> mux_forward_logical_cores = {{11, 4}, {11, 5}};
 
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -1558,7 +1558,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             mux_core_range_set,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
                 .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
                 .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
