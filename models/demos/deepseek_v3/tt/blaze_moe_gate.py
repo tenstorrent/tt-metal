@@ -32,8 +32,6 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
-MAX_BATCH_SIZE_PER_CORE = 1
-
 
 class MoEGate(AbstractModule):
     """MoE gate module from DeepSeek-R1.
@@ -353,11 +351,10 @@ class MoEGate(AbstractModule):
         # create the shard spec and memory config for the input, logits and output
         grid = mesh_device.compute_with_storage_grid_size()
         num_device_cores = grid.x * grid.y
-        max_batch_size_per_device = num_device_cores * MAX_BATCH_SIZE_PER_CORE
         start_index = 0
-        end_index = min(max_batch_size_per_device, total_batch_size_per_device)
+        # we can only have one token per core at a time
+        end_index = min(num_device_cores, total_batch_size_per_device)
         # this while loop is designed to handle the huge batch size (4096)
-        # the DeepseekMoeGateSingleCore.op can only handle at most 4 tokens at a time per core
         topk_experts_scores_list = []
         topk_experts_indices_list = []
         while True:

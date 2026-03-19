@@ -135,16 +135,6 @@ def test_forward_pass(
         checkpoint_state_dict=checkpoint_state_dict,
         module_path=module_path,
     )
-    """
-    first_input = torch_input[:, 0:1, :]
-    first_indices = reference_topk_indices[0:1, :]
-    first_weights = reference_topk_weights[0:1, :]
-
-    batch_size = 292
-    torch_input = first_input.repeat(1, batch_size, 1)
-    reference_topk_indices = first_indices.repeat(batch_size, 1)
-    reference_topk_weights = first_weights.repeat(batch_size, 1)
-    """
 
     weight_config = get_test_weight_config(
         MoEGate,
