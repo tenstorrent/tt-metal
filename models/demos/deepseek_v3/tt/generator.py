@@ -13,7 +13,7 @@ from tracy import signpost
 from transformers import AutoConfig
 
 import ttnn
-from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
+from models.common.sampling.generator import SamplingGenerator, SamplingParams, chunk_sampling_params
 from models.common.warmup import WarmupForwardMixin
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
@@ -220,6 +220,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         batch_size_per_row = int(batch_size_per_row)
         if batch_size_per_row <= 0:
             raise ValueError(f"batch_size_per_row must be > 0, got {batch_size_per_row}")
+        if batch_size_per_row > USERS_PER_ROW:
+            raise ValueError(f"batch_size_per_row {batch_size_per_row} exceeds the supported maximum {USERS_PER_ROW}")
         if batch_size_per_row % self.dp_factor != 0:
             raise ValueError(f"batch_size_per_row {batch_size_per_row} must be divisible by dp_factor={self.dp_factor}")
         self.batch_size_per_row = batch_size_per_row
@@ -647,21 +649,52 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
     def _reset_sampling_state(self, sampling_params: SamplingParams, batch_size: int, batch_size_per_row: int) -> None:
-        sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
-        self.sampling_generator.reset_sampling_params(sampling_params)
+        sampling_dp = self.sampling_generator.tt_sampling._sampling_dp
+        sampling_param_chunks = chunk_sampling_params(sampling_params, sampling_dp)
         seed = getattr(sampling_params, "seed", None)
         if seed is not None:
             user_ids = list(range(batch_size))
             self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
-        self.sampling_generator.reset_prompt_tokens(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
-        self.sampling_generator.reset_output_state(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
+        self.sampling_generator.apply_decode_state(
+            sampling_param_chunks,
+            reset_batch=True,
+            prompt_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
+            output_tokens=torch.zeros((batch_size_per_row, 1), dtype=torch.int64),
+        )
 
     def _sample_tokens_device(
         self, logits: ttnn.Tensor, enable_trace: bool = False, user_slots: list[int] | None = None
     ) -> ttnn.Tensor:
+        sampling_batch_size = self.sampling_generator.tt_sampling.max_batch_size
+        sampling_logits = logits
+        if logits.shape[2] != sampling_batch_size:
+            if enable_trace:
+                raise ValueError(
+                    f"Device sampling trace requires logits batch {sampling_batch_size}, got {logits.shape[2]}"
+                )
+            if logits.shape[2] <= 0 or logits.shape[2] > sampling_batch_size:
+                raise ValueError(
+                    f"Device sampling expects logits batch in [1, {sampling_batch_size}], got {logits.shape[2]}"
+                )
+            # Sampling kernels operate on the padded per-row batch size. Append filler rows so
+            # smaller decode/prefill batches can reuse the same device sampling path.
+            filler_row = ttnn.slice(
+                logits,
+                [0, 0, logits.shape[2] - 1, 0],
+                [1, 1, logits.shape[2], logits.shape[-1]],
+            )
+            filler = ttnn.repeat(filler_row, (1, 1, sampling_batch_size - logits.shape[2], 1))
+            ttnn.deallocate(filler_row)
+            sampling_logits = ttnn.concat([logits, filler], dim=2)
+            ttnn.deallocate(filler)
+
         self.sampling_generator.seed_manager.get_new_values(user_slots)
         self.sampling_generator.enable_internal_trace = enable_trace
-        tt_out = self.sampling_generator.sample(logits, enable_trace=enable_trace)
+        try:
+            tt_out = self.sampling_generator.sample(sampling_logits, enable_trace=enable_trace)
+        finally:
+            if sampling_logits is not logits:
+                ttnn.deallocate(sampling_logits)
 
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
