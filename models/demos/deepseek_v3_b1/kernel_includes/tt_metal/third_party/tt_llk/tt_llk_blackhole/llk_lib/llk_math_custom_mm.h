@@ -163,6 +163,8 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+inline void _llk_math_custom_mm_zero_dest_() { TT_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, 0, 0); }
+
 template <bool finalize = true>
 inline void _llk_math_custom_mm_(
     const std::uint32_t operandB_face_r_dim,

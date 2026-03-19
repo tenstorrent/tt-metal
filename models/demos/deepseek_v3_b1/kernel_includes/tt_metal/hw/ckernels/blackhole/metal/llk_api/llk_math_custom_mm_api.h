@@ -44,3 +44,5 @@ inline void llk_math_custom_mm(
 
     _llk_math_custom_mm_<finalize>(operandB_face_r_dim, dst_index, kt_dim, ct_dim);
 }
+
+inline void llk_math_custom_mm_zero_dest() { _llk_math_custom_mm_zero_dest_(); }
