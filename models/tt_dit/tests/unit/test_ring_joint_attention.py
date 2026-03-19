@@ -399,11 +399,13 @@ def run_ring_joint_sdpa(
     slice_seq_len = base_seq_len // rp_factor
 
     Q = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
-    K = torch.zeros(b, nh, base_seq_len, d)
-    V = torch.zeros(b, nh, base_seq_len, d)
-    for rp_id in range(rp_factor):
-        K[:, :, rp_id * slice_seq_len : (rp_id + 1) * slice_seq_len, :] = rp_id + 1
-        V[:, :, rp_id * slice_seq_len : (rp_id + 1) * slice_seq_len, :] = rp_id + 1
+    K = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    V = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    # K = torch.zeros(b, nh, base_seq_len, d)
+    # V = torch.zeros(b, nh, base_seq_len, d)
+    # for rp_id in range(rp_factor):
+    #     K[:, :, rp_id * slice_seq_len : (rp_id + 1) * slice_seq_len, :] = rp_id + 1
+    #     V[:, :, rp_id * slice_seq_len : (rp_id + 1) * slice_seq_len, :] = rp_id + 1
 
     padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
     padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
@@ -531,52 +533,6 @@ def run_ring_joint_sdpa(
         run_iters(tt_out_list, tt_joint_out_list)
 
     if not skip_check:
-        # --- All-gather output validation ---
-        rp_factor = list(submesh.shape)[rp_axis]
-        ag_read_dims = [None, None]
-        ag_read_dims[up_axis] = 1  # concat heads across UP axis
-        ag_read_dims[rp_axis] = 0  # stack RP replicas on batch dim so we can check each
-
-        for i in range(n_iters):
-            gathered_k_torch = ttnn.to_torch(
-                persistent_output_buffers[i][0],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=ag_read_dims
-                ),
-            )
-            gathered_v_torch = ttnn.to_torch(
-                persistent_output_buffers[i][1],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    submesh, mesh_shape=tuple(submesh.shape), dims=ag_read_dims
-                ),
-            )
-            logger.info(f"AG check iter {i}: gathered_k shape={gathered_k_torch.shape}, "
-                        f"gathered_v shape={gathered_v_torch.shape}")
-            for rp_id in range(rp_factor):
-                k_replica = gathered_k_torch[rp_id * b : (rp_id + 1) * b, :, :base_seq_len, :].bfloat16().float()
-                v_replica = gathered_v_torch[rp_id * b : (rp_id + 1) * b, :, :base_seq_len, :].bfloat16().float()
-                ref_k = padded_K[:, :, :base_seq_len, :].clone().bfloat16().float()
-                ref_v = padded_V[:, :, :base_seq_len, :].clone().bfloat16().float()
-                ref_k[:,:,rp_id*base_seq_len//rp_factor:(rp_id+1)*base_seq_len//rp_factor,:] = 0
-                ref_v[:,:,rp_id*base_seq_len//rp_factor:(rp_id+1)*base_seq_len//rp_factor,:] = 0
-                k_pass, k_pcc = comp_pcc(k_replica, ref_k, 0.999)
-                v_pass, v_pcc = comp_pcc(v_replica, ref_v, 0.999)
-                k_mse = ((ref_k - k_replica) ** 2).mean()
-                v_mse = ((ref_v - v_replica) ** 2).mean()
-                logger.info(f"  RP device {rp_id}: K PCC={k_pcc} mse={k_mse:.2e} pass={k_pass} | "
-                            f"V PCC={v_pcc} mse={v_mse:.2e} pass={v_pass}")
-                for name, actual, expected in [("K", k_replica, ref_k), ("V", v_replica, ref_v)]:
-                    diff_mask = actual != expected
-                    n_diff = diff_mask.sum().item()
-                    n_total = actual.numel()
-                    if n_diff > 0:
-                        idxs = torch.nonzero(diff_mask, as_tuple=False)
-                        n_show = min(10, len(idxs))
-                        logger.info(f"    {name}: {n_diff}/{n_total} values mismatch ({100*n_diff/n_total:.4f}%)")
-                        for j in range(n_show):
-                            idx = tuple(idxs[j].tolist())
-                            logger.info(f"      [{idx}] got={actual[idx].item():.6f} expected={expected[idx].item():.6f}")
-
         pt_Q = torch.cat([Q, joint_Q], dim=2)
         pt_K = torch.cat([K, joint_K], dim=2)
         pt_V = torch.cat([V, joint_V], dim=2)
@@ -1332,7 +1288,7 @@ def test_ring_joint_sdpa_dit_bh_glx_custom(
     rp_axis, rp_factor, up_axis, up_factor = parallel_config_map["bh_glx"]["wan_14b_720p"]  # (0, 8, 1, 4)
     q_chunk_size = 224
     k_chunk_size = 512
-    n_iters = 1
+    n_iters = 5
     trace_enabled = False
     skip_check = False
     pcc_threshold = 0.9993
