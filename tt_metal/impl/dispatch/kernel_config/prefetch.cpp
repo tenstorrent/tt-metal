@@ -99,7 +99,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         bool is_mock = descriptor_.cluster().get_target_device_type() == tt::TargetDevice::Mock;
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr = device_->sysmem_manager().is_dram_backed()
+                                                ? device_->sysmem_manager().get_dram_region_start_addr(cq_id_)
+                                                : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = is_mock ? 0x10000 : device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -155,7 +157,9 @@ void PrefetchKernel::GenerateStaticConfigs() {
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr = device_->sysmem_manager().is_dram_backed()
+                                                ? device_->sysmem_manager().get_dram_region_start_addr(cq_id_)
+                                                : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -467,6 +471,7 @@ void PrefetchKernel::CreateKernel() {
         {"DOWNSTREAM_CB_PAGES", std::to_string(dependent_config_.downstream_cb_pages.value())},
         {"MY_DOWNSTREAM_CB_SEM_ID", std::to_string(static_config_.my_downstream_cb_sem_id.value())},
         {"DOWNSTREAM_CB_SEM_ID", std::to_string(dependent_config_.downstream_cb_sem_id.value())},
+        {"IS_CQ_DRAM_BACKED", std::to_string(device_->sysmem_manager().is_dram_backed())},
         {"PCIE_BASE", std::to_string(static_config_.pcie_base.value())},
         {"PCIE_SIZE", std::to_string(static_config_.pcie_size.value())},
         {"PREFETCH_Q_BASE", std::to_string(static_config_.prefetch_q_base.value())},

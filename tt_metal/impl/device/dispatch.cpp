@@ -179,6 +179,22 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
+void read_completion_queue(
+    void* dst,
+    uint32_t size_bytes,
+    ChipId device_id,
+    uint16_t channel,
+    uint32_t cq_id,
+    uint32_t addr,
+    const SystemMemoryManager& sysmem_manager) {
+    if (sysmem_manager.is_dram_backed()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, 0, sysmem_manager.get_dram_region_start_addr(cq_id) + addr);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+    }
+}
+
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
     ChipId mmio_device_id,
@@ -215,12 +231,14 @@ void read_core_data_from_completion_queue(
         const uint32_t num_bytes_to_copy = std::min(
             num_bytes_to_read - num_bytes_read, num_bytes_available_in_completion_queue - completion_queue_read_offset);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        read_completion_queue(
             (char*)(uint64_t(read_descriptor.dst) + num_bytes_read),
             num_bytes_to_copy,
-            completion_q_read_ptr + completion_queue_read_offset,
             mmio_device_id,
-            channel);
+            channel,
+            cq_id,
+            completion_q_read_ptr + completion_queue_read_offset,
+            sysmem_manager);
 
         num_bytes_read += num_bytes_to_copy;
         const uint32_t num_pages_read =

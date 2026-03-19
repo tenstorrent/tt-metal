@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "command_queue_common.hpp"
+#include "device/device_manager.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "dispatch_settings.hpp"
 
 #include "impl/context/metal_context.hpp"
@@ -25,18 +27,27 @@ uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_siz
 
 template <bool addr_16B>
 uint32_t get_cq_issue_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
-    uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     uint32_t issue_q_rd_ptr =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_RD);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        &recv,
-        sizeof(uint32_t),
-        issue_q_rd_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
-        mmio_device_id,
-        channel);
+    const SystemMemoryManager& sysmem_manager =
+        MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
+    uint32_t recv;
+    if (sysmem_manager.is_dram_backed()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            &recv, sizeof(uint32_t), chip_id, 0, sysmem_manager.get_dram_region_start_addr(cq_id) + issue_q_rd_ptr);
+    } else {
+        ChipId mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+        uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            &recv,
+            sizeof(uint32_t),
+            issue_q_rd_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
+            mmio_device_id,
+            channel);
+    }
     if constexpr (!addr_16B) {
         return recv << 4;
     }
@@ -48,13 +59,22 @@ template uint32_t get_cq_issue_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint
 
 template <bool addr_16B>
 uint32_t get_cq_issue_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t issue_q_wr_ptr =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        &recv, sizeof(uint32_t), issue_q_wr_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
+    const SystemMemoryManager& sysmem_manager =
+        MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
+    uint32_t recv;
+    if (sysmem_manager.is_dram_backed()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            &recv, sizeof(uint32_t), chip_id, 0, sysmem_manager.get_dram_region_start_addr(cq_id) + issue_q_wr_ptr);
+    } else {
+        ChipId mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            &recv, sizeof(uint32_t), issue_q_wr_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
+    }
     if constexpr (!addr_16B) {
         return recv << 4;
     }
@@ -66,18 +86,31 @@ template uint32_t get_cq_issue_wr_ptr<false>(ChipId chip_id, uint8_t cq_id, uint
 
 template <bool addr_16B>
 uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
-    uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     uint32_t completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_WR);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        &recv,
-        sizeof(uint32_t),
-        completion_q_wr_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
-        mmio_device_id,
-        channel);
+    const SystemMemoryManager& sysmem_manager =
+        MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
+    uint32_t recv;
+    if (sysmem_manager.is_dram_backed()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            &recv,
+            sizeof(uint32_t),
+            chip_id,
+            0,
+            sysmem_manager.get_dram_region_start_addr(cq_id) + completion_q_wr_ptr);
+    } else {
+        ChipId mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+        uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            &recv,
+            sizeof(uint32_t),
+            completion_q_wr_ptr + channel_offset + get_relative_cq_offset(cq_id, cq_size),
+            mmio_device_id,
+            channel);
+    }
     if constexpr (!addr_16B) {
         return recv << 4;
     }
@@ -89,13 +122,30 @@ template uint32_t get_cq_completion_wr_ptr<false>(ChipId chip_id, uint8_t cq_id,
 
 template <bool addr_16B>
 inline uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
-    uint32_t recv;
-    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
-    uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        &recv, sizeof(uint32_t), completion_q_rd_ptr + get_relative_cq_offset(cq_id, cq_size), mmio_device_id, channel);
+    const SystemMemoryManager& sysmem_manager =
+        MetalContext::instance().device_manager()->get_active_device(chip_id)->sysmem_manager();
+    uint32_t recv;
+    if (sysmem_manager.is_dram_backed()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            &recv,
+            sizeof(uint32_t),
+            chip_id,
+            0,
+            sysmem_manager.get_dram_region_start_addr(cq_id) + completion_q_rd_ptr);
+    } else {
+        ChipId mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+        uint16_t channel =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+            &recv,
+            sizeof(uint32_t),
+            completion_q_rd_ptr + get_relative_cq_offset(cq_id, cq_size),
+            mmio_device_id,
+            channel);
+    }
     if constexpr (!addr_16B) {
         return recv << 4;
     }
