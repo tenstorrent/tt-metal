@@ -10,6 +10,7 @@ import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.utils import tree_map
 
 
 class TTNNEmbedding(TTNNModule):
@@ -64,7 +65,7 @@ class TTNNEmbedding(TTNNModule):
         ttnn.deallocate(self._weight_tt)
         super().deallocate_weights_impl()
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, input_ids):
         """Forward pass: token indices -> embeddings.
 
@@ -86,20 +87,39 @@ class TTNNEmbedding(TTNNModule):
             )
 
         batch_size, seq_len = input_ids.shape[0], input_ids.shape[-1]
-        # ttnn.embedding expects 4D input: (batch, 1, 1, seq_len)
+        # ttnn.embedding expects 4D input: (batch, 1, 1, seq_len) and UINT32 or BFLOAT16 dtype.
+        # Typecast requires padded shape multiple of 32; pad seq_len then slice output.
         if len(input_ids.shape) == 2:
             input_ids = ttnn.reshape(input_ids, (batch_size, 1, 1, seq_len))
+
+        pad_len = ((seq_len + 31) // 32) * 32 - seq_len
+        if pad_len > 0:
+            pad_val = self.padding_idx if self.padding_idx is not None else 0
+            input_ids = ttnn.pad(
+                input_ids,
+                padding=((0, 0), (0, 0), (0, 0), (0, pad_len)),
+                value=pad_val,
+            )
+        input_ids = ttnn.typecast(input_ids, dtype=ttnn.uint32)
 
         output = ttnn.embedding(
             input_ids,
             self._weight_tt,
-            pad_token=self.padding_idx,
+            padding_idx=self.padding_idx,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Output may be (batch, seq, embed) or need reshape
+        # Slice back to original seq_len if we padded
+        if pad_len > 0:
+            output = output[:, :seq_len, :]
         if len(output.shape) == 3:
             return output
         return ttnn.reshape(output, (batch_size, seq_len, self.embedding_dim))
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        from models.experimental.tt_symbiote.core.module import set_distributed_tensor_config
+
+        cfg = self.device_state.get_replicated_tensor_config((1, -1, self.embedding_dim))
+        return tree_map(set_distributed_tensor_config(cfg), output_tensors)

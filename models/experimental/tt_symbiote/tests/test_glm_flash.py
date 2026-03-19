@@ -18,9 +18,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.modules.linear import (
-    TTNNLinearIColShardedWRowSharded,
-)
+from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 import transformers
@@ -100,7 +98,7 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
 
     tokenizer = AutoTokenizer.from_pretrained("zai-org/GLM-4.7-Flash", use_fast=True)
     model = AutoModelForCausalLM.from_pretrained("zai-org/GLM-4.7-Flash")
-    print(model)
+    # print(model)
 
     if model.config.hidden_size == params["hidden_size"]:
         assert model.config.n_routed_experts == params["num_experts"]
@@ -115,7 +113,7 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
         model.model.layers[0].input_layernorm.__class__: TTNNDistributedRMSNorm,
     }
     nn_to_ttnn2 = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,  # sharded linears (exclude lm_head - needs all-gather for logits)
+        nn.Linear: TTNNLinear,
     }
 
     messages = [
@@ -125,8 +123,6 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
         },
     ]
     model_device = next(model.parameters()).device
-    # HuggingFace generate() (line 2502) requires model.device.type and input_ids.device.type.
-    # PreTrainedModel.device is read-only; patch it for the generate call.
     if not isinstance(model_device, torch.device):
         model_device = torch.device("cpu")
     inputs = tokenizer.apply_chat_template(
@@ -137,8 +133,6 @@ def test_glm(mesh_device, use_paged_attention, max_new_tokens):
         return_tensors="pt",
     ).to(model_device)
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
-    # Exclude lm_head: TTNNLinearIColShardedWRowSharded would output sharded logits;
-    # generation needs full logits for argmax
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None, exclude_replacement={"lm_head"})
     set_device(model, mesh_device)
     all_modules = {**modules1, **modules2}

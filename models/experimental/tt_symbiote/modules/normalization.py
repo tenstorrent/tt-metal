@@ -7,7 +7,13 @@
 from torch import nn
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    run_on_devices,
+    DeviceArch,
+    set_distributed_tensor_config,
+)
+from models.experimental.tt_symbiote.core.utils import tree_map
 
 
 class TTNNLayerNorm(TTNNModule):
@@ -112,16 +118,21 @@ class TTNNDistributedRMSNorm(TTNNModule):
         return new_layer_norm
 
     def move_weights_to_device_impl(self):
-        """Move weights to TTNN device."""
+        """Move weights to TTNN device.
+
+        Weight is replicated (not sharded) because rms_norm_post_all_gather receives
+        full input after embedding/attention; gamma must match input padded shape.
+        """
         dim = self.torch_layer.weight.shape[0]
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
         self.weight_distributed = ttnn.as_tensor(
             self.torch_layer.weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]),
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
+            mesh_mapper=mesh_mapper,
         )
         self.weight_distributed = ttnn.to_device(self.weight_distributed, self.device)
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, inp):
         original_shape = inp.shape
         if inp.layout != ttnn.TILE_LAYOUT:
@@ -129,22 +140,29 @@ class TTNNDistributedRMSNorm(TTNNModule):
         needs_squeeze = len(original_shape) == 3
         if needs_squeeze:
             inp = ttnn.unsqueeze(inp, 1)
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
-        tt_stats = ttnn.experimental.all_gather_async(
-            tt_stats,
-            dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
-        )
-        tt_out = ttnn.rms_norm_post_all_gather(
-            inp,
-            tt_stats,
-            epsilon=self.torch_layer.variance_epsilon,
-            weight=self.weight_distributed,
-        )
-        tt_stats.deallocate(True)
+        if self.device.get_num_devices() == 1:
+            tt_out = ttnn.rms_norm(inp, weight=self.weight_distributed, epsilon=self.torch_layer.variance_epsilon)
+        else:
+            tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
+            tt_stats = ttnn.experimental.all_gather_async(
+                tt_stats,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+            tt_out = ttnn.rms_norm_post_all_gather(
+                inp,
+                tt_stats,
+                epsilon=self.torch_layer.variance_epsilon,
+                weight=self.weight_distributed,
+            )
+            tt_stats.deallocate(True)
         if needs_squeeze:
             tt_out = ttnn.squeeze(tt_out, 1)
         return tt_out
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = self.device_state.get_replicated_tensor_config((1, 1, self.torch_layer.weight.shape[0]))
+        return tree_map(set_distributed_tensor_config(cfg), output_tensors)

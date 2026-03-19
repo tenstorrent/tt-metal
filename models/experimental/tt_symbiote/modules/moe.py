@@ -10,11 +10,13 @@ from torch import nn
 import ttnn
 from transformers.configuration_utils import PretrainedConfig
 from torch.nn import functional as F
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule, set_distributed_tensor_config
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.utils import tree_map
 from ttnn.model_preprocessing import preprocess_linear_weight
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinear,
     TTNNLinearSilu,
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
@@ -683,17 +685,23 @@ class TTNNGlm4MoeTopkRouter(TTNNLinearIColShardedWRowSharded):
         return tt_output
 
 
+class TTNNGlm4MoeTopkRouterReplicated(TTNNLinear):
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        tt_output = super().forward(input_tensor)
+        tt_output = ttnn.reshape(tt_output, [-1] + [tt_output.shape[-1]])
+        return tt_output
+
+
 class TTNNGlm4MoeMLP(TTNNModule):
     @classmethod
-    def from_torch(cls, torch_layer: Glm4MoeMLP):
+    def from_torch(cls, torch_layer: Glm4MoeMLP, distributed: bool = False):
         """Create a TTNNGlm4MoeMLP from a PyTorch Glm4MoeMLP layer."""
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_layer
-        tt_module.gate_proj = TTNNLinearSilu.from_torch(
-            torch_layer.gate_proj, linear_class=TTNNLinearIColShardedWRowSharded
-        )
-        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.up_proj)
-        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
+        LinearCls = TTNNLinearIColShardedWRowSharded if distributed else TTNNLinear
+        tt_module.gate_proj = TTNNLinearSilu.from_torch(torch_layer.gate_proj, linear_class=LinearCls)
+        tt_module.up_proj = LinearCls.from_torch(torch_layer.up_proj)
+        tt_module.down_proj = LinearCls.from_torch(torch_layer.down_proj)
         return tt_module
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -702,6 +710,10 @@ class TTNNGlm4MoeMLP(TTNNModule):
         x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn)
         x = self.down_proj(x)
         return x
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = self.device_state.get_replicated_tensor_config((1, 1, self.torch_layer.hidden_size))
+        return tree_map(set_distributed_tensor_config(cfg), output_tensors)
 
 
 class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
@@ -838,15 +850,14 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
 
 class TTNNGlm4MoeMoE(TTNNModule):
     @classmethod
-    def from_torch(cls, torch_module: Glm4MoeMoE) -> "TTNNGlm4MoeMoE":
+    def from_torch(cls, torch_module: Glm4MoeMoE, distributed: bool = False) -> "TTNNGlm4MoeMoE":
         ttnn_module = cls()
         ttnn_module._fallback_torch_layer = torch_module
         ttnn_module.experts = Glm4MoeNaiveMoeHybrid.from_torch(torch_module.experts, num_experts_off_chip=32)
-        ttnn_module.gate = TTNNGlm4MoeTopkRouter.from_parameters(
-            torch_module.gate.weight, torch_module.gate.e_score_correction_bias
-        )
+        GateCls = TTNNGlm4MoeTopkRouter if distributed else TTNNGlm4MoeTopkRouterReplicated
+        ttnn_module.gate = GateCls.from_parameters(torch_module.gate.weight, torch_module.gate.e_score_correction_bias)
         ttnn_module.gate._fallback_torch_layer = torch_module.gate
-        ttnn_module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_module.shared_experts)
+        ttnn_module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_module.shared_experts, distributed=distributed)
         ttnn_module.route_tokens_to_experts = TTNNGlm4MoeRouteTokenToExperts.from_torch(
             Glm4MoeRouteTokenToExperts(
                 torch_module.gate.e_score_correction_bias,
@@ -860,7 +871,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         )
         return ttnn_module
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, hidden_states):
         hidden_states = TorchTTNNTensor(hidden_states)
         residuals = hidden_states
@@ -1178,7 +1189,7 @@ class TTNNExperts(TTNNModule):
             packer_l1_acc=True,
         )
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(
         self, x: ttnn.Tensor, topk_experts_indices: ttnn.Tensor, topk_experts_weights: ttnn.Tensor
     ) -> ttnn.Tensor:
@@ -1469,7 +1480,7 @@ class TTNNMoE(TTNNModule):
         seq_len = h.shape[-2] if hasattr(h, "shape") and len(h.shape) > 1 else 1
         return seq_len == 1
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         residual = x
         seq_len = x.shape[-2] if len(x.shape) > 1 else 1

@@ -273,6 +273,29 @@ MeshShapeToDeviceArch = {
     "BHGLX": DeviceArch.BHGLX,
 }
 
+# Infer MESH_DEVICE from device shape when env var is not set (e.g. in pytest)
+_DEVICE_SHAPE_TO_MESH = {
+    (1, 1): "N150",
+    (1, 2): "N300",
+    (1, 4): "N150x4",
+    (1, 8): "T3K",
+    (8, 4): "TG",
+    (1, 4): "P150x4",
+    (1, 8): "P150x8",
+}
+
+
+def _get_mesh_device_arch(device) -> Optional[DeviceArch]:
+    """Get DeviceArch from MESH_DEVICE env or infer from device shape."""
+    mesh_name = os.environ.get("MESH_DEVICE")
+    if mesh_name is None and hasattr(device, "shape"):
+        try:
+            shape = tuple(device.shape) if hasattr(device.shape, "__iter__") else None
+            mesh_name = _DEVICE_SHAPE_TO_MESH.get(shape) if shape else None
+        except Exception:
+            pass
+    return MeshShapeToDeviceArch.get(mesh_name) if mesh_name else None
+
 
 def run_on_devices(*allowed_archs: DeviceArch):
     """
@@ -299,7 +322,7 @@ def run_on_devices(*allowed_archs: DeviceArch):
         def wrapper(self, *args, **kwargs):
             if not hasattr(self, "device") or self.device is None:
                 raise RuntimeError(f"{self.__class__.__name__}: No device set. ")
-            mesh_device = MeshShapeToDeviceArch.get(os.environ.get("MESH_DEVICE"))
+            mesh_device = _get_mesh_device_arch(self.device)
             if mesh_device is None:
                 raise RuntimeError(
                     f"{self.__class__.__name__}: Unable to determine device architecture from MESH_DEVICE environment variable."

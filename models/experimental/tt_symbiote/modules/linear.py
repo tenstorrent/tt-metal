@@ -63,7 +63,22 @@ class TTNNLinear(TTNNModule):
             self.tt_bias_host = preprocess_linear_bias(self.bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
     def move_weights_to_device_impl(self):
-        """Move weights to TTNN device."""
+        """Move weights to TTNN device. Replicate on mesh devices for full input compatibility."""
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.device.get_num_devices() > 1 else None
+        if mesh_mapper is not None:
+            self.tt_weight_host = preprocess_linear_weight(
+                self.weight,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                weights_mesh_mapper=mesh_mapper,
+            )
+            if self.bias is not None:
+                self.tt_bias_host = preprocess_linear_bias(
+                    self.bias,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    weights_mesh_mapper=mesh_mapper,
+                )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
@@ -130,24 +145,26 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, input_dim=-1, weight_dim=-2)
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
-        if len(input_tensor.tensor_topology().placements()) == 1:
+        placements = input_tensor.tensor_topology().placements()
+        # PlacementReplicate has no .dim; only PlacementShard does
+        shard_placements = [p for p in placements if isinstance(p, ttnn.PlacementShard)]
+        if len(shard_placements) == 1:
             assert (
-                input_tensor.tensor_topology().placements()[0].dim == self.input_dim
+                shard_placements[0].dim == self.input_dim
             ), f"Input tensor must be sharded on dimension {self.input_dim}."
-        elif len(input_tensor.tensor_topology().placements()) == 2:
+        elif len(shard_placements) == 2:
+            shard_dims = sorted(p.dim for p in shard_placements)
             assert (
-                input_tensor.tensor_topology().placements()[0].dim == 0
-            ), f"Input tensor must be sharded on batch dim (0)."
-            assert (
-                input_tensor.tensor_topology().placements()[1].dim == self.input_dim
-            ), f"Input tensor must be sharded on dimension {self.input_dim}."
-        else:
+                shard_dims[0] == 0 and shard_dims[1] == self.input_dim
+            ), f"Input tensor must be sharded on batch dim (0) and input dim ({self.input_dim})."
+        elif len(shard_placements) > 0:
             raise RuntimeError(
-                f"Input tensor must be sharded on either batch dim (0) or input dim ({self.input_dim}), but got tensor with placements: {input_tensor.tensor_topology().placements()}"
+                f"Input tensor must be sharded on either batch dim (0) or input dim ({self.input_dim}), but got: {placements}"
             )
+        # Replicated input (no shards) is allowed: full input per device, matmul with sharded weight, then reduce_scatter
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -217,7 +234,7 @@ class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
 
     @deallocate_weights_after
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass with automatic weight deallocation."""
         return super().forward(input_tensor)
@@ -261,7 +278,7 @@ class TTNNLinearIReplicatedWColSharded(TTNNLinearInputReplicatedWeightSharded):
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, weight_dim=-1)
 
-    @run_on_devices(DeviceArch.T3K)
+    @run_on_devices(DeviceArch.T3K, DeviceArch.P150x8, DeviceArch.N150)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
         if input_tensor.layout != ttnn.TILE_LAYOUT:

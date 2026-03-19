@@ -15,8 +15,9 @@ except ImportError:
     print("Could not import sdpa_attention_forward from transformers.integrations.sdpa_attention. ")
 
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule, set_distributed_tensor_config
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.core.run_config import trace_enabled, is_trace_capturing
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
@@ -1006,6 +1007,12 @@ class LlamaAttention(TTNNModule):
 
         return self.o_proj(attn_out), None
 
+    def set_output_tensors_config_impl(self, output_tensors):
+        out_dim = getattr(self.torch_layer, "num_attention_heads", None) or getattr(self, "num_heads", 1)
+        out_dim *= getattr(self.torch_layer, "head_dim", None) or getattr(self, "v_head_dim", 1)
+        cfg = self.device_state.get_replicated_tensor_config((1, 1, out_dim))
+        return tree_map(set_distributed_tensor_config(cfg), output_tensors)
+
 
 @trace_enabled
 class TTNNGlm4MoeLiteAttention(TTNNModule):
@@ -1039,7 +1046,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         self._use_trace_sems = False
 
     @classmethod
-    def from_torch(cls, torch_attn: "Glm4MoeLiteAttention", distributed: bool = True):
+    def from_torch(cls, torch_attn: "Glm4MoeLiteAttention", distributed: bool = False):
         new_attn = cls()
         new_attn._fallback_torch_layer = torch_attn
 
@@ -1322,7 +1329,9 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         q_states = self._maybe_all_gather(q_states)
 
-        q_states = ttnn.reshape(q_states, (batch_size, seq_length, self.num_heads, -1))
+        q_shape = list(q_states.shape)
+        q_seq = q_shape[1] if len(q_shape) == 3 else q_shape[2]
+        q_states = ttnn.reshape(q_states, (batch_size, q_seq, self.num_heads, -1))
         q_states = ttnn.permute(q_states, (0, 2, 1, 3))
 
         q_pass = ttnn.slice(q_states, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
@@ -1349,9 +1358,12 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         kv_full = self.kv_b_proj(k_pass_flat)
         kv_full = self._maybe_all_gather(kv_full)
 
-        kv_full = ttnn.reshape(
-            kv_full, (batch_size, seq_length, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
-        )
+        kv_shape = list(kv_full.shape)
+        if len(kv_shape) == 3:
+            kv_batch, kv_seq, _ = kv_shape
+        else:
+            kv_batch, kv_seq = kv_shape[0], kv_shape[2]
+        kv_full = ttnn.reshape(kv_full, (kv_batch, kv_seq, self.num_heads, -1))
         kv_full = ttnn.permute(kv_full, (0, 2, 1, 3))
 
         key_nope = ttnn.slice(kv_full, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
@@ -1361,7 +1373,9 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim + self.v_head_dim),
         )
 
-        k_rot = ttnn.reshape(k_rot, (batch_size, 1, seq_length, self.qk_rope_head_dim))
+        k_rot_shape = list(k_rot.shape)
+        k_rot_seq = k_rot_shape[1] if len(k_rot_shape) == 3 else k_rot_shape[2]
+        k_rot = ttnn.reshape(k_rot, (batch_size, 1, k_rot_seq, -1))
 
         cos, sin = position_embeddings
         if not rope_precomputed:
@@ -1457,6 +1471,10 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         attn_output = self.o_proj(attn_output)
 
         return attn_output, None
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        cfg = self.device_state.get_replicated_tensor_config((1, 1, self.num_heads * self.v_head_dim))
+        return tree_map(set_distributed_tensor_config(cfg), output_tensors)
 
     def _to_replicated(self, tensor: ttnn.Tensor, buf: ttnn.Tensor = None) -> ttnn.Tensor:
         """Convert a multi-device tensor to an explicitly replicated tensor.

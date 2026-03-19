@@ -78,6 +78,24 @@ class DistributedConfig:
         if self.ccl_manager is None and self.mesh_device.get_num_devices() > 1:
             self.ccl_manager = TT_CCL(self.mesh_device)
 
+    def get_replicated_tensor_config(self, shape):
+        """Return config for replicated tensors (take one device's copy, no concat)."""
+        mesh_shape = self.mesh_device.shape
+        num_mesh_dims = len(mesh_shape) if hasattr(mesh_shape, "__len__") else 1
+        dims = [0] * num_mesh_dims
+        shape_override = [1] * num_mesh_dims
+        return DistributedTensorConfig(
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_composer=ttnn.create_mesh_composer(
+                self.mesh_device,
+                ttnn.MeshComposerConfig(
+                    dims,
+                    ttnn.MeshShape(*shape_override),
+                ),
+            ),
+            logical_shape_fn=lambda s: tuple(s),
+        )
+
     def get_tensor_config_for_tensor(self, module_name, tensor):
         if tensor is not None:
             if (
@@ -89,12 +107,7 @@ class DistributedConfig:
                     print(
                         f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
                     )
-                return DistributedTensorConfig(
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                    mesh_composer=ttnn.create_mesh_composer(
-                        self.mesh_device, ttnn.MeshComposerConfig([0, len(tensor.shape)])
-                    ),
-                )
+                return self.get_replicated_tensor_config(tensor.shape)
         return self.tensor_config
 
 
