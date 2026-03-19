@@ -4,8 +4,12 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <functional>
+#include <thread>
+
+#include <taskflow/taskflow.hpp>
 
 #include "impl/jit_server/in_flight_compile_deduper.hpp"
 #include "impl/jit_server/rpc.capnp.h"
@@ -30,6 +34,7 @@ private:
     PrepareGenfilesCallback prepare_genfiles_callback_;
     InFlightCompileDeduper<CompileResponse> compile_deduper_;
     InFlightCompileDeduper<PrepareGenfilesResponse> genfiles_deduper_;
+    tf::Executor thread_pool_{std::thread::hardware_concurrency()};
 };
 
 }  // namespace tt::tt_metal::jit_server

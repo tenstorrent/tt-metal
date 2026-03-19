@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,6 +26,7 @@ namespace fs = std::filesystem;
 namespace {
 
 std::atomic<bool> g_keep_running{true};
+std::atomic<int> g_outstanding_compiles{0};
 
 constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
 constexpr const char* kDefaultEndpoint = "0.0.0.0:9876";
@@ -76,8 +78,6 @@ void compile_one(
     cmd += fmt::format("-c -o {} {} -MF {} ", obj_temp_path, request.srcs[src_index], temp_d_path);
     cmd += request.defines;
 
-    log_info(tt::LogMetal, "JIT compile server compile cmd: {}", cmd);
-
     tt::jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
@@ -110,8 +110,6 @@ void link_one(
     tt::jit_build::utils::FileRenamer elf_file(elf_name);
     cmd += "-o " + elf_file.path();
 
-    log_info(tt::LogMetal, "JIT compile server link cmd: {}", cmd);
-
     tt::jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
@@ -142,6 +140,7 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
 tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::jit_server::CompileRequest& request) {
     tt::tt_metal::jit_server::CompileResponse response;
     auto request_start = std::chrono::steady_clock::now();
+    int outstanding = g_outstanding_compiles.fetch_add(1) + 1;
 
     try {
         if (request.srcs.size() != request.objs.size()) {
@@ -161,22 +160,32 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
         std::vector<bool> compiled(num_objs, false);
         for (size_t i = 0; i < num_objs; ++i) {
             if (need_compile(out_dir, request.objs[i])) {
-                compile_one(request, out_dir, i, temp_objs[i]);
                 compiled[i] = true;
-            } else {
-                log_info(tt::LogMetal, "JIT compile server cache hit: {}{}", out_dir, request.objs[i]);
             }
         }
 
-        bool any_compiled = false;
-        for (bool c : compiled) {
-            if (c) {
-                any_compiled = true;
-                break;
+        const size_t recompiled = std::count(compiled.begin(), compiled.end(), true);
+        const size_t cache_hit = num_objs - recompiled;
+        bool needs_link = need_link(out_dir, request.target_name);
+
+        log_info(
+            tt::LogMetal,
+            "compile {}{}: obj={} hit={} miss={} link={} outstanding={}",
+            request.kernel_name,
+            request.target_name,
+            num_objs,
+            cache_hit,
+            recompiled,
+            needs_link || recompiled > 0 ? "yes" : "no",
+            outstanding);
+
+        for (size_t i = 0; i < num_objs; ++i) {
+            if (compiled[i]) {
+                compile_one(request, out_dir, i, temp_objs[i]);
             }
         }
 
-        if (any_compiled || need_link(out_dir, request.target_name)) {
+        if (recompiled > 0 || needs_link) {
             std::string link_objs_str;
             for (size_t i = 0; i < num_objs; ++i) {
                 std::string temp_path = out_dir + temp_objs[i];
@@ -193,7 +202,6 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             link_one(request, out_dir, link_objs_str);
         }
 
-        // Rename temp objects to final names after linking.
         for (size_t i = 0; i < num_objs; ++i) {
             fs::path src_path = out_dir + temp_objs[i];
             fs::path dst_path = out_dir + request.objs[i];
@@ -202,6 +210,20 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                 fs::rename(fs::path(src_path).concat(".dephash"), fs::path(dst_path).concat(".dephash"));
             } else if (fs::exists(src_path)) {
                 fs::remove(src_path);
+            }
+        }
+
+        {
+            static std::mutex stats_mutex;
+            std::lock_guard lock(stats_mutex);
+            std::ofstream stats("/tmp/tt-jit-compile-server-stats.log", std::ios::app);
+            if (stats) {
+                auto now = std::chrono::system_clock::now();
+                std::time_t t = std::chrono::system_clock::to_time_t(now);
+                char buf[32];
+                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+                stats << buf << "  " << request.kernel_name << request.target_name << "  recompiled=" << recompiled
+                      << "  cache_hit=" << cache_hit << "\n";
             }
         }
 
@@ -217,25 +239,17 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                 .count();
         log_info(
             tt::LogMetal,
-            "JIT compile server success: kernel={}, target={}, elf_size={}, elapsed_ms={}",
+            "done {}{}: {}ms, elf={}B",
             request.kernel_name,
             request.target_name,
-            response.elf_blobs.back().data.size(),
-            elapsed_ms);
+            elapsed_ms,
+            response.elf_blobs.back().data.size());
     } catch (const std::exception& e) {
         response.success = false;
         response.error_message = e.what();
-        auto elapsed_ms =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - request_start)
-                .count();
-        log_warning(
-            tt::LogMetal,
-            "JIT compile server exception: kernel={}, target={}, error={}, elapsed_ms={}",
-            request.kernel_name,
-            request.target_name,
-            response.error_message,
-            elapsed_ms);
+        log_warning(tt::LogMetal, "FAIL {}{}: {}", request.kernel_name, request.target_name, response.error_message);
     }
+    g_outstanding_compiles.fetch_sub(1);
     return response;
 }
 
@@ -260,22 +274,11 @@ tt::tt_metal::jit_server::PrepareGenfilesResponse prepare_genfiles_callback(
             }
         }
         response.success = true;
-        log_info(
-            tt::LogMetal,
-            "JIT compile server prepareGenfiles success: build_key={}, kernel={}, out_dir={}, file_count={}",
-            request.build_key,
-            request.kernel_name,
-            out_dir,
-            request.files.size());
+        log_info(tt::LogMetal, "genfiles {}: {} files", request.kernel_name, request.files.size());
     } catch (const std::exception& e) {
         response.success = false;
         response.error_message = e.what();
-        log_warning(
-            tt::LogMetal,
-            "JIT compile server prepareGenfiles exception: build_key={}, kernel={}, error={}",
-            request.build_key,
-            request.kernel_name,
-            response.error_message);
+        log_warning(tt::LogMetal, "genfiles FAIL {}: {}", request.kernel_name, response.error_message);
     }
     return response;
 }
