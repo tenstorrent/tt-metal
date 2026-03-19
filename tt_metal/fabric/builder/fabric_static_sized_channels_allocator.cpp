@@ -39,39 +39,31 @@ size_t FabricStaticSizedChannelsAllocator::get_sender_channel_number_of_slots(si
     return sender_channels_num_buffers[vc_id][channel_id];
 }
 
-size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const {
+size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(size_t vc_id) const {
     TT_FATAL(
         vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
-    TT_FATAL(
-        channel_id < receiver_channels_num_buffers[vc_id].size(),
-        "Receiver channel ID {} out of bounds for VC{}",
-        channel_id,
-        vc_id);
-    return receiver_channels_num_buffers[vc_id][channel_id];
+    TT_FATAL(is_receiver_channel_active_per_vc[vc_id], "VC{} has no active receiver channel", vc_id);
+    return receiver_channel_num_buffers[vc_id];
 }
 
-size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const {
+size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id) const {
     TT_FATAL(
         vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
-    TT_FATAL(
-        channel_id < receiver_channels_base_address[vc_id].size(),
-        "Receiver channel ID {} out of bounds for VC{}",
-        channel_id,
-        vc_id);
-    return receiver_channels_base_address[vc_id][channel_id];
+    TT_FATAL(is_receiver_channel_active_per_vc[vc_id], "VC{} has no active receiver channel", vc_id);
+    return receiver_channel_base_address[vc_id];
 }
 
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
     const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
-    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_receiver_channels_per_vc,
+    const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc,
     size_t channel_buffer_size_bytes,
     size_t available_channel_buffering_space,
     const std::vector<MemoryRegion>& memory_regions) :
     FabricChannelAllocator(topology, options, memory_regions),
     num_used_sender_channels_per_vc(num_used_sender_channels_per_vc),
-    num_used_receiver_channels_per_vc(num_used_receiver_channels_per_vc),
+    is_receiver_channel_active_per_vc(is_receiver_channel_active_per_vc),
     channel_buffer_size_bytes(channel_buffer_size_bytes),
     available_channel_buffering_space(available_channel_buffering_space) {
     // Compute buffer region start from memory regions
@@ -111,10 +103,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
             num_sender_buffer_slots_per_vc[vc].begin(),
             num_sender_buffer_slots_per_vc[vc].begin() + num_used_sender_channels_per_vc[vc],
             size_t{0});
-        size_t vc_receiver_slots = std::accumulate(
-            num_receiver_buffer_slots_per_vc[vc].begin(),
-            num_receiver_buffer_slots_per_vc[vc].begin() + num_used_receiver_channels_per_vc[vc],
-            size_t{0});
+        size_t vc_receiver_slots = is_receiver_channel_active_per_vc[vc] ? num_receiver_buffer_slots_per_vc[vc][0] : 0;
         total_slot_count += vc_sender_slots + vc_receiver_slots;
 
         log_trace(tt::LogFabric, "VC{} num_sender_buffer_slots: {}", vc, num_sender_buffer_slots_per_vc[vc]);
@@ -148,17 +137,16 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
                 channel_buffer_size_bytes * num_remote_sender_buffer_slots_per_vc[vc][i];
             this->remote_sender_channels_num_buffers[vc][i] = num_remote_sender_buffer_slots_per_vc[vc][i];
         }
-        // set the local receiver channel sizes and num buffers
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->receiver_channels_size_bytes[vc][i] =
-                channel_buffer_size_bytes * num_receiver_buffer_slots_per_vc[vc][i];
-            this->receiver_channels_num_buffers[vc][i] = num_receiver_buffer_slots_per_vc[vc][i];
+        // set the local receiver channel size and num buffers (one per VC)
+        if (is_receiver_channel_active_per_vc[vc]) {
+            this->receiver_channel_size_bytes[vc] = channel_buffer_size_bytes * num_receiver_buffer_slots_per_vc[vc][0];
+            this->receiver_channel_num_buffers[vc] = num_receiver_buffer_slots_per_vc[vc][0];
         }
-        // set the remote receiver channel sizes and num buffers
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->remote_receiver_channels_size_bytes[vc][i] =
-                channel_buffer_size_bytes * num_remote_receiver_buffer_slots_per_vc[vc][i];
-            this->remote_receiver_channels_num_buffers[vc][i] = num_remote_receiver_buffer_slots_per_vc[vc][i];
+        // set the remote receiver channel size and num buffers (one per VC)
+        if (is_receiver_channel_active_per_vc[vc]) {
+            this->remote_receiver_channel_size_bytes[vc] =
+                channel_buffer_size_bytes * num_remote_receiver_buffer_slots_per_vc[vc][0];
+            this->remote_receiver_channel_num_buffers[vc] = num_remote_receiver_buffer_slots_per_vc[vc][0];
         }
     }
 
@@ -175,15 +163,10 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     uint32_t receiver_buffer_addr = sender_buffer_addr;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->receiver_channels_base_address[vc][i] = receiver_buffer_addr;
-            receiver_buffer_addr += this->receiver_channels_size_bytes[vc][i];
-            log_trace(
-                tt::LogFabric,
-                "VC{} Receiver {} channel_start: {}",
-                vc,
-                i,
-                this->receiver_channels_base_address[vc][i]);
+        if (is_receiver_channel_active_per_vc[vc]) {
+            this->receiver_channel_base_address[vc] = receiver_buffer_addr;
+            receiver_buffer_addr += this->receiver_channel_size_bytes[vc];
+            log_trace(tt::LogFabric, "VC{} Receiver channel_start: {}", vc, this->receiver_channel_base_address[vc]);
         }
     }
     uint32_t buffer_addr_end = receiver_buffer_addr;
@@ -205,15 +188,14 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
-            this->remote_receiver_channels_base_address[vc][i] = remote_receiver_buffer_addr;
-            remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[vc][i];
+        if (is_receiver_channel_active_per_vc[vc]) {
+            this->remote_receiver_channel_base_address[vc] = remote_receiver_buffer_addr;
+            remote_receiver_buffer_addr += this->remote_receiver_channel_size_bytes[vc];
             log_trace(
                 tt::LogFabric,
-                "VC{} Remote Receiver {} channel_start: {}",
+                "VC{} Remote Receiver channel_start: {}",
                 vc,
-                i,
-                this->remote_receiver_channels_base_address[vc][i]);
+                this->remote_receiver_channel_base_address[vc]);
         }
     }
 
@@ -241,13 +223,11 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     // Validate receiver channels per VC
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (uint32_t i = 0; i < num_used_receiver_channels_per_vc[vc]; i++) {
+        if (is_receiver_channel_active_per_vc[vc]) {
             TT_FATAL(
-                this->receiver_channels_size_bytes[vc][i] > 0,
-                "Internal error when computing `receiver_channels_size_bytes[VC{}][{}]` which was computed to be size "
-                "0",
-                vc,
-                i);
+                this->receiver_channel_size_bytes[vc] > 0,
+                "Internal error when computing `receiver_channel_size_bytes[VC{}]` which was computed to be size 0",
+                vc);
         }
     }
 
@@ -258,10 +238,9 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
             this->sender_channels_size_bytes[vc].begin(),
             this->sender_channels_size_bytes[vc].begin() + num_used_sender_channels_per_vc[vc],
             0ul);
-        total_size += std::accumulate(
-            this->receiver_channels_size_bytes[vc].begin(),
-            this->receiver_channels_size_bytes[vc].begin() + num_used_receiver_channels_per_vc[vc],
-            0ul);
+        if (is_receiver_channel_active_per_vc[vc]) {
+            total_size += this->receiver_channel_size_bytes[vc];
+        }
     }
 
     TT_FATAL(
@@ -489,9 +468,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             get_optimal_num_slots_per_vc(
                 default_with_tensix_buffer_slot_options[arch_index],
                 num_used_sender_channels_per_vc[0],
-                num_used_receiver_channels_per_vc[0],
+                static_cast<size_t>(is_receiver_channel_active_per_vc[0]),
                 num_used_sender_channels_per_vc[1],
-                num_used_receiver_channels_per_vc[1],
+                static_cast<size_t>(is_receiver_channel_active_per_vc[1]),
                 vc0_sender_buffer_slots,
                 vc0_receiver_buffer_slots,
                 vc1_sender_buffer_slots,
@@ -519,9 +498,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     get_optimal_num_slots_per_vc(
         get_num_buffer_slots(topology, arch_index),
         num_used_sender_channels_per_vc[0],
-        num_used_receiver_channels_per_vc[0],
+        static_cast<size_t>(is_receiver_channel_active_per_vc[0]),
         num_used_sender_channels_per_vc[1],
-        num_used_receiver_channels_per_vc[1],
+        static_cast<size_t>(is_receiver_channel_active_per_vc[1]),
         vc0_sender_buffer_slots,
         vc0_receiver_buffer_slots,
         vc1_sender_buffer_slots,
@@ -550,22 +529,25 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
         }
     }
 
-    // Emit receiver channel args for all VCs
+    // Emit receiver channel args for all VCs (one channel per VC)
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (size_t i = 0; i < this->num_used_receiver_channels_per_vc[vc]; ++i) {
-            ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[vc][i]));
-            ct_args.push_back(this->receiver_channels_num_buffers[vc][i]);
-            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[vc][i]));
-            ct_args.push_back(this->remote_receiver_channels_num_buffers[vc][i]);
+        if (this->is_receiver_channel_active_per_vc[vc]) {
+            ct_args.push_back(static_cast<uint32_t>(this->receiver_channel_base_address[vc]));
+            ct_args.push_back(this->receiver_channel_num_buffers[vc]);
+            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channel_base_address[vc]));
+            ct_args.push_back(this->remote_receiver_channel_num_buffers[vc]);
         }
     }
 }
 
 void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     std::vector<uint32_t>& ct_args,
-    size_t num_used_vc0_sender_channels,
-    size_t num_used_vc1_sender_channels,
-    size_t num_used_receiver_channels) const {
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
+    const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc) const {
+    size_t num_used_vc0_sender_channels = num_used_sender_channels_per_vc[0];
+    size_t num_used_vc1_sender_channels = num_used_sender_channels_per_vc[1];
+    size_t num_used_receiver_channels = static_cast<size_t>(is_receiver_channel_active_per_vc[0]) +
+                                        static_cast<size_t>(is_receiver_channel_active_per_vc[1]);
     // Tag
     ct_args.push_back(0xabcd1234);
 

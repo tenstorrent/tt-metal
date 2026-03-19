@@ -323,14 +323,17 @@ struct FabricEriscDatamoverConfig {
         Topology topology,
         FabricEriscDatamoverOptions options,
         const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
+        const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc);
 
     std::size_t channel_buffer_size_bytes = 0;
 
-    std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
+    std::size_t num_used_sender_channels = 0;    // Derived total: sum(num_used_sender_channels_per_vc). Use
+                                                 // num_used_sender_channels_per_vc for per-VC logic.
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {
+        0, 0};  // Per-VC sender channel counts
+    std::array<bool, builder_config::MAX_NUM_VCS> is_receiver_channel_active_per_vc = {
+        false, false};  // Whether each VC has an active receiver channel
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
@@ -583,11 +586,6 @@ public:
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, builder_config::max_downstream_edms>
         downstream_allocators = {};
 
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> local_receiver_channels_buffer_address = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_base_address = {};
-
     std::array<size_t, builder_config::num_max_sender_channels> local_sender_channels_connection_info_addr = {};
 
     size_t termination_signal_ptr = 0;
@@ -630,8 +628,11 @@ public:
 
 private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
-    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
-    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+    // Outer dim is MAX_RISC_CORES_PER_ETH_CHAN (not MAX_NUM_VCS — they are equal by coincidence on current HW)
+    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_RISC_CORES_PER_ETH_CHAN>
+        is_sender_channel_serviced_{};
+    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_RISC_CORES_PER_ETH_CHAN>
+        is_receiver_channel_serviced_{};
 
     // Apply channel trimming overrides: disables unused sender/receiver channels
     // and stores overrides for compile-time arg generation (RX forwarding disable flags).

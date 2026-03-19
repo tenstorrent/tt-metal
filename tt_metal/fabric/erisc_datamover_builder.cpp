@@ -381,27 +381,27 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     Topology topology,
     FabricEriscDatamoverOptions options,
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
+    const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc) :
     FabricEriscDatamoverConfig(topology) {
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
 
     // Set channel counts from parameters
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         this->num_used_sender_channels_per_vc[vc] = sender_channels_per_vc[vc];
-        this->num_used_receiver_channels_per_vc[vc] = receiver_channels_per_vc[vc];
+        this->is_receiver_channel_active_per_vc[vc] = is_receiver_channel_active_per_vc[vc];
         log_debug(
             tt::LogFabric,
-            "  VC{}: {} senders, {} receivers",
+            "  VC{}: {} senders, receiver_active={}",
             vc,
             this->num_used_sender_channels_per_vc[vc],
-            this->num_used_receiver_channels_per_vc[vc]);
+            this->is_receiver_channel_active_per_vc[vc]);
     }
 
     // Set total counts for backward compatibility
     this->num_used_sender_channels = std::accumulate(
         this->num_used_sender_channels_per_vc.begin(), this->num_used_sender_channels_per_vc.end(), size_t{0});
-    this->num_used_receiver_channels = std::accumulate(
-        this->num_used_receiver_channels_per_vc.begin(), this->num_used_receiver_channels_per_vc.end(), size_t{0});
+    this->num_used_receiver_channels = static_cast<size_t>(this->is_receiver_channel_active_per_vc[0]) +
+                                       static_cast<size_t>(this->is_receiver_channel_active_per_vc[1]);
 
     // num_fwd_paths = total sender channels - 1 (worker channel)
     this->num_fwd_paths = this->num_used_sender_channels - 1;
@@ -460,7 +460,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         topology,
         options,
         this->num_used_sender_channels_per_vc,
-        this->num_used_receiver_channels_per_vc,
+        this->is_receiver_channel_active_per_vc,
         this->channel_buffer_size_bytes,
         available_channel_buffering_space,
         this->available_buffer_memory_regions);
@@ -711,8 +711,10 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
     // Initialize per-RISC channel servicing flags
     const auto& sender_counts = actual_sender_channels_per_vc.value_or(this->config.num_used_sender_channels_per_vc);
-    const auto& receiver_counts =
-        actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
+    std::array<size_t, builder_config::MAX_NUM_VCS> config_receiver_counts = {
+        static_cast<size_t>(this->config.is_receiver_channel_active_per_vc[0]),
+        static_cast<size_t>(this->config.is_receiver_channel_active_per_vc[1])};
+    const auto& receiver_counts = actual_receiver_channels_per_vc.value_or(config_receiver_counts);
 
     bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
                                                 tt::tt_fabric::FabricTensixConfig::MUX);
@@ -972,7 +974,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Get actual downstream EDM counts from the adapter (actual connections made)
     uint32_t num_vc0_downstream_edms = this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0);
 
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
+    bool needs_vc1 = config.is_receiver_channel_active_per_vc[1];
     // Get actual VC1 downstream EDM count from adapter (only relevant for multi-mesh 2D routing)
     uint32_t num_vc1_downstream_edms =
         needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
@@ -1271,13 +1273,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Emit local channel allocations
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
+    const std::array<size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc = {
+        actual_sender_channels_vc0, actual_sender_channels_vc1};
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args, actual_sender_channels_per_vc, config.is_receiver_channel_active_per_vc);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
     TT_FATAL(config.remote_channels_allocator != nullptr, "Remote channels allocator must be non-null");
-    config.remote_channels_allocator->emit_channel_allocations_ct_args(ct_args, num_receiver_channels);
+    config.remote_channels_allocator->emit_channel_allocations_ct_args(
+        ct_args, config.is_receiver_channel_active_per_vc);
 
     // Downstream sender data
     ct_args.push_back(0xabaddad7);
@@ -1339,7 +1344,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
 
     // Pack VC1 runtime args if VC1 is configured
     // Both inter-mesh and intra-mesh routers have VC1 in multi-mesh topologies
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
+    bool needs_vc1 = config.is_receiver_channel_active_per_vc[1];
     if (needs_vc1) {
         receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
     }
@@ -1573,8 +1578,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     // Validate upstream VC1 usage
     if (upstream_vc_idx == 1) {
         TT_FATAL(
-            config.num_used_receiver_channels_per_vc[1] > 0,
-            "VC1 receiver channels not configured on upstream router.");
+            config.is_receiver_channel_active_per_vc[1], "VC1 receiver channels not configured on upstream router.");
     }
 
     const auto ds_noc_x = downstream_builder->get_noc_x();
@@ -1617,7 +1621,7 @@ tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_le
     }
     // Use Os (optimize for size) when VC1 is active to fit in code space
     // Use O3 (optimize for performance) otherwise
-    bool vc1_active = this->config.num_used_receiver_channels_per_vc[1] > 0;
+    bool vc1_active = this->config.is_receiver_channel_active_per_vc[1];
     return vc1_active ? tt::tt_metal::KernelBuildOptLevel::Os : tt::tt_metal::KernelBuildOptLevel::O3;
 }
 
