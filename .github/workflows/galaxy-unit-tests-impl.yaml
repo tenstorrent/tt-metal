@@ -183,7 +183,7 @@ jobs:
             echo "::group::${name}"
             if GTEST_OUTPUT="xml:/work/generated/test_reports/${xml_name}" "$@"; then
               echo "::endgroup::"
-              echo "::notice title=PASS::${name}"
+              echo "::notice title=PASS::${name} passed."
             else
               local status=$?
               failed=1
