@@ -410,6 +410,8 @@ def format_sampling_params(sampling_params, max_batch_size):
     # broadcast to all users (not pad with default). A scalar True means
     # "all users enabled", not "only user 0".
     def _broadcast_pad(lst, name):
+        if not isinstance(lst, list):
+            return [lst] * target_len
         if len(lst) == 1:
             return lst * target_len
         return _pad(lst, name)
