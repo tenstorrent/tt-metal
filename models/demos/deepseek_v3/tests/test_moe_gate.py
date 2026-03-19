@@ -12,6 +12,7 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -21,10 +22,10 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 
 @pytest.mark.parametrize(
-    "mode,seq_len",
+    "mode,batch_size_per_row,seq_len",
     [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
+        ("decode", USERS_PER_ROW, 1),
+        ("prefill", 1, _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
@@ -35,6 +36,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 )
 def test_forward_pass(
     mode,
+    batch_size_per_row,
     seq_len,
     hf_config,
     topk_fallback,
@@ -45,7 +47,7 @@ def test_forward_pass(
 ):
     """Test forward pass against reference model."""
 
-    batch_size = 1
+    num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
 
     # Get state dict from actual model - pass directly to convert_weights
     torch.use_deterministic_algorithms(True)
@@ -75,7 +77,7 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
+    torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
     reference_model.eval()
