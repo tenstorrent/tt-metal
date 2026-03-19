@@ -248,7 +248,7 @@ class SFTTrainer:
                 if micro_step == 0:
                     memory_snapshot("FORWARD_PASS")
 
-                loss = self._compute_loss(batch, micro_step, logits)
+                loss = self._compute_loss(batch, logits)
 
                 if micro_step == 0:
                     memory_snapshot("LOSS_COMPUTATION")
