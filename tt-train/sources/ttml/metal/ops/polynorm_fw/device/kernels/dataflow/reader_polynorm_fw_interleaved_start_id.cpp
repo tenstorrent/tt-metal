@@ -45,20 +45,31 @@ void kernel_main() {
 
     for (uint32_t row = 0; row < num_rows_to_process; ++row) {
         const uint32_t row_start_idx = (start_row + row) * Wt;
+
+        // Pass A: feed stream consumed first by compute (pass_1).
         for (uint32_t col = 0; col < Wt; col += block_size) {
             const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
             const uint32_t block_start_idx = row_start_idx + col;
 
-            read_tiles_by_row<false>(
+            read_tiles_by_row(
                 cb_input_pass_1, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
-            read_tiles_by_row<false>(
-                cb_input_pass_2, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+        }
+
+        // Pass B: feed pass_3 after pass_1, matching compute's stage order.
+        for (uint32_t col = 0; col < Wt; col += block_size) {
+            const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
+            const uint32_t block_start_idx = row_start_idx + col;
             read_tiles_by_row(
                 cb_input_pass_3, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+        }
 
-            // Barrier is issued in the final read call above.
-            cb_push_back(cb_input_pass_1, block_size);
-            cb_push_back(cb_input_pass_2, block_size);
+        // Pass C: feed pass_2 last. This stream is only consumed in emit_output(),
+        // so producing it earlier can deadlock for Wt > block_size.
+        for (uint32_t col = 0; col < Wt; col += block_size) {
+            const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
+            const uint32_t block_start_idx = row_start_idx + col;
+            read_tiles_by_row(
+                cb_input_pass_2, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
         }
     }
 }
