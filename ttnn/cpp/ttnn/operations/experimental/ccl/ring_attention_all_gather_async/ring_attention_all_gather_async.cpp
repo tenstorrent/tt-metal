@@ -22,6 +22,7 @@ std::vector<ttnn::Tensor> ring_attention_all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensors.at(0), topology, cluster_axis);
+    topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     return ttnn::prim::ring_attention_all_gather_async(
         input_tensors,
         persistent_output_buffer,
