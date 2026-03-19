@@ -551,6 +551,5 @@ class DecoderBlock:
             # MoE fabric connections (reduce-to-one)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
-        print("Running DecoderBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result, attention_block_output_tensor
