@@ -48,7 +48,7 @@ from models.demos.minimax_m2.reference.generate_goldens import load_and_dequant
 from models.demos.minimax_m2.tt.attention import TtMiniMaxAttention
 from models.demos.minimax_m2.tt.generator import TtMiniMaxGenerator
 from models.demos.minimax_m2.tt.model import TtDecoderLayer, TtMiniMaxModel
-from models.demos.minimax_m2.tt.model_config import MiniMaxM2TTConfig, make_mesh_config
+from models.demos.minimax_m2.tt.model_config import MiniMaxM2TTConfig, make_mesh_config, make_paged_attention_config
 from models.demos.minimax_m2.tt.moe import TtMiniMaxMoE
 from models.demos.minimax_m2.tt.rms_norm import TtRMSNorm
 from models.demos.minimax_m2.tt.rope import PartialRoPESetup, apply_partial_rope
@@ -710,3 +710,117 @@ def test_trace_generation(device, real_state_dict, ref_config, tt_config):
     match = (out_trace == out_no_trace).float().mean().item()
     print(f"[TraceGen] token_match_trace_vs_notrace = {match:.6f}")
     assert match > 0.90, f"Trace vs no-trace token match too low: {match:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Test 13: Paged Attention — generation with paged KV cache
+# ---------------------------------------------------------------------------
+
+
+def test_paged_attention_generation(device, real_state_dict, ref_config, tt_config):
+    """Verify paged attention generates same tokens as non-paged."""
+    torch.manual_seed(88)
+    prompt_len = 8
+    max_new = 6
+    prompt_ids = torch.randint(0, ref_config.vocab_size, (BATCH, prompt_len))
+
+    # Non-paged model for reference
+    tt_model_nonpaged = TtMiniMaxModel(device, real_state_dict, tt_config, max_seq_len=MAX_SEQ_LEN)
+    gen_nonpaged = TtMiniMaxGenerator(tt_model_nonpaged, device, max_seq_len=MAX_SEQ_LEN, batch=BATCH)
+    out_nonpaged = gen_nonpaged.generate(prompt_ids, max_new_tokens=max_new)
+
+    # Paged attention model
+    paged_config = make_paged_attention_config(max_seq_len=MAX_SEQ_LEN)
+    print(f"[PagedAttn] blocks={paged_config.max_num_blocks}, block_size={paged_config.block_size}")
+
+    tt_model_paged = TtMiniMaxModel(
+        device,
+        real_state_dict,
+        tt_config,
+        max_seq_len=MAX_SEQ_LEN,
+        max_batch_size=BATCH,
+        paged_attention_config=paged_config,
+    )
+    gen_paged = TtMiniMaxGenerator(tt_model_paged, device, max_seq_len=MAX_SEQ_LEN, batch=BATCH)
+    out_paged = gen_paged.generate(prompt_ids, max_new_tokens=max_new)
+
+    assert (
+        out_paged.shape == out_nonpaged.shape
+    ), f"Shape mismatch: paged={out_paged.shape}, nonpaged={out_nonpaged.shape}"
+
+    match = (out_paged == out_nonpaged).float().mean().item()
+    print(f"[PagedAttn] token_match_paged_vs_nonpaged = {match:.6f}")
+    assert match > 0.90, f"Paged vs non-paged token match too low: {match:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Paged Attention with trace — trace-safe paged decode
+# ---------------------------------------------------------------------------
+
+
+def test_paged_attention_trace(device, real_state_dict, ref_config, tt_config):
+    """Verify paged attention with trace produces same tokens as without trace."""
+    torch.manual_seed(99)
+    prompt_len = 8
+    max_new = 6
+    prompt_ids = torch.randint(0, ref_config.vocab_size, (BATCH, prompt_len))
+
+    paged_config = make_paged_attention_config(max_seq_len=MAX_SEQ_LEN)
+
+    tt_model = TtMiniMaxModel(
+        device,
+        real_state_dict,
+        tt_config,
+        max_seq_len=MAX_SEQ_LEN,
+        max_batch_size=BATCH,
+        paged_attention_config=paged_config,
+    )
+    gen = TtMiniMaxGenerator(tt_model, device, max_seq_len=MAX_SEQ_LEN, batch=BATCH)
+
+    # Without trace
+    out_no_trace = gen.generate(prompt_ids, max_new_tokens=max_new, use_trace=False)
+    gen.reset_caches()
+
+    # With trace
+    out_trace = gen.generate(prompt_ids, max_new_tokens=max_new, use_trace=True)
+
+    assert out_trace.shape == out_no_trace.shape
+
+    match = (out_trace == out_no_trace).float().mean().item()
+    print(f"[PagedAttnTrace] token_match_trace_vs_notrace = {match:.6f}")
+    assert match > 0.90, f"Paged trace vs no-trace token match too low: {match:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# Test 15: ISL 32k verification — verify model can allocate 32k context
+# ---------------------------------------------------------------------------
+
+
+def test_isl_32k_allocation(device, real_state_dict, tt_config):
+    """Verify model can allocate paged KV cache for 32k context length."""
+    max_seq_32k = 32768
+
+    paged_config = make_paged_attention_config(max_seq_len=max_seq_32k)
+    print(f"[ISL-32k] blocks={paged_config.max_num_blocks}, block_size={paged_config.block_size}")
+
+    # Just verify allocation succeeds — don't run inference
+    tt_model = TtMiniMaxModel(
+        device,
+        real_state_dict,
+        tt_config,
+        max_seq_len=max_seq_32k,
+        max_batch_size=BATCH,
+        paged_attention_config=paged_config,
+    )
+
+    # Verify KV cache is allocated with paged shape
+    layer0 = tt_model.layers[0]
+    k_shape = list(layer0.self_attn.k_cache.shape)
+    print(f"[ISL-32k] K-cache shape: {k_shape}")
+
+    expected_blocks = paged_config.max_num_blocks
+    expected_block_size = paged_config.block_size
+    assert k_shape[0] == expected_blocks, f"Expected {expected_blocks} blocks, got {k_shape[0]}"
+    assert k_shape[2] == expected_block_size, f"Expected block_size {expected_block_size}, got {k_shape[2]}"
+
+    print(f"[ISL-32k] Paged KV cache allocated successfully for 32k context")

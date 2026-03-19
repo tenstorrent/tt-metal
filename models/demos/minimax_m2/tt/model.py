@@ -13,6 +13,7 @@ import torch
 
 import ttnn
 from models.demos.gpt_oss.tt.ccl import CCLManager
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 from .attention import TtMiniMaxAttention
 from .model_config import MiniMaxM2TTConfig, make_mesh_config
@@ -40,6 +41,7 @@ class TtDecoderLayer:
         ccl_manager=None,
         max_seq_len: int = 4096,
         max_batch_size: int = 1,
+        paged_attention_config: PagedAttentionConfig = None,
     ):
         prefix = f"model.layers.{layer_idx}."
         eps = config.rms_norm_eps
@@ -58,6 +60,7 @@ class TtDecoderLayer:
             ccl_manager=ccl_manager,
             max_seq_len=max_seq_len,
             max_batch_size=max_batch_size,
+            paged_attention_config=paged_attention_config,
         )
         self.moe = TtMiniMaxMoE(
             device,
@@ -88,11 +91,11 @@ class TtDecoderLayer:
 
         return x
 
-    def forward_prefill(self, x, cos, sin, user_id: int = 0):
+    def forward_prefill(self, x, cos, sin, user_id: int = 0, page_table: ttnn.Tensor = None):
         """Prefill: fills device-resident KV cache."""
         residual = x
         normed = self.input_layernorm(x)
-        attn_out = self.self_attn.forward_prefill(normed, cos, sin, user_id=user_id)
+        attn_out = self.self_attn.forward_prefill(normed, cos, sin, user_id=user_id, page_table=page_table)
         normed.deallocate(True)
         x = ttnn.add(residual, attn_out)
         residual.deallocate(True)
@@ -126,11 +129,11 @@ class TtDecoderLayer:
         moe_out.deallocate(True)
         return x
 
-    def forward_decode_trace(self, x, cos, sin, position_idx: ttnn.Tensor):
+    def forward_decode_trace(self, x, cos, sin, position_idx: ttnn.Tensor, page_table: ttnn.Tensor = None):
         """Trace-safe decode: tensor position for attention, device routing for MoE."""
         residual = x
         normed = self.input_layernorm(x)
-        attn_out = self.self_attn.forward_decode_trace(normed, cos, sin, position_idx)
+        attn_out = self.self_attn.forward_decode_trace(normed, cos, sin, position_idx, page_table=page_table)
         normed.deallocate(True)
         x = ttnn.add(residual, attn_out)
         residual.deallocate(True)
@@ -153,6 +156,7 @@ class TtMiniMaxModel:
     """Full MiniMax-M2.5 inference model — Galaxy mesh (8,4).
 
     KV cache is device-resident inside each attention layer.
+    Supports both paged and non-paged attention modes.
     Trace-safe decode via forward_decode_trace.
     """
 
@@ -163,11 +167,13 @@ class TtMiniMaxModel:
         config: MiniMaxM2TTConfig,
         max_seq_len: int = 4096,
         max_batch_size: int = 1,
+        paged_attention_config: PagedAttentionConfig = None,
     ):
         self.config = config
         self.device = device
         self.max_seq_len = max_seq_len
         self.max_batch_size = max_batch_size
+        self.paged_attention_config = paged_attention_config
         self._is_mesh = isinstance(device, ttnn.MeshDevice)
 
         if self._is_mesh:
@@ -210,6 +216,7 @@ class TtMiniMaxModel:
                 ccl_manager=self.ccl_manager,
                 max_seq_len=max_seq_len,
                 max_batch_size=max_batch_size,
+                paged_attention_config=paged_attention_config,
             )
             for i in range(config.num_hidden_layers)
         ]
@@ -282,14 +289,20 @@ class TtMiniMaxModel:
         x = self.norm(x)
         return ttnn.linear(x, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def forward_prefill(self, input_ids: torch.Tensor, user_id: int = 0):
-        """Prefill: process prompt tokens, fill device-resident KV-cache."""
+    def forward_prefill(self, input_ids: torch.Tensor, user_id: int = 0, page_table: ttnn.Tensor = None):
+        """Prefill: process prompt tokens, fill device-resident KV-cache.
+
+        Args:
+            input_ids: [B, S] token ids
+            user_id: Batch index for non-paged attention
+            page_table: [B, max_blocks_per_user] page table for paged attention
+        """
         B, S = input_ids.shape
         x = self._embed(input_ids)
         cos, sin = self.rope.get_cos_sin(S)
 
         for layer in self.layers:
-            x = layer.forward_prefill(x, cos, sin, user_id=user_id)
+            x = layer.forward_prefill(x, cos, sin, user_id=user_id, page_table=page_table)
 
         cos.deallocate(True)
         sin.deallocate(True)
@@ -336,6 +349,7 @@ class TtMiniMaxModel:
         position_idx: ttnn.Tensor,
         rope_ids: ttnn.Tensor,
         batch: int = 1,
+        page_table: ttnn.Tensor = None,
     ):
         """Trace-safe decode: all operations use fixed tensor shapes.
 
@@ -344,6 +358,7 @@ class TtMiniMaxModel:
             position_idx: [B] int32 — persistent position buffer for cache + SDPA
             rope_ids:     [B] uint32 — persistent position buffer for RoPE embedding
             batch:        batch size
+            page_table:   [B, max_blocks_per_user] page table for paged attention
 
         Returns:
             logits tensor (persistent buffer during trace replay)
@@ -354,7 +369,7 @@ class TtMiniMaxModel:
         cos, sin = self.rope.get_cos_sin_decode(rope_ids)
 
         for layer in self.layers:
-            x = layer.forward_decode_trace(x, cos, sin, position_idx)
+            x = layer.forward_decode_trace(x, cos, sin, position_idx, page_table=page_table)
 
         cos.deallocate(True)
         sin.deallocate(True)

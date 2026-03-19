@@ -5,11 +5,13 @@
 MiniMax-M2.5 GQA Attention with QK-norm and Partial RoPE — Galaxy mesh (8,4).
 
 KV-cache strategy:
-  - Device-resident: pre-allocated [B, NK, max_seq_len, D] on DRAM per layer.
-  - Prefill:  ttnn.fill_cache(k_cache, k, batch_idx=user_id)
-  - Decode:   ttnn.update_cache / paged_update_cache with tensor index
-  - Trace-safe decode via forward_decode_trace: uses paged_update_cache and
-    scaled_dot_product_attention_decode with tensor positions.
+  - Paged attention (default): [max_num_blocks, NK, block_size, D] on DRAM per layer.
+    Prefill: paged_fill_cache with page_table
+    Decode:  paged_update_cache + paged_scaled_dot_product_attention_decode
+  - Non-paged fallback: [B, NK, max_seq_len, D] on DRAM per layer.
+    Prefill: fill_cache
+    Decode:  update_cache + scaled_dot_product_attention_decode
+  - Trace-safe decode via forward_decode_trace with tensor positions.
 """
 
 import torch
@@ -18,6 +20,7 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.tt.attention.operations import apply_allreduce
 from models.demos.gpt_oss.tt.ccl import CCLManager
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 from .model_config import MiniMaxM2TTConfig
 from .rms_norm import TtRMSNorm
@@ -44,8 +47,11 @@ class TtMiniMaxAttention:
       - O projection:      row-parallel (shard input, all-reduce partial products)
       - QK-norm weights:   sharded to match local head count per device
 
-    KV cache: [B, NK_local, max_seq_len, D] bfloat16 on DRAM per device.
-    Prefill fills via ttnn.fill_cache; decode updates via ttnn.update_cache.
+    KV cache modes:
+      - Paged: [max_num_blocks, NK_local, block_size, D] with page_table for mapping
+      - Non-paged: [B, NK_local, max_seq_len, D] static allocation
+
+    Prefill fills via paged_fill_cache/fill_cache; decode uses paged_update_cache/update_cache.
     Trace-safe decode via forward_decode_trace with tensor positions.
     """
 
@@ -59,6 +65,7 @@ class TtMiniMaxAttention:
         ccl_manager: CCLManager = None,
         max_seq_len: int = 4096,
         max_batch_size: int = 1,
+        paged_attention_config: PagedAttentionConfig = None,
     ):
         self.config = config
         self.device = device
@@ -120,9 +127,22 @@ class TtMiniMaxAttention:
         self._tp = tp
         self._max_seq_len = max_seq_len
         self._max_batch_size = max_batch_size
+        self._paged_attention_config = paged_attention_config
+        self._use_paged_attention = paged_attention_config is not None
 
-        # Device-resident KV cache [B, NK_local, max_seq_len, D] per TP device
-        cache_shape = [max_batch_size, NK_local, max_seq_len, D]
+        # Device-resident KV cache
+        if self._use_paged_attention:
+            # Paged: [max_num_blocks, NK_local, block_size, D]
+            cache_shape = [
+                paged_attention_config.max_num_blocks,
+                NK_local,
+                paged_attention_config.block_size,
+                D,
+            ]
+        else:
+            # Non-paged: [B, NK_local, max_seq_len, D]
+            cache_shape = [max_batch_size, NK_local, max_seq_len, D]
+
         self.k_cache = ttnn.from_torch(
             torch.zeros(cache_shape, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -223,13 +243,26 @@ class TtMiniMaxAttention:
     # Prefill: fill device KV cache
     # ------------------------------------------------------------------
 
-    def forward_prefill(self, x, cos, sin, user_id: int = 0):
-        """Prefill: process S tokens, fill device-resident KV cache."""
+    def forward_prefill(self, x, cos, sin, user_id: int = 0, page_table: ttnn.Tensor = None):
+        """Prefill: process S tokens, fill device-resident KV cache.
+
+        Args:
+            x: Input hidden states [B, S, H]
+            cos, sin: RoPE matrices
+            user_id: Batch index for non-paged attention
+            page_table: [B, max_blocks_per_user] page table for paged attention
+        """
         scale = self._D**-0.5
         q, k, v, B, S = self._qkv_rope(x, cos, sin)
 
-        ttnn.fill_cache(self.k_cache, k, batch_idx=user_id)
-        ttnn.fill_cache(self.v_cache, v, batch_idx=user_id)
+        if self._use_paged_attention and page_table is not None:
+            # Paged attention: use paged_fill_cache
+            ttnn.experimental.paged_fill_cache(self.k_cache, k, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(self.v_cache, v, page_table, batch_idx=user_id)
+        else:
+            # Non-paged: use fill_cache
+            ttnn.fill_cache(self.k_cache, k, batch_idx=user_id)
+            ttnn.fill_cache(self.v_cache, v, batch_idx=user_id)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -280,13 +313,14 @@ class TtMiniMaxAttention:
     # Decode: trace-safe (uses tensor position_idx)
     # ------------------------------------------------------------------
 
-    def forward_decode_trace(self, x, cos, sin, position_idx: ttnn.Tensor):
+    def forward_decode_trace(self, x, cos, sin, position_idx: ttnn.Tensor, page_table: ttnn.Tensor = None):
         """Trace-safe decode: uses paged_update_cache + SDPA decode with tensor positions.
 
         Args:
             x:            [B, 1, H] hidden states
             cos, sin:     [1, 1, B, rotary_dim] from RoPE embedding lookup
             position_idx: [B] int32 tensor with current decode position
+            page_table:   [B, max_blocks_per_user] page table for paged attention (optional)
 
         All shapes are fixed → safe for Metal trace capture/replay.
         """
@@ -307,8 +341,12 @@ class TtMiniMaxAttention:
         v_dec.deallocate(True)
 
         # Update cache with tensor position index (trace-safe)
-        ttnn.experimental.paged_update_cache(self.k_cache, k_sharded, update_idxs_tensor=position_idx)
-        ttnn.experimental.paged_update_cache(self.v_cache, v_sharded, update_idxs_tensor=position_idx)
+        ttnn.experimental.paged_update_cache(
+            self.k_cache, k_sharded, update_idxs_tensor=position_idx, page_table=page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            self.v_cache, v_sharded, update_idxs_tensor=position_idx, page_table=page_table
+        )
         k_sharded.deallocate(True)
         v_sharded.deallocate(True)
 
@@ -316,13 +354,25 @@ class TtMiniMaxAttention:
         q_dec = ttnn.permute(q, (2, 0, 1, 3))  # [1, B, NQ, D]
         q.deallocate(True)
 
-        attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
-            q_dec,
-            self.k_cache,
-            self.v_cache,
-            cur_pos_tensor=position_idx,
-            scale=scale,
-        )
+        if self._use_paged_attention and page_table is not None:
+            # Paged SDPA decode
+            attn_out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q_dec,
+                self.k_cache,
+                self.v_cache,
+                cur_pos_tensor=position_idx,
+                page_table_tensor=page_table,
+                scale=scale,
+            )
+        else:
+            # Non-paged SDPA decode
+            attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_dec,
+                self.k_cache,
+                self.v_cache,
+                cur_pos_tensor=position_idx,
+                scale=scale,
+            )
         q_dec.deallocate(True)
 
         # attn_out: [1, B, NQ, D] → [B, NQ, 1, D] for O-proj

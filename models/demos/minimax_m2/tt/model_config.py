@@ -15,6 +15,7 @@ from typing import Optional
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
+from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
 @dataclass
@@ -73,3 +74,22 @@ def make_mesh_config(mesh_device) -> MeshConfig:
         mesh_shape=mesh_device.shape,
         decode=ModeConfig(tp=cols, ep=rows, sp=1),
     )
+
+
+def make_paged_attention_config(
+    max_seq_len: int = 32768,
+    block_size: int = 64,
+) -> PagedAttentionConfig:
+    """
+    Create PagedAttentionConfig for MiniMax-M2.5.
+
+    Args:
+        max_seq_len: Maximum sequence length to support (default 32k)
+        block_size: Tokens per KV cache block (default 64, must be tile-aligned)
+
+    Returns:
+        PagedAttentionConfig with computed max_num_blocks
+    """
+    # Compute blocks needed for max_seq_len
+    max_num_blocks = (max_seq_len + block_size - 1) // block_size
+    return PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
