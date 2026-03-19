@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils import config_helpers
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 
 SPECS_JSONL_ENV_VAR = "DEEPSEEK_V3_CACHE_SPECS_JSONL"
 LEGACY_SPECS_JSONL_ENV_VAR = "DEEPSEEK_V3_DUMP_CACHE_SPECS"
@@ -111,7 +112,7 @@ class ReplayResult:
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
         }
     ],
     indirect=True,
