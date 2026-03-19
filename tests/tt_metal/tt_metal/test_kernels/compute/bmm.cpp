@@ -26,6 +26,7 @@ void kernel_main() {
     uint32_t Mt = get_compile_time_arg_val(1);
     uint32_t Kt = get_compile_time_arg_val(2);
     uint32_t Nt = get_compile_time_arg_val(3);
+    uint32_t THREADING = get_compile_time_arg_val(4);
 
 #ifdef ARCH_QUASAR
     uint32_t compute_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
@@ -47,12 +48,17 @@ void kernel_main() {
     for (uint32_t nb = 0; nb < batch; nb++) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {  // output tile of C
 #ifdef ARCH_QUASAR
-            if (mt_C % 2 != compute_id) {
+            if (mt_C % THREADING != compute_id) {
                 continue;
             }
 #endif
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
+#ifdef ARCH_QUASAR
+            if (nt_C % THREADING != compute_id) {
+                continue;
+            }
+#endif
                 acquire_dst();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
 #ifdef ARCH_QUASAR

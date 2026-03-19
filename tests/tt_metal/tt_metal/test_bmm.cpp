@@ -66,7 +66,8 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
     std::vector<uint32_t> writer_compile_time_args;
     TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
 
-    vector<uint32_t> compute_kernel_args = {B, Mt, Kt, Nt};
+    uint32_t THREADING = 1;
+    vector<uint32_t> compute_kernel_args = {B, Mt, Kt, Nt, THREADING};
     KernelHandle reader;
     KernelHandle writer;
     KernelHandle compute;
@@ -126,9 +127,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig src0_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .num_producers = 2,
+            .num_producers = THREADING,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 2,
+            .num_consumers = THREADING,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -136,9 +137,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig src1_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_input_tiles,
-            .num_producers = 2,
+            .num_producers = THREADING,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 2,
+            .num_consumers = THREADING,
             .cap = tt_metal::experimental::dfb::AccessPattern::BLOCKED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -146,9 +147,9 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
         tt_metal::experimental::dfb::DataflowBufferConfig dst_dfb_config = {
             .entry_size = single_tile_size,
             .num_entries = num_output_tiles,
-            .num_producers = 2,
+            .num_producers = THREADING,
             .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 2,
+            .num_consumers = THREADING,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b
@@ -163,7 +164,7 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 2,
+                .num_threads_per_cluster = THREADING,
                 .compile_args = reader_compile_time_args});
 
         writer = tt_metal::experimental::quasar::CreateKernel(
@@ -171,14 +172,14 @@ TEST_F(MeshDeviceSingleCardFixture, Bmm) {
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_bmm_8bank.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 2,
+                .num_threads_per_cluster = THREADING,
                 .compile_args = writer_compile_time_args});
 
         compute = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/bmm.cpp",
             core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 2, .compile_args = compute_kernel_args});
+            tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = THREADING, .compile_args = compute_kernel_args});
     }
 
     if (dev->arch() == ARCH::QUASAR) {
