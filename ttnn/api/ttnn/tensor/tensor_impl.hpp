@@ -135,10 +135,14 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
+HostTensor pad_to_tile(const HostTensor& tensor, float pad_value);
+
 HostTensor unpad(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_tensor_start,
     const tt::tt_metal::Shape& output_tensor_end);
+
+HostTensor unpad_from_tile(const HostTensor& tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
 // ======================================================================================
 //                                         Print
