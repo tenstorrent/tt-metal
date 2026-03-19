@@ -196,7 +196,9 @@ def create_dram_streaming_metadata(
     """
     num_banks = len(primary_worker_cores)
     num_total_cores = len(all_compute_cores)
-    data_tensor = ct.get_data_tensor()
+    data_tensors = ct.get_data_tensors()
+    # DRAM streaming: data is a single lockstep tensor in DRAM
+    data_tensor = data_tensors[0]
     dram_cores = ttnn.corerange_to_cores(data_tensor.memory_config().shard_spec.grid)
 
     per_core_block_sizes = {}
@@ -404,7 +406,8 @@ class DRAMStreamingMatmulCompressed:
         assert cores_per_bank in (1, 2, 4), f"cores_per_bank must be 1, 2, or 4, got {cores_per_bank}"
 
         device = input_a.device()
-        data_tensor = ct.get_data_tensor()
+        data_tensors = ct.get_data_tensors()
+        data_tensor = data_tensors[0]  # DRAM: single lockstep tensor
 
         # Get primary cores from DRAM bank assignment (1 per bank)
         in1_noc = ttnn.NOC.NOC_0

@@ -219,7 +219,7 @@ class CompressedTensor:
         memory_config=None,
         assignment_memory_config=None,
         quantize_fn=ttnn_quantize_fn,
-        per_core_allocation: bool = False,
+        per_core_allocation: bool = True,
     ) -> CompressedTensor:
         """Convenience: run assignment then pack in one step."""
         result = assigner.assign(tensor, quantize_fn)
@@ -253,13 +253,18 @@ class CompressedTensor:
         assert core_key in self._core_assignment, f"Core {core_coord} not found in shard grid"
         return self._core_assignment[core_key]
 
-    def get_data_tensor(self) -> ttnn.Tensor:
-        assert (
-            not self._per_core_allocation
-        ), "get_data_tensor() not available in per_core_allocation mode; use get_io_tensors()"
-        return self.data
+    def get_data_core_range_set(self):
+        """Return CoreRangeSet of cores that have compressed data.
 
-    def get_io_tensors(self) -> list:
+        In per_core_allocation mode, only cores with non-zero data are included.
+        In lockstep mode, returns the full shard grid.
+        """
+        if self._per_core_allocation:
+            cores = [ttnn.CoreCoord(x, y) for x, y in self._data_per_core.keys()]
+            return ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+        return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core, _pages in self._shard_mapping])
+
+    def get_data_tensors(self) -> list:
         """Return data tensor(s) for use in io_tensors lists (lifetime management).
 
         In per_core_allocation mode, returns the list of per-core tensors.

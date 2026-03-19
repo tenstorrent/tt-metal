@@ -23,8 +23,9 @@ class EltwiseAddCompressed:
         """
         A (bf16) + B (bfp8) = C (bf16) using standard add_tiles.
         """
-        core_grid = a_tensor.memory_config().shard_spec.grid
-        data_tensor = ct.get_data_tensor()
+        # Use only cores that have compressed data — empty cores (from uneven shards)
+        # would hang because CB1 has no backing tensor on those cores.
+        core_grid = ct.get_data_core_range_set()
 
         # CB indices
         cb_in0 = 0
@@ -38,21 +39,8 @@ class EltwiseAddCompressed:
         # CB0: A tensor — standard
         cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
 
-        # CB1: backed by compressed data tensor, override format to bfp8
-        tile_32x32 = ttnn.Tile([32, 32])
-
-        cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb_in1,
-            data_tensor,
-            total_size=ct.max_shard_size,
-        )
-        cb1_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb_in1,
-            data_format=ttnn.bfloat8_b,
-            page_size=ct.max_shard_size,
-            tile=ttnn.TileDescriptor(tile_32x32),
-        )
-        cb1_desc.format_descriptors = [cb1_fmt]
+        # CB1: compressed data — per-core or lockstep depending on ct mode
+        cb1_descs = ct.cb_descriptor_from_compressed_tensor(cb_in1)
 
         # CB2: output tensor — standard
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
@@ -91,11 +79,10 @@ class EltwiseAddCompressed:
 
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[cb0_desc, cb1_desc, cb2_desc],
+            cbs=[cb0_desc, *cb1_descs, cb2_desc],
             semaphores=[],
         )
 
-        io_tensors = [a_tensor, data_tensor, output_tensor]
-        output = ttnn.generic_op(io_tensors, program_descriptor)
-
-        return output
+        io_tensors = [a_tensor, *ct.get_data_tensors(), output_tensor]
+        ttnn.generic_op(io_tensors, program_descriptor)
+        return output_tensor

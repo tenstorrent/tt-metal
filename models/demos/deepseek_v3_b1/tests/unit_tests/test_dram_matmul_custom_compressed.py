@@ -126,7 +126,9 @@ def _run_dram_matmul_custom_compressed(
     b_shard_spec = ttnn.ShardSpec(dram_grid, [K, total_N_per_bank], ttnn.ShardOrientation.ROW_MAJOR)
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, b_shard_spec)
 
-    ct = CompressedTensor.from_torch(torch_b_shuffled, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        torch_b_shuffled, assigner, device=device, memory_config=b_mem_config, per_core_allocation=False
+    )
 
     logger.info(f"DRAM compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")

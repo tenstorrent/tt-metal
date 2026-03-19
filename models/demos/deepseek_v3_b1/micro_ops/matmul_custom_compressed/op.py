@@ -274,6 +274,6 @@ class MatmulCustomCompressed:
 
         # io_tensors: include per-core data and fmt tensors for lifetime management
         fmt_io = list(fmt_tensors.values()) if fmt_tensors else []
-        io_tensors = [a_tensor, *ct.get_io_tensors(), output_tensor, *fmt_io]
+        io_tensors = [a_tensor, *ct.get_data_tensors(), output_tensor, *fmt_io]
         ttnn.generic_op(io_tensors, program_descriptor)
         return output_tensor

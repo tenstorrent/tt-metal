@@ -30,7 +30,6 @@ class MatmulCompressed:
         A [M, K] @ decompress(B_compressed [K, N]) = output [M, N].
         """
         core_grid = a_tensor.memory_config().shard_spec.grid
-        data_tensor = ct.get_data_tensor()
 
         # CB indices
         cb_in0 = 0  # A (bf16, srcB in matmul)
@@ -46,21 +45,8 @@ class MatmulCompressed:
         # CB0: A tensor — standard
         cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, a_tensor)
 
-        # CB1: compressed data, override format to bfp8 for HW init
-        tile_32x32 = ttnn.Tile([32, 32])
-
-        cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(
-            cb_in1,
-            data_tensor,
-            total_size=ct.max_shard_size,
-        )
-        cb1_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb_in1,
-            data_format=ttnn.bfloat8_b,
-            page_size=ct.max_shard_size,
-            tile=ttnn.TileDescriptor(tile_32x32),
-        )
-        cb1_desc.format_descriptors = [cb1_fmt]
+        # CB1: compressed data — per-core or lockstep depending on ct mode
+        cb1_descs = ct.cb_descriptor_from_compressed_tensor(cb_in1)
 
         # CB2: output — standard
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
@@ -98,11 +84,10 @@ class MatmulCompressed:
 
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=unified_kernel.get_kernel_descriptors().kernels,
-            cbs=[cb0_desc, cb1_desc, cb2_desc],
+            cbs=[cb0_desc, *cb1_descs, cb2_desc],
             semaphores=[],
         )
 
-        io_tensors = [a_tensor, data_tensor, output_tensor]
-        output = ttnn.generic_op(io_tensors, program_descriptor)
-
-        return output
+        io_tensors = [a_tensor, *ct.get_data_tensors(), output_tensor]
+        ttnn.generic_op(io_tensors, program_descriptor)
+        return output_tensor
