@@ -9,49 +9,6 @@
 
 namespace ttnn {
 
-// auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
-
-// Other unaries
-
-// This function is used to transform the arguments of a function before calling it
-// where the lambda is applied to the type that matches T.
-// Example: https://godbolt.org/z/3P9YedMdj
-template <typename T, typename Func, typename Lambda, typename... Args>
-constexpr auto transform_args_lambda(Func func, Lambda lambda, Args&&... args) -> decltype(auto) {
-    auto transformer = [lambda](auto&& arg) -> decltype(auto) {
-        if constexpr (std::is_same_v<T, std::decay_t<decltype(arg)>>) {
-            return lambda(std::forward<decltype(arg)>(arg));
-        } else {
-            return std::forward<decltype(arg)>(arg);
-        }
-    };
-
-    return func(transformer(std::forward<Args>(args))...);
-}
-
-template <typename T, typename Lambda>
-auto transform_first_matching_arg(Lambda /*lambda*/) {
-    static_assert(!std::is_same_v<T, T>, "No matching type found");
-}
-
-template <typename T, typename Lambda, typename First, typename... Rest>
-auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) {
-    if constexpr (std::is_same_v<T, std::decay_t<First>>) {
-        return lambda(std::forward<First>(first));
-    } else {
-        return transform_first_matching_arg<T>(lambda, std::forward<Rest>(rest)...);
-    }
-}
-#define WRAP_WITH_RESHAPE(function)                                                                    \
-    ([](auto&&... args) {                                                                              \
-        const auto original_shape = transform_first_matching_arg<Tensor>(                              \
-            [&](auto&& tensor) { return tensor.get_shape(); }, std::forward<decltype(args)>(args)...); \
-        return ttnn::reshape(                                                                          \
-            transform_args_lambda<Tensor>(                                                             \
-                function, [&](auto&& tensor) { return ttnn::unsqueeze_to_4D(tensor); }, args...),      \
-            original_shape);                                                                           \
-    })
-
 // Free functions for unary composite operations (impl is the public API)
 inline Tensor digamma(const Tensor& t, const std::optional<MemoryConfig>& m = std::nullopt) {
     return operations::unary::digamma(t, m);
