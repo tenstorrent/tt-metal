@@ -275,10 +275,6 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
-    void init_command_queue_host() override;
-    void init_command_queue_device() override;
-    bool compile_fabric() override;
-    void configure_fabric() override;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;
