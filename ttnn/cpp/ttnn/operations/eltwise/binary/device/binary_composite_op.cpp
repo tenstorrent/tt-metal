@@ -25,49 +25,6 @@ namespace ttnn {
 
 using namespace operations;
 
-namespace {
-template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
-Tensor div_like_op(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
-}
-
-template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
-Tensor div_like_op(
-    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, memory_config);
-}
-template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
-Tensor binary_composite_op_polyval(
-    const Tensor& input_tensor_a,
-    const std::vector<float>& coeffs,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, coeffs, memory_config);
-}
-
-template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
-Tensor binary_composite_op(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
-}
-
-template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
-Tensor binary_composite_op_isclose(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    float rtol,
-    float atol,
-    const bool equal_nan,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::OpHandler<binary_comp_op_type>::handle(
-        input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
-}
-}  // namespace
-
 // nextafter
 Tensor operations::binary::_nextafter(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -1563,12 +1520,14 @@ Tensor bias_gelu(
 
 Tensor atan2(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return binary_composite_op<binary::BinaryCompositeOpType::ATAN2>(input_tensor_a, input_tensor_b, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::ATAN2>::handle(
+        input_tensor_a, input_tensor_b, memory_config);
 }
 
 Tensor nextafter(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return binary_composite_op<binary::BinaryCompositeOpType::NEXTAFTER>(input_tensor_a, input_tensor_b, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::NEXTAFTER>::handle(
+        input_tensor_a, input_tensor_b, memory_config);
 }
 
 Tensor isclose(
@@ -1578,36 +1537,42 @@ Tensor isclose(
     float atol,
     const bool equal_nan,
     const std::optional<MemoryConfig>& memory_config) {
-    return binary_composite_op_isclose<binary::BinaryCompositeOpType::ISCLOSE>(
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::ISCLOSE>::handle(
         input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
 }
 
 Tensor div_no_nan(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return div_like_op<binary::BinaryCompositeOpType::DIV_NO_NAN>(input_tensor_a, input_tensor_b, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::DIV_NO_NAN>::handle(
+        input_tensor_a, input_tensor_b, memory_config);
 }
 
 Tensor div_no_nan(const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
-    return div_like_op<binary::BinaryCompositeOpType::DIV_NO_NAN>(input_tensor_a, value, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::DIV_NO_NAN>::handle(
+        input_tensor_a, value, memory_config);
 }
 
 Tensor floor_div(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return div_like_op<binary::BinaryCompositeOpType::FLOOR_DIV>(input_tensor_a, input_tensor_b, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::FLOOR_DIV>::handle(
+        input_tensor_a, input_tensor_b, memory_config);
 }
 
 Tensor floor_div(const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
-    return div_like_op<binary::BinaryCompositeOpType::FLOOR_DIV>(input_tensor_a, value, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::FLOOR_DIV>::handle(
+        input_tensor_a, value, memory_config);
 }
 
 Tensor outer(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return binary_composite_op<binary::BinaryCompositeOpType::OUTER>(input_tensor_a, input_tensor_b, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::OUTER>::handle(
+        input_tensor_a, input_tensor_b, memory_config);
 }
 
 Tensor polyval(
     const Tensor& input_tensor_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& memory_config) {
-    return binary_composite_op_polyval<binary::BinaryCompositeOpType::POLYVAL>(input_tensor_a, coeffs, memory_config);
+    return operations::binary::OpHandler<binary::BinaryCompositeOpType::POLYVAL>::handle(
+        input_tensor_a, coeffs, memory_config);
 }
 
 }  // namespace ttnn
