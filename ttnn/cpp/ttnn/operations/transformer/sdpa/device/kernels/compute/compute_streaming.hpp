@@ -23,11 +23,9 @@
 #include "tools/profiler/kernel_profiler.hpp"
 
 // ---- Per-K-chunk profiling selector ----
-// Define PROFILE_K_CHUNK to profile a single K-chunk iteration:
-//   0 = first K-chunk only
-//   1 = middle K-chunk only (k_num_chunks/2)
-//   2 = last K-chunk only
-// Leave undefined to disable profiling (all chunks use false_type).
+// Define PROFILE_K_CHUNK to the k_chunk loop index you want to instrument (0–4).
+// Profiling is enabled for that exact iteration; all others use false_type (zero overhead).
+// Leave undefined to disable profiling entirely.
 #define PROFILE_K_CHUNK 0
 
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
@@ -443,6 +441,101 @@ void mul_block_bcast_cols_acc(
         tile_regs_release();
     }
 }
+
+#ifdef ARCH_BLACKHOLE
+/**
+ * Fused SALAD correction: output correction + sum correction in one init cycle.
+ * Folds the sum correction tile(s) into the output correction's last DEST batch
+ * when there's room, or appends a minimal extra batch otherwise.
+ * Eliminates the separate init + acquire/release overhead for sum correction.
+ */
+template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size, bool skip_init = false>
+void salad_correct_fused(
+    uint32_t out_in_cb,
+    uint32_t sum_in_cb,
+    uint32_t bcast_cb,
+    uint32_t out_out_cb,
+    uint32_t sum_out_cb,
+    uint32_t q_subblock,
+    uint32_t write_q_subblock) {
+    constexpr uint32_t tiles_per_row = sbh_t;
+    constexpr uint32_t tiles_per_column = sbw_t;
+    constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
+    // Can we fit sum tiles (sbh_t) alongside the last output batch in DEST?
+    constexpr uint32_t last_out_cols = (sbw_t % col_batch == 0) ? col_batch : (sbw_t % col_batch);
+    constexpr bool can_fuse_last = (last_out_cols * sbh_t + sbh_t <= dst_size);
+
+    const uint32_t read_row_base = q_subblock * tiles_per_row;
+    const uint32_t write_row_base = write_q_subblock * tiles_per_row;
+
+    if constexpr (!skip_init) {
+        mul_bcast_cols_init_short(out_in_cb, bcast_cb);
+    }
+
+    cb_wait_front(out_in_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
+    cb_wait_front(sum_in_cb, (q_subblock + 1) * tiles_per_row);
+    cb_wait_front(bcast_cb, (q_subblock + 1) * tiles_per_row);
+
+    for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
+        const uint32_t last_batch_rem = tiles_per_column % col_batch;
+        const uint32_t cur_cols =
+            (col_base + col_batch <= tiles_per_column) ? col_batch : (last_batch_rem > 0 ? last_batch_rem : col_batch);
+        const bool is_last_out_batch = (col_base + cur_cols >= tiles_per_column);
+        const bool fuse_sum_here = can_fuse_last && is_last_out_batch;
+
+        tile_regs_acquire();
+        uint32_t dst_index = 0;
+        // Output correction tiles
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            for (uint32_t j = 0; j < cur_cols; j++) {
+                uint32_t in0_tile_index = (read_row_base + i) * tiles_per_column + col_base + j;
+                mul_tiles_bcast_cols(out_in_cb, bcast_cb, in0_tile_index, read_row_base + i, dst_index++);
+            }
+        }
+        // Sum correction tiles fused into this batch
+        if (fuse_sum_here) {
+            for (uint32_t i = 0; i < tiles_per_row; i++) {
+                mul_tiles_bcast_cols(sum_in_cb, bcast_cb, read_row_base + i, read_row_base + i, dst_index++);
+            }
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        // Pack output correction tiles
+        dst_index = 0;
+        PACK((llk_pack_mop_config<false, false, false>(out_out_cb, cur_cols)));
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
+            pack_tile<true>(dst_index, out_out_cb, out_tile_index);
+            dst_index += cur_cols;
+        }
+        // Pack sum correction tiles
+        if (fuse_sum_here) {
+            PACK((llk_pack_mop_config<false, false, false>(sum_out_cb, 1)));
+            for (uint32_t i = 0; i < tiles_per_row; i++) {
+                pack_tile<true>(dst_index++, sum_out_cb, write_row_base + i);
+            }
+        }
+        PACK((llk_pack_mop_config<false, false, false>(out_out_cb, 1)));
+        tile_regs_release();
+    }
+
+    // If sum couldn't be fused into the last output batch, process it separately.
+    // Still shares the init from above — no redundant mul_bcast_cols_init_short.
+    if constexpr (!can_fuse_last) {
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            mul_tiles_bcast_cols(sum_in_cb, bcast_cb, read_row_base + i, read_row_base + i, i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        PACK((llk_pack_mop_config<false, false, false>(sum_out_cb, 1)));
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            pack_tile<true>(i, sum_out_cb, write_row_base + i);
+        }
+        tile_regs_release();
+    }
+}
+#endif
 
 /**
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
@@ -960,8 +1053,16 @@ static void sdpa_inner_loop_step(
         };
 
         // SALAD correction + optional normalization lambda
+        // Fused: output + sum correction share a single FPU init and pipeline.
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
             PACK((llk_pack_reconfig_l1_acc(1)));
+#ifdef ARCH_BLACKHOLE
+            {
+                MaybeDeviceZoneScopedN(profiling_enabled, "S_CORR_FUSED");
+                salad_correct_fused<qktv_subblock_h, vDHt, dst_size>(
+                    prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, salad_row, w_salad);
+            }
+#else
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "S_SUM_CORR");
                 mul_bcast_cols_l1_acc(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad, qktv_subblock_h);
@@ -971,6 +1072,7 @@ static void sdpa_inner_loop_step(
                 mul_block_bcast_cols_acc<qktv_subblock_h, vDHt, dst_size>(
                     prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad);
             }
+#endif
             PACK((llk_pack_reconfig_l1_acc(0)));
             if (last_iter) {
                 normalize_row(w_salad, pushed);
@@ -1027,7 +1129,31 @@ static void sdpa_inner_loop_step(
 
             // SALAD corrections + optional per-row normalization
             if (!is_first_iter) {
-                salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
+#ifdef ARCH_BLACKHOLE
+                // Last main-loop iteration: hoist drain's sub_exp so both salads
+                // (current row and drain row) chain back-to-back with one FPU init.
+                if (q_subblock == qktv_q_num_subblocks - 1) {
+                    const uint32_t drain_row = qktv_q_num_subblocks - 1;
+                    cb_reserve_back(cb_exp_max_diff, qktv_subblock_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, drain_row, qktv_subblock_h);
+                    cb_push_back(cb_exp_max_diff, qktv_subblock_h);
+
+                    salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
+
+                    const uint32_t drain_w = drain_row - pushed_rows;
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                    salad_correct_fused<qktv_subblock_h, vDHt, dst_size, true /*skip_init*/>(
+                        prev.out, prev.sum, cb_exp_max_diff, cur.out, cur.sum, drain_row, drain_w);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    if (is_last_iter) {
+                        normalize_row(drain_w, pushed_rows);
+                    }
+                } else
+#endif
+                {
+                    salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
+                }
             } else if (is_last_iter) {
                 normalize_row(w_salad, pushed_rows);
             }
@@ -1037,10 +1163,23 @@ static void sdpa_inner_loop_step(
         }
 
         // Pipeline drain: SALAD for last row
+        // On BH with >1 q_subblock, drain was hoisted into the last main-loop iteration.
         {
             const uint32_t salad_row = qktv_q_num_subblocks - 1;
             uint32_t w_salad = salad_row - pushed_rows;
 
+#ifdef ARCH_BLACKHOLE
+            // Drain already handled above when main loop ran (qktv_q_num_subblocks > 1).
+            // Only the first-K-chunk normalize path remains.
+            if (is_first_iter && is_last_iter) {
+                MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+                cb_push_back(cur.sum, qktv_subblock_h);
+                cb_push_back(cur.out, qktv_subblock_h * vDHt);
+                normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
+                    cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, qktv_subblock_h);
+                pushed_rows++;
+            }
+#else
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, qktv_subblock_h);
                 sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
@@ -1048,16 +1187,15 @@ static void sdpa_inner_loop_step(
                 cb_push_back(cb_exp_max_diff, qktv_subblock_h);
 
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
-            } else {
-                if (is_last_iter) {
-                    MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
-                    cb_push_back(cur.sum, qktv_subblock_h);
-                    cb_push_back(cur.out, qktv_subblock_h * vDHt);
-                    normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
-                        cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, qktv_subblock_h);
-                    pushed_rows++;
-                }
+            } else if (is_last_iter) {
+                MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
+                cb_push_back(cur.sum, qktv_subblock_h);
+                cb_push_back(cur.out, qktv_subblock_h * vDHt);
+                normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
+                    cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, qktv_subblock_h);
+                pushed_rows++;
             }
+#endif
         }
 
         // Bulk push — skip on last iteration when rows are consumed by normalization.
@@ -1204,11 +1342,7 @@ void sdpa_standard_v2(
             bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
 
 #ifdef PROFILE_K_CHUNK
-            // Profile selected K-chunk: 0=first, 1=middle, 2=last
-            constexpr uint32_t profile_sel = PROFILE_K_CHUNK;
-            bool profile_this = (profile_sel == 0 && is_first) || (profile_sel == 1 && k_chunk == k_num_chunks / 2) ||
-                                (profile_sel == 2 && is_last);
-            if (profile_this) {
+            if (k_chunk == PROFILE_K_CHUNK) {
                 call_step(
                     std::true_type{},
                     is_last,
@@ -1466,15 +1600,10 @@ void sdpa_ring_v2(
             };
 
 #ifdef PROFILE_K_CHUNK
-            {
-                constexpr uint32_t profile_sel = PROFILE_K_CHUNK;
-                bool profile_this = (profile_sel == 0 && is_first) ||
-                                    (profile_sel == 1 && k_chunk == num_kv_chunks / 2) || (profile_sel == 2 && is_last);
-                if (profile_this) {
-                    ring_call_step(std::true_type{});
-                } else {
-                    ring_call_step(std::false_type{});
-                }
+            if (k_chunk == PROFILE_K_CHUNK) {
+                ring_call_step(std::true_type{});
+            } else {
+                ring_call_step(std::false_type{});
             }
 #else
             ring_call_step(std::false_type{});

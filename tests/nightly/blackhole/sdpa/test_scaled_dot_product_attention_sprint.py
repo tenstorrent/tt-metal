@@ -190,6 +190,18 @@ K_CHUNK_SIZES = [512]
 # INPUT_SHAPES = [
 #     # batch, num_heads, sequence_length, head_dim
 #     [1, 10, 9472, 128],  # WAN 2.2: 1x Galaxy analog (single device seq len)
+# ]
+# INPUT_IDS = [
+#     "wan2_2_1xGLX_analog",
+# ]
+
+# Q_CHUNK_SIZES = [288]
+# K_CHUNK_SIZES = [512]
+
+# # WAN 2.2 model shapes for BH
+# INPUT_SHAPES = [
+#     # batch, num_heads, sequence_length, head_dim
+#     [1, 10, 9472, 128],  # WAN 2.2: 1x Galaxy analog (single device seq len)
 #     [1, 10, 2368, 128],  # WAN 2.2: 4x Galaxy analog (per-device seq len)
 # ]
 # INPUT_IDS = [
