@@ -119,6 +119,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv  --tb=short -k random
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and single_run' -vvv --tb=short
   skus:
     wh_llmbox:
       timeout: 15
