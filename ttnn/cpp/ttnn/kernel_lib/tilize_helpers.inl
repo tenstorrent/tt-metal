@@ -80,10 +80,11 @@ constexpr bool can_use_fast_tilize() {
 
 template <uint32_t input_cb, uint32_t output_cb>
 ALWI void assert_tilize_cb_page_sizes(bool asymmetric_cb_pages) {
-    // When output is a block float format (e.g. Bfp8_b), the op converts from a
-    // non-block input format (e.g. Float16_b), so page sizes legitimately differ.
+    // Page sizes only need to match when input and output have the same data format.
+    // Format-converting tilize (e.g. Float32 -> BFloat16) legitimately produces
+    // different page sizes since tile sizes differ between formats.
 #if defined(UCK_CHLKC_PACK)
-    if constexpr (!is_block_float_format(pack_dst_format[output_cb])) {
+    if constexpr (pack_dst_format[input_cb] == pack_dst_format[output_cb]) {
         const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
         const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
         if (asymmetric_cb_pages) {
