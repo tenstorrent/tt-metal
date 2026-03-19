@@ -10,7 +10,11 @@
 
 // Adaptive per-segment degree — reduces Horner steps for low-degree segments
 #define HAS_SEGMENT_DEGREES
+#ifdef INP_FLOAT32
+constexpr uint32_t SEGMENT_DEGREES[] = {14, 1};
+#else
 constexpr uint32_t SEGMENT_DEGREES[] = {0, 11, 1, 1};
+#endif
 
 #include "ckernel_sfpu_piecewise_polynomial.h"
 
@@ -21,7 +25,24 @@ namespace ckernel::sfpu {
 // LUT-based elu via piecewise polynomial P(x)
 //
 // BF16: n11/d0, 4 segment(s), range [-10.0, 10.0]
+// FP32: n14/d0, 2 segment(s), range [-10.0, 10.0]
 // ======================================================================
+
+#ifdef INP_FLOAT32
+constexpr uint32_t ELU_NUM_DEGREE = 14;
+constexpr uint32_t ELU_NUM_SEGMENTS = 2;
+constexpr uint32_t ELU_LUT_SIZE = 33;
+constexpr std::array<float, 33> ELU_LUT = {{
+    -1.0000000000e+01f, 0.0000000000e+00f, 1.0000000000e+01f, 0.0000000000e+00f, 1.0000000000e+00f,
+    4.9999934435e-01f, 1.6666224599e-01f, 4.1655816138e-02f, 8.3194561303e-03f, 1.3780959416e-03f,
+    1.9285458256e-04f, 2.2803982574e-05f, 2.2368417376e-06f, 1.7566813426e-07f, 1.0487319457e-08f,
+    4.4169295998e-10f, 1.1582759057e-11f, 1.4128406561e-13f, 0.0000000000e+00f, 1.0000000000e+00f,
+    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
+    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
+    0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f
+}};
+
+#else
 
 constexpr uint32_t ELU_NUM_DEGREE = 11;
 constexpr uint32_t ELU_NUM_SEGMENTS = 4;
@@ -39,6 +60,8 @@ constexpr std::array<float, 53> ELU_LUT = {{
     0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f,
     0.0000000000e+00f, 0.0000000000e+00f, 0.0000000000e+00f
 }};
+
+#endif
 
 // Boundary clamping: elu(x) → -alpha as x→-∞, elu(x) = x for x≥0
 
