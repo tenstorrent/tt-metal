@@ -1645,6 +1645,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         struct KernelElfInfo {
             std::shared_ptr<Kernel> kernel;
             std::vector<std::string> elf_paths;
+            bool has_response = false;
         };
         std::vector<KernelElfInfo> kernel_infos;
 
@@ -1668,73 +1669,80 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 build_options.set_name(kernel_path_suffix);
                 kernel->register_kernel_elf_paths_with_watcher(*device);
 
-                jit_build_genfiles_descriptors(build_env.build_env, build_options);
-                if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-                    jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
-                } else {
-                    jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
-                }
-
                 std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
                 uint32_t core_type_idx = MetalContext::instance().hal().get_programmable_core_type_index(
                     kernel->get_kernel_programmable_core_type());
                 uint32_t proc_class_idx = enchantum::to_underlying(kernel->get_kernel_processor_class());
-
-                jit_server::CompileRequest request;
-                request.build_key = build_env.build_key();
-                request.kernel_name = kernel_path_suffix;
-                request.gpp = build_env.build_env.get_gpp();
-                request.generated_files = CollectGenfiles(genfiles_dir, kernel);
 
                 KernelElfInfo info;
                 info.kernel = kernel;
                 for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
                     const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
                         device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
-                    request.targets.push_back(BuildTargetRecipe(build_state, kernel));
                     info.elf_paths.push_back(build_state.get_target_out_path(kernel_path_suffix));
                 }
-                session.send(request);
+
+                jit_build_once(kernel_hash, [&] {
+                    jit_build_genfiles_descriptors(build_env.build_env, build_options);
+                    if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+                        jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
+                    } else {
+                        jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
+                    }
+
+                    jit_server::CompileRequest request;
+                    request.build_key = build_env.build_key();
+                    request.kernel_name = kernel_path_suffix;
+                    request.gpp = build_env.build_env.get_gpp();
+                    request.generated_files = CollectGenfiles(genfiles_dir, kernel);
+
+                    for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
+                        const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                            device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
+                        request.targets.push_back(BuildTargetRecipe(build_state, kernel));
+                    }
+                    session.send(request);
+                    info.has_response = true;
+                });
 
                 Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 kernel_infos.push_back(std::move(info));
             }
         }
 
-        // Collect all responses and write ELFs.
+        // Collect responses and write ELFs for compiled kernels.
         auto all_responses = session.wait_all();
-        TT_FATAL(
-            all_responses.size() == kernel_infos.size(),
-            "Expected {} responses but got {}",
-            kernel_infos.size(),
-            all_responses.size());
-        for (size_t k = 0; k < kernel_infos.size(); ++k) {
-            auto& info = kernel_infos[k];
-            auto& resp = all_responses[k];
-            TT_FATAL(
-                resp.success, "Remote JIT compile failed for kernel {}: {}", info.kernel->name(), resp.error_message);
-            TT_FATAL(
-                resp.elf_blobs.size() == info.elf_paths.size(),
-                "Expected {} ELF blobs but got {} for kernel {}",
-                info.elf_paths.size(),
-                resp.elf_blobs.size(),
-                info.kernel->name());
+        size_t resp_idx = 0;
+        for (auto& info : kernel_infos) {
+            if (info.has_response) {
+                TT_FATAL(resp_idx < all_responses.size(), "More compiled kernels than responses");
+                auto& resp = all_responses[resp_idx++];
+                TT_FATAL(
+                    resp.success,
+                    "Remote JIT compile failed for kernel {}: {}",
+                    info.kernel->name(),
+                    resp.error_message);
+                TT_FATAL(
+                    resp.elf_blobs.size() == info.elf_paths.size(),
+                    "Expected {} ELF blobs but got {} for kernel {}",
+                    info.elf_paths.size(),
+                    resp.elf_blobs.size(),
+                    info.kernel->name());
 
-            std::vector<std::string> elf_paths;
-            elf_paths.reserve(info.elf_paths.size());
-            for (size_t i = 0; i < info.elf_paths.size(); ++i) {
-                fs::create_directories(fs::path(info.elf_paths[i]).parent_path());
-                {
-                    tt::jit_build::utils::FileRenamer tmp(info.elf_paths[i]);
-                    std::ofstream elf_file(tmp.path(), std::ios::binary);
-                    TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
-                    elf_file.write(
-                        reinterpret_cast<const char*>(resp.elf_blobs[i].data.data()),
-                        static_cast<std::streamsize>(resp.elf_blobs[i].data.size()));
+                for (size_t i = 0; i < info.elf_paths.size(); ++i) {
+                    fs::create_directories(fs::path(info.elf_paths[i]).parent_path());
+                    {
+                        tt::jit_build::utils::FileRenamer tmp(info.elf_paths[i]);
+                        std::ofstream elf_file(tmp.path(), std::ios::binary);
+                        TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
+                        elf_file.write(
+                            reinterpret_cast<const char*>(resp.elf_blobs[i].data.data()),
+                            static_cast<std::streamsize>(resp.elf_blobs[i].data.size()));
+                    }
                 }
-                elf_paths.push_back(info.elf_paths[i]);
             }
-            info.kernel->set_elf_paths(build_env.build_key(), std::move(elf_paths));
+            // All kernel instances (including deduped) set elf_paths -- files are on disk.
+            info.kernel->set_elf_paths(build_env.build_key(), std::vector<std::string>(info.elf_paths));
         }
     } else {
         // Local compile path (original flow).
