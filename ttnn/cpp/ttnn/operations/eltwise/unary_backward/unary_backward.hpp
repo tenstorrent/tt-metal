@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
@@ -327,15 +326,15 @@ std::vector<std::optional<Tensor>> rsqrt_bw(
 std::vector<Tensor> clamp_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
-    const std::optional<float>& min = std::nullopt,
-    const std::optional<float>& max = std::nullopt,
+    std::optional<float> min = std::nullopt,
+    std::optional<float> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> clamp_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
-    const std::optional<Tensor>& min = std::nullopt,
-    const std::optional<Tensor>& max = std::nullopt,
+    std::optional<Tensor> min = std::nullopt,
+    std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> clip_bw(
@@ -348,8 +347,8 @@ std::vector<Tensor> clip_bw(
 std::vector<Tensor> clip_bw(
     const Tensor& grad_tensor_arg,
     const Tensor& input_tensor_arg,
-    const std::optional<Tensor>& min = std::nullopt,
-    const std::optional<Tensor>& max = std::nullopt,
+    std::optional<Tensor> min = std::nullopt,
+    std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> rdiv_bw(

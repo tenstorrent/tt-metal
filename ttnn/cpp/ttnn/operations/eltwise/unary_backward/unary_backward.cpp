@@ -33,8 +33,8 @@ namespace ttnn {
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
     const Tensor& input,
-    const std::optional<float>& min,
-    const std::optional<float>& max,
+    std::optional<float> min,
+    std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -63,8 +63,8 @@ std::vector<Tensor> clamp_bw(
 std::vector<Tensor> clamp_bw(
     const Tensor& grad,
     const Tensor& input,
-    const std::optional<Tensor>& min,
-    const std::optional<Tensor>& max,
+    std::optional<Tensor> min,
+    std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -102,10 +102,10 @@ std::vector<Tensor> clip_bw(
 std::vector<Tensor> clip_bw(
     const Tensor& grad,
     const Tensor& input,
-    const std::optional<Tensor>& min,
-    const std::optional<Tensor>& max,
+    std::optional<Tensor> min,
+    std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return clamp_bw(grad, input, min, max, output_mem_config);
+    return clamp_bw(grad, input, std::move(min), std::move(max), output_mem_config);
 }
 
 // Hardtanh
