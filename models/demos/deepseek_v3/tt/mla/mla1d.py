@@ -546,7 +546,7 @@ class MLA1D(AbstractModule):
         )
 
         flash_mla_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -590,7 +590,7 @@ class MLA1D(AbstractModule):
             "dims": [1],
             "output": None,
             "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
@@ -1035,7 +1035,7 @@ class MLA1D(AbstractModule):
         )
 
         flash_mla_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
@@ -1105,7 +1105,7 @@ class MLA1D(AbstractModule):
             "dims": [1],
             "output": None,
             "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,

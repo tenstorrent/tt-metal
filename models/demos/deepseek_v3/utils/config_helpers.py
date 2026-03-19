@@ -35,14 +35,14 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 )
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
 
 COMPUTE_KERNEL_CONFIG_HIFI2_THROTTLE_LEVEL_2 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=True,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
@@ -50,35 +50,35 @@ COMPUTE_KERNEL_CONFIG_HIFI2_THROTTLE_LEVEL_2 = ttnn.WormholeComputeKernelConfig(
 )
 
 COMPUTE_KERNEL_CONFIG_HIFI2_FP16 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
 
 COMPUTE_KERNEL_CONFIG_HIFI4 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
     packer_l1_acc=True,
 )
 
 COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
 
 COMPUTE_KERNEL_CONFIG_HIFI2_NA = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=False,
     packer_l1_acc=False,
 )
 
 COMPUTE_KERNEL_CONFIG_SDPA = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_fidelity=ttnn.MathFidelity.LoFi,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
     packer_l1_acc=False,
