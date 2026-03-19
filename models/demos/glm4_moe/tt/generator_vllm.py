@@ -322,18 +322,19 @@ class Glm4MoeForCausalLM(nn.Module):
         if start_pos is not None:
             start_pos_t = torch.as_tensor(start_pos, dtype=torch.int32) if not isinstance(start_pos, torch.Tensor) else start_pos.to(torch.int32)
             if (start_pos_t != 0).any():
-                import copy
                 prompt_lens = list(prompt_lens)
-                tokens = tokens.clone()
+                # Clone to avoid overlapping tensor writes (sp:pl → :new_len overlap)
+                new_tokens = torch.zeros_like(tokens)
                 for i in range(batch):
                     sp = int(start_pos_t[i])
-                    if sp > 0 and sp < int(prompt_lens[i]):
-                        pl = int(prompt_lens[i])
+                    pl = int(prompt_lens[i])
+                    if sp > 0 and sp < pl:
                         new_len = pl - sp
-                        # Shift uncached tokens to the front
-                        tokens[i, :new_len] = tokens[i, sp:pl]
-                        tokens[i, new_len:] = 0
+                        new_tokens[i, :new_len] = tokens[i, sp:pl]
                         prompt_lens[i] = new_len
+                    else:
+                        new_tokens[i] = tokens[i]
+                tokens = new_tokens
 
         self._ensure_tt_runner()
 

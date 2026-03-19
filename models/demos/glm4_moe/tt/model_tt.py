@@ -2350,6 +2350,10 @@ class Glm4MoeTT:
                     except Exception:
                         pass
         self._decode_trace_states.clear()
+        # Reset CCL semaphore counters — decode trace replay advances counters,
+        # and the next prefill's all_reduce needs them starting at 0.
+        if self.tt_ccl is not None:
+            self.tt_ccl.reset_sem_counters()
         ttnn.synchronize_device(self.device)
 
     # -------------------------------------------------------------------

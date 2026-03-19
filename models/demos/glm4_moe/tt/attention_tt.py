@@ -957,9 +957,12 @@ class Glm4MoeAttention(LightweightModule):
         )
         # -> [1, 1, seq_len, 1536]
 
-        # Reshape for long sequences
-        if seq_len > 1024:
-            attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
+        # Reshape for long sequences (must match QKV path threshold)
+        _oproj_thresh = self.MAX_QKV_MM_SEQ_LEN
+        if seq_len > _oproj_thresh:
+            if seq_len % _oproj_thresh != 0:
+                raise ValueError(f"O-proj: seq_len {seq_len} must be divisible by {_oproj_thresh}")
+            attn_output = ttnn.reshape(attn_output, [1, seq_len // _oproj_thresh, _oproj_thresh, -1])
 
         # 9. Output projection (BF16 output for precision through 92 layers)
         output = ttnn.linear(
@@ -970,7 +973,7 @@ class Glm4MoeAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        if seq_len > 1024:
+        if seq_len > _oproj_thresh:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output)
 
