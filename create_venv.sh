@@ -228,6 +228,14 @@ elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "24.04" ]; then
     VENV_PYTHON_VERSION="3.12"
 elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     VENV_PYTHON_VERSION="3.10"
+elif [ "$OS_ID" = "gentoo" ]; then
+    # Gentoo: use the system's active Python version to match the built extensions
+    # Try to detect the active Python version
+    if command -v python3 &>/dev/null; then
+        VENV_PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.12")
+    else
+        VENV_PYTHON_VERSION="3.12"
+    fi
 else
     VENV_PYTHON_VERSION="3.10"
 fi
@@ -330,7 +338,7 @@ if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
         setuptools==80 wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
-    uv pip install --upgrade wheel setuptools==80
+    uv pip install --upgrade wheel setuptools==80 meson-python cython
 fi
 
 echo "Installing dev dependencies"
