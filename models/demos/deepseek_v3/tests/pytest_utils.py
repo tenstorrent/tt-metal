@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-DEFAULT_PREFILL_SEQ_LEN = 128
+DEFAULT_PREFILL_SEQ_LEN = 512
 
 
 def expand_test_cases_with_position_ids_ranges(base_cases):
