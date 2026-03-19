@@ -150,9 +150,10 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
  */
 // clang-format on
 template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format(const uint32_t new_cb_id, const uint32_t face_r_dim, const uint32_t num_faces) {
+ALWI void pack_reconfig_data_format_custom_face_r_dim(const uint32_t new_cb_id, const uint32_t face_r_dim) {
 #ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(new_cb_id, face_r_dim, num_faces)));
+    PACK((llk_pack_reconfig_data_format_custom_face_r_dim<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(
+        new_cb_id, face_r_dim)));
 #endif  // TODO: AM; add Quasar implementation
 }
 

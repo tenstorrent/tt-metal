@@ -377,13 +377,13 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * @tparam is_tile_dim_reconfig_en   Enable tile dimension reconfiguration.
  * @param  new_output                Output operand index to configure the packer for.
  * @param  face_r_dim                Row dimension of each face (overrides operand metadata).
- * @param  num_faces                 Number of faces (overrides operand metadata).
  */
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
-inline void llk_pack_reconfig_data_format(
-    const std::uint32_t new_output, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
+inline void llk_pack_reconfig_data_format_custom_face_r_dim(
+    const std::uint32_t new_output, const std::uint32_t face_r_dim) {
     const std::uint32_t output_id = get_output_id(new_output);
     const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
 
     _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
         pack_src_format[output_id],
@@ -391,7 +391,7 @@ inline void llk_pack_reconfig_data_format(
         get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
         tile_c_dim,
-        num_faces == 0 ? 1 : num_faces,
+        num_faces,
         false,   // partial_face
         false);  // narrow_tile
 }

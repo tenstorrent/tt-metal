@@ -185,8 +185,8 @@ inline void llk_pack_untilize_init(
     const std::uint32_t output_id = get_output_id(output);
 
     LLK_ASSERT(
-        (are_packers_configured_correctly<PackerProgramType::ProgramByTile>(
-            pack_src_format[output_id], pack_dst_format[output_id])),
+        (are_packers_configured_correctly<PackerProgramType::ProgramByFace>(
+            pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
@@ -446,9 +446,10 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
  * @param  face_r_dim                Row dimension of each face (overrides operand metadata).
  */
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
-inline void llk_pack_reconfig_data_format(
-    const std::uint32_t new_output, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
+inline void llk_pack_reconfig_data_format_custom_face_r_dim(
+    const std::uint32_t new_output, const std::uint32_t face_r_dim) {
     const std::uint32_t output_id = get_output_id(new_output);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
@@ -457,7 +458,7 @@ inline void llk_pack_reconfig_data_format(
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
-        num_faces == 0 ? 1 : num_faces,
+        num_faces,
         partial_face,
         narrow_tile);
 }
