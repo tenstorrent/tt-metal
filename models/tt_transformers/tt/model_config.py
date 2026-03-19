@@ -1068,6 +1068,8 @@ class ModelArgs:
         model_specific_ceil_warmup_lengths = {
             # Qwen3-32B hangs at 8192, so we cap at 4096
             "Qwen3-32B": 4096,
+            # Qwen3.5-27B: conservative cap for initial bringup (DeltaNet prefill is sequential)
+            "Qwen3.5-27B": 2048,
         }
 
         max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
@@ -1169,6 +1171,9 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_mlp_ff1_3_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        # Qwen3.5: weights converted to DRAM interleaved, let ttnn auto-select matmul
+        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+            return None
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1220,6 +1225,8 @@ class ModelArgs:
 
     @lru_cache(maxsize=None)
     def get_mlp_ff2_prg_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
+        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+            return None
         if mode == Mode.DECODE:
             if self.dim >= 4096 and self.is_galaxy:
                 return self.matmul_1d_config_from_tensor_shapes(
@@ -1527,6 +1534,8 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_qkv_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for the QKV matmul in attention."""
+        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+            return None
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 return self.matmul_1d_ring_config(
@@ -1832,6 +1841,8 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_wo_program_config(self, mode: Mode, seq_len: int = 1, prefetcher: Prefetcher = None):
         """Get the program config for WO (dense output) matmul in attention."""
+        if getattr(self, "is_qwen35", False) and mode == Mode.DECODE:
+            return None
         if mode == Mode.DECODE:
             if prefetcher is not None:
                 k_wo = self.dim
@@ -2286,6 +2297,7 @@ class ModelArgs:
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3.5-27B": {"N150": None, "N300": None, "T3K": 32, "TG": 32, "P100": 1, "P150": 1, "P150x4": 32},
                 "Mistral-Small-3.1-24B": {
                     "N150": 32,
                     "N300": 64,
@@ -2623,11 +2635,31 @@ class ModelArgs:
 
         self.layer_types = text_config.get("layer_types", None)
 
+        # Qwen3.5 Gated DeltaNet (linear attention) params
+        self.linear_num_key_heads = text_config.get("linear_num_key_heads", None)
+        self.linear_num_value_heads = text_config.get("linear_num_value_heads", None)
+        self.linear_key_head_dim = text_config.get("linear_key_head_dim", None)
+        self.linear_value_head_dim = text_config.get("linear_value_head_dim", None)
+        self.linear_conv_kernel_dim = text_config.get("linear_conv_kernel_dim", None)
+        self.full_attention_interval = text_config.get("full_attention_interval", None)
+        self.attn_output_gate = text_config.get("attn_output_gate", False)
+        self.is_qwen35 = self.linear_num_key_heads is not None
+        if self.is_qwen35:
+            # Qwen3.5 uses HF-style RoPE (no reverse_permute needed for Q/K weights)
+            # and partial rotary (only head_dim * partial_rotary_factor dims get RoPE)
+            self.use_hf_rope = True
+
+        # For Qwen3.5, RMSNorm uses zero-centered weights: output * (1 + weight)
+        if self.is_qwen35:
+            self.rms_norm_add_unit_offset = True
+
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
+        # RoPE params (Qwen3.5 nests these under rope_parameters)
+        rope_params = text_config.get("rope_parameters", {})
+        self.rope_theta = text_config.get("rope_theta") or rope_params.get("rope_theta")
+        self.partial_rotary_factor = rope_params.get("partial_rotary_factor", 1.0)
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2744,19 +2776,21 @@ class ModelArgs:
 
         from transformers import AutoConfig
 
-        if self.dummy_weights:
-            logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
+        ckpt_dir = self.LOCAL_HF_PARAMS[self.model_name] if self.dummy_weights else self.CKPT_DIR
+        try:
             self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
-        else:
-            self.hf_config = AutoConfig.from_pretrained(
-                self.CKPT_DIR,
+                ckpt_dir,
                 trust_remote_code=self.trust_remote_code_hf,
                 local_files_only=os.getenv("CI") == "true",
             )
-
-        config = self.hf_config.to_dict()
+            config = self.hf_config.to_dict()
+        except ValueError:
+            # AutoConfig doesn't recognize this model type -- load raw JSON
+            config_path = os.path.join(ckpt_dir, "config.json")
+            logger.info(f"AutoConfig failed, loading raw config from {config_path}")
+            with open(config_path) as f:
+                config = json.load(f)
+            self.hf_config = None
 
         if "text_config" in config or "vision_config" in config:
             merged_text_config = merge_text_config(config)
@@ -2851,6 +2885,8 @@ class ModelArgs:
         text_module_map = {
             "MLP": "feed_forward",
             "Attention": "attention",
+            "GatedDeltaNet": "linear_attn",
+            "GatedAttention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
@@ -2939,23 +2975,46 @@ class ModelArgs:
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
             state_dict = model.state_dict()
         else:
-            # Always HuggingFace since we only support HF_MODEL now
-            model_cls = self.get_hf_model_cls()
-            model = model_cls.from_pretrained(
-                self.CKPT_DIR,
-                torch_dtype="auto",
-                trust_remote_code=self.trust_remote_code_hf,
-                local_files_only=os.getenv("CI") == "true"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
-            if self.cache_hf_flag:
-                self.cached_hf_model = model
-            state_dict = model.state_dict()
-            self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+            if self.hf_config is None:
+                # AutoConfig didn't recognize this model type -- load safetensors directly
+                from safetensors.torch import load_file
 
-        if self.is_multimodal:
+                state_dict = {}
+                for sf in sorted(Path(self.CKPT_DIR).glob("*.safetensors")):
+                    state_dict.update(load_file(str(sf)))
+                self.is_mixture_of_experts = any(".experts." in k for k in state_dict)
+            else:
+                # Always HuggingFace since we only support HF_MODEL now
+                model_cls = self.get_hf_model_cls()
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto",
+                    trust_remote_code=self.trust_remote_code_hf,
+                    local_files_only=os.getenv("CI") == "true"
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
+                state_dict = model.state_dict()
+                self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
+
+        if getattr(self, "is_qwen35", False):
+            # Qwen3.5 has vision_config in its config but we only handle text weights.
+            # Strip model.language_model. and model. prefixes (can't use standardize_hf_keys_multimodal
+            # because its qkv/proj/attn replacements would corrupt DeltaNet keys).
+            state_dict = {
+                k.replace("model.language_model.", "").replace("model.", ""): v
+                for k, v in state_dict.items()
+                if not any(x in k for x in ("visual.", "vision_model.", "vision_tower."))
+            }
+            from models.tt_transformers.tt.qwen35_utils import convert_hf_to_meta_qwen35
+
+            state_dict = convert_hf_to_meta_qwen35(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            # Note: convert_hf_to_meta_qwen35 calls map_hf_to_meta_keys internally (step 3),
+            # so standardize_hf_keys is NOT needed separately.
+        elif self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
             if self.is_llama_vision():
                 if self.use_hf_rope:
@@ -2975,11 +3034,11 @@ class ModelArgs:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
-            if self.use_hf_rope:
-                # For Attention: skip QKV format conversion
+            if getattr(self, "is_qwen35", False):
+                state_dict = convert_hf_to_meta_qwen35(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            elif self.use_hf_rope:
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
-                # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
@@ -2997,6 +3056,12 @@ class ModelArgs:
     # =========================================================================
     def create_dram_sharded_mem_config(self, k, n, dram_grid=None):
         """Create DRAM-sharded memory config for width-sharded tensors"""
+        # Qwen3.5: use DRAM interleaved to avoid peak allocation OOM.
+        # DRAM-sharded has bank-alignment padding that inflates peak DRAM
+        # during layer construction. With DRAM interleaved, weights load
+        # without overhead. program_config=None auto-selects compatible matmul.
+        if getattr(self, "is_qwen35", False):
+            return ttnn.DRAM_MEMORY_CONFIG
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
         assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
         padded_size = math.ceil(n / (ttnn.TILE_SIZE * dram_cores)) * (ttnn.TILE_SIZE * dram_cores)

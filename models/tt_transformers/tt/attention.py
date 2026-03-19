@@ -38,6 +38,8 @@ class Attention(LightweightModule):
         self.num_devices = configuration.num_devices
         self.prefetcher = prefetcher
         self.TG = self.num_devices == 32
+        self.pre_wo_hook = None  # Optional hook for GatedAttention gate
+        self.custom_rope_fn = None  # Optional: replace rotary_embedding_llama (e.g. for partial RoPE)
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
@@ -674,18 +676,26 @@ class Attention(LightweightModule):
             num_kv_heads=self.n_local_kv_heads,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
         )
+
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode=Mode.DECODE, norm_config=norm_config)
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode=Mode.DECODE, norm_config=norm_config)
         ttnn.deallocate(xqkv_fused)
 
         # Q, K Rotary Embeddings
-        q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
-            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos
-        )
-
-        ttnn.deallocate(q_heads_pre_rot_1BQD)
-        ttnn.deallocate(k_heads_pre_rot_1BKD)
+        if self.custom_rope_fn is not None:
+            # Custom RoPE (e.g. Qwen3.5 partial rotation via host)
+            q_heads_1BQD, k_heads_1BKD = self.custom_rope_fn(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, current_pos)
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+            ttnn.deallocate(k_heads_pre_rot_1BKD)
+            # When using custom_rope_fn, KV cache update is done on host
+            self._custom_rope_kv_update = True
+        else:
+            q_heads_1BQD, k_heads_1BKD = self.rotary_embedding_decode(
+                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos
+            )
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+            ttnn.deallocate(k_heads_pre_rot_1BKD)
         ###
         # KV update
         ###
@@ -700,7 +710,42 @@ class Attention(LightweightModule):
         # v_heads [seqlen, n_kv_heads, bsz, head_dim]
         # keys, [max_batch_size, n_kv_heads // configuration.num_devices, max_seq_len, head_dim]
 
-        if self.use_qk_fused:
+        if getattr(self, "_custom_rope_kv_update", False):
+            # Host-based KV cache update for custom RoPE path
+            pos = ttnn.to_torch(current_pos).int().item()
+            # k/v from nlp_create_qkv_heads_decode: (1, batch, kv_heads, head_dim)
+            # KV cache: (batch, kv_heads, max_seq_len, head_dim)
+            k_host = ttnn.to_torch(k_heads_1BKD).float()
+            v_host = ttnn.to_torch(v_heads_1BKD).float()
+            keys_host = ttnn.to_torch(keys).float()
+            values_host = ttnn.to_torch(values).float()
+            keys_host[0, :, pos, :] = k_host[0, 0, :, :]
+            values_host[0, :, pos, :] = v_host[0, 0, :, :]
+            ttnn.deallocate(keys)
+            ttnn.deallocate(values)
+            keys_new = ttnn.from_torch(
+                keys_host.bfloat16(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            values_new = ttnn.from_torch(
+                values_host.bfloat16(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if kv_cache:
+                kv_cache[0] = keys_new
+                kv_cache[1] = values_new
+            else:
+                self.layer_past = [keys_new, values_new]
+            keys = keys_new
+            values = values_new
+            self._custom_rope_kv_update = False
+        elif self.use_qk_fused:
             ttnn.experimental.paged_fused_update_cache(
                 keys, k_heads_1BKD, values, v_heads_1BKD, update_idxs_tensor=current_pos, page_table=page_table
             )
@@ -843,6 +888,10 @@ class Attention(LightweightModule):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
+
+            # Pre-WO hook: used by GatedAttention to apply sigmoid gate
+            if self.pre_wo_hook is not None:
+                attn_output = self.pre_wo_hook(attn_output)
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
             dense_out_sharded = ttnn.linear(
