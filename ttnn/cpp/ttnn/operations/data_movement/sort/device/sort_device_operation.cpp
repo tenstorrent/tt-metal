@@ -78,8 +78,10 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(tensor_args.input_tensor.layout() == Layout::TILE, "The input must be in tiled format");
 
     TT_FATAL(
-        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 || tensor_args.input_tensor.dtype() == DataType::UINT16,
-        "Input tensor data type must be BFLOAT16 or UINT16, got {}",
+        tensor_args.input_tensor.dtype() == DataType::BFLOAT16 ||
+            tensor_args.input_tensor.dtype() == DataType::UINT16 ||
+            tensor_args.input_tensor.dtype() == DataType::FLOAT32,
+        "Input tensor data type must be BFLOAT16, UINT16, or FLOAT32, got {}",
         tensor_args.input_tensor.dtype());
 
     if (tensor_args.output_tensors.size() == 2) {
