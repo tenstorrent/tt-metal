@@ -442,7 +442,6 @@ class SocketInterface:
             sender_program = self._create_sender_program(
                 self.mesh_device,
                 self.send_core_coord,
-                self.upstream_socket,
                 self.internal_socket_pair[0],
                 self.sender_packet_header_cb_index,
             )

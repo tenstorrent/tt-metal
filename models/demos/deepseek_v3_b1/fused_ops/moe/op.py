@@ -4092,7 +4092,7 @@ class MoeOp:
         agg_sem_addr = self.sem_addrs[MoeSem.REDUCE_AGG_SYNC]
         persistent_core_noc_x = 0
         persistent_core_noc_y = 0
-        if device_role == MESH_ROOT1 and self.downstream_sockets is not None:
+        if device_role == MESH_ROOT1:
             persistent_core_phys = routed_ctx.device.worker_core_from_logical_core(
                 reduce_params["worker_cores_list"][0]
             )
@@ -4101,11 +4101,7 @@ class MoeOp:
 
         # Persistent signal: on ROOT1, aggregator worker signals a fabric core via local NOC,
         # then the fabric core sends a fabric atomic inc to the bcast sender on the entry device.
-        persistent_enable_root1 = (
-            device_role == MESH_ROOT1
-            and self.downstream_sockets is not None
-            and self.persistent_next_iter_sem_addr != 0
-        )
+        persistent_enable_root1 = device_role == MESH_ROOT1 and self.persistent_next_iter_sem_addr != 0
         persistent_dst_noc_x = 0
         persistent_dst_noc_y = 0
         persistent_dst_sem_addr = 0
