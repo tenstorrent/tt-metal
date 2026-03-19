@@ -401,12 +401,14 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields
+    # Pad core sampling fields (scalar→list already done above)
     temperature = _pad(sampling_params.temperature, "temperature")
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
+    enable_log_probs = _pad(sampling_params.enable_log_probs, "enable_log_probs")
+    num_logprobs = _pad(sampling_params.num_logprobs, "num_logprobs")
 
-    # Normalise and pad penalty / seed fields
+    # Normalise and pad penalty / seed fields (may still be None/scalar)
     def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
@@ -421,8 +423,6 @@ def format_sampling_params(sampling_params, max_batch_size):
     frequency_penalty = _normalise_and_pad("frequency_penalty")
     repetition_penalty = _normalise_and_pad("repetition_penalty")
     seed = _normalise_and_pad("seed")
-    num_logprobs = _normalise_and_pad("num_logprobs")
-    enable_log_probs = _normalise_and_pad("enable_log_probs")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
