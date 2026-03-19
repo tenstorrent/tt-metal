@@ -26,6 +26,7 @@ If no input is provided, stop and ask for the ticket.
 
 4. **Investigate and propose fix**
    - Follow `.cursor/rules/ci-solve-ticket.mdc`.
+   - **Do not edit `.github/time_budget.yaml`.** That file enforces aggregate time caps; loosening it bypasses policy. If raising a job timeout in `tests/pipeline_reorg/*.yaml` would exceed the budget, fix tests (faster/shorter), split or shard work, reallocate minutes from another job in the same matrix only when clearly safe, or hand off to infra/owners—never bump the budget file unless the user explicitly overrides this rule.
    - Reproduce locally when possible.
    - If hardware is unavailable, do CI/log-driven diagnosis and document constraints.
    - Implement the smallest credible fix with targeted validation.
