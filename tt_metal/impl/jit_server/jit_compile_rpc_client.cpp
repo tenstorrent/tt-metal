@@ -166,6 +166,14 @@ JitCompileRpcSession::JitCompileRpcSession(const std::string& endpoint) : impl_(
 
 JitCompileRpcSession::~JitCompileRpcSession() = default;
 
+CompileResponse JitCompileRpcSession::send_and_wait(const CompileRequest& request) {
+    auto rpc_request = impl_->cap.compileRequest();
+    auto builder = rpc_request.initRequest();
+    fill_compile_request(builder, request);
+    auto result = rpc_request.send().wait(impl_->client.getWaitScope());
+    return read_compile_response(result.getResponse());
+}
+
 void JitCompileRpcSession::send(const CompileRequest& request) {
     auto rpc_request = impl_->cap.compileRequest();
     auto builder = rpc_request.initRequest();

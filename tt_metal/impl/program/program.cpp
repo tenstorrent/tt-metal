@@ -234,6 +234,50 @@ std::vector<std::uint8_t> read_file_content(const std::string& path) {
     return data;
 }
 
+// Thread-safe global cache for remote compile dedup.
+// enqueue() returns {future, is_new}. If is_new, caller must compile and call the returned
+// PendingBuild to fulfill the future. If not new, caller just waits on the future.
+class RemoteBuildCache {
+public:
+    struct PendingBuild {
+        std::shared_ptr<std::promise<void>> promise;
+        void complete() { promise->set_value(); }
+    };
+
+    struct EnqueueResult {
+        std::shared_future<void> future;
+        bool is_new = false;
+        PendingBuild pending;
+    };
+
+    static RemoteBuildCache& instance() {
+        static RemoteBuildCache inst;
+        return inst;
+    }
+
+    EnqueueResult enqueue(size_t hash) {
+        std::lock_guard lock(mutex_);
+        auto it = cache_.find(hash);
+        if (it != cache_.end()) {
+            return {it->second, false, {}};
+        }
+        auto p = std::make_shared<std::promise<void>>();
+        auto future = p->get_future().share();
+        cache_[hash] = future;
+        return {future, true, {std::move(p)}};
+    }
+
+    bool is_known(size_t hash) const {
+        std::lock_guard lock(mutex_);
+        return cache_.contains(hash);
+    }
+
+private:
+    RemoteBuildCache() = default;
+    mutable std::mutex mutex_;
+    std::unordered_map<size_t, std::shared_future<void>> cache_;
+};
+
 std::vector<jit_server::GeneratedFile> CollectGenfiles(
     const std::string& genfiles_dir, const std::shared_ptr<Kernel>& kernel) {
     std::vector<jit_server::GeneratedFile> files;
@@ -1628,14 +1672,24 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         // send compile requests immediately (pipelined), then collect all responses.
         jit_server::JitCompileRpcSession session(remote_jit_compile_endpoint);
 
-        struct KernelElfInfo {
+        auto& build_cache = RemoteBuildCache::instance();
+
+        struct KernelFuture {
             std::shared_ptr<Kernel> kernel;
             std::vector<std::string> elf_paths;
-            bool has_response = false;
+            std::shared_future<void> future;
         };
-        std::vector<KernelElfInfo> kernel_infos;
-        std::unordered_set<size_t> sent_hashes;
+        std::vector<KernelFuture> kernel_futures;
 
+        // Per-call batch: new requests that this compile() call needs to send.
+        struct PendingEntry {
+            jit_server::CompileRequest request;
+            std::vector<std::string> elf_paths;
+            RemoteBuildCache::PendingBuild pending;
+        };
+        std::vector<PendingEntry> local_pending;
+
+        // Phase 1: prepare each kernel, generate genfiles, enqueue unique requests.
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
@@ -1656,26 +1710,29 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 build_options.set_name(kernel_path_suffix);
                 kernel->register_kernel_elf_paths_with_watcher(*device);
 
-                std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
                 uint32_t core_type_idx = MetalContext::instance().hal().get_programmable_core_type_index(
                     kernel->get_kernel_programmable_core_type());
                 uint32_t proc_class_idx = enchantum::to_underlying(kernel->get_kernel_processor_class());
 
-                KernelElfInfo info;
-                info.kernel = kernel;
+                std::vector<std::string> elf_paths;
                 for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
                     const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
                         device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
-                    info.elf_paths.push_back(build_state.get_target_out_path(kernel_path_suffix));
+                    elf_paths.push_back(build_state.get_target_out_path(kernel_path_suffix));
                 }
 
-                if (sent_hashes.insert(kernel_hash).second) {
+                auto result = build_cache.enqueue(kernel_hash);
+                kernel_futures.push_back({kernel, elf_paths, result.future});
+
+                if (result.is_new) {
                     jit_build_genfiles_descriptors(build_env.build_env, build_options);
                     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
                         jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
                     } else {
                         jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
                     }
+
+                    std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
 
                     jit_server::CompileRequest request;
                     request.build_key = build_env.build_key();
@@ -1684,52 +1741,55 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     request.generated_files = CollectGenfiles(genfiles_dir, kernel);
 
                     for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
-                        const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                        const auto& bs = BuildEnvManager::get_instance().get_kernel_build_state(
                             device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
-                        request.targets.push_back(BuildTargetRecipe(build_state, kernel));
+                        request.targets.push_back(BuildTargetRecipe(bs, kernel));
                     }
+
                     session.send(request);
-                    info.has_response = true;
+                    local_pending.push_back({std::move(request), std::move(elf_paths), std::move(result.pending)});
                 }
 
                 Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                kernel_infos.push_back(std::move(info));
             }
         }
 
-        // Collect responses and write ELFs for compiled kernels.
-        auto all_responses = session.wait_all();
-        size_t resp_idx = 0;
-        for (auto& info : kernel_infos) {
-            if (info.has_response) {
-                TT_FATAL(resp_idx < all_responses.size(), "More compiled kernels than responses");
-                auto& resp = all_responses[resp_idx++];
+        // Phase 2: collect responses (requests already sent during phase 1), write ELFs, fulfill futures.
+        if (!local_pending.empty()) {
+            auto responses = session.wait_all();
+            TT_FATAL(responses.size() == local_pending.size(), "Response count mismatch");
+            for (size_t i = 0; i < local_pending.size(); ++i) {
+                auto& resp = responses[i];
+                auto& pend = local_pending[i];
                 TT_FATAL(
                     resp.success,
                     "Remote JIT compile failed for kernel {}: {}",
-                    info.kernel->name(),
+                    pend.request.kernel_name,
                     resp.error_message);
                 TT_FATAL(
-                    resp.elf_blobs.size() == info.elf_paths.size(),
+                    resp.elf_blobs.size() == pend.elf_paths.size(),
                     "Expected {} ELF blobs but got {} for kernel {}",
-                    info.elf_paths.size(),
+                    pend.elf_paths.size(),
                     resp.elf_blobs.size(),
-                    info.kernel->name());
+                    pend.request.kernel_name);
 
-                for (size_t i = 0; i < info.elf_paths.size(); ++i) {
-                    fs::create_directories(fs::path(info.elf_paths[i]).parent_path());
-                    {
-                        tt::jit_build::utils::FileRenamer tmp(info.elf_paths[i]);
-                        std::ofstream elf_file(tmp.path(), std::ios::binary);
-                        TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
-                        elf_file.write(
-                            reinterpret_cast<const char*>(resp.elf_blobs[i].data.data()),
-                            static_cast<std::streamsize>(resp.elf_blobs[i].data.size()));
-                    }
+                for (size_t j = 0; j < pend.elf_paths.size(); ++j) {
+                    fs::create_directories(fs::path(pend.elf_paths[j]).parent_path());
+                    tt::jit_build::utils::FileRenamer tmp(pend.elf_paths[j]);
+                    std::ofstream elf_file(tmp.path(), std::ios::binary);
+                    TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
+                    elf_file.write(
+                        reinterpret_cast<const char*>(resp.elf_blobs[j].data.data()),
+                        static_cast<std::streamsize>(resp.elf_blobs[j].data.size()));
                 }
+                pend.pending.complete();
             }
-            // All kernel instances (including deduped) set elf_paths -- files are on disk.
-            info.kernel->set_elf_paths(build_env.build_key(), std::vector<std::string>(info.elf_paths));
+        }
+
+        // Phase 3: wait for all futures (including those owned by other threads) and set elf_paths.
+        for (auto& kf : kernel_futures) {
+            kf.future.get();
+            kf.kernel->set_elf_paths(build_env.build_key(), std::move(kf.elf_paths));
         }
     } else {
         // Local compile path (original flow).
