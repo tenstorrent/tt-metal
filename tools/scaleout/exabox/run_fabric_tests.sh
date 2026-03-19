@@ -53,10 +53,7 @@ Examples:
     # Multi-pod (4 meshes, 16 hosts, requires MGD)
     $0 --num-meshes 4 \\
        --mesh-graph-desc-path tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto \\
-       --hosts bh-glx-d03u02,bh-glx-d03u08,bh-glx-d04u08,bh-glx-d04u02,\\
-               bh-glx-d05u02,bh-glx-d05u08,bh-glx-d06u08,bh-glx-d06u02,\\
-               bh-glx-d07u02,bh-glx-d07u08,bh-glx-d08u08,bh-glx-d08u02,\\
-               bh-glx-d09u02,bh-glx-d09u08,bh-glx-d10u08,bh-glx-d10u02 \\
+       --hosts bh-glx-d03u02,bh-glx-d03u08,bh-glx-d04u08,bh-glx-d04u02,bh-glx-d05u02,bh-glx-d05u08,bh-glx-d06u08,bh-glx-d06u02,bh-glx-d07u02,bh-glx-d07u08,bh-glx-d08u08,bh-glx-d08u02,bh-glx-d09u02,bh-glx-d09u08,bh-glx-d10u08,bh-glx-d10u02 \\
        --image ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:latest
 EOF
 }
@@ -157,6 +154,15 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo "Error: --image is required"; echo ""; show_help; exit 1
 fi
 
+# --hosts-per-mesh is only valid alongside --num-meshes; reject it alone to
+# avoid silently ignoring it when a single-pod preset takes over.
+if [[ -z "$NUM_MESHES" && -n "$HOSTS_PER_MESH" ]]; then
+    echo "Error: --hosts-per-mesh requires --num-meshes"
+    echo ""
+    show_help
+    exit 1
+fi
+
 # --- Resolve topology -------------------------------------------------------
 # --num-meshes triggers multi-pod mode; --config drives single-pod mode.
 
@@ -174,6 +180,16 @@ else
     [[ -z "$MESH_GRAPH_DESC_PATH" ]] && MESH_GRAPH_DESC_PATH="${PRESET_MGD[$CONFIG]}"
     [[ -z "$TEST_CONFIG" ]]          && TEST_CONFIG="${PRESET_TEST_CONFIG[$CONFIG]}"
     [[ -z "$OUTPUT_DIR" ]]           && OUTPUT_DIR="${PRESET_OUTPUT[$CONFIG]}"
+fi
+
+# --- Validate topology parameters are positive integers ---------------------
+if ! [[ "$NUM_MESHES" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --num-meshes ('$NUM_MESHES') must be a positive integer"
+    exit 1
+fi
+if ! [[ "$HOSTS_PER_MESH" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: --hosts-per-mesh ('$HOSTS_PER_MESH') must be a positive integer"
+    exit 1
 fi
 
 # --- Validate host count ----------------------------------------------------

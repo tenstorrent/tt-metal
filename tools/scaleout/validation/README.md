@@ -242,7 +242,7 @@ To visualize the discovered connectivity, the user can use the `--print-connecti
 
 ## Multi-Mesh Fabric Testing
 
-Multi-mesh testing goes beyond single-pod validation: it exercises the fabric across multiple pods (meshes) and requires matching Mesh Graph Descriptors, rank bindings, and MPI placement to your physical deployment.
+Multi-mesh testing goes beyond single-pod validation: it exercises the fabric across multiple pods (meshes) and requires a correct rank-to-(mesh_id, mesh_host_rank) mapping - provided either via a rank-bindings YAML or per-rank environment variables - along with matching Mesh Graph Descriptors and MPI placement.
 
 ### Mainlined Artifacts
 
