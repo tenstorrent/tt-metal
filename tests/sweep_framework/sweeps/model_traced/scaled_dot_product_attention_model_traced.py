@@ -99,12 +99,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=32768, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=32768, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -160,32 +160,16 @@ def run(
     if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
         del op_kwargs["memory_config"]
 
-    # Traced program_config (grid dims, chunk sizes) is tightly coupled to the
-    # mesh topology where the model was traced.  Only use it when running on
-    # matching hardware (MESH_DEVICE_SHAPE matches the traced mesh).
-    # On different hardware the chunk/grid values produce incorrect results.
+    # Validate program_config grid fits current device
     pc = op_kwargs.get("program_config")
     if pc is not None:
-        import os
-
-        mesh_env = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
-        traced_mesh = kwargs.get("traced_machine_info", {})
-        if isinstance(traced_mesh, dict):
-            traced_shape = traced_mesh.get("mesh_device_shape", [])
-        else:
-            traced_shape = []
-        # Compare: mesh_env "1x2" vs traced [1, 2]
-        if mesh_env and traced_shape:
-            try:
-                env_parts = mesh_env.lower().split("x")
-                env_mesh = [int(env_parts[0]), int(env_parts[1])]
-                if env_mesh != list(traced_shape):
-                    op_kwargs.pop("program_config", None)
-            except (ValueError, IndexError):
-                op_kwargs.pop("program_config", None)
-        elif not mesh_env:
-            # Single device run — program_config from multi-device trace won't work
-            op_kwargs.pop("program_config", None)
+        try:
+            device_grid = device.compute_with_storage_grid_size()
+            pc_grid = pc.compute_with_storage_grid_size
+            if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
+                del op_kwargs["program_config"]
+        except Exception:
+            del op_kwargs["program_config"]
 
     # Handle shape extraction — V2 loader provides separate input_b_shape, input_c_shape
     if isinstance(input_a_shape, dict):

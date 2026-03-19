@@ -1358,6 +1358,8 @@ class MasterConfigLoader:
                     arg_idx += 1
 
                 # Process named keyword arguments (inside try so bad configs get skipped)
+                # Named tensor kwargs keep their original names from the JSON
+                # (e.g., input_tensor_q_shape, page_table_shape, etc.)
                 for key, value in named_kwargs.items():
                     tensor_config = self._extract_tensor_config(value)
                     if tensor_config:

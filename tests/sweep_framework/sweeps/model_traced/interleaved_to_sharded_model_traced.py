@@ -61,7 +61,7 @@ def mesh_device_fixture():
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
             device = ttnn.open_device(
-                device_id=0, l1_small_size=32768, dispatch_core_config=ttnn.device.DispatchCoreConfig()
+                device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.device.DispatchCoreConfig()
             )
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
@@ -69,7 +69,7 @@ def mesh_device_fixture():
             del device
     else:
         device = ttnn.open_device(
-            device_id=0, l1_small_size=32768, dispatch_core_config=ttnn.device.DispatchCoreConfig()
+            device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.device.DispatchCoreConfig()
         )
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
