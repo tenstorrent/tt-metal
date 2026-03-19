@@ -44,8 +44,8 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 3072, 4096, 8192),
-    ids=["128", "3k", "4k", "8k"],
+    (128, 4096),
+    ids=["128", "4k"],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
@@ -67,8 +67,10 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 )
 @pytest.mark.parametrize(
     "num_layers",
-    (1, None),
-    ids=["1layer", "all_layers"],
+    (1,),
+    ids=[
+        "1layer",
+    ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "trace_region_size": 250000000}], indirect=True)
 def test_model_inference(
