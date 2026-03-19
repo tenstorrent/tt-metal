@@ -114,6 +114,8 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # Default 5s trips false positives on Galaxy LLM demos (CQ wait without dispatch progress ticks).
+          hang-detection-timeout: 30
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
