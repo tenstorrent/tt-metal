@@ -21,9 +21,11 @@ namespace tt::tt_metal {
 class HostStorage {
 public:
     // Creates HostStorage distributed over a mesh that matches `buffer` shape.
+    [[deprecated("Use HostStorage(HostTensor tensor) instead")]]
     explicit HostStorage(DistributedHostBuffer buffer);
 
     // Creates HostStorage distributed over 1x1 mesh.
+    [[deprecated("Use HostStorage(HostTensor tensor) instead")]]
     explicit HostStorage(HostBuffer buffer);
 
     // Creates HostStorage from a HostTensor.
