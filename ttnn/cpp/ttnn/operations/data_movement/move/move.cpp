@@ -30,12 +30,11 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     auto input_address = input_tensor.buffer()->address();
     TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
-    if (not can_deallocate(input_tensor)) {
+    // TODO(#38697): Migrate to Tensor::deallocate(/* force = */ false)
+    if (not input_tensor.device_storage().is_sole_owner_of_device_memory()) {
         // TODO: Should this throw error?
         return input_tensor;
     }
-
-    // TODO(#38697): Migrate to Tensor::deallocate(/* force = */ false)
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {
@@ -106,7 +105,10 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    if (not can_deallocate(input_tensor)) {
+    auto shard_spec = input_tensor.shard_spec().value();
+
+    // TODO(#38697): Migrate to Tensor::deallocate(/* forced = */ false)
+    if (not input_tensor.device_storage().is_sole_owner_of_device_memory()) {
         TT_FATAL(
             false,
             "Expect input tensor to be deallocated after move op. Cannot deallocate before there is probably "
@@ -114,9 +116,6 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
         // TODO: Should this throw error?
         return {input_tensor};
     }
-    auto shard_spec = input_tensor.shard_spec().value();
-
-    // TODO(#38697): Migrate to Tensor::deallocate(/* forced = */ false)
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();

@@ -54,8 +54,11 @@ public:
     Buffer* get_buffer() const;
     const distributed::MeshBuffer& get_mesh_buffer() const;
 
+    // Returns true if no other DeviceStorage or third party has a shared reference to the device memory (MeshBuffer).
+    bool is_sole_owner_of_device_memory() const;
+
     // Begin internal functions:
-    const std::shared_ptr<distributed::MeshBuffer>& get_mesh_buffer_leak_ownership() const;
+    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
     //
     // These functions allows the use of the get_mesh_buffer as a view.
     // These are considered internal functions and are not part of the public API.
