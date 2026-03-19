@@ -203,16 +203,14 @@ class VisionAttention(LightweightModule):
         if seq_len > 2048:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
-        # QKV projection
+        # QKV projection (bias fused into linear to reduce matmul + binary op)
         qkv = ttnn.linear(
             x,
             self.wqkv,
+            bias=self.bqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # Add bias
-        qkv = qkv + self.bqkv
 
         # Reshape back if needed
         if seq_len > 2048:
@@ -263,15 +261,14 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
+        # Output projection (bias fused into linear to reduce matmul + binary op)
         output = ttnn.linear(
             attn_output,
             self.wo,
+            bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        # Add output bias
-        output = output + self.bo
 
         if seq_len > 1024:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])

@@ -266,13 +266,15 @@ class VisionTransformer(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-        # TTNN: linear projection -- x @ patch_embed_weight
+        # TTNN: linear projection with fused bias (one matmul instead of matmul + add)
         # x: [1, 1, B*N, 588],  patch_embed_weight: [1, 1, 588, 1152]
-        embedded = ttnn.matmul(x_ttnn, self.patch_embed_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        embedded = ttnn.linear(
+            x_ttnn,
+            self.patch_embed_weight,
+            bias=self.patch_embed_bias,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         ttnn.deallocate(x_ttnn)
-
-        # Add bias
-        embedded = ttnn.add(embedded, self.patch_embed_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Add positional embedding: [1, 1, num_patches, 1152]
         if batch_size == 1:

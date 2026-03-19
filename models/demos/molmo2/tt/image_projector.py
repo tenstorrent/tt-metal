@@ -138,14 +138,14 @@ class ImageProjector(LightweightModule):
         if seq_len > 1024:
             x = ttnn.reshape(x, [1, seq_len // 1024, 1024, -1])
 
-        # w1 (gate projection) with SiLU activation
+        # w1 (gate projection) with fused SiLU to reduce matmul + unary op
         gate = ttnn.linear(
             x,
             self.w1_weight,
+            activation="silu",
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        gate = ttnn.silu(gate)
 
         # w3 (up projection)
         up = ttnn.linear(

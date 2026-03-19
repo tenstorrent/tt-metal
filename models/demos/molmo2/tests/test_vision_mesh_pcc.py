@@ -3,14 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test vision backbone PCC on mesh device (1x8) vs single device reference.
+Test vision backbone PCC on mesh device vs single device reference.
+
+Mesh shape: N300 -> (1, 2), T3K -> (1, 8). Set MESH_DEVICE=N300 or T3K.
+Use this test with Tracy to profile full vision pipeline (ViT + pooling + projector).
+
+Profile with Tracy: python -m tracy -r -p -v -m pytest models/demos/molmo2/tests/test_vision_mesh_pcc.py -v -s
 """
+
+import os
 
 import numpy as np
 import torch
 from loguru import logger
 
 import ttnn
+
+# Mesh shape for multi-device: N300=2 chips, T3K=8 chips.
+# If MESH_DEVICE is unset, use (1, num_devices) so the test runs on whatever hardware is available (e.g. N300 with 2 devices).
+MESH_SHAPE_BY_DEVICE = {"N300": (1, 2), "T3K": (1, 8)}
 
 
 def calculate_pcc(ref, out):
@@ -77,13 +88,19 @@ def test_vision_backbone_mesh_pcc():
     )
     logger.info(f"Reference output: shape={ref_output.shape}, min={ref_output.min():.4f}, max={ref_output.max():.4f}")
 
-    # TTNN mesh device forward
+    # TTNN mesh device forward: use MESH_DEVICE env if set, else (1, num_devices) for current machine (e.g. N300 -> (1, 2)).
+    mesh_env = os.environ.get("MESH_DEVICE", "").strip()
+    if mesh_env in MESH_SHAPE_BY_DEVICE:
+        mesh_tup = MESH_SHAPE_BY_DEVICE[mesh_env]
+    else:
+        num_devices = ttnn.get_num_devices()
+        mesh_tup = (1, num_devices)
     logger.info("=" * 80)
-    logger.info("TTNN forward (mesh device 1x8)")
+    logger.info(f"TTNN forward (mesh device {mesh_tup[0]}x{mesh_tup[1]})")
     logger.info("=" * 80)
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
+    mesh_shape = ttnn.MeshShape(*mesh_tup)
     mesh_device = ttnn.open_mesh_device(mesh_shape)
     logger.info(f"Mesh device opened with {mesh_device.get_num_devices()} devices")
 

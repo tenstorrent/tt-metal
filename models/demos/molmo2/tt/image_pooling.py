@@ -259,32 +259,30 @@ class ImagePooling(LightweightModule):
         num_queries = query.shape[-2]
         pool_size = key_value.shape[-2]
 
-        # Q projection
+        # Q, K, V projections (bias fused into linear to reduce matmul + binary ops)
         q = ttnn.linear(
             query,
             self.wq,
+            bias=self.bq,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        q = q + self.bq
 
-        # K projection
         k = ttnn.linear(
             key_value,
             self.wk,
+            bias=self.bk,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        k = k + self.bk
 
-        # V projection
         v = ttnn.linear(
             key_value,
             self.wv,
+            bias=self.bv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        v = v + self.bv
 
         # Reshape Q, K, V for multi-head attention
         # Note: Using ttnn ops for head splitting
@@ -342,14 +340,14 @@ class ImagePooling(LightweightModule):
         attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
         attn_output = ttnn.reshape(attn_output, [1, batch_seq, num_queries, self.num_heads * self.padded_head_dim])
 
-        # Output projection
+        # Output projection (bias fused into linear)
         output = ttnn.linear(
             attn_output,
             self.wo,
+            bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        output = output + self.bo
 
         ttnn.deallocate(attn_output)
 
