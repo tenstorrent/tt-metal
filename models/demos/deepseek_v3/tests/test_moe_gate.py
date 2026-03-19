@@ -15,7 +15,7 @@ from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.blaze_moe_gate import BlazeMoeGate
 
 # from models.demos.deepseek_v3.tt.moe_gate import MoEGate as BlazeMoeGate
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -95,10 +95,10 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 
 @pytest.mark.parametrize(
-    "mode,seq_len",
+    "mode,batch_size_per_row,seq_len",
     [
-        ("decode", 128),
-        ("prefill", _prefill_seq_len),
+        ("decode", USERS_PER_ROW, 1),
+        ("prefill", 1, _prefill_seq_len),
     ],
 )
 @pytest.mark.parametrize(
@@ -110,6 +110,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 @pytest.mark.parametrize("weight_type", ["real"])
 def test_forward_pass(
     mode,
+    batch_size_per_row,
     seq_len,
     hf_config,
     topk_fallback,
@@ -126,9 +127,10 @@ def test_forward_pass(
     module_path = "model.layers.3.mlp" if weight_type == "real" else None
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort)
     checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
+    num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     state_dict, torch_input, reference_topk_indices, reference_topk_weights = generate_reference_io(
         mode=mode,
-        num_tokens=seq_len,
+        num_tokens=num_tokens,
         reference_model=reference_model,
         hf_config=hf_config,
         weight_type=weight_type,
