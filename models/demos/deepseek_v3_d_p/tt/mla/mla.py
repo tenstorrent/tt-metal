@@ -8,8 +8,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-
-from .tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class ttMLA:
@@ -299,7 +298,7 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # split rope and nope
+        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [1, num_heads_local, seq_len_local, self.qk_nope_head_dim])
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, self.qk_nope_head_dim], [1, num_heads_local, seq_len_local, self.qk_head_dim]
@@ -320,7 +319,7 @@ class ttMLA:
             is_decode_mode=False,
         )
 
-        # concat rope and nope
+        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
 
         # kv
@@ -346,7 +345,7 @@ class ttMLA:
             tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
         )
 
-        # split rope and nope
+        # TODO: split rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kv_nope = ttnn.slice(tt_kv, [0, 0, 0, 0], [1, 1, seq_len_local, self.kv_lora_rank])
         tt_kv_rope = ttnn.slice(
             tt_kv, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim]
@@ -369,13 +368,13 @@ class ttMLA:
             is_decode_mode=False,
         )
 
-        # concat rope and nope
+        # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
         # expand v with wkv_b2
-        # workaround for #37416
+        # TODO: workaround for #37416, remove when resolved
         tt_v_latent_post_repeat = ttnn.repeat(tt_kv_nope, [1, num_heads_local, 1, 1])
         ttnn.deallocate(tt_kv_nope)
 
