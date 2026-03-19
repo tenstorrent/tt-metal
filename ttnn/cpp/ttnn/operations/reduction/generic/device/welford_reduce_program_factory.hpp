@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op_device_operation_types.hpp"
+#include "ttnn/operations/reduction/generic/device/welford_reduce_device_operation_types.hpp"
 
 namespace ttnn::prim {
 

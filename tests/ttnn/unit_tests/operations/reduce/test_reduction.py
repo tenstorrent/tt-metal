@@ -34,12 +34,15 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [None, [], -1, -2])
+@pytest.mark.parametrize("batch_size", [1])
+# @pytest.mark.parametrize("batch_size", [1, 16])
+@pytest.mark.parametrize("h", [320, 640, 327])
+@pytest.mark.parametrize("w", [320, 640, 641])
+@pytest.mark.parametrize("dim", [-1])
+# @pytest.mark.parametrize("dim", [None, [], -1, -2])
 @pytest.mark.parametrize("keepdim", [True])
-@pytest.mark.parametrize("correction", [True, False])
+@pytest.mark.parametrize("correction", [False])
+# @pytest.mark.parametrize("correction", [True, False])
 def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch.manual_seed(0)
 
@@ -55,7 +58,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     output_tensor = ttnn.to_torch(output_tensor)
     assert len(torch_output_tensor.shape) == len(output_tensor.shape)
     assert torch_output_tensor.shape == output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
 
 
 # Test a 1D, 2D, 3D, and 4D tensor

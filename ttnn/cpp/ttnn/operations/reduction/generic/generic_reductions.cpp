@@ -375,12 +375,10 @@ static Tensor std_var_impl(
     // For now support only interleaved tensors.
     TT_FATAL(!input_tensor_arg.is_sharded(), "Welford variance does not yet support sharded inputs");
 
-
-
-
     // If tensor is 1D, reshape to 2D because the reduction kernel only supports 2D tensors.
-    // Use H dimension for Welford reduce.
-    ttnn::Tensor input_tensor = (rank == 1) ? ttnn::reshape(input_tensor_arg, ttnn::Shape{input_shape[0], 1}) : input_tensor_arg;
+    // Use the W dimension for Welford reduce.
+    ttnn::Tensor input_tensor =
+        (rank == 1) ? ttnn::reshape(input_tensor_arg, ttnn::Shape{1, input_shape[0]}) : input_tensor_arg;
 
     if (input_tensor.layout() != Layout::TILE) {
         ttnn::Shape padded_shape = data_movement::pad_to_tile_shape(input_tensor.padded_shape());
@@ -481,10 +479,25 @@ Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::SmallVector<int> dim = generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
-    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
+
+    if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
+        return std_var_impl<reduce_type>(
+            input_tensor_arg,
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            scalar,
+            non_height_width_dims,
+            correction,
+            sub_core_grids);
+    }
+
+    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
+    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
+
     if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
@@ -500,18 +513,6 @@ Tensor reduce(
             }
             dim = height_width_dims;
         }
-    }
-    if constexpr (reduce_type == ReduceType::Std || reduce_type == ReduceType::Var) {
-        return std_var_impl<reduce_type>(
-            input_tensor,
-            dim,
-            keepdim,
-            memory_config_arg,
-            compute_kernel_config,
-            scalar,
-            non_height_width_dims,
-            correction,
-            sub_core_grids);
     }
     return reduce_impl<reduce_type>(
         input_tensor,
