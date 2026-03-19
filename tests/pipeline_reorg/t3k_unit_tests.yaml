@@ -17,13 +17,17 @@
   owner_id: ULMEPM2MA # Sean Nijjar
   team: fabric
 
-- name: t3k_ttnn_tests
-  cmd: run_t3000_ttnn_tests
-  skus:
-    wh_llmbox:
-      timeout: 25
-  owner_id: UBHPP2NDP # Joseph Chu
-  team: ttnn
+# TODO(ci-disable): t3k_ttnn_tests — job step timed out at 25m on T3000 unit tests (both runs below).
+# Re-enable when run_t3000_ttnn_tests completes within budget or timeout is raised with infra sign-off.
+# Evidence: https://github.com/tenstorrent/tt-metal/actions/runs/23199328648/job/67418050271
+#           https://github.com/tenstorrent/tt-metal/actions/runs/23294411119/job/67738963512
+# - name: t3k_ttnn_tests
+#   cmd: run_t3000_ttnn_tests
+#   skus:
+#     wh_llmbox:
+#       timeout: 25
+#   owner_id: UBHPP2NDP # Joseph Chu
+#   team: ttnn
 
 - name: t3k_tt_metal_multiprocess_tests
   cmd: run_t3000_tt_metal_multiprocess_tests
