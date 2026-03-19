@@ -61,6 +61,7 @@
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -142,6 +143,8 @@ void py_module(nb::module_& mod) {
     // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
+
+    deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
 }
 
 }  // namespace ttnn::operations::experimental
