@@ -49,9 +49,8 @@ def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
     return out, lse_list
 
 
-def create_global_semaphores(mesh_device, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+def create_global_semaphores(mesh_device, cores, initial_value, num_links=2):
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(num_links)]
     return ccl_semaphore_handles
 
 
@@ -118,8 +117,8 @@ def run_ring_joint_sdpa_model_config(
     submesh.load_sub_device_manager(sub_device_manager)
     submesh.set_sub_device_stall_group(sub_device_stall_group)
 
-    # --- Global semaphores ---
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+    # --- Global semaphores: one per link for per-chunk sync ---
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(num_links)]
 
     # --- Persistent output buffers for all-gather K/V ---
     kv_shard_dims = [None, None]
@@ -355,8 +354,8 @@ def run_ring_joint_sdpa(
     submesh.load_sub_device_manager(sub_device_manager)
     submesh.set_sub_device_stall_group(sub_device_stall_group)
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_iters)]
+    # create global semaphore handles: one per link for per-chunk sync
+    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0, num_links=num_links) for _ in range(n_iters)]
 
     kv_shard_dims = [None, None]
     kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis

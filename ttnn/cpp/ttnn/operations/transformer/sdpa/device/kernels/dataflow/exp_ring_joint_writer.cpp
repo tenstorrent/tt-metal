@@ -946,7 +946,7 @@ void kernel_main() {
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
 
                         if (!is_last_ring_iter) {
-                            chunks_signaled_by_remote++;
+
                             tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
                             noc_async_writes_flushed();
                         }
