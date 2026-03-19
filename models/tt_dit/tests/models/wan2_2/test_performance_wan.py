@@ -132,6 +132,13 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         "i2v",
     ],
 )
+@pytest.mark.parametrize(
+    "traced",
+    [
+        pytest.param(True, id="tracing_on"),
+        pytest.param(False, id="tracing_off"),
+    ],
+)
 def test_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -147,6 +154,7 @@ def test_pipeline_performance(
     is_ci_env: bool,
     galaxy_type: str,
     is_fsdp: bool,
+    traced: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -236,6 +244,7 @@ def test_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
+                    traced=traced,
                 )
 
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -258,10 +267,11 @@ def test_pipeline_performance(
     # Save video using diffusers utility
     # Remove batch dimension
     frames = frames[0]
+    filename = f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4"
     try:
         if not is_ci_env:
-            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            export_to_video(frames, filename, fps=16)
+            print(f"✓ Saved video to: {filename}")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
 

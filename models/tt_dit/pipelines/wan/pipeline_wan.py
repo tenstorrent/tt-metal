@@ -259,19 +259,23 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            self.tt_umt5_encoder.set_unload_set(self.transformer_2)
+            self.tt_umt5_encoder.register_unload_set(self.transformer_2)
             if ttnn.device.is_blackhole():
-                self.transformer.set_unload_set(self.transformer_2)
-                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+                self.transformer.register_unload_set(self.transformer_2)
+                self.transformer_2.register_unload_set(self.transformer, self.tt_umt5_encoder)
             else:
                 # WH T3K has tighter DRAM — include VAE in the unload chain so
                 # transformers and VAE never coexist in DRAM across pipeline runs.
-                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
-                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
-                self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
+                self.transformer.register_unload_set(self.transformer_2, self.tt_vae)
+                self.transformer_2.register_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.tt_vae.register_unload_set(self.transformer, self.transformer_2)
 
-        self._transformer_tracer = None
-        self._transformer_2_tracer = None
+        self._transformer_tracer = Tracer(
+            self.transformer.combined_step, device=self.mesh_device, clone_prep_inputs=False
+        )
+        self._transformer_2_tracer = Tracer(
+            self.transformer_2.combined_step, device=self.mesh_device, clone_prep_inputs=False
+        )
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -403,6 +407,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
     def _prepare_transformer1(self):
+        self._transformer_2_tracer.release_trace()
         cache.load_model(
             self.transformer,
             model_name=os.path.basename(self.checkpoint_name),
@@ -412,12 +417,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
-        if self._transformer_tracer is None:
-            self._transformer_tracer = Tracer(
-                self.transformer.combined_step, device=self.mesh_device, clone_prep_inputs=False
-            )
+        self._transformer_tracer.set_trace_function(self.transformer.combined_step)
 
     def _prepare_transformer2(self):
+        self._transformer_tracer.release_trace()
         cache.load_model(
             self.transformer_2,
             model_name=os.path.basename(self.checkpoint_name),
@@ -427,12 +430,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
-        if self._transformer_2_tracer is None:
-            self._transformer_2_tracer = Tracer(
-                self.transformer_2.combined_step, device=self.mesh_device, clone_prep_inputs=False
-            )
+        self._transformer_2_tracer.set_trace_function(self.transformer_2.combined_step)
 
     def _prepare_vae(self):
+        self._transformer_2_tracer.release_trace()
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
@@ -910,11 +911,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 previous_model_name = current_model_name
 
                 if boundary_timestep is None or t >= boundary_timestep:
+                    # Wan2.1 or high-noise stage in Wan2.2
                     self._prepare_transformer1()
-                    if self._transformer_2_tracer is not None:
-                        self._transformer_2_tracer.release_trace()
-                        self._transformer_2_tracer = None
-                    # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
                     forward = self._transformer_tracer if traced else self.transformer.combined_step
                     current_model_name = "transformer"
@@ -922,9 +920,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 else:
                     # low-noise stage in wan2.2
                     self._prepare_transformer2()
-                    if self._transformer_tracer is not None:
-                        self._transformer_tracer.release_trace()
-                        self._transformer_tracer = None
                     current_model = self.transformer_2
                     forward = self._transformer_2_tracer if traced else self.transformer_2.combined_step
                     current_model_name = "transformer_2"

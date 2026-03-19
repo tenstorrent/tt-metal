@@ -215,9 +215,9 @@ class Module(ABC):
     def is_loaded(self) -> bool:
         return self._is_loaded
 
-    def set_unload_set(self, *args: Module) -> None:
+    def register_unload_set(self, *args: Module) -> None:
         """
-        Set the modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
+        Register the modules that cannot be loaded together with this module. They need to be unloaded before loading this module.
         Args:
             *args: Arbitrary number of Modules that cannot be loaded together with this module.
         """

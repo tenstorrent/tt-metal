@@ -37,6 +37,18 @@ class Tracer:
 
     def __init__(
         self,
+        function: Callable[..., Any] | None = None,
+        /,
+        *,
+        device: ttnn.MeshDevice,
+        prep_run: bool = True,
+        clone_prep_inputs: bool = True,
+    ) -> None:
+        self._trace_id: ttnn.MeshTraceId | None = None
+        self.init_tracer(function, device=device, prep_run=prep_run, clone_prep_inputs=clone_prep_inputs)
+
+    def init_tracer(
+        self,
         function: Callable[..., Any],
         /,
         *,
@@ -44,7 +56,7 @@ class Tracer:
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
     ) -> None:
-        """Initialize the tracer.
+        """Initialize the tracer. To be used when Tracer is integrated as a mixin class.
 
         If the function modifies its input tensors in place, set ``clone_prep_inputs`` to ``True``
         so that preparation runs operate on cloned inputs, leaving the originals intact for trace
@@ -56,6 +68,9 @@ class Tracer:
             prep_run: Whether to run the function once before capturing the trace.
             clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
         """
+        if self._trace_id is not None:
+            return
+
         self._function = function
         self._device = device
         self._prep_run = prep_run
@@ -64,6 +79,9 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_id: ttnn.MeshTraceId | None = None
+
+    def set_trace_function(self, function: Callable[..., Any]) -> None:
+        self._function = function
 
     def __call__(
         self,
@@ -174,6 +192,9 @@ class Tracer:
     def trace_captured(self) -> bool:
         """Whether a trace has been captured and is ready for execution."""
         return self._trace_id is not None
+
+    def deallocate(self) -> None:
+        self.release_trace()
 
     def release_trace(self) -> None:
         """Release the captured trace and clear inputs and outputs."""

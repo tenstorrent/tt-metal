@@ -101,8 +101,6 @@ def test_pipeline_inference(
                 num_inference_steps=num_inference_steps,
                 seed=seed,
                 traced=traced,
-                # vae_traced=traced,
-                # encoder_traced=traced,
                 guidance_scale=4.0,
                 guidance_scale_2=3.0,
             )
