@@ -198,7 +198,7 @@ jobs:
               "co-owner-2-id": "U08BH66EXAL"
             },
             {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
@@ -215,7 +215,7 @@ jobs:
               "co-owner-2-id": "U08CEGF78ET"
             },
             {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample",
+              "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample (prefix caching)",
               "model": "meta-llama/Llama-3.3-70B-Instruct",
               "server-timeout": 35,
               "benchmark-timeout": 10,
