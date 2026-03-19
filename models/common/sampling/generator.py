@@ -405,8 +405,17 @@ def format_sampling_params(sampling_params, max_batch_size):
     temperature = _pad(sampling_params.temperature, "temperature")
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
-    enable_log_probs = _pad(sampling_params.enable_log_probs, "enable_log_probs")
-    num_logprobs = _pad(sampling_params.num_logprobs, "num_logprobs")
+
+    # enable_log_probs / num_logprobs: when scalar was converted to [value],
+    # broadcast to all users (not pad with default). A scalar True means
+    # "all users enabled", not "only user 0".
+    def _broadcast_pad(lst, name):
+        if len(lst) == 1:
+            return lst * target_len
+        return _pad(lst, name)
+
+    enable_log_probs = _broadcast_pad(sampling_params.enable_log_probs, "enable_log_probs")
+    num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
 
     # Normalise and pad penalty / seed fields (may still be None/scalar)
     def _normalise_and_pad(name):
