@@ -19,9 +19,6 @@
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
-// This will be brought in at #37692
-class DeviceStorage;
-
 // Implementation details for MeshTensor
 class MeshTensorImpl;
 
@@ -61,19 +58,24 @@ public:
     /**
      * Construct a tensor that does not own any device memory.
      */
-    MeshTensor() = default;
+    MeshTensor();
 
-    // TODO(#38376), TODO(#38689):
-    // This should be a private constructor, external user should not be able to construct a MeshTensor
-    // directly. As this will lead to leaks of the MeshBuffer unique ownership.
-    explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+    // Internal Constructor for transition.
+    explicit MeshTensor(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology);
+
+    /**
+     * Move constructor with new spec and topology.
+     * Moves the buffer from other and uses the provided spec/topology.
+     * This is meant for transition as TTNN-Tensor current has a two-step construction for MeshTensor.
+     */
+    MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology);
 
     /**
      * Release ownership of the underlying device memory.
      * Whether or not the device memory is actually deallocated depends on the destructor semantics of the underlying
      * MeshBuffer.
      */
-    ~MeshTensor() = default;
+    ~MeshTensor();
 
     /**
      * A device tensor is non-copyable as this is the sole owner of the underlying device memory.
@@ -90,25 +92,18 @@ public:
      *
      * post-condition: The other MeshTensor will be in a default constructed state.
      */
-    MeshTensor(MeshTensor&& other) = default;
+    MeshTensor(MeshTensor&& other) noexcept;
 
     /**
      * Transfer ownership of the underlying device memory to the other MeshTensor.
      *
      * post-condition: The other MeshTensor will be in a default constructed state.
      */
-    MeshTensor& operator=(MeshTensor&& other) = default;
+    MeshTensor& operator=(MeshTensor&& other) noexcept;
 
     // End special member functions
 
     // Deallocation related:
-
-    /**
-     * Check if the device tensor owns any device memory.
-     *
-     * pre-condition: The device tensor must not be in a default constructed state.
-     */
-    bool is_allocated() const;
 
     /**
      * Return the underlying device storage MeshBuffer.
@@ -146,10 +141,6 @@ public:
      */
     const TensorTopology& tensor_topology() const;
 
-    // DeviceStorage is meant to bridge ttnn::Tensor and MeshTensor,
-    // this should go away as part of refactoring, see: #38376
-    const DeviceStorage& get_legacy_device_storage() const;
-
     // Derivables:
 
     DataType dtype() const;
@@ -180,6 +171,9 @@ public:
 
     Strides strides() const;
 
+    // Update the topology of the MeshTensor post construction.
+    // TODO(river): Is this a good idea? Would a move constructor be better?
+    // Is a MeshTensor with a new tensor topology fundamentally different?
     void update_tensor_topology(TensorTopology tensor_topology);
 
 private:
