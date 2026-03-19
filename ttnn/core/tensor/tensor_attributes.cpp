@@ -8,7 +8,7 @@
 
 namespace tt::tt_metal {
 
-const HostTensor& get_host_tensor(const Storage& storage) {
+static const HostTensor& get_host_tensor(const Storage& storage) {
     if (const auto* host_storage = std::get_if<HostStorage>(&storage)) {
         return host_storage->host_tensor();
     }
