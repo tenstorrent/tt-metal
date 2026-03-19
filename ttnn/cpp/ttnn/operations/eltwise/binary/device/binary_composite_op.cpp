@@ -88,9 +88,7 @@ Tensor minimum(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 Tensor minimum(
@@ -134,9 +132,7 @@ Tensor maximum(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 Tensor maximum(
@@ -181,9 +177,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        sub_core_grids);
+        use_legac);
 }
 
 Tensor bias_gelu(
@@ -223,9 +217,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        std::nullopt,  // use_legacy
-        /*fast_and_approximate_mode*/ false,
-        std::nullopt);  // sub_core_grids
+        std::nullopt,  // use_legads
 }
 
 Tensor atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -305,9 +297,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                /*fast_and_approximate_mode*/ false,
-                sub_core_grids);
+                std::nullopt
+
+                    sub_core_grids);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -320,9 +312,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                /*fast_and_approximate_mode*/ false,
-                sub_core_grids);
+                std::nullopt
+
+                    sub_core_grids);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -442,9 +434,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                /*fast_and_approximate_mode*/ false,
-                sub_core_grids);
+                std::nullopt
+
+                    sub_core_grids);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -457,9 +449,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt,
-                /*fast_and_approximate_mode*/ false,
-                sub_core_grids);
+                std::nullopt
+
+                    sub_core_grids);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -740,9 +732,7 @@ Tensor fmod(
         {},
         {},
         {},
-        std::nullopt,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        std::nullopt);
 }
 
 Tensor fmod(
@@ -867,9 +857,7 @@ Tensor gcd(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 Tensor lcm(
@@ -892,9 +880,7 @@ Tensor lcm(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 // power - floating point exponent
@@ -946,9 +932,7 @@ Tensor pow(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 // power - scalar input, tensor exponent
@@ -998,9 +982,7 @@ Tensor rsub(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 Tensor rsub(
@@ -1031,9 +1013,7 @@ Tensor rsub(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::rsub_sfpu(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1067,9 +1047,7 @@ Tensor bitwise_and(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::detail::invoke_binary_ng(
@@ -1082,9 +1060,7 @@ Tensor bitwise_and(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        use_legac);
 }
 
 Tensor bitwise_and(
@@ -1114,9 +1090,7 @@ Tensor bitwise_and(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::bitwise_and(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1150,9 +1124,7 @@ Tensor bitwise_or(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::detail::invoke_binary_ng(
@@ -1165,9 +1137,7 @@ Tensor bitwise_or(
         {},
         {},
         {},
-        std::nullopt,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        std::nullopt);
 }
 
 Tensor bitwise_or(
@@ -1197,9 +1167,7 @@ Tensor bitwise_or(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::bitwise_or(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1233,9 +1201,7 @@ Tensor bitwise_xor(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::detail::invoke_binary_ng(
@@ -1248,9 +1214,7 @@ Tensor bitwise_xor(
         {},
         {},
         {},
-        std::nullopt,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        std::nullopt);
 }
 
 Tensor bitwise_xor(
@@ -1280,9 +1244,7 @@ Tensor bitwise_xor(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::bitwise_xor(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1316,9 +1278,7 @@ Tensor bitwise_left_shift(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::detail::invoke_binary_ng(
@@ -1331,9 +1291,7 @@ Tensor bitwise_left_shift(
         {},
         {},
         {},
-        std::nullopt,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        std::nullopt);
 }
 
 Tensor bitwise_left_shift(
@@ -1363,9 +1321,7 @@ Tensor bitwise_left_shift(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::bitwise_left_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1399,9 +1355,7 @@ Tensor bitwise_right_shift(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::detail::invoke_binary_ng(
@@ -1414,9 +1368,7 @@ Tensor bitwise_right_shift(
         {},
         {},
         {},
-        std::nullopt,
-        /*fast_and_approximate_mode*/ false,
-        /*sub_core_grids*/ std::nullopt);
+        std::nullopt);
 }
 
 Tensor bitwise_right_shift(
@@ -1446,9 +1398,7 @@ Tensor bitwise_right_shift(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy,
-            /*fast_and_approximate_mode*/ false,
-            /*sub_core_grids*/ std::nullopt);
+            use_legacy);
     }
 
     return ttnn::bitwise_right_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);

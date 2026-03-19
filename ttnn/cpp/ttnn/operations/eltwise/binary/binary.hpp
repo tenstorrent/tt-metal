@@ -44,8 +44,8 @@ Tensor invoke_binary_ng(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<bool>& fast_and_approximate_mode = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
@@ -58,8 +58,8 @@ Tensor invoke_binary_ng(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<bool>& fast_and_approximate_mode = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
@@ -72,8 +72,8 @@ Tensor invoke_binary_ng(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
-    const std::optional<bool>& fast_and_approximate_mode,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<bool>& fast_and_approximate_mode = false,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace detail
 
