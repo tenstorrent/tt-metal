@@ -1372,7 +1372,7 @@ class BlitzDecodeWeights:
         *,
         layer_idx: int | None = None,
         move_to_device: bool = True,
-    ) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor]]:
+    ) -> tuple[list, list, list]:
         """Create DRAM WIDTH_SHARDED expert weight tensors for routed MoE.
 
         Each expert projection is uploaded as a separate WIDTH_SHARDED tensor
@@ -1470,7 +1470,7 @@ class BlitzDecodeWeights:
                         device=device_for_torch,
                         memory_config=mem_config,
                     )
-                    tensors.append(ct.get_data_tensor())  # Extract the underlying ttnn.Tensor
+                    tensors.append(ct)  # Keep full CompressedTensor for assignment round-trip
                 else:
                     # Original uniform bfloat4_b path
                     w_shuffled = self._shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)

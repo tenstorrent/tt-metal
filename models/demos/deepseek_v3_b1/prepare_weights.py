@@ -21,11 +21,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+
+try:
+    from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
+
+    HAS_COMPRESSED_TENSOR = True
+except ImportError:
+    HAS_COMPRESSED_TENSOR = False
 
 # Serialization: manifest version and dtype name mapping
 _MANIFEST_VERSION = 1
@@ -1093,9 +1101,20 @@ def save_routed_expert_weights(
                 logger.debug("  saved experts 0..{}", e - 1)
             expert_dir = experts_dir / f"e_{e:03d}"
             expert_dir.mkdir(parents=True, exist_ok=True)
-            ttnn.dump_tensor(expert_dir / "gate_proj.tensorbin", routed.routed_gate_proj[e])
-            ttnn.dump_tensor(expert_dir / "up_proj.tensorbin", routed.routed_up_proj[e])
-            ttnn.dump_tensor(expert_dir / "down_proj.tensorbin", routed.routed_down_proj[e])
+            for proj_name, proj_tensor in (
+                ("gate_proj", routed.routed_gate_proj[e]),
+                ("up_proj", routed.routed_up_proj[e]),
+                ("down_proj", routed.routed_down_proj[e]),
+            ):
+                if HAS_COMPRESSED_TENSOR and isinstance(proj_tensor, CompressedTensor):
+                    ttnn.dump_tensor(expert_dir / f"{proj_name}.tensorbin", proj_tensor.get_data_tensor())
+                    # Save 2D assignment array: shape (tiles_h, tiles_w) encodes tile grid.
+                    np.save(
+                        expert_dir / f"{proj_name}_assignment.npy",
+                        proj_tensor.get_assignment().astype(np.int8),
+                    )
+                else:
+                    ttnn.dump_tensor(expert_dir / f"{proj_name}.tensorbin", proj_tensor)
         logger.info("  saved {} routed experts in {:.3f}s", num_experts, time.perf_counter() - t0)
     else:
         assert isinstance(routed, DenseRoutedExpertWeights)
@@ -1190,6 +1209,51 @@ def save_decoder_layer(
     logger.info(f"  save_decoder_layer total: {time.perf_counter() - save_decoder_layer_t0:.3f}s")
 
 
+def _reconstruct_expert_memory_config(device, K: int, N_padded: int):
+    """Reconstruct the original WIDTH_SHARDED DRAM MemoryConfig for a routed expert projection.
+
+    Mirrors the shard spec built in BlitzDecodeWeights.get_tt_moe_routed_expert_weights().
+    Needed to reconstruct shard-page mapping when loading cached CompressedTensors.
+    """
+    dram_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+            )
+        }
+    )
+    num_banks = device.dram_grid_size().x * device.dram_grid_size().y
+    per_core_N = N_padded // num_banks
+    shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+
+def _load_expert_proj(expert_dir: Path, proj_name: str, device):
+    """Load one expert projection from cache.
+
+    If a companion *_assignment.npy file exists the projection was packed as a
+    CompressedTensor (BSPM mixed-precision).  In that case the data tensor and
+    the saved assignment are used to reconstruct a CompressedTensor via
+    CompressedTensor.from_packed_data().  Otherwise returns a plain ttnn.Tensor.
+    """
+    data_tensor = ttnn.load_tensor(expert_dir / f"{proj_name}.tensorbin", device=device)
+    assignment_path = expert_dir / f"{proj_name}_assignment.npy"
+    if not (HAS_COMPRESSED_TENSOR and assignment_path.exists()):
+        return data_tensor
+    assignment_2d = np.load(assignment_path)  # shape (tiles_h, tiles_w), int8
+    tiles_h, tiles_w = assignment_2d.shape
+    K = tiles_h * 32
+    N_padded = tiles_w * 32
+    original_mem_config = _reconstruct_expert_memory_config(device, K, N_padded)
+    return CompressedTensor.from_packed_data(
+        data_tensor,
+        assignment_2d,
+        original_mem_config,
+        device=device,
+    )
+
+
 def load_moe_routed_experts(
     path: str | Path,
     device,
@@ -1226,15 +1290,15 @@ def load_moe_routed_experts(
             logger.debug("  loaded experts 0..{}", e - 1)
         expert_dir = experts_dir / f"e_{e:03d}"
         t_load_gate_t0 = time.perf_counter()
-        routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
+        routed_gate_proj.append(_load_expert_proj(expert_dir, "gate_proj", device))
         t_load_gate = time.perf_counter() - t_load_gate_t0
 
         t_load_up_t0 = time.perf_counter()
-        routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
+        routed_up_proj.append(_load_expert_proj(expert_dir, "up_proj", device))
         t_load_up = time.perf_counter() - t_load_up_t0
 
         t_load_down_t0 = time.perf_counter()
-        routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
+        routed_down_proj.append(_load_expert_proj(expert_dir, "down_proj", device))
         t_load_down = time.perf_counter() - t_load_down_t0
 
         logger.debug(

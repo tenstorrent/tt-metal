@@ -282,6 +282,70 @@ class CompressedTensor:
             tile_hw=tile_hw,
         )
 
+    @classmethod
+    def from_packed_data(
+        cls,
+        data_tensor,
+        assignment_2d: np.ndarray,
+        original_memory_config,
+        device=None,
+        tile_hw: int = DEFAULT_TILE_HW,
+    ) -> CompressedTensor:
+        """Reconstruct a CompressedTensor from a cached packed data tensor + assignment.
+
+        Used when loading a previously-packed CompressedTensor from disk cache.
+        The data tensor is already on device (loaded via ttnn.load_tensor); the
+        assignment is a numpy array saved alongside it.  This avoids re-quantizing
+        the original float weights.
+
+        Args:
+            data_tensor: Packed uint8 BFP data tensor, already on device.
+            assignment_2d: (tiles_h, tiles_w) int8/uint8 array with tt-metal
+                COMPRESSED_FORMATS indices.  The shape encodes the tile grid.
+            original_memory_config: The MemoryConfig that was passed to __init__
+                or from_bspm() during packing (before shard-size correction).
+                Needed to reconstruct the shard-to-page mapping.
+            device: ttnn device (required to place the repacked assignment tensor).
+            tile_hw: Tile dimension (default 32).
+
+        Returns:
+            CompressedTensor ready for use with DRAMStreamingMatmulCompressed.
+        """
+        obj = object.__new__(cls)
+
+        tiles_h, tiles_w = int(assignment_2d.shape[0]), int(assignment_2d.shape[1])
+        K = tiles_h * tile_hw
+        N_padded = tiles_w * tile_hw
+
+        obj.shape = (K, N_padded)
+        obj.tile_hw = tile_hw
+        obj.tiles_h = tiles_h
+        obj.tiles_w = tiles_w
+
+        obj.data = data_tensor
+        obj.spec = None
+        obj.max_shard_size = data_tensor.memory_config().shard_spec.shape[1]
+
+        obj._assignment_flat = assignment_2d.astype(np.int8).ravel().copy()
+        obj._tile_mant_bits = []  # not populated; to_torch() will not work
+
+        obj._shard_mapping = compute_shard_page_mapping((K, N_padded), original_memory_config, tile_hw)
+        obj._core_assignment = obj._build_core_assignment()
+
+        # Re-pack the assignment tensor from numpy (cheap: assignment is tiny).
+        assign_bytes, assign_mem = obj._pack_sharded_assignment(
+            (K, N_padded), original_memory_config, original_memory_config.buffer_type
+        )
+        obj.assignment = ttnn.from_torch(
+            assign_bytes,
+            dtype=ttnn.uint8,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=assign_mem,
+        )
+
+        return obj
+
     def to_torch(self) -> torch.Tensor:
         """Unpack back to float32 torch tensor."""
         data_tensor = self.data

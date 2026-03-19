@@ -109,6 +109,28 @@ def _create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Verify existing cache (manifest + files, optional device load) instead of generating",
     )
+    parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "BitSculpt results directory containing BSPM files (e.g. /path/to/bit_sculpt/results). "
+            "When provided, routed MoE expert weights use BSPM-driven mixed-precision "
+            "CompressedTensor instead of uniform bfloat4_b.  Falls back to bfloat4_b for "
+            "layers whose BSPM file is not found."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-variant",
+        default="B",
+        help="BitSculpt allocation variant letter (default: B)",
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert (default: 3.5)",
+    )
     return parser
 
 
@@ -606,7 +628,12 @@ def main() -> int:
 
             submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
             logger.info("Creating BlitzDecodeWeights on 4x2 submesh...")
-            bdw = BlitzDecodeWeights(submesh)
+            bdw = BlitzDecodeWeights(
+                submesh,
+                bspm_dir=args.bspm_dir,
+                bspm_variant=args.bspm_variant,
+                bspm_budget=args.bspm_budget,
+            )
 
             manifest_kw = dict(
                 hf_model_name=HF_MODEL_NAME,
