@@ -535,6 +535,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                TT_FATAL(
+                    !attributes.sub_device_id.has_value(),
+                    "sub_device_id is not supported for DRAM-sharded matmul. "
+                    "DRAM-sharded matmul selects worker cores based on DRAM bank adjacency and cannot be constrained "
+                    "to a sub-device.");
                 TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded for DRAM sharded program config");
                 TT_FATAL(
                     attributes.output_mem_config.is_sharded(),
@@ -596,6 +601,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/12 complete [M, N] matrices)
                 // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/12 complete [N, K] matrices)
                 // Output: HEIGHT_SHARDED in L1 (batch-sharded, each core outputs B/12 complete [M, K] matrices)
+                TT_FATAL(
+                    !attributes.sub_device_id.has_value(),
+                    "sub_device_id is not supported for batched DRAM-sharded matmul. "
+                    "DRAM-sharded matmul selects worker cores based on DRAM bank adjacency and cannot be constrained "
+                    "to a sub-device.");
                 TT_FATAL(input_tensor_a.is_sharded(), "Input tensor A must be sharded for batch-sharded DRAM matmul");
                 TT_FATAL(
                     attributes.output_mem_config.is_sharded(),
