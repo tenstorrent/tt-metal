@@ -279,6 +279,9 @@ void kernel_main() {
                         cb_push_back(cb_k_writer_in, k_chunk_tiles);
                     }
                 }
+                if (mux_forward_this_iter) {
+                    ASSERT(get_write_ptr(cb_k_in) == get_write_ptr(cb_k_writer_in));
+                }
 
                 // Forward K chunk to next core(s): initiate async write (NOC write channel)
                 // For mcast: send linked data + companion semaphore back-to-back.
@@ -359,6 +362,9 @@ void kernel_main() {
                         cb_push_back(cb_v_writer_in, v_chunk_tiles);
                     }
                 }
+                if (mux_forward_this_iter) {
+                    ASSERT(get_write_ptr(cb_v_in) == get_write_ptr(cb_v_writer_in));
+                }
 
                 // Forward V chunk to next core(s) if applicable
                 if (should_forward) {
@@ -390,6 +396,12 @@ void kernel_main() {
             cb_reserve_back(cb_v_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_v_in, k_chunk_tiles);
+            if (mux_forward_this_iter) {
+                cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
+                cb_reserve_back(cb_v_writer_in, v_chunk_tiles);
+                cb_push_back(cb_k_writer_in, k_chunk_tiles);
+                cb_push_back(cb_v_writer_in, v_chunk_tiles);
+            }
         }
     }
 

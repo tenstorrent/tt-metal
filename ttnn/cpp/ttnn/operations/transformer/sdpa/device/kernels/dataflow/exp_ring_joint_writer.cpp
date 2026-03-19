@@ -871,6 +871,14 @@ void kernel_main() {
                         cb_wait_front(cb_k_writer_in, k_chunk_tiles);
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
+                            volatile tt_l1_ptr uint16_t* k_data_peek =
+                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_k_read_ptr);
+                            DPRINT << "MUX_FWD ri=" << ring_iter << " rid=" << ring_id
+                                   << " kc=" << k_chunk << " nb=" << nb << " nq=" << nq
+                                   << " glob_st=" << kv_global_start_tile
+                                   << " mux=" << my_mux_index << " rows=[" << my_row_start << "," << my_row_end << ")"
+                                   << " k_data[0]=0x" << HEX() << (uint32_t)k_data_peek[0] << DEC()
+                                   << ENDL();
                             for (uint32_t col = 0; col < DHt; ++col) {
                                 for (uint32_t row = my_row_start; row < my_row_end; row += 2) {
                                     if (kv_slice.d2_start + row >= end_seq_tile) break;
@@ -931,13 +939,14 @@ void kernel_main() {
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
                     }
                     tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
-                }
-                if (KV_chunks_processed_in_iter % 2 == 0) {
-                    DPRINT << " HELP, I'm doing the THING!!!!" << ENDL();
-                    cb_reserve_back(cb_k_writer_in, k_chunk_tiles);
-                    cb_reserve_back(cb_v_writer_in, k_chunk_tiles);
-                    cb_push_back(cb_k_writer_in, k_chunk_tiles);
-                    cb_push_back(cb_v_writer_in, k_chunk_tiles);
+
+                    if (KV_chunks_processed_in_iter % 2 == 0) {
+                    //     DPRINT << " HELP, I'm doing the THING!!!!" << ENDL();
+                        cb_wait_front(cb_k_writer_in, k_chunk_tiles);
+                        cb_wait_front(cb_v_writer_in, v_chunk_tiles);
+                        cb_pop_front(cb_k_writer_in, k_chunk_tiles);
+                        cb_pop_front(cb_v_writer_in, v_chunk_tiles);
+                    }
                 }
 #endif
 
