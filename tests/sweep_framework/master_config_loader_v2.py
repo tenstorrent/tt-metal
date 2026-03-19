@@ -274,9 +274,9 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "LayerNormShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
-        inplace = re.search(r"inplace=(\d+)", value_str)
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
+        inplace = re.search(r"(?<![a-z_])inplace=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -293,8 +293,8 @@ def _parse_string_repr_program_config(type_name: str, value_str: str):
     if "SoftmaxShardedMultiCoreProgramConfig" in value_str:
         grid_m = re.search(r"compute_with_storage_grid_size=\(x=(\d+),\s*y=(\d+)\)", value_str)
         sub_w = re.search(r"subblock_w=(\d+)", value_str)
-        blk_h = re.search(r"block_h=(\d+)", value_str)
-        blk_w = re.search(r"block_w=(\d+)", value_str)
+        blk_h = re.search(r"(?<![a-z_])block_h=(\d+)", value_str)
+        blk_w = re.search(r"(?<![a-z_])block_w=(\d+)", value_str)
         if not grid_m or not sub_w or not blk_h or not blk_w:
             return None
         return ttnn.SoftmaxShardedMultiCoreProgramConfig(
