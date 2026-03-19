@@ -302,6 +302,22 @@ class Generator(WarmupForwardMixin):
         # For row-sharded users, use max_local_batch_size (users per row) for group_user_id
         local_batch_size = getattr(self.model_args[0], "max_local_batch_size", max_batch_size_per_model)
 
+        if not isinstance(prompt_lens, list):
+            prompt_lens = prompt_lens.tolist()
+
+        prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
+        # Use batched prefill when all prompts have the same padded length and total sequence fits in memory
+        use_batched_prefill = (
+            batch_size > 1
+            and len(set(prefill_seq_lens)) == 1
+            and prefill_seq_lens[0] * batch_size < MAX_BATCHED_PREFILL_SEQ_LEN
+            and self.data_parallel == 1
+            and not getattr(self.model_args[0], "disable_batched_prefill", False)
+        )
+
+        all_users = [0] if use_batched_prefill else empty_slots
+        padded_batch = self.model_args[0].max_batch_size
+
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
         prefill_results: list[dict] = []
@@ -1889,6 +1905,18 @@ class Generator(WarmupForwardMixin):
         num_blocks = 0
         if trace_enabled:
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+            page_table = page_table[:, :num_blocks]
+            if trace_enabled:
+                if page_table.shape[1] < num_blocks:
+                    padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                    page_table = torch.cat([page_table, padding], dim=1)
+            padded_page_table = (
+                torch.ones(self.model_args[0].max_batch_size, page_table.shape[1], dtype=torch.int32) * -1
+            )
+            assert user_id is not None
+            for i, user in enumerate(user_id):
+                padded_page_table[user, :] = page_table[i, :]
+            return padded_page_table
         else:
             num_blocks = num_blocks_in_seq(prefill_len, block_size)
         if trace_enabled:
