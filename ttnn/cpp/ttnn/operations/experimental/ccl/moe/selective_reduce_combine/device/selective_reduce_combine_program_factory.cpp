@@ -365,6 +365,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         {"source_token_segment_buffer_size_bytes", token_segment_buffer_size_bytes},
         {"source_expert_block_size_bytes", expert_token_segment_buffer_block_size_bytes},
         {"token_size_bytes", token_size_bytes},
+        {"select_experts_k", operation_attributes.select_experts_k},
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"alignment", l1_alignment},
         {"num_devices", num_devices_total},

@@ -67,6 +67,7 @@ void kernel_main() {
     constexpr uint32_t source_expert_block_size_bytes =
         get_named_compile_time_arg_val("source_expert_block_size_bytes");
     constexpr uint32_t token_size_bytes = get_named_compile_time_arg_val("token_size_bytes");
+    constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t alignment = get_named_compile_time_arg_val("alignment");
     constexpr uint32_t num_devices = get_named_compile_time_arg_val("num_devices");
@@ -274,6 +275,25 @@ void kernel_main() {
 
         noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
         noc_semaphore_set(semaphore_ptr, 0);
+
+        // Zero the output tensor for the next decode step.
+        // All ring devices have now finished writing expert results (guaranteed by the
+        // semaphore_wait above), so zeroing here is safe and races-free.
+        // This prevents stale K-slot values from contaminating the all_reduce when
+        // expert routing changes between decode steps.
+        {
+            constexpr uint32_t output_size_bytes = select_experts_k * tokens_per_device * token_size_bytes;
+            constexpr uint32_t kZeroChunkBytes = 2048;
+            uint32_t zero_buf[kZeroChunkBytes / sizeof(uint32_t)] = {};
+            const uint32_t zero_src = reinterpret_cast<uint32_t>(&zero_buf[0]);
+            const uint64_t out_noc_base = get_noc_addr(output_base_addr);
+            for (uint32_t offset = 0; offset < output_size_bytes; offset += kZeroChunkBytes) {
+                const uint32_t write_size =
+                    (offset + kZeroChunkBytes <= output_size_bytes) ? kZeroChunkBytes : (output_size_bytes - offset);
+                noc_async_write(zero_src, out_noc_base + offset, write_size);
+            }
+            noc_async_write_barrier();
+        }
     } else {
         // get sync core semaphore noc address
         close_direction_connections<

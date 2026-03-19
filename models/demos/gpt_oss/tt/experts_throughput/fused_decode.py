@@ -157,7 +157,7 @@ def fused_decode_forward(
     # token_activations metadata to look up each token's K-index, so the
     # output is [select_experts_k, M, H] instead of [experts_per_ring, M, H].
     # ------------------------------------------------------------------
-    fused_config.combine_preallocated = ttnn.mul(fused_config.combine_preallocated, 0)
+    # combine_preallocated is zeroed by selective_reduce_combine kernel (sync core init path)
     tt_combine_output = ttnn.experimental.selective_reduce_combine(
         moe_gpt_outputs[4],
         moe_gpt_outputs[1],
