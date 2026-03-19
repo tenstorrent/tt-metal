@@ -14,10 +14,11 @@ Owner:
     tt-vjovanovic
 """
 
+from pathlib import Path
+
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
-import os
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device
@@ -37,10 +38,10 @@ def check_binary_integrity(
     log_check_risc(
         risc_name,
         location,
-        os.path.exists(dispatcher_core_data.firmware_path),
+        Path(dispatcher_core_data.firmware_path).exists(),
         f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
     )
-    if os.path.exists(dispatcher_core_data.firmware_path):
+    if Path(dispatcher_core_data.firmware_path).exists():
         elf_file = elfs_cache[dispatcher_core_data.firmware_path].elf
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
@@ -68,11 +69,11 @@ def check_binary_integrity(
         log_check_risc(
             risc_name,
             location,
-            os.path.exists(dispatcher_core_data.kernel_xip_path),
+            Path(dispatcher_core_data.kernel_xip_path).exists(),
             f"Kernel ELF file {dispatcher_core_data.kernel_xip_path} does not exist.",
         )
 
-        if os.path.exists(dispatcher_core_data.kernel_xip_path):
+        if Path(dispatcher_core_data.kernel_xip_path).exists():
             elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:

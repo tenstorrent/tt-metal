@@ -1,2 +1,1 @@
 pycapnp==2.0.0
-tt-exalens==0.3.11

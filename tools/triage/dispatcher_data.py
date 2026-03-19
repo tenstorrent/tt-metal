@@ -16,13 +16,19 @@ Owner:
 """
 
 from dataclasses import dataclass
-import os
+from pathlib import Path
 import threading
 from typing import Callable
 
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
-from inspector_data import run as get_inspector_data, InspectorData
+from inspector_data import (
+    run as get_inspector_data,
+    InspectorData,
+    InspectorException,
+    InspectorRpcRemoteException,
+    InspectorUnserializedMethod,
+)
 from metal_device_id_mapping import run as get_metal_device_id_mapping, MetalDeviceIdMapping
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check_location
@@ -88,6 +94,7 @@ class DispatcherData:
         metal_device_id_mapping: MetalDeviceIdMapping,
     ):
         self.inspector_data = inspector_data
+        self._metal_device_id_mapping = metal_device_id_mapping
         self.programs = inspector_data.getPrograms().programs
         self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
         self.use_rpc_kernel_find = True
@@ -103,47 +110,68 @@ class DispatcherData:
         # Cache is keyed by unique_id for consistency
         self._build_env_cache = {}
 
-        # Get the firmware paths from Inspector RPC build environment instead of relative paths
-        # This ensures correct firmware paths for all devices and build configs
-        # Prefill cache from no-arg RPC (ok if this fails - we'll fall back)
-        try:
-            all_build_envs = inspector_data.getAllBuildEnvs().buildEnvs
-            for build_env in all_build_envs:
-                # build_env.metalDeviceId is logical - remap to unique_id for cache key
-                unique_id = metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
-                self._build_env_cache[unique_id] = build_env.buildInfo
-        except Exception:
-            pass
+        # Prefill cache from no-arg RPC (best effort); strict handling happens on-demand.
+        self._populate_build_env_cache(strict=False)
 
-        # Get the device ID from run_checks or inspector_data
-        try:
-            if not (run_checks and getattr(run_checks, "devices", None)):
-                raise TTTriageError("RunChecks.devices not available. Ensure run_checks is a dependency or pass --dev.")
-            # Use unique_id for device lookup
-            device_unique_id = run_checks.devices[0].unique_id
-
-            build_env = self._build_env_cache[device_unique_id]
-            # Use build_env for initial firmware paths
-            brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
-            idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
-            active_erisc_elf_path = os.path.join(
-                build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
-            )
-
-            # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
-            # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
-            if run_checks.devices[0].is_blackhole():
-                self._is_2_erisc_mode = os.path.exists(
-                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
-                )
-
-        except Exception as e:
+        if run_checks is None:
             raise TTTriageError(
-                f"Failed to get firmware path from Inspector RPC: {e}\n"
-                "Make sure Inspector RPC is available or serialized RPC data exists.\n"
-                "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
+                "RunChecks dependency is unavailable. Fix run_checks failures first (device mapping and selection) "
+                "or pass --dev explicitly."
             )
+        if not hasattr(run_checks, "devices"):
+            raise TTTriageError(
+                "RunChecks.devices is unavailable. Ensure run_checks completed successfully and returned a valid result."
+            )
+        if not run_checks.devices:
+            raise TTTriageError(
+                "RunChecks selected zero devices. This commonly happens when --dev=in_use is combined with "
+                "TT_VISIBLE_DEVICES remapping. Retry with --dev=all or explicit --dev IDs."
+            )
+
+        # Use the first device that has an Inspector build env (e.g. with --dev=all we may have more
+        # devices than this process's Inspector has build envs for; with multiprocess we connect to
+        # this rank's Inspector so only this rank's devices are in the cache).
+        device = None
+        device_unique_id = None
+        for d in run_checks.devices:
+            if d.unique_id in self._build_env_cache:
+                device = d
+                device_unique_id = d.unique_id
+                break
+        if device is None:
+            self._populate_build_env_cache(strict=True)
+            for d in run_checks.devices:
+                if d.unique_id in self._build_env_cache:
+                    device = d
+                    device_unique_id = d.unique_id
+                    break
+        if device is None:
+            unique_ids = [hex(d.unique_id) for d in run_checks.devices[:5]]
+            if len(run_checks.devices) > 5:
+                unique_ids.append("...")
+            raise TTTriageError(
+                "No device in the selected list has an Inspector build environment. "
+                "Check device-id mapping consistency between Inspector and debugger context. "
+                "In multiprocess runs, ensure triage connects to this rank's Inspector (e.g. rank-aware "
+                "--inspector-rpc-port or default port with OMPI_COMM_WORLD_RANK/PMI_RANK set). "
+                "Try --dev=in_use, and ensure TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1. "
+                f"Selected devices (unique_id): {', '.join(unique_ids)}."
+            )
+
+        build_env = self._build_env_cache[device_unique_id]
+        # Use build_env for initial firmware paths
+        firmware_base = Path(build_env.firmwarePath)
+        brisc_elf_path = str(firmware_base / "brisc" / "brisc.elf")
+        idle_erisc_elf_path = str(firmware_base / "idle_erisc" / "idle_erisc.elf")
+        active_erisc_elf_name = "erisc" if device.is_wormhole() else "active_erisc"
+        active_erisc_elf_path = str(firmware_base / active_erisc_elf_name / f"{active_erisc_elf_name}.elf")
+
+        # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
+        # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
+        if device.is_blackhole():
+            self._is_2_erisc_mode = (
+                firmware_base / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
+            ).exists()
 
         self._brisc_elf = elfs_cache[brisc_elf_path]
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
@@ -227,13 +255,41 @@ class DispatcherData:
             "ERISC1": 0,
         }
 
+    def _populate_build_env_cache(self, strict: bool) -> None:
+        """Populate build-env cache from Inspector, optionally with strict failures."""
+        try:
+            all_build_envs = self.inspector_data.getAllBuildEnvs().buildEnvs
+            for build_env in all_build_envs:
+                unique_id = self._metal_device_id_mapping.get_unique_id(build_env.metalDeviceId)
+                self._build_env_cache[unique_id] = build_env.buildInfo
+        except InspectorUnserializedMethod as exc:
+            if strict:
+                raise TTTriageError(
+                    "Inspector build-env data is unavailable in serialized logs (getAllBuildEnvs missing). "
+                    "Provide complete inspector serialized artifacts via --inspector-log-path, or connect "
+                    "to live Inspector RPC with TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1."
+                ) from exc
+        except InspectorRpcRemoteException as exc:
+            if strict:
+                raise TTTriageError(
+                    f"Inspector RPC getAllBuildEnvs failed remotely: {exc}. Ensure Inspector RPC is healthy "
+                    "and enabled in the Metal process (TT_METAL_INSPECTOR=1, TT_METAL_INSPECTOR_RPC=1)."
+                ) from exc
+        except InspectorException as exc:
+            if strict:
+                raise TTTriageError(f"Failed to query Inspector build environment data: {exc}") from exc
+        except Exception as exc:
+            if strict:
+                raise TTTriageError(f"Unexpected failure while querying Inspector build environments: {exc}") from exc
+
     def _get_build_env_for_device(self, device_unique_id: int):
-        """Get build_env for a specific device, with caching"""
+        """Get build_env for a specific device, filling cache on demand with precise errors."""
+        if device_unique_id not in self._build_env_cache:
+            self._populate_build_env_cache(strict=True)
         if device_unique_id not in self._build_env_cache:
             raise TTTriageError(
-                "Failed to get firmware path from Inspector RPC. "
-                "Make sure Inspector RPC is available or serialized RPC data exists. "
-                "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
+                f"Inspector build environment missing for device unique_id={device_unique_id}. "
+                "Check device-id mapping consistency between Inspector and debugger context."
             )
         return self._build_env_cache[device_unique_id]
 
@@ -495,49 +551,49 @@ class DispatcherData:
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
+        firmware_base = Path(build_env.firmwarePath)
         if location in location.device.active_eth_block_locations:
             if proc_name.lower() == "erisc":
-                firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
+                firmware_path = firmware_base / "erisc" / "erisc.elf"
             elif proc_name.lower() == "erisc0":
-                firmware_path = os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+                firmware_path = firmware_base / "active_erisc" / "active_erisc.elf"
             elif proc_name.lower() == "erisc1":
                 firmware_path = (
-                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+                    firmware_base / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
                     if self._is_2_erisc_mode
-                    else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+                    else firmware_base / "active_erisc" / "active_erisc.elf"
                 )
 
         else:
             if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
+                firmware_path = firmware_base / "idle_erisc" / "idle_erisc.elf"
             elif proc_name.lower() == "erisc1":
-                firmware_path = os.path.join(
-                    build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf"
-                )
+                firmware_path = firmware_base / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
             else:
-                firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
-        firmware_path = os.path.realpath(firmware_path)
+                firmware_path = firmware_base / proc_name.lower() / f"{proc_name.lower()}.elf"
+        firmware_path = str(firmware_path.resolve())
 
         if kernel:
+            kernel_base = Path(kernel.path)
             if location in location.device.active_eth_block_locations:
                 if proc_name.lower() == "erisc":
-                    kernel_path = kernel.path + "/erisc/erisc.elf"
+                    kernel_path = kernel_base / "erisc" / "erisc.elf"
                 elif proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
+                    kernel_path = kernel_base / "active_erisc" / "active_erisc.elf" if self._is_2_erisc_mode else None
                 elif proc_name.lower() == "erisc1":
                     kernel_path = (
-                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                        kernel_base / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
                         if self._is_2_erisc_mode
-                        else kernel.path + "/active_erisc/active_erisc.elf"
+                        else kernel_base / "active_erisc" / "active_erisc.elf"
                     )
             else:
                 if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                    kernel_path = kernel_base / "idle_erisc" / "idle_erisc.elf"
                 elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                    kernel_path = kernel_base / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
                 else:
-                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
-            kernel_path = os.path.realpath(kernel_path)
+                    kernel_path = kernel_base / proc_name.lower() / f"{proc_name.lower()}.elf"
+            kernel_path = str(kernel_path.resolve()) if kernel_path else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
                 kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
