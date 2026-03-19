@@ -70,8 +70,13 @@ void kernel_main() {
 
     // ==================== Initialize Scaler CB ====================
     // Generate scaler tile for reduction (1.0 for SUM, 1/W for MEAN)
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_scaler,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
+        1,
+        true>();
 
     // ==================== Compute Initial Page IDs ====================
     uint32_t input_page_id = iter_args.initial_page_id();

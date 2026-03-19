@@ -22,7 +22,7 @@ struct SoftmaxProgramFactoryAttentionOptimized {
         tt::tt_metal::KernelHandle softmax_kernels_id{};
         CoreCoord grid_size;
         bool fp32_dest_acc_en{};
-        uint32_t reduce_scaler_tile_size{}, in0_tile_size{}, im_tile_size{}, out0_tile_size{}, mask_tile_size{};
+        uint32_t max_scaler_tile_size{}, in0_tile_size{}, im_tile_size{}, out0_tile_size{}, mask_tile_size{};
         tt::tt_metal::CBHandle cb_in0_id{}, cb_out0_id{}, cb_intermed1_id{}, cb_in2_id{}, cb_intermed0_id{};
         std::optional<tt::tt_metal::CBHandle> cb_intermed3_id, cb_in3_id, cb_in4_id, cb_intermed2_id, cb_intermed4_id;
         bool use_large_kernel{};

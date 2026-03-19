@@ -71,8 +71,13 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
     if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
-        dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_in_2,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW,
+            tt::constants::TILE_WIDTH,
+            1,
+            /*force_reduce_llk=*/true>();
     }
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);

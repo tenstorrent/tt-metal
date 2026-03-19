@@ -10,7 +10,8 @@
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_mask = tt::CBIndex::c_1;
-    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_exps = tt::CBIndex::c_24;
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
@@ -18,7 +19,7 @@ void kernel_main() {
     constexpr auto cb_max = tt::CBIndex::c_27;
     constexpr auto cb_tmp = tt::CBIndex::c_28;
 
-    binary_op_init_common(cb_in0, cb_bcast_scaler, cb_out0);
+    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
 
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
@@ -32,18 +33,18 @@ void kernel_main() {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
+                cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Phase 1: Reduce Ht-1 tiles
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
-                cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+                cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             // Phase 2: Reduce final masked tile with accumulation
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL>(
                 cb_tmp,
-                cb_bcast_scaler,
+                cb_max_scaler,
                 cb_max,
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -98,7 +99,7 @@ void kernel_main() {
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_add,
-                cb_bcast_scaler,
+                cb_sum_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -112,7 +113,7 @@ void kernel_main() {
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_COL, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_add,
-                cb_bcast_scaler,
+                cb_sum_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),

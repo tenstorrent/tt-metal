@@ -335,7 +335,8 @@ void kernel_main() {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    auto cb_scaler = tt::CBIndex::c_2;
+    auto cb_max_scaler = tt::CBIndex::c_2;
+    auto cb_sum_scaler = tt::CBIndex::c_13;
     auto cb_fused_scale = tt::CBIndex::c_3;
     auto cb_fused_attn = tt::CBIndex::c_4;
     auto cb_exps = tt::CBIndex::c_6;
@@ -350,14 +351,16 @@ void kernel_main() {
     auto cb_recip = tt::CBIndex::c_16;
     auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    experimental::CircularBuffer cb_max_scaler_obj(cb_max_scaler);
+    experimental::CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
     experimental::CircularBuffer cb_fused_scale_obj(cb_fused_scale);
     experimental::CircularBuffer cb_recip_obj(cb_recip);
     experimental::CircularBuffer cb_mask_padded_obj(cb_mask_padded);
     binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_6);
     init_sfpu(cb_mask_padded, cb_mask_padded);
 
-    cb_scaler_obj.wait_front(1);  // comes from the reader
+    cb_max_scaler_obj.wait_front(1);  // comes from the reader
+    cb_sum_scaler_obj.wait_front(1);  // comes from the reader
 
 #if FUSED_SCALE_MASK
     cb_fused_scale_obj.wait_front(1);
@@ -400,7 +403,7 @@ void kernel_main() {
                 cb_processed_input = cb_in0;
             }
 #endif
-            reduce_cb<PoolType::MAX>(cb_processed_input, tt::CBIndex::c_2, cb_prev_max, cb_max, use_prev_reduce, cur_cb_length_t);
+            reduce_cb<PoolType::MAX>(cb_processed_input, cb_max_scaler, cb_prev_max, cb_max, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
@@ -445,7 +448,7 @@ void kernel_main() {
             exp_cb(cb_processed_input, cb_exps, cb_max, cur_cb_length_t, blk);
 
             reduce_cb<PoolType::SUM>(
-                cb_exps, tt::CBIndex::c_2, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
+                cb_exps, cb_sum_scaler, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;  // We want to accumulate the previous cb reductions
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);

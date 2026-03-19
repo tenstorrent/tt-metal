@@ -27,8 +27,13 @@ void kernel_main() {
 
     constexpr uint32_t input_block_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_reduce,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
+        1,
+        true>();
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 

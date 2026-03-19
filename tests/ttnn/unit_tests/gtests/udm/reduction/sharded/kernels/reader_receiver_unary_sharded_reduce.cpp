@@ -71,8 +71,13 @@ void kernel_main() {
     // ============================================================================
     // Phase 1: Generate scaler tile for reduction
     // ============================================================================
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_scaler,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        tt::constants::TILE_WIDTH,
+        1,
+        true>();
 
     // ============================================================================
     // Determine number of rows this core is responsible for
