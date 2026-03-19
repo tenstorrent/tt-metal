@@ -115,6 +115,8 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
         sfpi::dst_reg[0] = beta_reciprocal * piecewise_polynomial_eval<SOFTPLUS_NUM_DEGREE, SOFTPLUS_NUM_SEGMENTS, SOFTPLUS_LUT_SIZE>(SOFTPLUS_LUT, x);
     }
     v_endif;
+    v_if(x < -10.0f) { sfpi::dst_reg[0] = 0.0f; }
+    v_endif;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
