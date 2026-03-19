@@ -36,47 +36,54 @@ from models.experimental.ops.descriptors.fusion.codegen.args import (
 # Fusion Build Cache
 # =============================================================================
 
-# Caches the entire built FusedOp keyed by structural hash of input ops.
-# On cache hit, skips the full build (codegen, CB allocation, barrier setup)
-# and updates only the ProgramDescriptor's RT args and CB buffer pointers
-# from the fresh source ops.  generic_op then copies these into the cached
-# Program via override_runtime_arguments.
+# Caches the built FusedOp descriptor keyed by topology + structural hash.
+# On cache hit, deep-copies the descriptor and updates only the RT args
+# and CB buffer pointers from the fresh source ops.  generic_op then copies
+# these into the cached Program via override_runtime_arguments.
 _BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 
 
 @dataclass
-class _CacheEntry:
-    """Cached build result plus metadata for updating the ProgramDescriptor on cache hit."""
+class _CacheHitOverrideSpec:
+    """How to override a cached descriptor with fresh op data on cache hit.
 
-    # The built FusedOp (merged ProgramDescriptor with fused kernel sources,
-    # CB descriptors, named CT args, etc.).  Updated in-place on cache hit.
-    fused_op: "FusedOp"
-    # Per fused kernel: which original unfused op kernels' RT args were
-    # concatenated into this fused kernel, as (op_idx, kernel_idx_in_op)
-    # pairs.  Needed because on cache hit, the ops have new tensors with
-    # new buffer addresses — all RT args are stale and must be rebuilt by
-    # appending from the correct origin kernels in the right order.
-    origin_kernel_map: List[List[Tuple[int, int]]]
-    # Per fused kernel: fixed barrier RT arg values (GlobalSemaphore L1
-    # addresses).  Stable across builds because semaphore refs are kept
-    # alive in FusedOp.semaphores.
-    barrier_suffix: List[List[int]]
-    # Per fused kernel: [(op_idx, cb_idx, total_size)] for sharded CBs
-    # whose buffer addresses appear in RT args.  The kernel reads these
-    # at runtime to rebind CBs to new L1 locations between phases.
-    rebind_spec: List[List[Tuple[int, int, int]]]
-    # (merged_cb_idx, op_idx, orig_cb_idx) for sharded CBs at the
-    # descriptor level.  Updates CBDescriptor buffer pointers so that
-    # generic_op's override_runtime_arguments can call
-    # UpdateDynamicCircularBufferAddress on the cached Program.
-    sharded_cb_map: List[Tuple[int, int, int]]
-    # (merged_cb_idx, op_idx, orig_cb_idx) for GlobalCB-backed CBs.
-    # Updates the GlobalCircularBuffer pointer so that the cached Program
-    # uses the current allocation (which may differ across invocations).
-    global_cb_map: List[Tuple[int, int, int]]
-    # Which source ops produce the FusedOp's output tensors:
-    # [(op_idx, tensor_idx_within_op), ...]
-    output_sources: List[Tuple[int, int]]
+    All fields are derived structurally from the builder's output —
+    no address matching or id() reverse engineering.  Immutable after
+    construction (tuple fields).
+    """
+
+    # Per fused kernel: ((op_idx, kernel_idx), ...) — which source kernels'
+    # RT args were concatenated into this fused kernel.
+    origin_kernel_map: Tuple[Tuple[Tuple[int, int], ...], ...]
+
+    # Per fused kernel: fixed barrier RT arg values (GlobalSemaphore L1 addrs).
+    # Constant across cache hits — semaphore refs kept alive in _CacheEntry.
+    barrier_suffix: Tuple[Tuple[int, ...], ...]
+
+    # Per fused kernel: ((op_idx, cb_idx, size), ...) — sharded CB rebind
+    # sources.  On hit, read fresh buffer_address() from the source op's CB.
+    rebind_spec: Tuple[Tuple[Tuple[int, int, int], ...], ...]
+
+    # (merged_cb_idx, op_idx, orig_cb_idx) — which source op CB provides
+    # the buffer pointer for each sharded merged CB.
+    sharded_cb_map: Tuple[Tuple[int, int, int], ...]
+
+    # (merged_cb_idx, op_idx, orig_cb_idx) — which source op CB provides
+    # the GlobalCircularBuffer pointer for each GlobalCB-backed merged CB.
+    global_cb_map: Tuple[Tuple[int, int, int], ...]
+
+    # (op_idx, tensor_idx) — which source ops produce the fused output tensors.
+    output_sources: Tuple[Tuple[int, int], ...]
+
+
+@dataclass
+class _CacheEntry:
+    """Stored in _BUILD_CACHE.  Never mutated after construction."""
+
+    cached_descriptor: Any  # ProgramDescriptor — template for deep copy on hit
+    semaphores: tuple  # Keeps GlobalSemaphore L1 alive
+    kernel_labels: tuple  # For _apply_kernel_dir file naming
+    spec: _CacheHitOverrideSpec  # How to apply fresh ops
 
 
 def _flatten_ops(items) -> List[OpDescriptor]:
@@ -92,44 +99,53 @@ def _flatten_ops(items) -> List[OpDescriptor]:
     return result
 
 
-def _cache_key_and_ops(items):
-    """Compute a hash key and flattened ops list from the input items.
+def _topology_fingerprint(items) -> str:
+    """Encode the tree shape of items as a string.
 
-    Returns (key, ops) to avoid redundant _flatten_ops calls.
+    Distinguishes ``Sequential(A, B, C)`` from ``Sequential(A, Parallel(B, C))``
+    even when the flattened op hashes are identical.
+    """
+    parts = []
+    for item in items:
+        if isinstance(item, OpDescriptor):
+            parts.append("O")
+        elif isinstance(item, Sequential):
+            parts.append(f"S({_topology_fingerprint(item._items)})")
+        elif isinstance(item, Parallel):
+            parts.append(f"P({_topology_fingerprint(item._items)})")
+    return ",".join(parts)
+
+
+def _item_sort_key(item):
+    """Sort key for Parallel items — normalizes order at construction."""
+    h = ttnn.compute_program_descriptor_hash
+    if isinstance(item, OpDescriptor):
+        return (h(item.descriptor),)
+    if isinstance(item, (Sequential, Parallel)):
+        return tuple(h(op.descriptor) for op in _flatten_ops([item]))
+    raise TypeError(f"Unsupported item type: {type(item)}")
+
+
+def _cache_key_and_ops(items):
+    """Compute a topology-aware hash key and flattened ops list.
+
+    Returns (key, ops).  The key starts with a topology fingerprint
+    so that structurally different compositions (e.g. Sequential vs
+    Parallel) with the same ops produce different keys.
     """
     ops = _flatten_ops(items)
     h = ttnn.compute_program_descriptor_hash
-    return tuple(h(op.descriptor) for op in ops), ops
+    topo = _topology_fingerprint(items)
+    return (topo, *(h(op.descriptor) for op in ops)), ops
 
 
-def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_phase_map) -> _CacheEntry:
-    """Record metadata from a freshly-built FusedOp for future cache hits.
+def _extract_barrier_suffix(descriptor) -> Tuple[Tuple[int, ...], ...]:
+    """Extract barrier RT arg values per kernel from a freshly-built descriptor.
 
-    Extracts the origin_kernel_map (which phase kernels map to each fused kernel),
-    barrier suffix (fixed barrier addresses), rebind spec (sharded CB info),
-    sharded CB map (merged CB indices needing buffer pointer updates), and
-    output tensor sources (which phases produce the FusedOp's outputs).
-
-    Args:
-        kernel_phase_map: Builder-provided mapping. Per fused kernel, a list
-            of (OpDescriptor, kernel_index) tuples identifying which source
-            phase kernels' RT args were concatenated into that fused kernel.
+    Uses named CT args (barrier_rt_offset, rebind_rt_offset) for precise split.
     """
-    desc = fused_op.descriptor
-
-    # --- Build origin_kernel_map from builder-provided kernel_phase_map ---
-    op_id_to_idx = {id(op): idx for idx, op in enumerate(ops)}
-    origin_kernel_map: List[List[Tuple[int, int]]] = [
-        [(op_id_to_idx[id(od)], ki) for od, ki in sources] for sources in kernel_phase_map
-    ]
-
-    # --- Extract barrier_suffix and rebind spec per fused kernel ---
-    # Uses named CT args (barrier_rt_offset, rebind_rt_offset) for precise split.
-    barrier_suffix: List[List[int]] = []
-    rebind_spec: List[List[Tuple[int, int, int]]] = []
-
-    for fused_kernel in desc.kernels:
-        # Find barrier_rt_offset and rebind_rt_offset from named CT args
+    barrier_suffix = []
+    for fused_kernel in descriptor.kernels:
         barrier_offset = None
         rebind_offset = None
         for name, value in fused_kernel.named_compile_time_args:
@@ -138,8 +154,6 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
             elif name == "rebind_rt_offset":
                 rebind_offset = value
 
-        # Get the full RT args from first core of the fused kernel.
-        # RuntimeArgsView supports [x][y] access but not .get() or iteration.
         coords = _get_core_coords_from_ranges(fused_kernel.core_ranges)
         if coords:
             c = coords[0]
@@ -147,100 +161,98 @@ def _cache_build_result(fused_op: "FusedOp", ops: List[OpDescriptor], kernel_pha
         else:
             all_args = []
 
-        # Extract barrier portion (constant across builds — semaphore addrs)
         if barrier_offset is not None:
             if rebind_offset is not None:
                 barrier_vals = all_args[barrier_offset:rebind_offset]
-                rebind_vals = all_args[rebind_offset:]
             else:
                 barrier_vals = all_args[barrier_offset:]
-                rebind_vals = []
         else:
             barrier_vals = []
-            rebind_vals = []
 
-        barrier_suffix.append(barrier_vals)
+        barrier_suffix.append(tuple(barrier_vals))
+    return tuple(barrier_suffix)
 
-        # Map rebind values back to source op CBs by address matching.
-        # Rebind values are [addr, size, addr, size, ...] pairs.
-        role_rebind_entries: List[Tuple[int, int, int]] = []
-        for i in range(0, len(rebind_vals), 2):
-            addr = rebind_vals[i]
-            size = rebind_vals[i + 1]
-            found = False
-            for op_idx, op in enumerate(ops):
-                for cb_idx, cb in enumerate(op.descriptor.cbs):
-                    if cb.has_buffer() and cb.buffer_address() == addr and cb.total_size == size:
-                        role_rebind_entries.append((op_idx, cb_idx, size))
-                        found = True
-                        break
-                if found:
-                    break
 
-        rebind_spec.append(role_rebind_entries)
+def _distribute_rebind_to_kernels(rebind_entries, descriptor) -> Tuple[Tuple[Tuple[int, int, int], ...], ...]:
+    """Distribute rebind entries to per-kernel specs.
 
-    # --- Build sharded_cb_map ---
-    # Track which merged CB descriptors have buffers and map to source op CBs.
-    sharded_cb_map: List[Tuple[int, int, int]] = []
-    for merged_idx, merged_cb in enumerate(desc.cbs):
-        if not merged_cb.has_buffer():
-            continue
-        merged_addr = merged_cb.buffer_address()
-        found = False
-        for op_idx, op in enumerate(ops):
-            for cb_idx, cb in enumerate(op.descriptor.cbs):
-                if cb.has_buffer() and cb.buffer_address() == merged_addr:
-                    sharded_cb_map.append((merged_idx, op_idx, cb_idx))
-                    found = True
-                    break
-            if found:
+    All fused kernels with a rebind_rt_offset get the full rebind entries.
+    Kernels without rebind get empty specs.
+    """
+    result = []
+    for fused_kernel in descriptor.kernels:
+        has_rebind = False
+        for name, _value in fused_kernel.named_compile_time_args:
+            if name == "rebind_rt_offset":
+                has_rebind = True
                 break
+        result.append(rebind_entries if has_rebind else ())
+    return tuple(result)
 
-    # --- Build global_cb_map ---
-    # Track which merged CB descriptors use a GlobalCircularBuffer.
-    global_cb_map: List[Tuple[int, int, int]] = []
-    for merged_idx, merged_cb in enumerate(desc.cbs):
-        if not merged_cb.has_global_circular_buffer():
-            continue
-        # Match to source op CB by core_ranges identity
-        merged_ranges = merged_cb.core_ranges
-        found = False
-        for op_idx, op in enumerate(ops):
-            for cb_idx, cb in enumerate(op.descriptor.cbs):
-                if cb.has_global_circular_buffer() and cb.core_ranges == merged_ranges:
-                    global_cb_map.append((merged_idx, op_idx, cb_idx))
-                    found = True
-                    break
-            if found:
-                break
 
-    # --- Record output tensor sources ---
-    output_sources: List[Tuple[int, int]] = []
-    for out_t in fused_op.output_tensors:
-        out_id = id(out_t)
-        found = False
-        for op_idx, op in enumerate(ops):
-            for t_idx, t in enumerate(op.output_tensors):
-                if id(t) == out_id:
-                    output_sources.append((op_idx, t_idx))
-                    found = True
-                    break
-            if found:
-                break
+def _cache_build_result(
+    fused_op: "FusedOp",
+    ops: List[OpDescriptor],
+    kernel_phase_map,
+    cb_source_map,
+    rebind_source_map,
+    global_cb_source_map,
+    output_source_map,
+) -> _CacheEntry:
+    """Record metadata from a freshly-built FusedOp for future cache hits.
 
-    return _CacheEntry(
-        fused_op=fused_op,
+    All source maps come directly from the builder — no address matching
+    or id()-based reverse engineering.
+
+    Args:
+        kernel_phase_map: Per fused kernel, list of (OpDescriptor, kernel_index)
+            tuples identifying which source phase kernels' RT args were concatenated.
+        cb_source_map: [(merged_idx, OpDescriptor, cbs_position)] for sharded CBs.
+        rebind_source_map: [(OpDescriptor, cbs_position, size)] for rebind CBs.
+        global_cb_source_map: [(merged_idx, OpDescriptor, cbs_position)] for GlobalCBs.
+        output_source_map: [(OpDescriptor, tensor_idx)] for output tensors.
+    """
+    desc = fused_op.descriptor
+    op_id_to_idx = {id(op): idx for idx, op in enumerate(ops)}
+
+    # origin_kernel_map: convert OpDescriptor refs → integer indices
+    origin_kernel_map = tuple(tuple((op_id_to_idx[id(od)], ki) for od, ki in sources) for sources in kernel_phase_map)
+
+    # barrier_suffix: extract from descriptor (constant across builds)
+    barrier_suffix = _extract_barrier_suffix(desc)
+
+    # sharded_cb_map: direct from builder
+    sharded_cb_map = tuple((merged_idx, op_id_to_idx[id(op)], orig_idx) for merged_idx, op, orig_idx in cb_source_map)
+
+    # global_cb_map: direct from builder
+    global_cb_map = tuple(
+        (merged_idx, op_id_to_idx[id(op)], orig_idx) for merged_idx, op, orig_idx in global_cb_source_map
+    )
+
+    # rebind entries: convert to (op_idx, cbs_position, size) tuples
+    rebind_entries = tuple((op_id_to_idx[id(op)], cbs_pos, size) for op, cbs_pos, size in rebind_source_map)
+
+    # output_sources: direct from builder
+    output_sources = tuple((op_id_to_idx[id(op)], t_idx) for op, t_idx in output_source_map)
+
+    spec = _CacheHitOverrideSpec(
         origin_kernel_map=origin_kernel_map,
         barrier_suffix=barrier_suffix,
-        rebind_spec=rebind_spec,
+        rebind_spec=_distribute_rebind_to_kernels(rebind_entries, desc),
         sharded_cb_map=sharded_cb_map,
         global_cb_map=global_cb_map,
         output_sources=output_sources,
     )
+    return _CacheEntry(
+        cached_descriptor=fused_op.descriptor,
+        semaphores=fused_op.semaphores,
+        kernel_labels=fused_op.kernel_labels,
+        spec=spec,
+    )
 
 
 def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "FusedOp":
-    """Update a cached FusedOp's ProgramDescriptor from fresh source ops.
+    """Update a cached descriptor from fresh source ops.
 
     Rebuilds RT args and CB buffer pointers so that generic_op's
     override_runtime_arguments copies the correct values into the
@@ -251,24 +263,26 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
     when EnqueueMeshWorkload returns before remote devices finish
     reading the host-side descriptor.
     """
+    spec = entry.spec
+
     # Deep-copy via C++ copy constructor (async-safe)
-    desc = ttnn.merge_program_descriptors([entry.fused_op.descriptor])
+    desc = ttnn.merge_program_descriptors([entry.cached_descriptor])
 
     # 1. Rebuild per-kernel RT args via C++ helpers
     for ki, fused_kernel in enumerate(desc.kernels):
         fused_kernel.clear_runtime_args()
-        for op_idx, k_idx in entry.origin_kernel_map[ki]:
+        for op_idx, k_idx in spec.origin_kernel_map[ki]:
             fused_kernel.append_runtime_args_from(ops[op_idx].descriptor.kernels[k_idx])
-        if entry.barrier_suffix[ki]:
-            fused_kernel.extend_runtime_args_uniform(entry.barrier_suffix[ki])
-        rebind_vals = _recompute_rebind(entry.rebind_spec[ki], ops)
+        if spec.barrier_suffix[ki]:
+            fused_kernel.extend_runtime_args_uniform(spec.barrier_suffix[ki])
+        rebind_vals = _recompute_rebind(spec.rebind_spec[ki], ops)
         if rebind_vals:
             fused_kernel.extend_runtime_args_uniform(rebind_vals)
 
     # 2. Rebuild common_runtime_args
     for ki, fused_kernel in enumerate(desc.kernels):
         common: List[int] = []
-        for op_idx, k_idx in entry.origin_kernel_map[ki]:
+        for op_idx, k_idx in spec.origin_kernel_map[ki]:
             src_kernel = ops[op_idx].descriptor.kernels[k_idx]
             try:
                 common.extend(list(src_kernel.common_runtime_args))
@@ -277,12 +291,12 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
         fused_kernel.common_runtime_args = common
 
     # 3. Update sharded CB buffer pointers
-    for merged_cb_idx, op_idx, orig_cb_idx in entry.sharded_cb_map:
+    for merged_cb_idx, op_idx, orig_cb_idx in spec.sharded_cb_map:
         new_cb = ops[op_idx].descriptor.cbs[orig_cb_idx]
         desc.cbs[merged_cb_idx].set_buffer_from_cb(new_cb)
 
     # 4. Update GlobalCB pointers
-    for merged_cb_idx, op_idx, orig_cb_idx in entry.global_cb_map:
+    for merged_cb_idx, op_idx, orig_cb_idx in spec.global_cb_map:
         new_cb = ops[op_idx].descriptor.cbs[orig_cb_idx]
         desc.cbs[merged_cb_idx].set_global_circular_buffer_from_cb(new_cb)
 
@@ -295,17 +309,17 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
             if tid not in seen_ids:
                 all_inputs.append(t)
                 seen_ids.add(tid)
-    all_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
+    all_outputs = [ops[pi].output_tensors[ti] for pi, ti in spec.output_sources]
 
-    # Return NEW FusedOp — cached entry.fused_op is never mutated
+    # Return NEW FusedOp — cached entry is never mutated
     return FusedOp(
         op=OpDescriptor(desc, all_inputs, all_outputs),
-        semaphores=entry.fused_op.semaphores,
-        kernel_labels=entry.fused_op.kernel_labels,
+        semaphores=entry.semaphores,
+        kernel_labels=entry.kernel_labels,
     )
 
 
-def _recompute_rebind(spec_entries: List[Tuple[int, int, int]], ops: List[OpDescriptor]) -> List[int]:
+def _recompute_rebind(spec_entries, ops: List[OpDescriptor]) -> List[int]:
     """Recompute rebind RT args from new ops' CB buffer addresses.
 
     Each spec entry is (op_idx, cb_idx, total_size). On cache hit,
@@ -530,7 +544,15 @@ class Sequential:
 
         # Record cache entry for future hits
         if len(ops) > 1:
-            _BUILD_CACHE[key] = _cache_build_result(fused, ops, r.kernel_phase_map)
+            _BUILD_CACHE[key] = _cache_build_result(
+                fused,
+                ops,
+                r.kernel_phase_map,
+                r.cb_source_map,
+                r.rebind_source_map,
+                r.global_cb_source_map,
+                r.output_source_map,
+            )
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
@@ -567,7 +589,7 @@ class Parallel:
     def __init__(self, *items):
         if len(items) < 2:
             raise ValueError("Parallel() requires at least 2 items")
-        self._items = list(items)
+        self._items = sorted(items, key=_item_sort_key)
 
     def add(self, item):
         """Add a branch.  Returns self for chaining."""
@@ -603,7 +625,15 @@ class Parallel:
 
         # Record cache entry for future hits
         if len(ops) > 1:
-            _BUILD_CACHE[key] = _cache_build_result(fused, ops, r.kernel_phase_map)
+            _BUILD_CACHE[key] = _cache_build_result(
+                fused,
+                ops,
+                r.kernel_phase_map,
+                r.cb_source_map,
+                r.rebind_source_map,
+                r.global_cb_source_map,
+                r.output_source_map,
+            )
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
@@ -712,11 +742,24 @@ def _build_item(item, device):
 
     if isinstance(item, OpDescriptor):
         kpm = tuple([(item, k_idx)] for k_idx in range(len(item.descriptor.kernels)))
+        # Source maps for single op (identity mapping).
+        # merged_idx == source cb_idx since descriptor is passed through as-is.
+        cb_source_map = []
+        global_cb_source_map = []
+        for cb_idx, cb in enumerate(item.descriptor.cbs):
+            if cb.has_buffer():
+                cb_source_map.append((cb_idx, item, cb_idx))
+            if cb.has_global_circular_buffer():
+                global_cb_source_map.append((cb_idx, item, cb_idx))
+        output_source_map = [(item, t_idx) for t_idx in range(len(item.output_tensors))]
         return _BuildResult(
             descriptor=item.descriptor,
             input_tensors=item.input_tensors,
             output_tensors=item.output_tensors,
             kernel_phase_map=kpm,
+            cb_source_map=cb_source_map,
+            global_cb_source_map=global_cb_source_map,
+            output_source_map=output_source_map,
         )
     if isinstance(item, (Sequential, Parallel)):
         return item._build_internal(device)

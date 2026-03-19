@@ -412,7 +412,7 @@ class CBPoolAllocator:
     def build_merged_cb_descriptors(
         self,
         phases: List["PhaseInfo"],
-    ) -> list:
+    ) -> Tuple[list, list, list]:
         """Build merged CB descriptors from the pool.
 
         Uses alias groups to determine which pool slots share an L1 allocation
@@ -431,6 +431,14 @@ class CBPoolAllocator:
 
         The C++ CBFormatDescriptor bindings do not support deepcopy, so
         in-place mutation + restore is the only viable pattern.
+
+        Returns:
+            (merged, cb_source_map, global_cb_source_map) where:
+            - merged: list of CBDescriptors
+            - cb_source_map: [(merged_idx, OpDescriptor, cbs_position)] for
+              buffer-backed CBs
+            - global_cb_source_map: [(merged_idx, OpDescriptor, cbs_position)]
+              for GlobalCB-backed CBs
         """
         slot_alias = self._compute_slot_alias_groups(phases)
 
@@ -439,7 +447,20 @@ class CBPoolAllocator:
         for slot_idx in sorted(self._slots.keys()):
             groups[slot_alias[slot_idx]].append(slot_idx)
 
+        # Pre-compute buffer_index → position in descriptor.cbs per phase.
+        # Must be done before the group loop below, which mutates
+        # source_fmt.buffer_index to slot indices.
+        buf_idx_to_cbs_pos: List[Dict[int, int]] = []
+        for phase in phases:
+            mapping: Dict[int, int] = {}
+            for pos, cb_desc in enumerate(phase.op_descriptor.descriptor.cbs):
+                for fmt_desc in cb_desc.format_descriptors:
+                    mapping[fmt_desc.buffer_index] = pos
+            buf_idx_to_cbs_pos.append(mapping)
+
         merged = []
+        cb_source_map: List[Tuple] = []
+        global_cb_source_map: List[Tuple] = []
         seen_ids: Set[int] = set()  # Track GlobalCB pass-through dedup
 
         for group_id in sorted(groups.keys()):
@@ -468,11 +489,15 @@ class CBPoolAllocator:
             # mapping to any slot in this group.  This matches the rebind logic
             # which computes address diffs relative to phase 0's baseline.
             buffer_source_cb = None
+            buffer_source_ref = None
             for phase_idx, phase in enumerate(phases):
                 remap = self.phase_remaps[phase_idx]
                 for orig_idx, info in sorted(phase.cb_info.items()):
                     if info.has_buffer and remap.get(orig_idx) in slot_set:
                         buffer_source_cb = info.source_cb
+                        cbs_pos = buf_idx_to_cbs_pos[phase_idx].get(orig_idx)
+                        if cbs_pos is not None:
+                            buffer_source_ref = (phase.op_descriptor, cbs_pos)
                         break
                 if buffer_source_cb is not None:
                     break
@@ -480,6 +505,7 @@ class CBPoolAllocator:
             # Use first slot's source_cb for core_ranges / address_offset
             rep_cb = self._slots[slot_indices[0]].source_cb
 
+            merged_idx = len(merged)
             new_cb = ttnn.CBDescriptor()
             new_cb.total_size = max_total
             new_cb.core_ranges = rep_cb.core_ranges if rep_cb else fmts[0].core_ranges
@@ -490,17 +516,20 @@ class CBPoolAllocator:
                 new_cb.set_buffer_from_cb(buffer_source_cb)
 
             merged.append(new_cb)
+            if buffer_source_ref is not None:
+                cb_source_map.append((merged_idx, buffer_source_ref[0], buffer_source_ref[1]))
 
         # Pass through GlobalCB-backed CBDescriptors not covered by pool slots
         for phase in phases:
-            for cb_desc in phase.op_descriptor.descriptor.cbs:
+            for cb_idx, cb_desc in enumerate(phase.op_descriptor.descriptor.cbs):
                 if cb_desc.has_global_circular_buffer():
                     cid = id(cb_desc)
                     if cid not in seen_ids:
                         seen_ids.add(cid)
+                        global_cb_source_map.append((len(merged), phase.op_descriptor, cb_idx))
                         merged.append(cb_desc)
 
-        return merged
+        return merged, cb_source_map, global_cb_source_map
 
     def build_unpack_to_dest_mode(self) -> list:
         """Build merged unpack_to_dest_mode vector indexed by slot index.

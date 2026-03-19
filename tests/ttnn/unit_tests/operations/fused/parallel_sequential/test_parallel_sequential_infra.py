@@ -946,6 +946,11 @@ def _tree_shape(node):
 class TestSequentialParallelAPI:
     """Tests for Sequential/Parallel resolution."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_sort_key(self, monkeypatch):
+        """Mock _item_sort_key so that Parallel works with mock descriptors."""
+        monkeypatch.setattr(_fusion, "_item_sort_key", lambda item: (id(item),))
+
     def test_linear_chain(self):
         a, b, c = [_make_mock_op(n) for n in "abc"]
         nodes = _fusion._resolve(_fusion.Sequential(a, b, c))
@@ -971,8 +976,12 @@ class TestSequentialParallelAPI:
         nodes = _fusion._resolve(S(a, P(S(b, P(c, d)), e)))
         r = nodes[0]
         assert r.op is a and len(r.children) == 2
-        assert r.children[0].op is b and len(r.children[0].children) == 2
-        assert r.children[1].op is e
+        # Parallel sorting may reorder children — use identity checks
+        b_node = next((ch for ch in r.children if ch.op is b), None)
+        e_node = next((ch for ch in r.children if ch.op is e), None)
+        assert b_node is not None and e_node is not None
+        assert len(b_node.children) == 2
+        assert len(e_node.children) == 0
 
     def test_add_chaining(self):
         S = _fusion.Sequential
@@ -1012,10 +1021,11 @@ class TestSequentialParallelAPI:
         in_a, in_b = object(), object()
         out_a, out_b = object(), object()
         sem_a, sem_b = object(), object()
+        mock_desc = _ns(cbs=[])  # Mock descriptor with empty cbs list
         # Stub merge_program_descriptors — real one needs C++ ProgramDescriptor objects
         monkeypatch.setattr(_graph, "ttnn", _ns(merge_program_descriptors=lambda descs: descs[0]))
-        r_a = BR(_PLACEHOLDER, [shared, in_a], [out_a], (sem_a,))
-        r_b = BR(_PLACEHOLDER, [shared, in_b], [out_b], (sem_b,))
+        r_a = BR(mock_desc, [shared, in_a], [out_a], (sem_a,))
+        r_b = BR(mock_desc, [shared, in_b], [out_b], (sem_b,))
         merged = _graph._merge_build_results([r_a, r_b])
         assert len(merged.input_tensors) == 3  # shared deduped
         assert len(merged.output_tensors) == 2
@@ -1349,7 +1359,7 @@ class TestGlobalCircularBuffer:
         fmt0 = regular.format_descriptors[0]
         cb_info = {0: CI(0, 2048, "F16", 1024, None, False, source_fmt=fmt0, source_cb=regular)}
         pool.allocate_phase(0, cb_info, set())
-        merged = pool.build_merged_cb_descriptors([PI(0, mock_op, cb_info)])
+        merged, _cb_src, _gcb_src = pool.build_merged_cb_descriptors([PI(0, mock_op, cb_info)])
         assert len(merged) == 2 and remote_only in merged
 
 
