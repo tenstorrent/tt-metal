@@ -482,6 +482,8 @@ def run_ring_joint_sdpa(
 
     def run_iters(tt_out_list, tt_joint_out_list):
         for i in range(n_iters):
+            if not trace_enabled:
+                ttnn.synchronize_device(submesh)
             tt_out, tt_joint_out, tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
