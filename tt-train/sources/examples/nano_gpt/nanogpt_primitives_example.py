@@ -862,25 +862,11 @@ def main():
     print("=" * 70)
     print()
 
-    if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        current_dir = os.getcwd()
-        if os.path.exists(os.path.join(current_dir, "tt_metal")):
-            os.environ["TT_METAL_RUNTIME_ROOT"] = current_dir
-            print(f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)")
-        else:
-            parent_dir = os.path.dirname(current_dir)
-            if os.path.exists(os.path.join(parent_dir, "tt_metal")):
-                os.environ["TT_METAL_RUNTIME_ROOT"] = parent_dir
-                print(f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)")
-            else:
-                print("Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected.")
-                print("  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable")
-                print("  to point to the tt-metal repository root directory.")
-    else:
-        print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
+    tt_metal_root = get_tt_metal_runtime_root()
+    print(f"Using TT_METAL_RUNTIME_ROOT={tt_metal_root}")
     print()
 
-    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
+    tt_train_root = f"{tt_metal_root}/tt-train"
     configs_root = f"{tt_train_root}/configs"
     try:
         print(f"Loading training config from: {args.config}")
