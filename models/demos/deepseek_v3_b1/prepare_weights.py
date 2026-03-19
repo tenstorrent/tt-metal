@@ -547,7 +547,7 @@ def prepare_routed_expert_weights(
         up_stacked = torch.stack(up_list, dim=0)
         down_stacked = torch.stack(down_list, dim=0)
         routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
-            gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
+            gate_stacked, up_stacked, down_stacked, layer_idx=layer_idx, move_to_device=move_to_device
         )
         logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
         return MoERoutedExpertWeights(

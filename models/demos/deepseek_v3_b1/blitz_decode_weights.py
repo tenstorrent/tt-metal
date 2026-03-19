@@ -16,12 +16,22 @@ row offset within the fused shard.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import torch
 from loguru import logger
 
 import ttnn
+
+# BSPM integration (Phase 3)
+try:
+    from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor
+    from models.demos.deepseek_v3_b1.compressed_tensor.bspm_loader import load_bspm_for_layer
+
+    HAS_BSPM_SUPPORT = True
+except ImportError:
+    HAS_BSPM_SUPPORT = False
 
 
 def shuffle_weights_for_interleaved_qnope_qrope(
@@ -629,10 +639,28 @@ class BlitzDecodeWeights:
 
     Args:
         device: The ttnn device (or MeshDevice) to place tensors on.
+        bspm_dir: Optional path to BitSculpt BSPM directory (e.g., "results").
+            If provided, enables BSPM-driven mixed-precision compression for
+            routed expert weights. Falls back to uniform bfloat4_b if BSPM
+            not found for a layer.
+        bspm_model_name: Model short name for BSPM files (e.g., "deepseek-r1-0528").
+        bspm_variant: BitSculpt allocation variant (e.g., "B").
+        bspm_budget: Bit budget (e.g., 3.5).
     """
 
-    def __init__(self, device) -> None:
+    def __init__(
+        self,
+        device,
+        bspm_dir: str | Path | None = None,
+        bspm_model_name: str = "deepseek-r1-0528",
+        bspm_variant: str = "B",
+        bspm_budget: float = 3.5,
+    ) -> None:
         self._device = device
+        self._bspm_dir = Path(bspm_dir) if bspm_dir else None
+        self._bspm_model_name = bspm_model_name
+        self._bspm_variant = bspm_variant
+        self._bspm_budget = bspm_budget
 
         num_devices = device.get_num_devices()
         if num_devices == 1:
@@ -1342,6 +1370,7 @@ class BlitzDecodeWeights:
         up_proj_weights: torch.Tensor,
         down_proj_weights: torch.Tensor,
         *,
+        layer_idx: int | None = None,
         move_to_device: bool = True,
     ) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor]]:
         """Create DRAM WIDTH_SHARDED expert weight tensors for routed MoE.
@@ -1352,6 +1381,10 @@ class BlitzDecodeWeights:
         stream contiguously.
 
         Weights are replicated across all devices in a multi-device mesh.
+
+        If BSPM configuration is enabled and BSPM file exists for this layer,
+        uses CompressedTensor with mixed-precision (bfp4/bfp2/zero) instead
+        of uniform bfloat4_b. Falls back to uniform bfloat4_b if BSPM not found.
 
         Per-expert device layout::
 
@@ -1366,6 +1399,7 @@ class BlitzDecodeWeights:
                 ``(num_experts, K, N)``.
             down_proj_weights: Stacked down expert weights, shape
                 ``(num_experts, K_down, N_down)``.
+            layer_idx: Layer index for BSPM lookup. Required if BSPM support enabled.
 
         Returns:
             ``(gate_expert_tensors, up_expert_tensors, down_expert_tensors)``
@@ -1379,7 +1413,26 @@ class BlitzDecodeWeights:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
         device_for_torch = device if move_to_device else None
 
-        def upload(expert_weights: torch.Tensor) -> list[ttnn.Tensor]:
+        # Check if BSPM is available for this layer
+        use_bspm = False
+        bspm_data = None
+        if HAS_BSPM_SUPPORT and self._bspm_dir and layer_idx is not None:
+            bspm_path = (
+                self._bspm_dir
+                / self._bspm_model_name
+                / f"layer_{layer_idx}"
+                / "precision_eval"
+                / f"precision_map_{self._bspm_variant}_{self._bspm_budget:.1f}.bspm"
+            )
+            if bspm_path.exists():
+                logger.info(f"Loading BSPM for layer {layer_idx}: {bspm_path}")
+                bspm_data = load_bspm_for_layer(str(bspm_path))
+                use_bspm = True
+                logger.info(f"  Using BSPM-driven mixed-precision compression for {bspm_data['n_experts']} experts")
+            else:
+                logger.debug(f"BSPM not found for layer {layer_idx}, using uniform bfloat4_b")
+
+        def upload(expert_weights: torch.Tensor, proj_idx: int | None = None) -> list[ttnn.Tensor]:
             num_experts, K, N = expert_weights.shape
             N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
             per_core_N = N_padded // num_banks
@@ -1401,24 +1454,50 @@ class BlitzDecodeWeights:
                 if N_padded != N:
                     w = torch.nn.functional.pad(w, (0, N_padded - N))
 
-                w_shuffled = self._shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
-                w_shuffled = w_shuffled.reshape(1, 1, K, N_padded)
+                # Use BSPM-driven CompressedTensor if available
+                if use_bspm and proj_idx is not None:
+                    # Get assignment for this expert and projection
+                    tiles_h = K // tile_w
+                    tiles_w = N_padded // tile_w
+                    assignment_flat = bspm_data["codes"][i, proj_idx]  # Already remapped to tt-metal format
+                    assignment = assignment_flat.reshape(tiles_h, tiles_w)
 
-                tensors.append(
-                    ttnn.from_torch(
-                        w_shuffled.contiguous(),
-                        dtype=ttnn.bfloat4_b,
-                        layout=ttnn.TILE_LAYOUT,
+                    # Create CompressedTensor with BSPM assignment
+                    # Note: CompressedTensor expects non-shuffled weights and handles packing internally
+                    ct = CompressedTensor.from_bspm(
+                        w.float(),  # CompressedTensor expects float32
+                        assignment,
                         device=device_for_torch,
                         memory_config=mem_config,
-                        mesh_mapper=mesh_mapper,
                     )
-                )
+                    tensors.append(ct.get_data_tensor())  # Extract the underlying ttnn.Tensor
+                else:
+                    # Original uniform bfloat4_b path
+                    w_shuffled = self._shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
+                    w_shuffled = w_shuffled.reshape(1, 1, K, N_padded)
+
+                    tensors.append(
+                        ttnn.from_torch(
+                            w_shuffled.contiguous(),
+                            dtype=ttnn.bfloat4_b,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=device_for_torch,
+                            memory_config=mem_config,
+                            mesh_mapper=mesh_mapper,
+                        )
+                    )
+
                 if (i + 1) % 32 == 0:
-                    logger.info(f"  Uploaded {i + 1}/{num_experts} experts")
+                    compression_type = "compressed" if use_bspm else "bfloat4_b"
+                    logger.info(f"  Uploaded {i + 1}/{num_experts} experts ({compression_type})")
             return tensors
 
-        return upload(gate_proj_weights), upload(up_proj_weights), upload(down_proj_weights)
+        # Upload with projection indices for BSPM lookup (0=gate, 1=up, 2=down)
+        return (
+            upload(gate_proj_weights, proj_idx=0),
+            upload(up_proj_weights, proj_idx=1),
+            upload(down_proj_weights, proj_idx=2),
+        )
 
     # ------------------------------------------------------------------
     # MLP weight loading
