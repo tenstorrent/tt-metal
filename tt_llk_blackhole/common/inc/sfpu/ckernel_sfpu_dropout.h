@@ -8,7 +8,6 @@
 
 #include "ckernel_ops.h"
 #include "sfpi.h"
-#include "sfpi_fp16.h"
 
 namespace ckernel
 {

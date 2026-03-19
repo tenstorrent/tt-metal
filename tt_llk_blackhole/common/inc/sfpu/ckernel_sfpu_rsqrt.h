@@ -7,7 +7,6 @@
 #include "ckernel_sfpu_rsqrt_compat.h"
 #include "ckernel_sfpu_sqrt.h"
 #include "sfpi.h"
-#include "sfpi_fp16.h"
 
 namespace ckernel
 {
