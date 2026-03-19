@@ -28,7 +28,7 @@
       timeout: 5
       tier: 1
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 12
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -93,7 +93,7 @@
   model: llama90b-vl
   skus:
     wh_llmbox_perf:
-      timeout: 45
+      timeout: 10
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
@@ -111,7 +111,7 @@
   model: llama3.3-70b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -128,7 +128,7 @@
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -145,7 +145,7 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 5
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -162,7 +162,7 @@
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 5
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -180,7 +180,7 @@
   model: mistral-7b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 12
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -191,7 +191,7 @@
   model: gemma-3-27b
   skus:
     wh_llmbox_perf:
-      timeout: 45
+      timeout: 22
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -202,7 +202,7 @@
   model: shallow-unet
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 5
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -220,7 +220,7 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -302,7 +302,7 @@
   model: qwen2.5-72b-vl
   skus:
     wh_llmbox_perf:
-      timeout: 30
+      timeout: 15
       tier: 2
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
