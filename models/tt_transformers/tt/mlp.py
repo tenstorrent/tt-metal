@@ -276,7 +276,7 @@ class MLP(LightweightModule):
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
             )
         else:

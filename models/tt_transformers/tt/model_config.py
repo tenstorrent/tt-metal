@@ -1561,7 +1561,7 @@ class ModelArgs:
                     M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
                 )
             else:
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1574,7 +1574,9 @@ class ModelArgs:
                     else (
                         max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
                             1,
-                            8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
+                            8
+                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
+                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
                         )
                     ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                     per_core_N=math.ceil(
