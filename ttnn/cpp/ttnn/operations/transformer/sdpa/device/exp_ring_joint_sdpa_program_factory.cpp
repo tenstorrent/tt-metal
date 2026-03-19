@@ -1202,8 +1202,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     const uint32_t ag_pkt_hdr_cb_id = tt::CBIndex::c_13;
     const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
     const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    constexpr uint32_t max_scatter_addresses = 4;
     const uint32_t ag_packet_size_in_pages =
-        std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), uint32_t{2});
+        std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), max_scatter_addresses);
 
     writer_fabric_compile_time_args.push_back(device_index);
     writer_fabric_compile_time_args.push_back(ag_packet_size_in_pages);
