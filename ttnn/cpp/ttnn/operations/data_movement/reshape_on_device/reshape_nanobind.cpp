@@ -11,6 +11,7 @@
 
 #include "reshape.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"  // for SmallVector<int32_t>
 
 namespace ttnn::operations::data_movement {
 

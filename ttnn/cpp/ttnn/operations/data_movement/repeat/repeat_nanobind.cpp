@@ -9,6 +9,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"  // for SmallVector<uint32_t>
 
 #include "repeat.hpp"
 
