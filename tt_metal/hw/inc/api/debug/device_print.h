@@ -21,7 +21,7 @@
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
-// Start of the .device_print_strings section, which represents list of DevicePrintStringInfo structures.
+// Start of the .device_print_strings_info section, which represents list of DevicePrintStringInfo structures.
 extern char __device_print_strings_info_start[];
 
 struct bf4_t {
