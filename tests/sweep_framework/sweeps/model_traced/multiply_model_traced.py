@@ -45,14 +45,23 @@ if model_traced_params:
 
 
 def _parse_activations(activations_list):
-    """Parse a list of UnaryOpType dicts into ttnn.UnaryOpType enum values."""
+    """Parse a list of UnaryOpType dicts into ttnn.UnaryOpType enum values.
+
+    Handles both raw JSON dicts (pre-deserialization) and dicts whose ``repr``
+    value has already been converted to a ``ttnn.UnaryOpType`` enum by
+    ``deserialize_structured``.
+    """
     if not activations_list:
         return None
     parsed = []
     for item in activations_list:
         if isinstance(item, dict) and item.get("type") == "UnaryOpType":
-            op_name = item["repr"].split(".")[-1]
-            op_type = getattr(ttnn.UnaryOpType, op_name, None)
+            repr_val = item["repr"]
+            if isinstance(repr_val, str):
+                op_name = repr_val.split(".")[-1]
+                op_type = getattr(ttnn.UnaryOpType, op_name, None)
+            else:
+                op_type = repr_val
             if op_type is not None:
                 parsed.append(op_type)
         else:

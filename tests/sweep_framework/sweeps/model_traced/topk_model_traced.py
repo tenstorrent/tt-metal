@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -17,8 +18,13 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     detect_mesh_shape_from_hardware,
 )
 
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.master_config_loader_v2 import (
+    MasterConfigLoader,
+    dict_to_memory_config,
+    parse_dtype,
+    parse_layout,
+)
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 
 TIMEOUT = 300
 
@@ -87,7 +93,9 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
-        kwargs, exclude={"arg1", "arg2", "largest", "sorted"}, output_memory_config=output_memory_config
+        kwargs,
+        exclude={"arg1", "arg2", "largest", "sorted", "sub_core_grids"},
+        output_memory_config=output_memory_config,
     )
 
     if k is None:
@@ -96,14 +104,24 @@ def run(
     if dim is None:
         dim = kwargs.get("arg2", -1)
     dim_val = dim
-    largest = kwargs.get("largest", True)
-    if largest is None:
-        largest = True
-    sorted_flag = kwargs.get("sorted", True)
-    if sorted_flag is None:
-        sorted_flag = True
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
+
+    # Detect the indices_tensor calling convention used by deepseek for k=32 topk.
+    # When the model passes indices_tensor, it does NOT pass largest/sorted.
+    indices_tensor_info = extract_named_tensor_kwargs(kwargs, "indices_tensor")
+    has_indices_tensor = (
+        indices_tensor_info is not None
+        and indices_tensor_info["shape"] is not None
+        and str(indices_tensor_info["shape"]) != "__ABSENT__"
+    )
+
+    largest = kwargs.get("largest", True)
+    if largest is None or str(largest) == "__ABSENT__":
+        largest = True
+    sorted_flag = kwargs.get("sorted", True)
+    if sorted_flag is None or str(sorted_flag) == "__ABSENT__":
+        sorted_flag = True
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -140,7 +158,38 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, largest=largest, sorted=sorted_flag, **op_kwargs)
+
+    if has_indices_tensor:
+        idx_shape = indices_tensor_info["shape"]
+        if isinstance(idx_shape, str):
+            idx_shape = ast.literal_eval(idx_shape)
+        idx_dtype = parse_dtype(indices_tensor_info.get("dtype", "DataType.UINT16"))
+        idx_layout = parse_layout(indices_tensor_info.get("layout", "Layout.TILE"))
+        idx_mem_cfg = dict_to_memory_config(indices_tensor_info.get("memory_config"))
+        idx_placement = indices_tensor_info.get("tensor_placement")
+
+        torch_indices_tensor = torch.zeros(idx_shape, dtype=torch.int32)
+        if is_mesh_device and idx_placement:
+            indices_tt = create_tensor_on_mesh(
+                torch_indices_tensor,
+                device,
+                idx_dtype,
+                idx_layout,
+                idx_mem_cfg,
+                idx_placement,
+            )
+        else:
+            indices_tt = ttnn.from_torch(
+                torch_indices_tensor,
+                dtype=idx_dtype,
+                layout=idx_layout,
+                device=device,
+                memory_config=idx_mem_cfg,
+            )
+        topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, indices_tensor=indices_tt, **op_kwargs)
+    else:
+        topk_result = ttnn.topk(input_tensor_a, k=k_val, dim=dim_val, largest=largest, sorted=sorted_flag, **op_kwargs)
+
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
