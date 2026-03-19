@@ -30,7 +30,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
-    // create_descriptor falls back to program_config.compute_with_storage_grid_size when
+    // create_descriptor falls back to allowed_worker_cores (or full device grid) when
     // core_range_set is not provided, so no need to pass one explicitly here.
     ProgramDescriptor descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 
