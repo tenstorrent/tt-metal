@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
@@ -161,7 +161,7 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
     sfpi::vec_min_max(low, z);
 
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
     // Compute val = z * ln(2), then r = val - k*ln(2) in extended precision.
     constexpr float LN2 = 0.693147180559945309f;

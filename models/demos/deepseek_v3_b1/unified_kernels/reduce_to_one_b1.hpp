@@ -55,21 +55,12 @@ struct ReduceToOneB1 {
     // ========================================================================
 
     // Reader (NCRISC) compile-time args
-    template <
-        uint32_t deviceRole,
-        uint32_t numTiles,
-        uint32_t localCb,
-        uint32_t receivedCbR1,
-        uint32_t receivedCbR2,
-        uint32_t receivedCbR3,
-        uint32_t isFabricCore>
+    template <uint32_t deviceRole, uint32_t numTiles, uint32_t localCb, uint32_t receivedCb, uint32_t isFabricCore>
     struct ReaderCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
-        static constexpr uint32_t received_cb_r1 = receivedCbR1;
-        static constexpr uint32_t received_cb_r2 = receivedCbR2;
-        static constexpr uint32_t received_cb_r3 = receivedCbR3;
+        static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t is_fabric_core = isFabricCore;
     };
 
@@ -81,7 +72,6 @@ struct ReduceToOneB1 {
         uint32_t localCb,
         uint32_t scratchCb,
         uint32_t packetCb,
-        uint32_t packetHeaderCb,
         uint32_t numHops,
         uint32_t dstFabricNodeChipId,
         uint32_t dstFabricNodeMeshId,
@@ -90,7 +80,11 @@ struct ReduceToOneB1 {
         uint32_t numWorkers,
         uint32_t slotSizeBytes,
         uint32_t isFabricCore,
-        uint32_t fabricRtArgBase = 0>
+        uint32_t fabricRtArgBase = 0,
+        uint32_t totalNumWorkers = 0,
+        uint32_t aggOutputSizeBytes = 0,
+        uint32_t persistentFabricRtArgBase = 0,
+        uint32_t persistentFabricSignalEnable = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -98,7 +92,6 @@ struct ReduceToOneB1 {
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t packet_cb = packetCb;
-        static constexpr uint32_t packet_header_cb = packetHeaderCb;
         static constexpr uint32_t num_hops = numHops;
         static constexpr uint32_t dst_fabric_node_chip_id = dstFabricNodeChipId;
         static constexpr uint32_t dst_fabric_node_mesh_id = dstFabricNodeMeshId;
@@ -108,6 +101,11 @@ struct ReduceToOneB1 {
         static constexpr uint32_t slot_size_bytes = slotSizeBytes;
         static constexpr uint32_t is_fabric_core = isFabricCore;
         static constexpr uint32_t fabric_rt_arg_base = fabricRtArgBase;
+        static constexpr uint32_t total_num_workers = totalNumWorkers;
+        static constexpr uint32_t agg_output_size_bytes = aggOutputSizeBytes;
+        static constexpr bool enable_downstream_socket = totalNumWorkers > 0;
+        static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
+        static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
     };
 
     // Compute (TRISC) compile-time args
@@ -115,9 +113,7 @@ struct ReduceToOneB1 {
         uint32_t deviceRole,
         uint32_t numTiles,
         uint32_t localCb,
-        uint32_t receivedCbR1,
-        uint32_t receivedCbR2,
-        uint32_t receivedCbR3,
+        uint32_t receivedCb,
         uint32_t outputCb,
         uint32_t scratchCb,
         uint32_t isFabricCore>
@@ -125,9 +121,7 @@ struct ReduceToOneB1 {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
-        static constexpr uint32_t received_cb_r1 = receivedCbR1;
-        static constexpr uint32_t received_cb_r2 = receivedCbR2;
-        static constexpr uint32_t received_cb_r3 = receivedCbR3;
+        static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t output_cb = outputCb;
         static constexpr uint32_t scratch_cb = scratchCb;
         static constexpr uint32_t is_fabric_core = isFabricCore;
@@ -154,7 +148,16 @@ struct ReduceToOneB1 {
         uint32_t dst_sem_addr;
         uint32_t output_base_addr;
         uint32_t shard_idx;
-        uint32_t socket_config_addr;  // For ROOT1 socket sending
+        uint32_t socket_config_addr;  // Non-zero only on aggregator worker (downstream socket)
+        uint32_t agg_sem_l1_addr;     // Aggregation sync semaphore L1 address (global sem)
+        uint32_t agg_core_noc_x;      // Aggregator core physical NOC x
+        uint32_t agg_core_noc_y;      // Aggregator core physical NOC y
+        uint32_t persistent_enable;   // 1 if this core should send the persistent signal
+        uint32_t persistent_dst_noc_x;     // Bcast sender physical NOC x on entry device
+        uint32_t persistent_dst_noc_y;     // Bcast sender physical NOC y on entry device
+        uint32_t persistent_dst_mesh_id;   // Entry device fabric mesh id
+        uint32_t persistent_dst_chip_id;   // Entry device fabric chip id
+        uint32_t persistent_dst_sem_addr;  // persistent_next_iter_semaphore address on entry device
     };
 
     // Writer (BRISC) runtime args for fabric cores - handled dynamically via build_from_args
@@ -187,6 +190,7 @@ struct ReduceToOneB1 {
                 fabric_set_unicast_route<false>(header, num_hops);
             }
         }
+
 #endif
 
         void impl([[maybe_unused]] const RTArgs& args) {
@@ -213,33 +217,33 @@ struct ReduceToOneB1 {
                     cb_push_back(CTArgs::local_cb, CTArgs::num_tiles);
                 }
 
-                // Round 1: Wait for shard from LEAF
-                cb_reserve_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
+                // Round 1: Wait for shard from LEAF (page 0 of received_cb)
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem1_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round1);
                 noc_semaphore_wait_min(recv_sem1_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem1_ptr);
-                cb_push_back(CTArgs::received_cb_r1, CTArgs::num_tiles);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
-                // Round 2: Wait for result from ROOT3
-                cb_reserve_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                // Round 2: Wait for result from ROOT3 (page 1 of received_cb)
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem2_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
                 noc_semaphore_wait_min(recv_sem2_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem2_ptr);
-                cb_push_back(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Round 3: Wait for result from ROOT2
-                cb_reserve_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                // Round 3: Wait for result from ROOT2 (page 2 of received_cb)
+                cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
                 volatile tt_l1_ptr uint32_t* recv_sem3_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
                 noc_semaphore_wait_min(recv_sem3_ptr, 1);
                 unified_kernels::semaphore_dec(recv_sem3_ptr);
-                cb_push_back(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
 #elif defined(COMPILE_FOR_BRISC)
@@ -248,9 +252,42 @@ struct ReduceToOneB1 {
             // ================================================================
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             if constexpr (CTArgs::is_fabric_core) {
-                // Fabric core: forward worker packets via fabric
                 if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                    // ROOT1 fabric cores have nothing to do
+                    if constexpr (CTArgs::persistent_fabric_signal_enable != 0) {
+                        // Persistent fabric core: wait for aggregator signal, then send
+                        // cross-device atomic inc to bcast sender on entry device.
+                        // Persistent args start after the worker sem addrs.
+                        size_t p_idx = CTArgs::fabric_rt_arg_base + CTArgs::num_workers;
+                        uint32_t wait_sem_addr = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_noc_x = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_noc_y = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_mesh_id = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_chip_id = get_arg_val<uint32_t>(p_idx++);
+                        uint32_t dst_sem_addr = get_arg_val<uint32_t>(p_idx++);
+
+                        volatile tt_l1_ptr uint32_t* wait_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_sem_addr);
+                        noc_semaphore_wait_min(wait_sem_ptr, 1);
+                        unified_kernels::semaphore_dec(wait_sem_ptr);
+
+                        constexpr uint32_t pkt_hdr_bytes = sizeof(PACKET_HEADER_TYPE);
+                        PacketHeaderPool::reset();
+                        auto route_id = PacketHeaderPool::allocate_header_n(1);
+                        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = PacketHeaderPool::header_table[route_id].first;
+                        set_unicast_route(
+                            hdr, static_cast<uint16_t>(dst_chip_id), static_cast<uint16_t>(dst_mesh_id), 1);
+                        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(dst_noc_x, dst_noc_y, dst_sem_addr), 1});
+
+                        auto sender =
+                            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
+                                p_idx);
+                        sender.open();
+                        sender.wait_for_empty_write_slot();
+                        sender.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), pkt_hdr_bytes);
+                        sender.close();
+                        noc_async_full_barrier();
+                    }
                     return;
                 }
 
@@ -297,52 +334,71 @@ struct ReduceToOneB1 {
             const uint32_t my_noc_x = my_x[0];
             const uint32_t my_noc_y = my_y[0];
 
-            // ROOT1: send final results via socket (if D2H enabled) or NOC gather
+            // ROOT1: gather all shards to output tensor; aggregator worker sends downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Wait for compute to finish
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
-
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
                 uint64_t dst_noc_addr_0 =
                     get_noc_addr(CTArgs::output_core_noc_x, CTArgs::output_core_noc_y, dst_addr_0);
-
-                // Always write to output tensor via NOC
                 noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
                 noc_async_write_barrier();
 
-                // Send to D2H socket if enabled (socket_config_addr != 0)
-                if (args.socket_config_addr != 0) {
-                    // Create socket sender interface
-                    SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                    set_sender_socket_page_size(sender_socket, CTArgs::payload_size_bytes);
+                if constexpr (CTArgs::enable_downstream_socket) {
+                    if (args.socket_config_addr != 0) {
+                        // Aggregator: wait for all other workers, then stream to downstream socket.
+                        // The aggregator core IS the output core, so all shards are already in local L1.
+                        volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                        noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                        noc_semaphore_set(agg_sem_ptr, 0);
 
-                    // Reserve space in socket
-                    socket_reserve_pages(sender_socket, 1);
+                        constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
+                        SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
+                        set_sender_socket_page_size(sender_socket, CTArgs::agg_output_size_bytes);
+                        socket_reserve_pages(sender_socket, 1);
+                        sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
-                    // Get downstream encoding
-                    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
+                        uint32_t fifo_base = sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
+                        for (uint32_t i = 0; i < CTArgs::total_num_workers; i++) {
+                            uint32_t shard_l1_addr = args.output_base_addr + i * CTArgs::payload_size_bytes;
+                            uint64_t fifo_dst = get_noc_addr(
+                                downstream_enc.d2d.downstream_noc_x,
+                                downstream_enc.d2d.downstream_noc_y,
+                                fifo_base + i * useful_per_shard);
+                            noc_async_write(shard_l1_addr, fifo_dst, useful_per_shard);
+                            noc_async_writes_flushed();
+                        }
 
-                    // Write to downstream socket
-                    noc_async_write(
-                        src_addr,
-                        get_noc_addr(
-                            downstream_enc.d2d.downstream_noc_x,
-                            downstream_enc.d2d.downstream_noc_y,
-                            sender_socket.write_ptr + sender_socket.downstream_fifo_addr),
-                        CTArgs::payload_size_bytes);
-
-                    // Push to downstream and notify
-                    socket_push_pages(sender_socket, 1);
-                    socket_notify_receiver(sender_socket);
-                    noc_async_writes_flushed();
-
-                    socket_barrier(sender_socket);
-                    noc_async_write_barrier();
+                        socket_push_pages(sender_socket, 1);
+                        socket_notify_receiver(sender_socket);
+                        noc_async_write_barrier();
+                        socket_barrier(sender_socket);
+                        update_socket_config(sender_socket);
+                    } else if (args.agg_sem_l1_addr != 0) {
+                        // TODO: Use a separate flag to indicate the aggregator
+                        if (args.shard_idx == 0) {
+                            // No socket: aggregator waits for all workers before signaling.
+                            volatile tt_l1_ptr uint32_t* agg_sem_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.agg_sem_l1_addr);
+                            noc_semaphore_wait_min(agg_sem_ptr, CTArgs::total_num_workers - 1);
+                            noc_semaphore_set(agg_sem_ptr, 0);
+                        } else {
+                            // Non-aggregator worker: signal the aggregator that our shard is ready.
+                            uint64_t agg_sem_noc =
+                                get_noc_addr(args.agg_core_noc_x, args.agg_core_noc_y, args.agg_sem_l1_addr);
+                            noc_semaphore_inc(agg_sem_noc, 1);
+                            noc_async_atomic_barrier();
+                        }
+                    }
+                    if (args.persistent_enable != 0) {
+                        uint64_t fc_sem = get_noc_addr(
+                            args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr);
+                        noc_semaphore_inc(fc_sem, 1);
+                        noc_async_atomic_barrier();
+                    }
                 }
 
-                // Pop from CB
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 return;
             }
@@ -351,10 +407,9 @@ struct ReduceToOneB1 {
             const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
             const uint32_t arrival_sem_addr = args.worker_sem_addr;
 
-            // Get packet header from CB (persistent across iterations)
-            uint32_t packet_header_addr = get_write_ptr(CTArgs::packet_header_cb);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header =
-                reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            // Get packet header
+            PacketHeaderPool::reset();
+            auto* packet_header = PacketHeaderPool::allocate_header(1);
 
             // Set routing - works for both 1D (num_hops) and 2D (dst_dev_id, dst_mesh_id) fabric
             set_unicast_route(
@@ -427,7 +482,7 @@ struct ReduceToOneB1 {
             }
 
             // Initialize for binary operations
-            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb_r1);
+            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
 
             // Load local tiles to dest
@@ -439,32 +494,32 @@ struct ReduceToOneB1 {
             }
             cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
 
-            // Accumulate from received_cb_r1 (LEAF data)
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb_r1);
-            cb_wait_front(CTArgs::received_cb_r1, CTArgs::num_tiles);
+            // Accumulate from received_cb page 0 (LEAF data)
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb);
+            cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb_r1, i, i);
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
             }
-            cb_pop_front(CTArgs::received_cb_r1, CTArgs::num_tiles);
+            cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
 
             if constexpr (CTArgs::device_role == MESH_ROOT2 || CTArgs::device_role == MESH_ROOT1) {
-                // Accumulate from received_cb_r2 (ROOT3 data)
-                cb_wait_front(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                // Accumulate from received_cb page 1 (ROOT3 data)
+                cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                        CTArgs::received_cb_r2, i, i);
+                        CTArgs::received_cb, i, i);
                 }
-                cb_pop_front(CTArgs::received_cb_r2, CTArgs::num_tiles);
+                cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                // Accumulate from received_cb_r3 (ROOT2 data)
-                cb_wait_front(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                // Accumulate from received_cb page 2 (ROOT2 data)
+                cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                        CTArgs::received_cb_r3, i, i);
+                        CTArgs::received_cb, i, i);
                 }
-                cb_pop_front(CTArgs::received_cb_r3, CTArgs::num_tiles);
+                cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
             }
 
             // Pack result to scratch_cb

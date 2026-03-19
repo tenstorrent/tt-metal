@@ -13,7 +13,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -23,8 +23,8 @@ namespace ttnn::operations::experimental::ccl {
 
 namespace {
 
+// allows semaphore arguments to be passed as a single semaphore or a vector of semaphores
 struct GlobalSemaphoreArg {
-    // allows semaphore arguments to be passed as a single semaphore or a vector of semaphores
     std::vector<GlobalSemaphore> semaphores;
     GlobalSemaphoreArg(const GlobalSemaphore& single) : semaphores{single} {}
     GlobalSemaphoreArg(const std::vector<GlobalSemaphore>& vec) : semaphores(vec) {}
@@ -33,180 +33,180 @@ struct GlobalSemaphoreArg {
     operator const std::vector<GlobalSemaphore>&() const { return semaphores; }
 };
 
-template <typename ccl_operation_t>
-void bind_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const GlobalSemaphoreArg& multi_device_global_semaphore,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               bool use_optimal_ccl_for_llama,
-               const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    multi_device_global_semaphore.get(),
-                    num_links,
-                    memory_config,
-                    topology,
-                    subdevice_id,
-                    use_optimal_ccl_for_llama,
-                    barrier_semaphore,
-                    false,
-                    sub_core_grids,
-                    num_workers_per_link,
-                    num_buffers_per_channel);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()},
-        // ring
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::Tensor>& persistent_output_buffer,
-               const int32_t dim,
-               const GlobalSemaphoreArg& multi_device_global_semaphore,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis,
-               bool use_optimal_ccl_for_llama,
-               bool use_broadcast,
-               const std::optional<GlobalSemaphore>& barrier_semaphore,
-               std::optional<uint32_t> chunks_per_sync,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    persistent_output_buffer,
-                    dim,
-                    multi_device_global_semaphore.get(),
-                    num_links,
-                    memory_config,
-                    topology,
-                    subdevice_id,
-                    cluster_axis,
-                    use_optimal_ccl_for_llama,
-                    barrier_semaphore,
-                    use_broadcast,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel,
-                    false,
-                    sub_core_grids);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffer") = nb::none(),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("use_broadcast") = false,
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("sub_core_grids") = std::nullopt},
+template <bool Reversed>
+ttnn::Tensor all_gather_async_wrapper_sub_core_grids(
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const GlobalSemaphoreArg& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
+    if constexpr (Reversed) {
+        return ttnn::experimental::all_gather_async_reversed(
+            input_tensor,
+            dim,
+            multi_device_global_semaphore.get(),
+            num_links,
+            memory_config,
+            topology,
+            subdevice_id,
+            use_optimal_ccl_for_llama,
+            barrier_semaphore,
+            false,
+            sub_core_grids,
+            num_workers_per_link,
+            num_buffers_per_channel);
+    } else {
+        return ttnn::experimental::all_gather_async(
+            input_tensor,
+            dim,
+            multi_device_global_semaphore.get(),
+            num_links,
+            memory_config,
+            topology,
+            subdevice_id,
+            use_optimal_ccl_for_llama,
+            barrier_semaphore,
+            false,
+            sub_core_grids,
+            num_workers_per_link,
+            num_buffers_per_channel);
+    }
+}
 
-        // line
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const ttnn::ccl::Topology topology,
-               const GlobalSemaphoreArg& multi_device_global_semaphore,
-               const std::optional<ttnn::Tensor>& persistent_output_tensor,
-               const std::optional<size_t> num_preferred_links,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               bool use_optimal_ccl_for_llama,
-               bool use_broadcast,
-               const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    cluster_axis,
-                    mesh_device,
-                    topology,
-                    multi_device_global_semaphore.get(),
-                    persistent_output_tensor,  // = nb::none(),
-                    memory_config,             // = nb::none(),
-                    num_preferred_links,       // = nb::none(),
-                    subdevice_id,
-                    use_optimal_ccl_for_llama,
-                    use_broadcast,
-                    barrier_semaphore,
-                    false,
-                    sub_core_grids,
-                    num_workers_per_link,
-                    num_buffers_per_channel);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("topology"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::kw_only(),
-            nb::arg("persistent_output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("use_optimal_ccl_for_llama") = false,
-            nb::arg("use_broadcast") = false,
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none()});
+template <bool Reversed>
+ttnn::Tensor all_gather_async_wrapper_persistent_buffer(
+    const ttnn::Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    const int32_t dim,
+    const GlobalSemaphoreArg& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> cluster_axis,
+    bool use_optimal_ccl_for_llama,
+    bool use_broadcast,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if constexpr (Reversed) {
+        return ttnn::experimental::all_gather_async_reversed(
+            input_tensor,
+            persistent_output_buffer,
+            dim,
+            multi_device_global_semaphore.get(),
+            num_links,
+            memory_config,
+            topology,
+            subdevice_id,
+            cluster_axis,
+            use_optimal_ccl_for_llama,
+            barrier_semaphore,
+            use_broadcast,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            false,
+            sub_core_grids);
+    } else {
+        return ttnn::experimental::all_gather_async(
+            input_tensor,
+            persistent_output_buffer,
+            dim,
+            multi_device_global_semaphore.get(),
+            num_links,
+            memory_config,
+            topology,
+            subdevice_id,
+            cluster_axis,
+            use_optimal_ccl_for_llama,
+            barrier_semaphore,
+            use_broadcast,
+            chunks_per_sync,
+            num_workers_per_link,
+            num_buffers_per_channel,
+            false,
+            sub_core_grids);
+    }
+}
+
+template <bool Reversed>
+ttnn::Tensor all_gather_async_wrapper_mesh_device(
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const GlobalSemaphoreArg& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
+    const std::optional<size_t> num_preferred_links,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool use_optimal_ccl_for_llama,
+    bool use_broadcast,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
+    if constexpr (Reversed) {
+        return ttnn::experimental::all_gather_async_reversed(
+            input_tensor,
+            dim,
+            cluster_axis,
+            mesh_device,
+            topology,
+            multi_device_global_semaphore.get(),
+            persistent_output_tensor,
+            memory_config,
+            num_preferred_links,
+            subdevice_id,
+            use_optimal_ccl_for_llama,
+            use_broadcast,
+            barrier_semaphore,
+            false,
+            sub_core_grids,
+            num_workers_per_link,
+            num_buffers_per_channel);
+    } else {
+        return ttnn::experimental::all_gather_async(
+            input_tensor,
+            dim,
+            cluster_axis,
+            mesh_device,
+            topology,
+            multi_device_global_semaphore.get(),
+            persistent_output_tensor,
+            memory_config,
+            num_preferred_links,
+            subdevice_id,
+            use_optimal_ccl_for_llama,
+            use_broadcast,
+            barrier_semaphore,
+            false,
+            sub_core_grids,
+            num_workers_per_link,
+            num_buffers_per_channel);
+    }
 }
 
 }  // namespace
 
 void bind_all_gather_async(nb::module_& mod) {
-    // Define GlobalSemaphoreArg once, outside the template
     nb::class_<GlobalSemaphoreArg>(mod, "GlobalSemaphoreArg")
         .def(nb::init_implicit<const GlobalSemaphore&>())
         .def(nb::init_implicit<const std::vector<GlobalSemaphore>&>())
         .def(nb::init_implicit<std::vector<GlobalSemaphore>>());
 
-    bind_all_gather_async(
-        mod,
-        ttnn::experimental::all_gather_async,
-        R"doc(
+    const auto* all_gather_async_doc = R"doc(
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
@@ -239,12 +239,66 @@ void bind_all_gather_async(nb::module_& mod) {
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
             >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
 
-        )doc");
+        )doc";
 
-    bind_all_gather_async(
+    ttnn::bind_function<"all_gather_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::all_gather_async_reversed,
-        R"doc(
+        all_gather_async_doc,
+        ttnn::overload_t(
+            &all_gather_async_wrapper_sub_core_grids<false>,
+            nb::arg("input_tensor"),
+            nb::arg("dim"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::kw_only(),
+            nb::arg("num_links") = 1,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()),
+        ttnn::overload_t(
+            &all_gather_async_wrapper_persistent_buffer<false>,
+            nb::arg("input_tensor"),
+            nb::arg("persistent_output_buffer") = nb::none(),
+            nb::arg("dim"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::kw_only(),
+            nb::arg("num_links") = 1,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("sub_core_grids") = std::nullopt),
+        ttnn::overload_t(
+            &all_gather_async_wrapper_mesh_device<false>,
+            nb::arg("input_tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis"),
+            nb::arg("mesh_device"),
+            nb::arg("topology"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::kw_only(),
+            nb::arg("persistent_output_tensor") = nb::none(),
+            nb::arg("num_links") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()));
+
+    const auto* all_gather_async_reversed_doc = R"doc(
 
         Performs a reversed all-gather operation on multi-device :attr:`input_tensor` across all devices.
         This is identical to all_gather_async but with reversed device ordering in the output.
@@ -267,7 +321,64 @@ void bind_all_gather_async(nb::module_& mod) {
         Note:
             The tensor width must be divisible by 32*num_devices when using this reversed API.
 
-        )doc");
+        )doc";
+
+    ttnn::bind_function<"all_gather_async_reversed", "ttnn.experimental.">(
+        mod,
+        all_gather_async_reversed_doc,
+        ttnn::overload_t(
+            &all_gather_async_wrapper_sub_core_grids<true>,
+            nb::arg("input_tensor"),
+            nb::arg("dim"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::kw_only(),
+            nb::arg("num_links") = 1,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()),
+        ttnn::overload_t(
+            &all_gather_async_wrapper_persistent_buffer<true>,
+            nb::arg("input_tensor"),
+            nb::arg("persistent_output_buffer") = nb::none(),
+            nb::arg("dim"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::kw_only(),
+            nb::arg("num_links") = 1,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("chunks_per_sync") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none(),
+            nb::arg("sub_core_grids") = std::nullopt),
+        ttnn::overload_t(
+            &all_gather_async_wrapper_mesh_device<true>,
+            nb::arg("input_tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis"),
+            nb::arg("mesh_device"),
+            nb::arg("topology"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::kw_only(),
+            nb::arg("persistent_output_tensor") = nb::none(),
+            nb::arg("num_links") = nb::none(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("subdevice_id") = nb::none(),
+            nb::arg("use_optimal_ccl_for_llama") = false,
+            nb::arg("use_broadcast") = false,
+            nb::arg("barrier_semaphore") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("num_workers_per_link") = nb::none(),
+            nb::arg("num_buffers_per_channel") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -17,7 +17,11 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "context_types.hpp"
 #include "context/metal_env_accessor.hpp"
+#include <tt-metalium/experimental/context/metal_env.hpp>
+#include "dispatch_core_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
 #include "core_coord.hpp"
@@ -44,6 +48,7 @@
 #include <system_mesh.hpp>
 
 #include <tt_metal.hpp>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 
@@ -54,7 +59,34 @@
 
 namespace tt::tt_metal {
 
+// MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
+std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};
+std::atomic<MetalEnv*> g_default_env =
+    nullptr;  // used for implicit creation of the default context -- legacy behaviour
+std::mutex g_instance_mutex;
+bool registered_handlers = false;
+
 namespace {
+
+void check_context_id(ContextId context_id) {
+    TT_FATAL(context_id.get() >= 0, "context_id {} is invalid.", context_id);
+    TT_FATAL(
+        context_id.get() < MAX_CONTEXT_COUNT,
+        "context_id {} is out of range (max {}).",
+        context_id.get(),
+        MAX_CONTEXT_COUNT);
+}
+
+ContextId find_free_context_id_locked() {
+    // Slot 0 is reserved for the silicon context.
+    for (int index = DEFAULT_CONTEXT_ID.get() + 1; index < MAX_CONTEXT_COUNT; ++index) {
+        if (g_instances[index] == nullptr) {
+            return ContextId{index};
+        }
+    }
+    TT_THROW("Maximum MetalContext count ({}) reached.", MAX_CONTEXT_COUNT);
+}
+
 // Helper function to validate worker_l1_size, also updates it if it's 0.
 void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
     if (worker_l1_size == 0) {
@@ -70,6 +102,35 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
         max_worker_l1_size);
 }
 }  // namespace
+
+ContextId extract_context_id(const IDevice* device) {
+    // get_mesh_device is not const
+    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
+        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
+        return mesh_device->impl().get_context_id();
+    }
+    // Must be a Device if not MeshDevice
+    const auto* device_concrete = dynamic_cast<const Device*>(device);
+    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
+    return device_concrete->get_context_id();
+}
+
+ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
+    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
+    return mesh_device->impl().get_context_id();
+}
+
+ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
+    ContextId context_id = DEFAULT_CONTEXT_ID;
+    if (mesh_device != nullptr) {
+        context_id = extract_context_id(mesh_device);
+    } else if (device != nullptr) {
+        context_id = extract_context_id(device);
+    } else {
+        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
+    }
+    return context_id;
+}
 
 void MetalContext::initialize_device_manager(
     const std::vector<ChipId>& device_ids,
@@ -105,8 +166,17 @@ void MetalContext::initialize(
 
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
+
+    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with DEFAULT_CONTEXT_ID
+    // which will cause implicit initialization of a MetalContext if one doesn't exist yet.
+    // Workaround that by setting the dispatch core axis here and storing a resolved config.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    DispatchCoreConfig resolved_config = dispatch_core_config;
+    resolved_config.set_dispatch_core_axis(
+        resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
+
     if (initialized_) {
-        if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
+        if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
@@ -126,7 +196,9 @@ void MetalContext::initialize(
     }
 
     initialized_ = true;
-    dispatch_core_config_ = dispatch_core_config;
+
+    // Store the resolved config
+    dispatch_core_config_ = resolved_config;
     num_hw_cqs_ = num_hw_cqs;
     worker_l1_size_ = worker_l1_size;
     l1_bank_remap_ = l1_bank_remap;
@@ -138,17 +210,20 @@ void MetalContext::initialize(
         max_alignment);
 
     // Initialize inspector
-    inspector_data_ = Inspector::initialize();
-    // Set fw_compile_hash for Inspector RPC build environment info
-    Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
-
+    if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
+        inspector_data_ = Inspector::initialize();
+        // Set fw_compile_hash for Inspector RPC build environment info
+        Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
+    }
     // Reset timeout detection state
     dispatch_timeout_detection_processed_ = false;
 
     // Initialize dispatch state
     bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
-    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
-    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
+        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
+    dispatch_query_manager_ =
+        std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
         std::make_unique<DispatchMemMap>(CoreType::WORKER, num_hw_cqs, hal(), is_galaxy_cluster);
     dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
@@ -159,10 +234,10 @@ void MetalContext::initialize(
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
-        dprint_server_ = std::make_unique<DPrintServer>(rtoptions());
+        dprint_server_ = std::make_unique<DPrintServer>(*this->env_, num_hw_cqs, dispatch_core_config_);
     }
-    watcher_server_ =
-        std::make_unique<WatcherServer>();  // Watcher server always created, since we use it to register kernels
+    // Watcher server always created, since we use it to register kernels
+    watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
     if (rtoptions().get_experimental_noc_debug_dump_enabled()) {
@@ -189,27 +264,14 @@ void MetalContext::initialize(
     auto all_devices = get_cluster().all_chip_ids();
     std::set<ChipId> device_ids(all_devices.begin(), all_devices.end());
 
-    auto get_dispatch_ignore_cores = [this](ChipId device_id) {
-        std::unordered_set<CoreCoord> out;
-        if (device_manager_ && device_manager_->is_initialized()) {
-            const auto& dc = device_manager_->get_virtual_dispatch_cores(device_id);
-            const auto& rc = device_manager_->get_virtual_dispatch_routing_cores(device_id);
-            out.insert(dc.begin(), dc.end());
-            out.insert(rc.begin(), rc.end());
-        }
-        return out;
-    };
     init_risc_fw_context_descriptor(num_hw_cqs_, worker_l1_size_);
     risc_firmware_initializer_ = std::make_unique<RiscFirmwareInitializer>(
-        risc_fw_context_descriptor_,
-        std::bind(&MetalContext::get_control_plane, this),
-        *dispatch_core_manager_,
-        get_dispatch_ignore_cores);
+        risc_fw_context_descriptor_, std::bind(&MetalContext::get_control_plane, this), *dispatch_core_manager_);
 
     risc_firmware_initializer_->run_async_build_phase(device_ids);
 
     // Set internal routing for active ethernet cores, this is required for our FW to run
-    if (has_flag(MetalContext::instance().get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
+    if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
@@ -232,8 +294,10 @@ void MetalContext::initialize(
 void MetalContext::reinitialize_dispatch_managers() {
     // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
     // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
-    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config_, num_hw_cqs_);
-    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs_);
+    dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
+        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl());
+    dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(
+        *this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs_);
 }
 
 void MetalContext::set_fast_dispatch_mode(bool enable) {
@@ -281,21 +345,21 @@ void MetalContext::teardown() {
 
     // Clear dispatch, dispatch_s and prefetcher core info in inspector data
     Inspector::clear_all_core_info();
-    // Deinitialize inspector
+    // Destroy inspector before cluster to prevent RPC handlers from accessing destroyed cluster
     inspector_data_.reset();
 
     noc_debug_state_.reset();
 }
 
-// MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
-std::atomic<MetalContext*> g_instance{nullptr};
-std::mutex g_instance_mutex;
-bool registered_atexit = false;
+bool MetalContext::instance_exists(ContextId context_id) {
+    check_context_id(context_id);
+    return g_instances[context_id.get()].load(std::memory_order_acquire) != nullptr;
+}
 
-bool MetalContext::instance_exists() { return g_instance.load(std::memory_order_acquire) != nullptr; }
-
-MetalContext& MetalContext::instance() {
-    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+MetalContext& MetalContext::instance(ContextId context_id) {
+    check_context_id(context_id);
+    int index = context_id.get();
+    MetalContext* instance = g_instances[index].load(std::memory_order_acquire);
     if (instance) {
         // There is a potential race condition here if the instance is being torn down while this call is running or
         // while the caller is using the instance. We assume that if teardown is in progress, this call must be coming
@@ -304,26 +368,65 @@ MetalContext& MetalContext::instance() {
     }
     std::lock_guard lock(g_instance_mutex);
     // Check again in case another thread created the instance while we were waiting for the lock.
-    instance = g_instance.load(std::memory_order_acquire);
+    instance = g_instances[index].load(std::memory_order_acquire);
     if (!instance) {
-        instance = new MetalContext();
-        g_instance.store(instance, std::memory_order_release);
-        if (!registered_atexit) {
-            std::atexit([]() {
-                // Don't check device count because the destruction order is complicated and we can't guarantee that the
-                // client isn't holding onto devices on process exit.
-                MetalContext::destroy_instance(false);
-            });
-            registered_atexit = true;
-        }
+        // SILICON_CONTEXT_ID is implicitly created to match legacy behaviour
+        TT_FATAL(
+            context_id == DEFAULT_CONTEXT_ID,
+            "No MetalContext instance for context_id {}. Create one via create_instance().",
+            context_id);
+        create_default_instance_implicit_locked();
+        register_handlers_locked();
+        instance = g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire);
     }
     return *instance;
 }
 
-void MetalContext::destroy_instance(bool check_device_count) {
+ContextId MetalContext::create_default_instance_implicit_locked() {
+    if (g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire) != nullptr) {
+        TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
+    }
+
+    MetalEnvDescriptor desc{};
+    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
+        desc = MetalEnvDescriptor(*mock_cluster_desc);
+    }
+    g_default_env = new MetalEnv(std::move(desc));
+    MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, *g_default_env);
+    // Set the env_owned_ to true so the MetalContext destructor will delete the env_
+    instance->env_owned_ = true;
+
+    g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
+    return DEFAULT_CONTEXT_ID;
+}
+
+ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
+    std::lock_guard lock(g_instance_mutex);
+    register_handlers_locked();
+
+    // Allow only one instance connected to a silicon cluster
+    if (!MetalEnvAccessor(env_to_use).impl().get_rtoptions().get_mock_enabled()) {
+        if (g_instances[DEFAULT_CONTEXT_ID.get()].load(std::memory_order_acquire) != nullptr) {
+            TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
+        }
+        MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, env_to_use);
+        g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
+        return DEFAULT_CONTEXT_ID;
+    }
+
+    ContextId context_id = find_free_context_id_locked();
+    MetalContext* instance = new MetalContext(context_id, env_to_use);
+    g_instances[context_id.get()].store(instance, std::memory_order_release);
+    return context_id;
+}
+
+void MetalContext::destroy_instance(bool check_device_count, ContextId context_id) {
+    check_context_id(context_id);
     // Don't lock g_instance_mutex to avoid deadlocking with instance() calls. Teardown should only ever be called from
     // one thread while no work is being done on the MetalContext.
-    MetalContext* instance = g_instance.load(std::memory_order_acquire);
+    int index = context_id.get();
+    MetalContext* instance = g_instances[index].load(std::memory_order_acquire);
     if (!instance) {
         return;
     }
@@ -334,16 +437,24 @@ void MetalContext::destroy_instance(bool check_device_count) {
     delete instance;
     // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
     // return the old instance.
-    g_instance.store(nullptr, std::memory_order_release);
+    g_instances[index].store(nullptr, std::memory_order_release);
 }
 
-void MetalContext::teardown_base_objects() {
-    inspector_data_.reset();
-    if (env_owned_) {
-        delete env_;
+void MetalContext::destroy_all_instances(bool check_device_count) {
+    for (int index = 0; index < MAX_CONTEXT_COUNT; ++index) {
+        destroy_instance(check_device_count, ContextId{index});
     }
-    env_ = nullptr;
-    env_owned_ = false;
+}
+
+void MetalContext::register_handlers_locked() {
+    if (!registered_handlers) {
+        std::atexit([]() {
+            // Don't check device count because the destruction order is complicated and we can't guarantee that the
+            // client isn't holding onto devices on process exit.
+            MetalContext::destroy_all_instances(false);
+        });
+        registered_handlers = true;
+    }
 }
 
 void MetalContext::teardown_dispatch_state() {
@@ -357,25 +468,19 @@ void MetalContext::teardown_dispatch_state() {
     dispatch_core_manager_.reset();
 }
 
-void MetalContext::initialize_base_objects() {
-    MetalEnvDescriptor settings;
-    if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
-        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        settings = MetalEnvDescriptor(*mock_cluster_desc);
-    }
-    env_ = new tt::tt_metal::MetalEnv(std::move(settings));
-    env_owned_ = true;
-}
-
-MetalContext::MetalContext() {
-    initialize_base_objects();
-    device_manager_ = std::make_unique<DeviceManager>();
+MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env) :
+    env_(&metal_env), context_id_(context_id) {
+    check_context_id(context_id);
+    device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
 MetalContext::~MetalContext() {
     teardown();
     device_manager_.reset();
-    teardown_base_objects();
+    if (env_owned_) {
+        delete env_;
+    }
+    env_ = nullptr;
 }
 
 tt::tt_metal::MetalEnv& MetalContext::get_env() {
@@ -477,7 +582,9 @@ void MetalContext::set_fabric_config(
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    bool updated = MetalEnvAccessor(*env_).impl().set_fabric_config(
+    // This env pointer was provided to both descriptors so they
+    // will see the updated config as well
+    MetalEnvAccessor(*env_).impl().set_fabric_config(
         fabric_config,
         reliability_mode,
         num_routing_planes,
@@ -485,18 +592,6 @@ void MetalContext::set_fabric_config(
         fabric_udm_mode,
         fabric_manager,
         router_config);
-    if (updated) {
-        // Update the risc firmware context descriptor with the new fabric settings
-        // as well due to transient state between the descriptor creation and the fabric config update
-        if (risc_fw_context_descriptor_) {
-            risc_fw_context_descriptor_->fabric_config_ = fabric_config;
-            risc_fw_context_descriptor_->reliability_mode_ = reliability_mode;
-            risc_fw_context_descriptor_->num_routing_planes_ = num_routing_planes;
-            risc_fw_context_descriptor_->fabric_tensix_config_ = fabric_tensix_config;
-            risc_fw_context_descriptor_->fabric_udm_mode_ = fabric_udm_mode;
-            risc_fw_context_descriptor_->fabric_manager_ = fabric_manager;
-        }
-    }
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -564,19 +659,11 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
 void MetalContext::init_context_descriptor(
     int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size) {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvImpl& env_accessor = MetalEnvAccessor(*env_).impl();
     std::string mock_cluster_desc_path =
         env_->get_descriptor().is_mock_device() ? env_->get_descriptor().mock_cluster_desc_path() : "";
     context_descriptor_ = std::make_shared<ContextDescriptor>(
-        hal(),
-        get_cluster(),
-        rtoptions(),
-        env_accessor.get_fabric_config(),
-        env_accessor.get_fabric_reliability_mode(),
-        env_accessor.get_fabric_tensix_config(),
-        env_accessor.get_fabric_udm_mode(),
-        env_accessor.get_fabric_manager(),
-        env_accessor.get_fabric_router_config(),
+        env_,
+        this,
         num_hw_cqs,
         l1_small_size,
         trace_region_size,
@@ -592,17 +679,9 @@ void MetalContext::init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker
 
     // Fabric settings are used during risc init. In some cases, fabric is already running
     // and we don't want to reset the cores
-    MetalEnvImpl& env_accessor = MetalEnvAccessor(*env_).impl();
     risc_fw_context_descriptor_ = std::make_shared<ContextDescriptor>(
-        hal(),
-        get_cluster(),
-        rtoptions(),
-        env_accessor.get_fabric_config(),
-        env_accessor.get_fabric_reliability_mode(),
-        env_accessor.get_fabric_tensix_config(),
-        env_accessor.get_fabric_udm_mode(),
-        env_accessor.get_fabric_manager(),
-        env_accessor.get_fabric_router_config(),
+        env_,
+        this,
         num_hw_cqs,
         /*l1_small_size=*/0,
         /*trace_region_size=*/0,
