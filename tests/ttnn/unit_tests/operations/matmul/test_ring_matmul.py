@@ -69,7 +69,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
 
     # Program config for ring matmul
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(6, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 3))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=5,

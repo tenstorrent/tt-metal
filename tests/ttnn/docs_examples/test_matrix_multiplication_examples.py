@@ -70,7 +70,7 @@ def test_addmm(device):
 def test_sparse_matmul(device):
     # Define program configuration
     config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=1,

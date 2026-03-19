@@ -512,7 +512,9 @@ class TestMatmulFusion:
 
     def _mm_config(self, gx=1, gy=1, in0_block_w=4, per_core_M=1, per_core_N=4):
         return ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}
+            ),
             in0_block_w=in0_block_w,
             out_subblock_h=1,
             out_subblock_w=min(per_core_N, 4),
@@ -1106,7 +1108,9 @@ class TestParallelExecution:
 
         def mm_config(gx=4, gy=2):
             return ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}
+                ),
                 in0_block_w=2,
                 out_subblock_h=1,
                 out_subblock_w=4,

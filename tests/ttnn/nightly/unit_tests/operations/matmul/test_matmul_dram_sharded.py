@@ -563,7 +563,9 @@ def test_matmul_2d_in1_dram_sharded(
         bias_t = torch2tt_tensor(bias_padded, device, tt_memory_config=bias_mem_config, tt_dtype=ttnn.bfloat16)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=in0_block_w // 4,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

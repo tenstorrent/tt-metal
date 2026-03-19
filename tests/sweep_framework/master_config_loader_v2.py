@@ -324,7 +324,9 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
     try:
         if type_name == "MatmulMultiCoreReuseMultiCastProgramConfig":
             kwargs = dict(
-                compute_with_storage_grid_size=core_coord,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_coord.x - 1, core_coord.y - 1))}
+                ),
                 in0_block_w=int(cfg["in0_block_w"]),
                 out_subblock_h=int(cfg.get("out_subblock_h", 1)),
                 out_subblock_w=int(cfg.get("out_subblock_w", 1)),
@@ -341,7 +343,9 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
 
         if type_name == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
             kwargs = dict(
-                compute_with_storage_grid_size=core_coord,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_coord.x - 1, core_coord.y - 1))}
+                ),
                 in0_block_w=int(cfg["in0_block_w"]),
                 out_subblock_h=int(cfg.get("out_subblock_h", 1)),
                 out_subblock_w=int(cfg.get("out_subblock_w", 1)),
@@ -359,7 +363,9 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
 
         if type_name == "MatmulMultiCoreReuseProgramConfig":
             return ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=core_coord,
+                allowed_worker_cores=ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_coord.x - 1, core_coord.y - 1))}
+                ),
                 in0_block_w=int(cfg["in0_block_w"]),
                 out_subblock_h=int(cfg.get("out_subblock_h", 1)),
                 out_subblock_w=int(cfg.get("out_subblock_w", 1)),
@@ -448,7 +454,9 @@ def _build_program_config_heuristic(cfg, input_b_memory_config=None, input_a_mem
     if grid and isinstance(grid, dict):
         core_coord = ttnn.CoreCoord(int(grid["x"]), int(grid["y"]))
         base_kwargs = dict(
-            compute_with_storage_grid_size=core_coord,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_coord.x - 1, core_coord.y - 1))}
+            ),
             in0_block_w=int(cfg["in0_block_w"]),
             out_subblock_h=int(cfg.get("out_subblock_h", 1)),
             out_subblock_w=int(cfg.get("out_subblock_w", 1)),

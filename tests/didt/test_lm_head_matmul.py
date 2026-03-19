@@ -59,7 +59,9 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
     math_fidelity = ttnn.MathFidelity.LoFi
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+        ),
         in0_block_w=2,
         per_core_M=per_core_M,
         per_core_N=per_core_N,

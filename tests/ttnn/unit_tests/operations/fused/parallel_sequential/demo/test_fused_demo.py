@@ -297,7 +297,7 @@ class TestPerfDemos:
         N_tiles = H // 32
         core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))})
         mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(4, 2),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))}),
             in0_block_w=4,
             out_subblock_h=1,
             out_subblock_w=min(N_tiles, 4),
@@ -638,7 +638,7 @@ class TestPerfDemos:
         # M=32 tiles, K=8 tiles, N=4 tiles
         # per_core_M=32/8=4, per_core_N=4, in0_block_w=K/32=8
         mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
             in0_block_w=K // 32,
             out_subblock_h=1,
             out_subblock_w=min(N // 32, 4),
@@ -807,7 +807,7 @@ class TestPerfDemos:
         sharded_out = _shard_mem(N)  # [128, 128]
 
         mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
             in0_block_w=K // 32,
             out_subblock_h=1,
             out_subblock_w=min(N // 32, 4),
@@ -931,7 +931,7 @@ class TestPerfDemos:
         # in0_block_w must equal shard_w / tile_w for block-sharded A input
         # (shard [128,256] on 1-col grid -> shard_w=256, so in0_block_w=256/32=8)
         mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
             in0_block_w=cols // 32,
             out_subblock_h=1,
             out_subblock_w=min(mm_n // 32, 4),
@@ -1364,7 +1364,7 @@ class TestPerfDemos:
         leaf_mem = _shard_mem(leaf_cores, 128, 128)
 
         mm_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(1, 8),
+            allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
             in0_block_w=cols // 32,
             out_subblock_h=1,
             out_subblock_w=min(mm_n // 32, 4),

@@ -30,13 +30,13 @@ def test_with_ops(device):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    ttnn.matmul(a, b)
     # Ensure all binaries are compiled/loaded before starting trace capture.
     # Trace capture does not allow device writes (e.g. binary loading) on fast dispatch paths.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(100):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
@@ -70,12 +70,12 @@ def test_with_ops_single_core(device, capture_count, replay_count):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+    ttnn.matmul(a, b)
     # Ensure all binaries are compiled/loaded before starting trace capture.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for i in range(capture_count):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
+        ttnn.matmul(a, b)
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(replay_count):
@@ -103,7 +103,7 @@ def test_with_ops_multiple_trace_ids(device):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+    ttnn.matmul(a, b)
     # Warm-up the add op as well so its binaries are loaded outside trace capture.
     ttnn.add(a, b)
     # Ensure all binaries are compiled/loaded before starting trace capture.
@@ -118,7 +118,7 @@ def test_with_ops_multiple_trace_ids(device):
 
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(2):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     trace_ids.append(tid)
 
@@ -155,14 +155,14 @@ def test_with_ops_trace_with_non_trace(device):
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
     for _ in range(5):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b)
 
     trace_ids = []
     # Ensure all binaries are compiled/loaded before starting trace capture.
     ttnn.synchronize_device(device)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     for _ in range(10):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     trace_ids.append(tid)
 
@@ -171,7 +171,7 @@ def test_with_ops_trace_with_non_trace(device):
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
 
     for _ in range(5):
-        ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
+        ttnn.matmul(a, b)
 
     for tid in trace_ids:
         ttnn.release_trace(device, tid)

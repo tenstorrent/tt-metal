@@ -104,7 +104,9 @@ def test_ff1_matmul(
     out_subblock_w = 8
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+        ),
         in0_block_w=3,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

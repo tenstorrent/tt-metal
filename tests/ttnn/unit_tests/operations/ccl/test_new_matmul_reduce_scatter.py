@@ -133,7 +133,9 @@ def run_reduce_scatter_impl(
     per_core_M = max(1, math.ceil(rs_input_shape[2] / 32 / core_grid[1]))  # M / TILE_HEIGHT / Grid_Size
     per_core_N = max(1, math.ceil(rs_input_shape[3] / 32 / core_grid[0]))  # N / TILE_WIDTH / Grid_Size
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=core_grid,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid[0] - 1, core_grid[1] - 1))}
+        ),
         in0_block_w=in0_block_w,
         out_subblock_h=1,  # Must be divisible by per_core_M
         out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4

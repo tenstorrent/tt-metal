@@ -399,7 +399,7 @@ def test_resnet50_linear(device):
         packer_l1_acc=True,
     )
     matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 4),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -601,7 +601,7 @@ def test_linear_yolov7(
     per_core_N = output_channels // 32
 
     matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(8, 8),
+        allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock[0],
         out_subblock_w=out_subblock[1],
