@@ -72,6 +72,9 @@ bool SDMeshCommandQueue::write_shard_to_device(
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */) {
+    if (!mesh_device_->impl().is_local(device_coord)) {
+        return false;
+    }
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return false;  // Skip hardware write for mock devices
     }
@@ -102,6 +105,9 @@ void SDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!mesh_device_->impl().is_local(device_coord)) {
+        return;
+    }
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip hardware read for mock devices
     }
