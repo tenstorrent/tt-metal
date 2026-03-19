@@ -371,36 +371,11 @@ void run_stage_weighted_norm_x2_with_full_pass1() {
     binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // pass1a: consume pass_1 as in full stage.
-        bool first_tile_x2 = true;
-        tile_regs_acquire();
+        // keep pass_1 consumption matched with reader without contributing to this stage output
         for (uint32_t col = 0; col < num_inner; col += block_size) {
             cb_wait_front(cb_input_pass_1, block_size);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                if (first_tile_x2) {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 0U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 0U);
-                    first_tile_x2 = false;
-                } else {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 1U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(1U, 1U, 1U);
-                    add_binary_tile_init();
-                    add_binary_tile(0U, 1U, 0U);
-                }
-            }
             cb_pop_front(cb_input_pass_1, block_size);
         }
-        cb_reserve_back(cb_sum_x2, one_tile);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_sum_x2);
-        pack_tile(0U, cb_sum_x2);
-        tile_regs_release();
-        cb_push_back(cb_sum_x2, one_tile);
 
         // pass1b: compute x^4 on pass_3.
         bool first_tile_x4 = true;
@@ -410,19 +385,19 @@ void run_stage_weighted_norm_x2_with_full_pass1() {
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 if (first_tile_x4) {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 3U);  // x^2
-                    mul_binary_tile(3U, 3U, 1U);  // x^4 accumulator
+                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 0U);  // x^4 accumulator
                     first_tile_x4 = false;
                 } else {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 3U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(3U, 3U, 4U);  // x^2
-                    mul_binary_tile(4U, 4U, 5U);  // x^4
+                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 2U);  // x^4
                     add_binary_tile_init();
-                    add_binary_tile(1U, 5U, 1U);
+                    add_binary_tile(0U, 2U, 0U);
                 }
             }
             cb_pop_front(cb_input_pass_3, block_size);
@@ -431,7 +406,7 @@ void run_stage_weighted_norm_x2_with_full_pass1() {
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_sum_x4);
-        pack_tile(1U, cb_sum_x4);
+        pack_tile(0U, cb_sum_x4);
         tile_regs_release();
         cb_push_back(cb_sum_x4, one_tile);
 
@@ -477,36 +452,11 @@ void run_stage_weighted_norm_x3_with_full_pass1() {
     binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // pass1a: consume pass_1 as in full stage.
-        bool first_tile_x2 = true;
-        tile_regs_acquire();
+        // keep pass_1 consumption matched with reader without contributing to this stage output
         for (uint32_t col = 0; col < num_inner; col += block_size) {
             cb_wait_front(cb_input_pass_1, block_size);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                if (first_tile_x2) {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 0U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 0U);
-                    first_tile_x2 = false;
-                } else {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 1U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(1U, 1U, 1U);
-                    add_binary_tile_init();
-                    add_binary_tile(0U, 1U, 0U);
-                }
-            }
             cb_pop_front(cb_input_pass_1, block_size);
         }
-        cb_reserve_back(cb_sum_x2, one_tile);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_sum_x2);
-        pack_tile(0U, cb_sum_x2);
-        tile_regs_release();
-        cb_push_back(cb_sum_x2, one_tile);
 
         // pass1b: compute x^6 on pass_3.
         bool first_tile_x6 = true;
@@ -516,21 +466,21 @@ void run_stage_weighted_norm_x3_with_full_pass1() {
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 if (first_tile_x6) {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 3U);  // x^2
-                    mul_binary_tile(3U, 3U, 1U);  // x^4
-                    mul_binary_tile(1U, 3U, 2U);  // x^6 accumulator
+                    mul_binary_tile(1U, 1U, 2U);  // x^2
+                    mul_binary_tile(2U, 1U, 2U);  // x^3
+                    mul_binary_tile(2U, 2U, 0U);  // x^6 accumulator
                     first_tile_x6 = false;
                 } else {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 3U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(3U, 3U, 4U);  // x^2
-                    mul_binary_tile(4U, 4U, 5U);  // x^4
-                    mul_binary_tile(5U, 4U, 6U);  // x^6
+                    mul_binary_tile(1U, 1U, 2U);  // x^2
+                    mul_binary_tile(2U, 1U, 2U);  // x^3
+                    mul_binary_tile(2U, 2U, 3U);  // x^6
                     add_binary_tile_init();
-                    add_binary_tile(2U, 6U, 2U);
+                    add_binary_tile(0U, 3U, 0U);
                 }
             }
             cb_pop_front(cb_input_pass_3, block_size);
@@ -539,7 +489,7 @@ void run_stage_weighted_norm_x3_with_full_pass1() {
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_sum_x6);
-        pack_tile(2U, cb_sum_x6);
+        pack_tile(0U, cb_sum_x6);
         tile_regs_release();
         cb_push_back(cb_sum_x6, one_tile);
 
@@ -556,8 +506,8 @@ void run_stage_weighted_norm_x3_with_full_pass1() {
                 copy_tile_init(cb_input_pass_2);
                 copy_tile(cb_input_pass_2, block_idx, 0U);  // x
                 mul_binary_tile_init();
-                mul_binary_tile(0U, 0U, 0U);  // x^2
-                mul_binary_tile(0U, 0U, 2U);  // x^3
+                mul_binary_tile(0U, 0U, 2U);  // x^2
+                mul_binary_tile(2U, 0U, 2U);  // x^3
                 reconfig_data_format(cb_input_pass_2, cb_inv_rms_x3);
                 mul_binary_tile_init();
                 mul_binary_tile(2U, 1U, 2U);  // norm(x^3)
@@ -586,36 +536,11 @@ void run_stage_inv_rms_x2_broadcast_with_full_pass1() {
     binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // Consume pass_1 exactly once per row.
-        bool first_tile_x2 = true;
-        tile_regs_acquire();
+        // keep pass_1 consumption matched with reader without contributing to this stage output
         for (uint32_t col = 0; col < num_inner; col += block_size) {
             cb_wait_front(cb_input_pass_1, block_size);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                if (first_tile_x2) {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 0U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 0U);
-                    first_tile_x2 = false;
-                } else {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 1U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(1U, 1U, 1U);
-                    add_binary_tile_init();
-                    add_binary_tile(0U, 1U, 0U);
-                }
-            }
             cb_pop_front(cb_input_pass_1, block_size);
         }
-        cb_reserve_back(cb_sum_x2, one_tile);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_sum_x2);
-        pack_tile(0U, cb_sum_x2);
-        tile_regs_release();
-        cb_push_back(cb_sum_x2, one_tile);
 
         // Compute x^4 row sum from pass_3.
         bool first_tile_x4 = true;
@@ -625,19 +550,19 @@ void run_stage_inv_rms_x2_broadcast_with_full_pass1() {
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 if (first_tile_x4) {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 3U);  // x^2
-                    mul_binary_tile(3U, 3U, 1U);  // x^4 accumulator
+                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 0U);  // x^4 accumulator
                     first_tile_x4 = false;
                 } else {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 3U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(3U, 3U, 4U);  // x^2
-                    mul_binary_tile(4U, 4U, 5U);  // x^4
+                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 2U);  // x^4
                     add_binary_tile_init();
-                    add_binary_tile(1U, 5U, 1U);
+                    add_binary_tile(0U, 2U, 0U);
                 }
             }
             cb_pop_front(cb_input_pass_3, block_size);
@@ -646,7 +571,7 @@ void run_stage_inv_rms_x2_broadcast_with_full_pass1() {
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_sum_x4);
-        pack_tile(1U, cb_sum_x4);
+        pack_tile(0U, cb_sum_x4);
         tile_regs_release();
         cb_push_back(cb_sum_x4, one_tile);
 
@@ -679,36 +604,11 @@ void run_stage_inv_rms_x3_broadcast_with_full_pass1() {
     binary_op_init_common(cb_input_pass_1, cb_input_pass_1, cb_output);
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // Consume pass_1 exactly once per row.
-        bool first_tile_x2 = true;
-        tile_regs_acquire();
+        // keep pass_1 consumption matched with reader without contributing to this stage output
         for (uint32_t col = 0; col < num_inner; col += block_size) {
             cb_wait_front(cb_input_pass_1, block_size);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                if (first_tile_x2) {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 0U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 0U);
-                    first_tile_x2 = false;
-                } else {
-                    copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 1U);
-                    mul_binary_tile_init();
-                    mul_binary_tile(1U, 1U, 1U);
-                    add_binary_tile_init();
-                    add_binary_tile(0U, 1U, 0U);
-                }
-            }
             cb_pop_front(cb_input_pass_1, block_size);
         }
-        cb_reserve_back(cb_sum_x2, one_tile);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_sum_x2);
-        pack_tile(0U, cb_sum_x2);
-        tile_regs_release();
-        cb_push_back(cb_sum_x2, one_tile);
 
         // Compute x^6 row sum from pass_3.
         bool first_tile_x6 = true;
@@ -718,21 +618,21 @@ void run_stage_inv_rms_x3_broadcast_with_full_pass1() {
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                 if (first_tile_x6) {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 3U);  // x^2
-                    mul_binary_tile(3U, 3U, 1U);  // x^4
-                    mul_binary_tile(1U, 3U, 2U);  // x^6 accumulator
+                    mul_binary_tile(1U, 1U, 2U);  // x^2
+                    mul_binary_tile(2U, 1U, 2U);  // x^3
+                    mul_binary_tile(2U, 2U, 0U);  // x^6 accumulator
                     first_tile_x6 = false;
                 } else {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 3U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(3U, 3U, 4U);  // x^2
-                    mul_binary_tile(4U, 4U, 5U);  // x^4
-                    mul_binary_tile(5U, 4U, 6U);  // x^6
+                    mul_binary_tile(1U, 1U, 2U);  // x^2
+                    mul_binary_tile(2U, 1U, 2U);  // x^3
+                    mul_binary_tile(2U, 2U, 3U);  // x^6
                     add_binary_tile_init();
-                    add_binary_tile(2U, 6U, 2U);
+                    add_binary_tile(0U, 3U, 0U);
                 }
             }
             cb_pop_front(cb_input_pass_3, block_size);
@@ -741,7 +641,7 @@ void run_stage_inv_rms_x3_broadcast_with_full_pass1() {
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_sum_x6);
-        pack_tile(2U, cb_sum_x6);
+        pack_tile(0U, cb_sum_x6);
         tile_regs_release();
         cb_push_back(cb_sum_x6, one_tile);
 
@@ -843,76 +743,80 @@ void kernel_main() {
 #else
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        // Pass 1a: accumulate sum(x^2) only.
-        bool first_tile_x2 = true;
+        // Pass 1a: accumulate sum(x^2) and sum(x^6) from pass_1.
+        bool first_tile_x2x6 = true;
         tile_regs_acquire();
         for (uint32_t col = 0; col < num_inner; col += block_size) {
             cb_wait_front(cb_input_pass_1, block_size);
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                if (first_tile_x2) {
+                if (first_tile_x2x6) {
                     copy_tile_init(cb_input_pass_1);
-                    copy_tile(cb_input_pass_1, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_1, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 0U);  // x^2 accumulator
-                    first_tile_x2 = false;
+                    mul_binary_tile(1U, 1U, 0U);  // x^2 accumulator
+                    mul_binary_tile(1U, 1U, 3U);  // x^2
+                    mul_binary_tile(3U, 1U, 3U);  // x^3
+                    mul_binary_tile(3U, 3U, 2U);  // x^6 accumulator
+                    first_tile_x2x6 = false;
                 } else {
                     copy_tile_init(cb_input_pass_1);
                     copy_tile(cb_input_pass_1, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 4U);  // x^2
                     add_binary_tile_init();
-                    add_binary_tile(0U, 1U, 0U);
+                    add_binary_tile(0U, 4U, 0U);
+                    mul_binary_tile(4U, 1U, 3U);  // x^3
+                    mul_binary_tile(3U, 3U, 5U);  // x^6
+                    add_binary_tile_init();
+                    add_binary_tile(2U, 5U, 2U);
                 }
             }
             cb_pop_front(cb_input_pass_1, block_size);
         }
         cb_reserve_back(cb_sum_x2, one_tile);
+        cb_reserve_back(cb_sum_x6, one_tile);
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_sum_x2);
         pack_tile(0U, cb_sum_x2);
+        pack_reconfig_data_format(cb_sum_x6);
+        pack_tile(2U, cb_sum_x6);
         tile_regs_release();
         cb_push_back(cb_sum_x2, one_tile);
+        cb_push_back(cb_sum_x6, one_tile);
 
-        // Pass 1b: accumulate sum(x^4) and sum(x^6) independently on pass_3.
-        bool first_tile_x4x6 = true;
+        // Pass 1b: accumulate sum(x^4) on pass_3.
+        bool first_tile_x4 = true;
         tile_regs_acquire();
         for (uint32_t col = 0; col < num_inner; col += block_size) {
             cb_wait_front(cb_input_pass_3, block_size);
             for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                if (first_tile_x4x6) {
+                if (first_tile_x4) {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 3U);  // x^2
-                    mul_binary_tile(3U, 3U, 1U);  // x^4 accumulator
-                    mul_binary_tile(1U, 3U, 2U);  // x^6 accumulator
-                    first_tile_x4x6 = false;
+                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 0U);  // x^4 accumulator
+                    first_tile_x4 = false;
                 } else {
                     copy_tile_init(cb_input_pass_3);
-                    copy_tile(cb_input_pass_3, block_idx, 0U);  // x
+                    copy_tile(cb_input_pass_3, block_idx, 1U);  // x
                     mul_binary_tile_init();
-                    mul_binary_tile(0U, 0U, 3U);  // x^2
-                    mul_binary_tile(3U, 3U, 4U);  // x^4
-                    mul_binary_tile(4U, 3U, 5U);  // x^6
+                    mul_binary_tile(1U, 1U, 1U);  // x^2
+                    mul_binary_tile(1U, 1U, 3U);  // x^4
                     add_binary_tile_init();
-                    add_binary_tile(1U, 4U, 1U);
-                    add_binary_tile(2U, 5U, 2U);
+                    add_binary_tile(0U, 3U, 0U);
                 }
             }
             cb_pop_front(cb_input_pass_3, block_size);
         }
         cb_reserve_back(cb_sum_x4, one_tile);
-        cb_reserve_back(cb_sum_x6, one_tile);
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_sum_x4);
-        pack_tile(1U, cb_sum_x4);
-        pack_reconfig_data_format(cb_sum_x6);
-        pack_tile(2U, cb_sum_x6);
+        pack_tile(0U, cb_sum_x4);
         tile_regs_release();
         cb_push_back(cb_sum_x4, one_tile);
-        cb_push_back(cb_sum_x6, one_tile);
 
 #ifdef POLYNORM_DEBUG
         if (row == 0U) {
@@ -996,21 +900,21 @@ void kernel_main() {
                 cb_reserve_back(cb_sum_x4, one_tile);
                 tile_regs_acquire();
                 unary_bcast_init<BroadcastType::COL>(cb_inv_rms_x2, cb_inv_rms_x2);
-                unary_bcast<BroadcastType::COL>(cb_inv_rms_x2, 0, 5U);
+                unary_bcast<BroadcastType::COL>(cb_inv_rms_x2, 0, 1U);
                 copy_tile_init(cb_input_pass_2);
                 copy_tile(cb_input_pass_2, block_idx, 0U);  // x
                 mul_binary_tile_init();
-                mul_binary_tile(0U, 0U, 1U);  // x^2
+                mul_binary_tile(0U, 0U, 0U);  // x^2
                 reconfig_data_format(cb_input_pass_2, cb_inv_rms_x2);
                 mul_binary_tile_init();
-                mul_binary_tile(1U, 5U, 1U);  // norm(x^2)
+                mul_binary_tile(0U, 1U, 0U);  // norm(x^2)
                 copy_tile_init(cb_w1);
                 copy_tile(cb_w1, 0, 4U);
-                mul_binary_tile(1U, 4U, 1U);
+                mul_binary_tile(0U, 4U, 0U);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_sum_x4);
-                pack_tile(1U, cb_sum_x4);
+                pack_tile(0U, cb_sum_x4);
                 tile_regs_release();
                 cb_push_back(cb_sum_x4, one_tile);
 
