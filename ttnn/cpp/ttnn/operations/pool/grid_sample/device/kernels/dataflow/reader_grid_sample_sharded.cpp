@@ -14,6 +14,17 @@
 #include "api/debug/dprint.h"
 #endif
 
+template <uint32_t input_cb_index, uint32_t scalar_cb_index>
+ALWI void push_padding_sticks() {
+    cb_reserve_back(input_cb_index, 1);
+    cb_push_back(input_cb_index, 1);
+
+    cb_reserve_back(scalar_cb_index, 1);
+    zero_out_page<scalar_cb_index>(get_write_ptr(scalar_cb_index));
+    noc_async_read_barrier();
+    cb_push_back(scalar_cb_index, 1);
+}
+
 ALWI void advance_grid_index_bounded(
     uint32_t& in_grid_row_idx,
     uint32_t& grid_stick_idx,
@@ -127,14 +138,7 @@ void kernel_main() {
         } else {
             // Padding stick from height-sharding — push zero-weight data to CBs
             // so the compute kernel receives the expected number of items.
-            // Input CB content doesn't matter since all weights are zero.
-            cb_reserve_back(input_cb_index, 1);
-            cb_push_back(input_cb_index, 1);
-
-            cb_reserve_back(scalar_cb_index, 1);
-            zero_out_page<scalar_cb_index>(get_write_ptr(scalar_cb_index));
-            noc_async_read_barrier();
-            cb_push_back(scalar_cb_index, 1);
+            push_padding_sticks<input_cb_index, scalar_cb_index>();
         }
 
         // Always advance once after processing
