@@ -530,7 +530,6 @@ void py_module(nb::module_& mod) {
             additional memory round-trips in DRAM-based operations.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
-            // Include fused_activation in the repr for full visibility during tracing/debugging.
             std::string fused_activation_repr =
                 config.fused_activation.has_value() ? fmt::format("{}", config.fused_activation.value()) : "None";
             return fmt::format(
@@ -675,7 +674,6 @@ void py_module(nb::module_& mod) {
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
             activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
-            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
@@ -798,7 +796,6 @@ void py_module(nb::module_& mod) {
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
             activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. Defaults to `None`. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
-            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
@@ -862,7 +859,6 @@ void py_module(nb::module_& mod) {
             program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
             activation (str or ttnn.UnaryWithParam, optional): the activation function to be applied. Defaults to `None`. When using sharded tensors, the :attr:`fused_activation` parameter of the :attr:`program_config` should be used instead.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
-            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer, optional): the global circular buffer to be used for the matmul operation. Defaults to `None`.
@@ -946,7 +942,6 @@ void py_module(nb::module_& mod) {
             dtype (ttnn.DataType): the data type of the output tensor. Supported types: `ttnn.bfloat16`, `ttnn.float32`, `ttnn.bfloat8_b`  Defaults to `None` which means it will default to the highest precision of `input_tensor`, `mat1_tensor` or `mat2_tensor`.
             program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
-            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User-provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer): TBD
@@ -993,7 +988,6 @@ void py_module(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
-            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 

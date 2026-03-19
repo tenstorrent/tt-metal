@@ -950,10 +950,8 @@ MatmulProgramConfig get_program_config(
     std::visit(
         [input_tensor_a](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> and
-                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
+            // Validate allowed_worker_cores for configs that support it
+            if constexpr (requires { program_config.allowed_worker_cores; }) {
                 if (program_config.allowed_worker_cores.has_value()) {
                     auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
                     CoreRangeSet device_cores({CoreRange({0, 0}, {device_grid.x - 1, device_grid.y - 1})});
@@ -961,6 +959,11 @@ MatmulProgramConfig get_program_config(
                         device_cores.contains(program_config.allowed_worker_cores.value()),
                         "allowed_worker_cores must be a subset of the device compute grid!");
                 }
+            }
+            if constexpr (
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreProgramConfig> and
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig> and
+                not std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
                 TT_FATAL(program_config.in0_block_w > 0, "in0_block_w must be greater than 0!");
                 TT_FATAL(program_config.out_subblock_h > 0, "out_subblock_h must be greater than 0!");
                 TT_FATAL(program_config.out_subblock_w > 0, "out_subblock_w must be greater than 0!");

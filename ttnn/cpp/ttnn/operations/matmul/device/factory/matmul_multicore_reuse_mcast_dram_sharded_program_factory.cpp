@@ -1002,14 +1002,6 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;
     const auto& fused_activation = program_config.fused_activation;
-    if (program_config.allowed_worker_cores.has_value()) {
-        auto worker_cores = CoreRangeSet({CoreRange(
-            {0, 0}, {device->compute_with_storage_grid_size().x - 1, device->compute_with_storage_grid_size().y - 1})});
-        TT_FATAL(
-            worker_cores == program_config.allowed_worker_cores.value(),
-            "For DRAM-sharded matmul, allowed_worker_cores must match the full device compute grid");
-    }
-
     const auto& untilize_out = operation_attributes.untilize_out;
     const bool skip_compute = false;
     const bool skip_in0_mcast = false;
