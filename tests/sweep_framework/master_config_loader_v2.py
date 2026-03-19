@@ -823,7 +823,8 @@ class MasterConfigLoader:
                 1. Class-level override set via set_master_file_path()
                 2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
                 3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
-                4. None (degraded mode — empty configs)
+                4. ttnn_operations_master.json (bundled in repo when present)
+                5. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
             override = MasterConfigLoader._master_file_override
@@ -839,6 +840,7 @@ class MasterConfigLoader:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
             reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
             default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
+            bundled_master_path = os.path.join(traced_dir, "ttnn_operations_master.json")
 
             if os.path.exists(reconstructed_v2_path):
                 logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
@@ -846,6 +848,9 @@ class MasterConfigLoader:
             elif os.path.exists(default_trace_path):
                 logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
                 master_file_path = default_trace_path
+            elif os.path.exists(bundled_master_path):
+                logger.info(f"✅ Using bundled master trace JSON: {bundled_master_path}")
+                master_file_path = bundled_master_path
             else:
                 master_file_path = None
 
@@ -1179,15 +1184,25 @@ class MasterConfigLoader:
             if not orientation_str:
                 raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
 
-            # Create CoreRangeSet from grid
-            # grid is a list of ranges like [{"start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}]
+            # Create CoreRangeSet from grid. Bundled traces use several shapes:
+            # - [{"start": {x,y}, "end": {x,y}}, ...]
+            # - [{"x": 0, "y": 0}, ...]  (single core; start == end)
+            # - [[{x,y}, {x,y}], ...]     (pair of corners without start/end keys)
             core_ranges = set()
             for range_dict in grid_list:
-                start = range_dict.get("start")
-                end = range_dict.get("end")
+                start, end = None, None
+                if isinstance(range_dict, list) and len(range_dict) == 2:
+                    start, end = range_dict[0], range_dict[1]
+                elif isinstance(range_dict, dict):
+                    start = range_dict.get("start")
+                    end = range_dict.get("end")
+                    if (not start or not end) and "x" in range_dict and "y" in range_dict:
+                        start = end = range_dict
+                else:
+                    raise ValueError(f"Invalid grid range entry (expected dict or [start,end] list): {range_dict}")
 
-                if not start or not end:
-                    raise ValueError(f"Invalid grid range (missing start/end): {range_dict}")
+                if not isinstance(start, dict) or not isinstance(end, dict):
+                    raise ValueError(f"Invalid grid range (start/end not dicts): {range_dict}")
                 if "x" not in start or "y" not in start:
                     raise ValueError(f"Invalid grid start (missing x/y): {start}")
                 if "x" not in end or "y" not in end:
@@ -1328,7 +1343,9 @@ class MasterConfigLoader:
                     arg_value = positional_args[f"arg{arg_idx}"]
 
                     # Try to extract as tensor
-                    tensor_config = self._extract_tensor_config(arg_value)
+                    # Use extract_tensor_config (not _extract_tensor_config): bundled master JSON
+                    # uses {"Tensor": {...}} under arg0/arg1, not {"type": "ttnn.Tensor", ...}.
+                    tensor_config = self.extract_tensor_config(arg_value)
                     if tensor_config:
                         # It's a tensor - parse and store
                         parsed_dtype = self.parse_dtype(tensor_config.dtype)
@@ -1359,7 +1376,7 @@ class MasterConfigLoader:
 
                 # Process named keyword arguments (inside try so bad configs get skipped)
                 for key, value in named_kwargs.items():
-                    tensor_config = self._extract_tensor_config(value)
+                    tensor_config = self.extract_tensor_config(value)
                     if tensor_config:
                         parsed_dtype = self.parse_dtype(tensor_config.dtype)
                         parsed_layout = self.parse_layout(tensor_config.layout)

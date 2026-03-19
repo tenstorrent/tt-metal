@@ -29,6 +29,22 @@ SHUFFLE_SEED = None
 DO_RANDOMIZE = False
 
 
+def _scalar_from_trace_field(val, *, as_int: bool = False):
+    """Trace JSON sometimes wraps scalars in single-element lists; dict keys must be hashable."""
+    if val is None:
+        return 0 if as_int else ""
+    if isinstance(val, list):
+        if len(val) == 1:
+            return _scalar_from_trace_field(val[0], as_int=as_int)
+        return 0 if as_int else str(val)
+    if as_int:
+        try:
+            return int(val)
+        except (TypeError, ValueError):
+            return 0
+    return str(val)
+
+
 def get_mesh_shape_from_vector(vector):
     """Extract mesh_device_shape from traced_machine_info.
 
@@ -79,8 +95,8 @@ def get_mesh_shape_from_vector(vector):
         for entry in machine_info:
             if not isinstance(entry, dict):
                 continue
-            device_series = entry.get("device_series", "")
-            card_count = entry.get("card_count", 0)
+            device_series = _scalar_from_trace_field(entry.get("device_series", ""), as_int=False)
+            card_count = _scalar_from_trace_field(entry.get("card_count", 0), as_int=True)
             inferred = _DEVICE_SERIES_MESH_MAP.get((device_series, card_count))
             if inferred:
                 return inferred

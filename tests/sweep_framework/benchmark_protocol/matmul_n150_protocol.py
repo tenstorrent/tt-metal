@@ -97,7 +97,7 @@ def cmd_write_json(args: argparse.Namespace) -> int:
 def cmd_report(args: argparse.Namespace) -> int:
     with open(args.manifest, encoding="utf-8") as f:
         manifest = json.load(f)
-    paths = [Path(p) for p in args.results]
+    paths = [Path(p) for p in (args.results or [])]
     if args.results_glob:
         from glob import glob
 
