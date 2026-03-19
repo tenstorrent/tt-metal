@@ -406,6 +406,7 @@ int main(int argc, char* argv[]) {
         return -1;
     }
     if (links_reset) {
+        log_output_rank0("Ethernet Links were Retrained. Updating topology and continuing to traffic.");
         cluster.rediscover_ethernet_links();
     }
 
