@@ -157,22 +157,22 @@ ALWI void tilize_block(
 }
 // clang-format off
 /**
- * Unpacks and tilizes a block from two input CBs.
+ * Conditionally reconfigure srcA and srcB unpacker data formats when switching
+ * between circular buffer operands. SrcA reconfiguration uses explicit face
+ * geometry (num_faces, srca_face_r_dim) rather than deriving it from operand
+ * metadata. SrcB reconfiguration is driven purely by operand comparison.
  *
  * Return value: None
  *
  * | Param Type | Name             | Description                              | Type         | Valid Range | Required |
  * |------------|------------------|------------------------------------------|--------------|-------------|----------|
- * | Template   | neginf_srcA      | NegInf source A flag                     | bool         | true/false  | False    |
- * | Template   | reload_srcB      | Reload source B flag                     | std::uint32_t| true/false  | False    |
- * | Template   | zero_srcA        | Zero source A flag                       | bool         | true/false  | False    |
- * | Template   | zero_srcA_reduce | Zero source A for reduce flag            | bool         | true/false  | False    |
- * | Function   | icb0             | Input circular buffer A identifier       | uint32_t     | 0 to 31     | True     |
- * | Function   | icb1             | Input circular buffer B identifier       | uint32_t     | 0 to 31     | True     |
- * | Function   | block            | Size of tile block to work on            | uint32_t     | > 0         | True     |
- * | Function   | tile_idx_b       | Tile index for source B                  | uint32_t     | >= 0        | True     |
- * | Function   | num_faces        | Number of faces per tile                 | uint32_t     | 1 to 4      | False    |
- * | Function   | srca_face_r_dim  | Number of rows in each face (A)          | uint32_t     | 1 to 16     | False    |
+ * | Template   | dst_accum_mode   | Enable FP32 accumulation in dest register| bool         | true/false  | True     |
+ * | Function   | old_icb0         | Previous srcA circular buffer identifier | uint32_t     | 0 to 31     | True     |
+ * | Function   | new_icb0         | New srcA circular buffer identifier      | uint32_t     | 0 to 31     | True     |
+ * | Function   | old_icb1         | Previous srcB circular buffer identifier | uint32_t     | 0 to 31     | True     |
+ * | Function   | new_icb1         | New srcB circular buffer identifier      | uint32_t     | 0 to 31     | True     |
+ * | Function   | num_faces        | Number of faces per tile (srcA override) | uint32_t     | 1 to 4      | False    |
+ * | Function   | srca_face_r_dim  | Number of rows in each face (srcA override)| uint32_t  | 1 to 16     | False    |
  */
 // clang-format on
 template <bool dst_accum_mode>
