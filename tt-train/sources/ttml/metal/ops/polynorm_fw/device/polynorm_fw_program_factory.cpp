@@ -224,7 +224,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // Bump this to force fresh JIT binaries when debugging kernel behavior.
-    constexpr uint32_t kPolyNormKernelRevision = 7U;
+    constexpr uint32_t kPolyNormKernelRevision = 13U;
     std::vector<uint32_t> compute_group_1_args = {
         num_rows_per_core_group_1, block_size, Wt, polynorm_stage, kPolyNormKernelRevision};
     kernels.compute_group_1 =
