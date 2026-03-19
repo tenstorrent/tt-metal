@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
@@ -363,6 +364,17 @@ void py_module(nb::module_& m) {
             nb::arg("gamma"),
             nb::arg("epsilon"));
     }
+
+    m.def(
+        "rand",
+        &ttml::ops::rand,
+        nb::arg("shape"),
+        nb::kw_only(),
+        nb::arg("low") = 0.0f,
+        nb::arg("high") = 1.0f,
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE);
 
     m.def(
         "randn",

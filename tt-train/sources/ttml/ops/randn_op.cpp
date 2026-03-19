@@ -5,7 +5,7 @@
 #include "randn_op.hpp"
 
 #include <cmath>
-#include <random>
+#include <limits>
 #include <ttnn/distributed/types.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -17,6 +17,14 @@
 #include "ttnn/operations/rand/rand.hpp"
 
 namespace ttml::ops {
+
+namespace {
+// ttnn::rand treats seed==0 as "no seed" (uses random entropy).
+// Shift by +1 to keep all seeds deterministic. UINT32_MAX maps to 1.
+uint32_t avoid_zero_seed(uint32_t seed) {
+    return seed == std::numeric_limits<uint32_t>::max() ? 1 : seed + 1;
+}
+}  // namespace
 
 autograd::TensorPtr randn(
     const ttnn::Shape& shape,
@@ -30,31 +38,20 @@ autograd::TensorPtr randn(
     auto* device = &autograd::ctx().get_device();
     ttnn::MemoryConfig mem_config{};
 
-    // Box-Muller transform: z = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
-    // u1 in (eps, 1] to avoid log(0); u2 in [0, 1)
-    const uint32_t effective_seed = seed.value_or(std::random_device{}());
+    uint32_t u1_seed = avoid_zero_seed(seed.value_or(autograd::ctx().get_generator()()));
+
     // ttnn::rand assigns seed + core_index per core, so offset u2's seed
     // by at least num_cores to avoid overlapping LFSR sequences.
     auto grid = device->compute_with_storage_grid_size();
     const uint32_t seed_gap = grid.x * grid.y;
+    uint32_t u2_seed = avoid_zero_seed(u1_seed + seed_gap);
+
+    // Box-Muller transform: z = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
+    // u1 in (eps, 1] to avoid log(0); u2 in [0, 1)
     auto u1 = ttnn::rand(
-        shape,
-        *device,
-        tt::tt_metal::DataType::FLOAT32,
-        tt::tt_metal::Layout::TILE,
-        mem_config,
-        1e-6f,
-        1.0f,
-        effective_seed);
+        shape, *device, tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config, 1e-6f, 1.0f, u1_seed);
     auto u2 = ttnn::rand(
-        shape,
-        *device,
-        tt::tt_metal::DataType::FLOAT32,
-        tt::tt_metal::Layout::TILE,
-        mem_config,
-        0.0f,
-        1.0f,
-        effective_seed + seed_gap);
+        shape, *device, tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config, 0.0f, 1.0f, u2_seed);
 
     auto log_u1 = ttnn::log(u1, false, mem_config);
     auto neg2log = ttnn::multiply(log_u1, -2.0f, std::nullopt, mem_config);

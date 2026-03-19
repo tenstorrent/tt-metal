@@ -30,15 +30,7 @@ def uniform(low: float = 0.0, high: float = 1.0):
     """Uniform distribution over [low, high)."""
 
     def init_fn(shape):
-        device = _get_device()
-        t = ttnn.rand(
-            shape,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            low=low,
-            high=high,
-        )
-        return ttml.autograd.create_tensor(t)
+        return ttml.ops.rand(shape, dtype=ttnn.DataType.BFLOAT16, low=low, high=high)
 
     return init_fn
 
