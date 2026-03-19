@@ -1,5 +1,5 @@
 ---
-description: Create a draft PR that temporarily disables the smallest failing CI test/job scope from a run URL and/or issue, while preserving traceability.
+description: Create a draft PR that temporarily disables the smallest failing CI test/job scope from a run URL and/or issue, while preserving traceability. With multiple explicit job URLs, disable only the failure common to all runs.
 alwaysApply: false
 ---
 
@@ -14,8 +14,16 @@ Ship a minimal, reversible disable change in a **draft PR** that references trac
 ## Required Inputs
 
 - At least one of:
-  - GitHub Actions job URL (`.../actions/runs/<run-id>/job/<job-id>`)
+  - One or more GitHub Actions job URLs (`.../actions/runs/<run-id>/job/<job-id>`)
   - `tenstorrent/tt-metal` issue URL or issue number
+
+### Multiple explicit job links
+
+- When the user provides **two or more** job URLs (not merely multiple URLs scraped from an issue thread), treat every listed job as mandatory evidence.
+- Download and read logs for **each** job.
+- Determine the **specific failing test, step, or workflow target** that failed in **all** of those runs (same test name/path, same job step, or same matrix identity—use consistent matching rules in the PR notes).
+- The disable scope must address **only** that shared failure. Do **not** disable something that failed in only a subset of the provided runs.
+- If **no** single failure clearly matches across **all** provided runs, do **not** pick the “smallest” failure from one run. Stop with a short comparison (what failed where) and either ask the user to narrow the links or document that a single minimal disable is ambiguous.
 
 ## GitHub API Preference
 
@@ -44,6 +52,7 @@ Ship a minimal, reversible disable change in a **draft PR** that references trac
    - Read logs yourself; do not rely on generic assumptions from issue text alone.
 
 3. **Choose smallest disable scope**
+   - If multiple job URLs were provided as input, complete the **Multiple explicit job links** intersection step first; the chosen target must be the shared failure only.
    - Disable the narrowest failing target that unblocks CI:
      - exact test case/selector first,
      - then single test file,
@@ -62,6 +71,7 @@ Ship a minimal, reversible disable change in a **draft PR** that references trac
      - exact disabled scope,
      - why this scope was chosen,
      - re-enable condition.
+   - If multiple job URLs were inputs, also state briefly that the disabled target failed in **each** listed job (or attach the per-run failure table if intersection was used to justify scope).
 
 5. **Delete transient logs**
    - Delete downloaded logs from `build_ci/disabling` after they are no longer needed.
