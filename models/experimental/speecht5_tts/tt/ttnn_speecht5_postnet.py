@@ -158,6 +158,9 @@ class TtConv1d:
         """
         # PHASE 1: Ensure input is in L1 and reshape (L1 outputs)
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        # Upcast to FP32 before conv so activations match float32 weights precision
+        if x.dtype != ttnn.float32:
+            x = ttnn.typecast(x, ttnn.float32)
         x = ttnn.permute(x, [0, 2, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, [batch_size, 1, input_length, self.in_channels], memory_config=ttnn.L1_MEMORY_CONFIG)
 
@@ -380,6 +383,9 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         # PHASE 1: Ensure input is in L1
         start_time = time.time()
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        # Upcast to FP32 so feat_out, conv postnet, and prob_out all run in full precision
+        if hidden_states.dtype != ttnn.float32:
+            hidden_states = ttnn.typecast(hidden_states, ttnn.float32)
         timing["memory_input"] = time.time() - start_time
 
         # PHASE 2: Op 1: Project to mel features (high-performance compute kernel)
