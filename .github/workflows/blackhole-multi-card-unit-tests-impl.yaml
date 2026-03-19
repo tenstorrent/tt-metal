@@ -81,10 +81,40 @@ jobs:
               TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
             timeout: 15
             test-type: fast
-          - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
-            cmd: |
-              pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-              pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+          - name: ttnn ccl fast unit tests (all_gather)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_all_gather_apc.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (all_to_all)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_all_to_all.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (all_to_all_combine)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_all_to_all_combine_bh.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (all_to_all_dispatch)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_all_to_all_dispatch_bh.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (deepseek_ccl_ops)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_deepseek_ccl_ops.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (new_all_broadcast)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_new_all_broadcast.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (new_all_reduce)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_new_all_reduce.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn ccl fast unit tests (reduce_scatter)
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit/test_reduce_scatter_apc.py
+            timeout: 15
+            test-type: fast
+          - name: ttnn fast unit tests (DRAM prefetcher)
+            cmd: pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
             timeout: 15
             test-type: fast
           - name: fabric and ttnn UDM unit tests
