@@ -11,8 +11,8 @@ from datasets import load_dataset
 from loguru import logger
 from transformers import CLIPImageProcessor, CLIPTextModelWithProjection, CLIPTokenizer, CLIPVisionModelWithProjection
 
-from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.common.utility_functions import is_blackhole
+from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_img2img import test_demo
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG, SDXL_TRACE_REGION_SIZE
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
@@ -129,8 +129,8 @@ def test_accuracy_sdxl_img2img(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 
