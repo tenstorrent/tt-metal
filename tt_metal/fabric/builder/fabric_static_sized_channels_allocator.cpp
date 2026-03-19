@@ -444,11 +444,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         if (topology == Topology::Mesh || topology == Topology::Torus) {
             if (num_active_vcs >= 3) {
                 return vc0_vc1_vc2_mesh_slots.get()[arch_index];
-            } else if (num_active_vcs >= 2) {
-                return vc0_vc1_mesh_slots.get()[arch_index];
-            } else {
-                return vc0_only_mesh_slots.get()[arch_index];
             }
+            if (num_active_vcs >= 2) {
+                return vc0_vc1_mesh_slots.get()[arch_index];
+            }
+            return vc0_only_mesh_slots.get()[arch_index];
         }
         return other_slots.get()[arch_index];
     };
