@@ -4,15 +4,9 @@
 """
 MiniMax-M2.5 TTNN model: DecoderLayer + MiniMaxM2Model — Galaxy mesh (8,4).
 
-Mesh parallelism:
-  - Attention: TP=4 (column-parallel QKV, row-parallel O-proj, all-reduce)
-  - MoE:       EP=8 + TP=4 (EP×TP sharded experts, EP+TP all-reduce)
-  - Embeddings / norms / lm_head: replicated across all 32 devices
-
-Modes:
-  forward()         — full-sequence (no KV-cache), used for unit tests.
-  forward_prefill() — fills KV-cache, returns hidden + updated caches.
-  forward_decode()  — single-token decode using KV-cache.
+Trace-safe decode: forward_decode_trace uses tensor positions for
+paged_update_cache, SDPA decode, and RoPE embedding lookup.
+All shapes are fixed → safe for Metal trace capture/replay.
 """
 
 import torch
@@ -28,7 +22,6 @@ from .rope import PartialRoPESetup
 
 
 def _mesh_mapper(device):
-    """Return ReplicateTensorToMesh for MeshDevice, else None (single device)."""
     if isinstance(device, ttnn.MeshDevice):
         return ttnn.ReplicateTensorToMesh(device)
     return None
@@ -45,6 +38,8 @@ class TtDecoderLayer:
         layer_idx: int,
         mesh_config=None,
         ccl_manager=None,
+        max_seq_len: int = 4096,
+        max_batch_size: int = 1,
     ):
         prefix = f"model.layers.{layer_idx}."
         eps = config.rms_norm_eps
@@ -61,6 +56,8 @@ class TtDecoderLayer:
             layer_idx,
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
+            max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
         )
         self.moe = TtMiniMaxMoE(
             device,
@@ -71,14 +68,8 @@ class TtDecoderLayer:
             ccl_manager=ccl_manager,
         )
 
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        cos: ttnn.Tensor,
-        sin: ttnn.Tensor,
-        attention_mask: ttnn.Tensor | None = None,
-        is_causal: bool = True,
-    ) -> ttnn.Tensor:
+    def forward(self, x, cos, sin, attention_mask=None, is_causal=True):
+        """Full-sequence forward (no KV-cache)."""
         residual = x
         normed = self.input_layernorm(x)
         attn_out = self.self_attn(normed, cos, sin, attention_mask, is_causal=is_causal)
@@ -97,10 +88,11 @@ class TtDecoderLayer:
 
         return x
 
-    def forward_prefill(self, x, cos, sin, k_cache, v_cache):
+    def forward_prefill(self, x, cos, sin, user_id: int = 0):
+        """Prefill: fills device-resident KV cache."""
         residual = x
         normed = self.input_layernorm(x)
-        attn_out, k_cache, v_cache = self.self_attn.forward_prefill(normed, cos, sin, k_cache, v_cache)
+        attn_out = self.self_attn.forward_prefill(normed, cos, sin, user_id=user_id)
         normed.deallocate(True)
         x = ttnn.add(residual, attn_out)
         residual.deallocate(True)
@@ -113,12 +105,13 @@ class TtDecoderLayer:
         x = ttnn.add(residual, moe_out)
         residual.deallocate(True)
         moe_out.deallocate(True)
-        return x, k_cache, v_cache
+        return x
 
-    def forward_decode(self, x, cos, sin, k_cache, v_cache, cur_pos):
+    def forward_decode(self, x, cos, sin, cur_pos: int):
+        """Decode: single token using device-resident KV cache (not trace-safe)."""
         residual = x
         normed = self.input_layernorm(x)
-        attn_out, k_cache, v_cache = self.self_attn.forward_decode(normed, cos, sin, k_cache, v_cache, cur_pos)
+        attn_out = self.self_attn.forward_decode(normed, cos, sin, cur_pos)
         normed.deallocate(True)
         x = ttnn.add(residual, attn_out)
         residual.deallocate(True)
@@ -131,14 +124,37 @@ class TtDecoderLayer:
         x = ttnn.add(residual, moe_out)
         residual.deallocate(True)
         moe_out.deallocate(True)
-        return x, k_cache, v_cache
+        return x
+
+    def forward_decode_trace(self, x, cos, sin, position_idx: ttnn.Tensor):
+        """Trace-safe decode: tensor position for attention, device routing for MoE."""
+        residual = x
+        normed = self.input_layernorm(x)
+        attn_out = self.self_attn.forward_decode_trace(normed, cos, sin, position_idx)
+        normed.deallocate(True)
+        x = ttnn.add(residual, attn_out)
+        residual.deallocate(True)
+        attn_out.deallocate(True)
+
+        residual = x
+        normed = self.post_attention_layernorm(x)
+        moe_out = self.moe(normed)
+        normed.deallocate(True)
+        x = ttnn.add(residual, moe_out)
+        residual.deallocate(True)
+        moe_out.deallocate(True)
+        return x
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
 
 class TtMiniMaxModel:
-    """Full MiniMax-M2.5 inference model — Galaxy mesh (8,4)."""
+    """Full MiniMax-M2.5 inference model — Galaxy mesh (8,4).
+
+    KV cache is device-resident inside each attention layer.
+    Trace-safe decode via forward_decode_trace.
+    """
 
     def __init__(
         self,
@@ -146,13 +162,14 @@ class TtMiniMaxModel:
         state_dict: dict,
         config: MiniMaxM2TTConfig,
         max_seq_len: int = 4096,
+        max_batch_size: int = 1,
     ):
         self.config = config
         self.device = device
         self.max_seq_len = max_seq_len
+        self.max_batch_size = max_batch_size
         self._is_mesh = isinstance(device, ttnn.MeshDevice)
 
-        # Build mesh config and CCL manager
         if self._is_mesh:
             self.mesh_config = make_mesh_config(device)
             num_links = 4 if device.shape[0] > 1 else 1
@@ -182,7 +199,7 @@ class TtMiniMaxModel:
             max_seq_len=max_seq_len,
         )
 
-        # ---------- Decoder layers ----------
+        # ---------- Decoder layers (with device-resident KV cache) ----------
         self.layers = [
             TtDecoderLayer(
                 device,
@@ -191,6 +208,8 @@ class TtMiniMaxModel:
                 i,
                 mesh_config=self.mesh_config,
                 ccl_manager=self.ccl_manager,
+                max_seq_len=max_seq_len,
+                max_batch_size=max_batch_size,
             )
             for i in range(config.num_hidden_layers)
         ]
@@ -199,7 +218,7 @@ class TtMiniMaxModel:
         self.norm = TtRMSNorm(device, state_dict["model.norm.weight"], config.rms_norm_eps, mesh_mapper=rep)
 
         # ---------- LM head [H, V] — replicated -------
-        lm_w = state_dict["lm_head.weight"].to(torch.bfloat16).T  # [H, V]
+        lm_w = state_dict["lm_head.weight"].to(torch.bfloat16).T
         self.lm_head = ttnn.from_torch(
             lm_w,
             dtype=ttnn.bfloat16,
@@ -213,8 +232,13 @@ class TtMiniMaxModel:
     # Helpers
     # ------------------------------------------------------------------
 
+    def _embed_tt_ids(self, ids_tt: ttnn.Tensor, batch: int, seq: int) -> ttnn.Tensor:
+        x = ttnn.embedding(ids_tt, self.embed_weight, layout=ttnn.TILE_LAYOUT)
+        if len(x.shape) == 3:
+            x = ttnn.unsqueeze_to_4D(x)
+        return ttnn.reshape(x, (batch, seq, self.config.hidden_size))
+
     def _embed(self, input_ids: torch.Tensor) -> ttnn.Tensor:
-        """Embed input_ids [B, S] → [B, S, H] on device."""
         B, S = input_ids.shape
         rep = _mesh_mapper(self.device)
         ids_tt = ttnn.from_torch(
@@ -224,24 +248,20 @@ class TtMiniMaxModel:
             device=self.device,
             mesh_mapper=rep,
         )
-        x = ttnn.embedding(ids_tt, self.embed_weight, layout=ttnn.TILE_LAYOUT)
+        x = self._embed_tt_ids(ids_tt, B, S)
         ids_tt.deallocate(True)
-        if len(x.shape) == 3:
-            x = ttnn.unsqueeze_to_4D(x)
-        return ttnn.reshape(x, (B, S, self.config.hidden_size))
+        return x
 
-    def allocate_kv_cache(self, batch: int = 1):
-        """Allocate CPU KV-cache for all layers.
+    # ------------------------------------------------------------------
+    # KV cache management
+    # ------------------------------------------------------------------
 
-        Returns: list of (k_cache, v_cache) tuples.
-        Each cache: [B, NK, max_seq_len, D] bfloat16 CPU tensor.
-        """
-        NK = self.config.num_key_value_heads
-        D = self.config.head_dim
-        shape = (batch, NK, self.max_seq_len, D)
-        return [
-            (torch.zeros(shape, dtype=torch.bfloat16), torch.zeros(shape, dtype=torch.bfloat16)) for _ in self.layers
-        ]
+    def clear_kv_caches(self):
+        """Zero all device-resident KV caches in-place."""
+        for layer in self.layers:
+            layer.self_attn.clear_cache()
+
+    # MoE routing is always on device (trace-safe) — no CPU fallback.
 
     # ------------------------------------------------------------------
     # Forward modes
@@ -262,41 +282,86 @@ class TtMiniMaxModel:
         x = self.norm(x)
         return ttnn.linear(x, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def forward_prefill(self, input_ids: torch.Tensor, kv_caches: list):
-        """Prefill: process prompt tokens, fill KV-cache."""
+    def forward_prefill(self, input_ids: torch.Tensor, user_id: int = 0):
+        """Prefill: process prompt tokens, fill device-resident KV-cache."""
         B, S = input_ids.shape
         x = self._embed(input_ids)
         cos, sin = self.rope.get_cos_sin(S)
 
-        for i, layer in enumerate(self.layers):
-            k_cache, v_cache = kv_caches[i]
-            x, k_cache, v_cache = layer.forward_prefill(x, cos, sin, k_cache, v_cache)
-            kv_caches[i] = (k_cache, v_cache)
+        for layer in self.layers:
+            x = layer.forward_prefill(x, cos, sin, user_id=user_id)
 
         cos.deallocate(True)
         sin.deallocate(True)
 
         x = self.norm(x)
         logits = ttnn.linear(x, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return logits, kv_caches
+        return logits
 
-    def forward_decode(self, input_ids: torch.Tensor, kv_caches: list, cur_pos: int):
-        """Decode: single new token at cur_pos using KV-cache."""
+    def forward_decode(self, input_ids: torch.Tensor, cur_pos: int):
+        """Decode: single new token at cur_pos (not trace-safe)."""
         x = self._embed(input_ids)
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         cos, sin = self.rope.get_single_position(cur_pos)
 
-        for i, layer in enumerate(self.layers):
-            k_cache, v_cache = kv_caches[i]
-            x, k_cache, v_cache = layer.forward_decode(x, cos, sin, k_cache, v_cache, cur_pos)
-            kv_caches[i] = (k_cache, v_cache)
+        for layer in self.layers:
+            x = layer.forward_decode(x, cos, sin, cur_pos)
 
         cos.deallocate(True)
         sin.deallocate(True)
 
         x = self.norm(x)
         logits = ttnn.linear(x, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return logits, kv_caches
+        return logits
+
+    def forward_decode_tt(self, input_ids_tt: ttnn.Tensor, cur_pos: int, batch: int = 1):
+        """Decode from persistent TT token tensor (not trace-safe, uses Python int pos)."""
+        x = self._embed_tt_ids(input_ids_tt, batch, 1)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        cos, sin = self.rope.get_single_position(cur_pos)
+
+        for layer in self.layers:
+            x = layer.forward_decode(x, cos, sin, cur_pos)
+
+        cos.deallocate(True)
+        sin.deallocate(True)
+
+        x = self.norm(x)
+        logits = ttnn.linear(x, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits
+
+    def forward_decode_trace(
+        self,
+        input_ids_tt: ttnn.Tensor,
+        position_idx: ttnn.Tensor,
+        rope_ids: ttnn.Tensor,
+        batch: int = 1,
+    ):
+        """Trace-safe decode: all operations use fixed tensor shapes.
+
+        Args:
+            input_ids_tt: [1, 1, B, 1] uint32 — persistent token buffer
+            position_idx: [B] int32 — persistent position buffer for cache + SDPA
+            rope_ids:     [B] uint32 — persistent position buffer for RoPE embedding
+            batch:        batch size
+
+        Returns:
+            logits tensor (persistent buffer during trace replay)
+        """
+        x = self._embed_tt_ids(input_ids_tt, batch, 1)
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+        cos, sin = self.rope.get_cos_sin_decode(rope_ids)
+
+        for layer in self.layers:
+            x = layer.forward_decode_trace(x, cos, sin, position_idx)
+
+        cos.deallocate(True)
+        sin.deallocate(True)
+
+        x = self.norm(x)
+        logits = ttnn.linear(x, self.lm_head, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return logits
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)

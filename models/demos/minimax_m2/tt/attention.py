@@ -4,21 +4,12 @@
 """
 MiniMax-M2.5 GQA Attention with QK-norm and Partial RoPE — Galaxy mesh (8,4).
 
-QK-norm design:
-  MiniMax QK-norm computes RMS over ALL NQ*D=6144 elements jointly (not per-head).
-  This is non-separable: splitting Q across TP shards gives different norms per shard.
-  To be EXACT we replicate Q/K projection weights so every device has the full Q/K,
-  applies the correct norm, then runs the full 48-head SDPA.
-
-Weight layout on (8,4) mesh:
-  wq, wk, wv, q_norm, k_norm:  ReplicateTensorToMesh  (every device has full weights)
-  wo (O-proj):                  column-parallel         [NQ*D, H/TP] per device
-  wo all-reduce:                reduce-scatter + all-gather across TP cols
-
-All 32 devices run identical attention (full 48 Q heads, 8 KV heads).
-O-proj benefits from TP=4 (H/TP = 768 per device), all-reduce restores full H.
-
-KV-cache: CPU torch tensors (device upgrade is a follow-up).
+KV-cache strategy:
+  - Device-resident: pre-allocated [B, NK, max_seq_len, D] on DRAM per layer.
+  - Prefill:  ttnn.fill_cache(k_cache, k, batch_idx=user_id)
+  - Decode:   ttnn.update_cache / paged_update_cache with tensor index
+  - Trace-safe decode via forward_decode_trace: uses paged_update_cache and
+    scaled_dot_product_attention_decode with tensor positions.
 """
 
 import torch
@@ -46,14 +37,11 @@ def _extract_bsh(x: ttnn.Tensor, H: int):
 
 class TtMiniMaxAttention:
     """
-    MiniMax-M2.5 attention — exact QK-norm via replicated Q/K projections.
+    MiniMax-M2.5 attention with device-resident KV cache.
 
-    Weight layout on (8,4) mesh:
-      wq, wk, wv:  Replicated — every device holds the full [H, N*D] weight.
-                   Required so QK-norm is computed over the full head dimension.
-      q_norm, k_norm: Replicated — exact RMS over NQ*D=6144 / NK*D=1024 elements.
-      wo:          Column-parallel [NQ*D, H/TP] per device — TP=4 efficiency for output.
-                   Followed by all-reduce across TP cols to restore full H.
+    KV cache: [B, NK, max_seq_len, D] bfloat16 on DRAM, allocated at init.
+    Prefill fills via ttnn.fill_cache; decode updates via ttnn.update_cache.
+    Trace-safe decode via forward_decode_trace with tensor positions.
     """
 
     def __init__(
@@ -64,6 +52,8 @@ class TtMiniMaxAttention:
         layer_idx: int,
         mesh_config: MeshConfig = None,
         ccl_manager: CCLManager = None,
+        max_seq_len: int = 4096,
+        max_batch_size: int = 1,
     ):
         self.config = config
         self.device = device
@@ -83,12 +73,8 @@ class TtMiniMaxAttention:
         rep_mapper = ttnn.ReplicateTensorToMesh(device) if self._is_mesh else None
         col_mapper = mesh_config.column_parallel(device) if (self._is_mesh and mesh_config) else None
 
-        # ---------- Q/K/V projections: replicated so QK-norm is exact ----------
-        # wq: [H, NQ*D] = [3072, 6144]  replicated
-        # wk: [H, NK*D] = [3072, 1024]  replicated
-        # wv: [H, NK*D] = [3072, 1024]  replicated
         def _load_rep(key):
-            w = state_dict[prefix + key].T.to(torch.bfloat16)  # transpose: [in, out]
+            w = state_dict[prefix + key].T.to(torch.bfloat16)
             return ttnn.from_torch(
                 w,
                 dtype=config.weight_dtype,
@@ -98,13 +84,11 @@ class TtMiniMaxAttention:
                 mesh_mapper=rep_mapper,
             )
 
-        self.wq = _load_rep("q_proj.weight")  # [H, NQ*D]
-        self.wk = _load_rep("k_proj.weight")  # [H, NK*D]
-        self.wv = _load_rep("v_proj.weight")  # [H, NK*D]
+        self.wq = _load_rep("q_proj.weight")
+        self.wk = _load_rep("k_proj.weight")
+        self.wv = _load_rep("v_proj.weight")
 
-        # ---------- O-proj: column-parallel [NQ*D, H] → [NQ*D, H/TP] per device ----------
-        # Column-parallel: each device outputs H/TP partial hidden; all-reduce restores H.
-        wo_pt = state_dict[prefix + "o_proj.weight"].T.to(torch.bfloat16)  # [NQ*D, H]
+        wo_pt = state_dict[prefix + "o_proj.weight"].T.to(torch.bfloat16)
         self.wo = ttnn.from_torch(
             wo_pt,
             dtype=config.weight_dtype,
@@ -114,7 +98,6 @@ class TtMiniMaxAttention:
             mesh_mapper=col_mapper,
         )
 
-        # ---------- QK-norm: replicated, exact over full head dimension ----------
         self.q_norm = TtRMSNorm(device, state_dict[prefix + "q_norm.weight"], eps, mesh_mapper=rep_mapper)
         self.k_norm = TtRMSNorm(device, state_dict[prefix + "k_norm.weight"], eps, mesh_mapper=rep_mapper)
 
@@ -122,44 +105,76 @@ class TtMiniMaxAttention:
         self._NK = NK
         self._D = D
         self._tp = tp
+        self._max_seq_len = max_seq_len
+        self._max_batch_size = max_batch_size
 
-    # ------------------------------------------------------------------
-    # Internal: QKV projection + exact QK-norm + reshape to heads + RoPE
-    # ------------------------------------------------------------------
+        # Device-resident KV cache [B, NK, max_seq_len, D]
+        cache_shape = [max_batch_size, NK, max_seq_len, D]
+        self.k_cache = ttnn.from_torch(
+            torch.zeros(cache_shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep_mapper,
+        )
+        self.v_cache = ttnn.from_torch(
+            torch.zeros(cache_shape, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rep_mapper,
+        )
+
+        # Pre-compute HEIGHT_SHARDED mem config for decode KV
+        NK_padded = max(32, ((NK + 31) // 32) * 32)
+        grid_end_y = max_batch_size - 1
+        self._decode_kv_shard_mem = ttnn.create_sharded_memory_config(
+            shape=(NK_padded, D),
+            core_grid=ttnn.CoreGrid(y=max_batch_size, x=1),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
 
     def _qkv_rope(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor):
-        """Full QKV projection + exact QK-norm + reshape to per-head + partial RoPE.
-
-        All devices compute the same full Q/K/V (replicated weights).
-        Exact QK-norm is applied over NQ*D=6144 and NK*D=1024 respectively.
-
-        Returns q/k/v: [B, NQ, S, D], [B, NK, S, D], [B, NK, S, D]
-        """
         cfg = self.config
         NQ, NK, D, H = self._NQ, self._NK, self._D, cfg.hidden_size
 
         B, S, x = _extract_bsh(x, H)
 
-        # Separate projections (replicated weights)
-        q = ttnn.linear(x, self.wq, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, S, NQ*D]
-        k = ttnn.linear(x, self.wk, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, S, NK*D]
-        v = ttnn.linear(x, self.wv, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, S, NK*D]
+        q = ttnn.linear(x, self.wq, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.linear(x, self.wk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.linear(x, self.wv, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Exact QK-norm: RMS over full NQ*D and NK*D respectively
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        # Reshape to per-head: [B, N_heads, S, D]
         q = ttnn.permute(ttnn.reshape(q, (B, S, NQ, D)), (0, 2, 1, 3))
         k = ttnn.permute(ttnn.reshape(k, (B, S, NK, D)), (0, 2, 1, 3))
         v = ttnn.permute(ttnn.reshape(v, (B, S, NK, D)), (0, 2, 1, 3))
 
-        # Partial RoPE (local, no CCL needed)
         q, k = apply_partial_rope(q, k, cos, sin, cfg.rotary_dim, D)
         return q, k, v, B, S
 
+    def _o_proj_allreduce(self, attn_out, B, S):
+        cfg = self.config
+        tp = self._tp
+        NQ, D, H = self._NQ, self._D, cfg.hidden_size
+
+        attn_out = ttnn.reshape(ttnn.permute(attn_out, (0, 2, 1, 3)), (B, S, NQ * D))
+        out = ttnn.linear(attn_out, self.wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn_out.deallocate(True)
+
+        if self._is_mesh and self.mesh_config and self.ccl_manager and tp > 1:
+            out_4d = ttnn.unsqueeze_to_4D(out)
+            out_4d = apply_allreduce(out_4d, self.mesh_config, self.ccl_manager, H)
+            out = ttnn.reshape(out_4d, (B, S, H))
+
+        return out
+
     # ------------------------------------------------------------------
-    # Forward modes
+    # Forward: no KV-cache (unit tests)
     # ------------------------------------------------------------------
 
     def forward(
@@ -170,16 +185,7 @@ class TtMiniMaxAttention:
         attention_mask: ttnn.Tensor | None = None,
         is_causal: bool = True,
     ) -> ttnn.Tensor:
-        """Full-sequence forward (no KV-cache). All devices run identical attention.
-
-        O-proj is column-parallel → each device produces [B, S, H/TP].
-        All-reduce across TP cols restores full [B, S, H].
-        """
-        cfg = self.config
-        tp = self._tp
-        NQ, D, H = self._NQ, self._D, cfg.hidden_size
-        scale = D**-0.5
-
+        scale = self._D**-0.5
         q, k, v, B, S = self._qkv_rope(x, cos, sin)
 
         if attention_mask is not None:
@@ -200,39 +206,19 @@ class TtMiniMaxAttention:
                 scale=scale,
             )
 
-        # Reshape: [B, NQ, S, D] → [B, S, NQ*D]
-        attn_out = ttnn.reshape(ttnn.permute(attn_out, (0, 2, 1, 3)), (B, S, NQ * D))
+        return self._o_proj_allreduce(attn_out, B, S)
 
-        # Column-parallel O-proj: [B, S, NQ*D] × [NQ*D, H/TP] → [B, S, H/TP] per device
-        out = ttnn.linear(attn_out, self.wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_out.deallocate(True)
+    # ------------------------------------------------------------------
+    # Prefill: fill device KV cache
+    # ------------------------------------------------------------------
 
-        # All-reduce across TP cols: sum partial H/TP outputs → full [B, S, H]
-        # CCL ops require 4D; unsqueeze_to_4D returns a view — do not deallocate original
-        if self._is_mesh and self.mesh_config and self.ccl_manager and tp > 1:
-            out_4d = ttnn.unsqueeze_to_4D(out)
-            out_4d = apply_allreduce(out_4d, self.mesh_config, self.ccl_manager, H)
-            out = ttnn.reshape(out_4d, (B, S, H))
-
-        return out
-
-    def forward_prefill(self, x, cos, sin, k_cache, v_cache):
-        """Prefill: process S tokens, fill CPU KV cache."""
-        cfg = self.config
-        tp = self._tp
-        NQ, NK, D, H = self._NQ, self._NK, self._D, cfg.hidden_size
-        scale = D**-0.5
-
+    def forward_prefill(self, x, cos, sin, user_id: int = 0):
+        """Prefill: process S tokens, fill device-resident KV cache."""
+        scale = self._D**-0.5
         q, k, v, B, S = self._qkv_rope(x, cos, sin)
 
-        # Save K/V to CPU cache
-        extract = (
-            lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).bfloat16()
-            if self._is_mesh
-            else ttnn.to_torch(t).bfloat16()
-        )
-        k_cache[:, :NK, :S, :] = extract(k)
-        v_cache[:, :NK, :S, :] = extract(v)
+        ttnn.fill_cache(self.k_cache, k, batch_idx=user_id)
+        ttnn.fill_cache(self.v_cache, v, batch_idx=user_id)
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -241,79 +227,102 @@ class TtMiniMaxAttention:
             is_causal=True,
             scale=scale,
         )
-        attn_out = ttnn.reshape(ttnn.permute(attn_out, (0, 2, 1, 3)), (B, S, NQ * D))
-        out = ttnn.linear(attn_out, self.wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_out.deallocate(True)
 
-        if self._is_mesh and self.mesh_config and self.ccl_manager and tp > 1:
-            out_4d = ttnn.unsqueeze_to_4D(out)
-            out_4d = apply_allreduce(out_4d, self.mesh_config, self.ccl_manager, H)
-            out = ttnn.reshape(out_4d, (B, S, H))
+        return self._o_proj_allreduce(attn_out, B, S)
 
-        return out, k_cache, v_cache
+    # ------------------------------------------------------------------
+    # Decode: non-trace (uses Python int cur_pos)
+    # ------------------------------------------------------------------
 
-    def forward_decode(self, x, cos, sin, k_cache, v_cache, cur_pos):
-        """Decode: single token at cur_pos using CPU KV cache."""
-        cfg = self.config
-        tp = self._tp
-        NQ, NK, D, H = self._NQ, self._NK, self._D, cfg.hidden_size
-        scale = D**-0.5
-        L1 = ttnn.L1_MEMORY_CONFIG
+    def forward_decode(self, x, cos, sin, cur_pos: int):
+        """Decode: single token, device-resident KV cache.
 
+        Uses ttnn.update_cache for in-place KV update (no host reads).
+        NOT trace-safe — uses Python int slice bounds.
+        """
+        scale = self._D**-0.5
+        NK, D = self._NK, self._D
         q, k, v, B, _ = self._qkv_rope(x, cos, sin)
 
-        extract = (
-            lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).bfloat16()
-            if self._is_mesh
-            else ttnn.to_torch(t).bfloat16()
-        )
-        k_cache[:, :NK, cur_pos : cur_pos + 1, :] = extract(k)
-        v_cache[:, :NK, cur_pos : cur_pos + 1, :] = extract(v)
+        ttnn.update_cache(self.k_cache, k, cur_pos)
+        ttnn.update_cache(self.v_cache, v, cur_pos)
         k.deallocate(True)
         v.deallocate(True)
 
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self._is_mesh else None
-        cache_mem = L1 if (cur_pos + 1) * NK * D * 2 < 256 * 1024 else ttnn.DRAM_MEMORY_CONFIG
-        k_filled = ttnn.from_torch(
-            k_cache[:, :NK, : cur_pos + 1, :].contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=cache_mem,
-            mesh_mapper=mesh_mapper,
-        )
-        v_filled = ttnn.from_torch(
-            v_cache[:, :NK, : cur_pos + 1, :].contiguous(),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=cache_mem,
-            mesh_mapper=mesh_mapper,
-        )
+        k_filled = ttnn.slice(self.k_cache, (0, 0, 0, 0), (B, NK, cur_pos + 1, D))
+        v_filled = ttnn.slice(self.v_cache, (0, 0, 0, 0), (B, NK, cur_pos + 1, D))
 
-        q_l1 = ttnn.to_memory_config(q, L1)
-        q.deallocate(True)
         attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q_l1,
+            q,
             k_filled,
             v_filled,
             is_causal=False,
             scale=scale,
         )
-        q_l1.deallocate(True)
+        q.deallocate(True)
         k_filled.deallocate(True)
         v_filled.deallocate(True)
 
-        attn_out = ttnn.reshape(ttnn.permute(attn_out, (0, 2, 1, 3)), (B, 1, NQ * D))
-        out = ttnn.linear(attn_out, self.wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        attn_out.deallocate(True)
+        return self._o_proj_allreduce(attn_out, B, 1)
 
-        if self._is_mesh and self.mesh_config and self.ccl_manager and tp > 1:
-            out_4d = ttnn.unsqueeze_to_4D(out)
-            out_4d = apply_allreduce(out_4d, self.mesh_config, self.ccl_manager, H)
-            out = ttnn.reshape(out_4d, (B, 1, H))
+    # ------------------------------------------------------------------
+    # Decode: trace-safe (uses tensor position_idx)
+    # ------------------------------------------------------------------
 
-        return out, k_cache, v_cache
+    def forward_decode_trace(self, x, cos, sin, position_idx: ttnn.Tensor):
+        """Trace-safe decode: uses paged_update_cache + SDPA decode with tensor positions.
+
+        Args:
+            x:            [B, 1, H] hidden states
+            cos, sin:     [1, 1, B, rotary_dim] from RoPE embedding lookup
+            position_idx: [B] int32 tensor with current decode position
+
+        All shapes are fixed → safe for Metal trace capture/replay.
+        """
+        scale = self._D**-0.5
+        q, k, v, B, _ = self._qkv_rope(x, cos, sin)
+        # q: [B, NQ, 1, D], k: [B, NK, 1, D], v: [B, NK, 1, D]
+
+        # Convert K/V to decode format [1, B, NK, D] for paged_update_cache
+        k_dec = ttnn.permute(k, (2, 0, 1, 3))  # [1, B, NK, D]
+        v_dec = ttnn.permute(v, (2, 0, 1, 3))  # [1, B, NK, D]
+        k.deallocate(True)
+        v.deallocate(True)
+
+        # HEIGHT_SHARD K/V for paged_update_cache requirement
+        k_sharded = ttnn.to_memory_config(k_dec, self._decode_kv_shard_mem)
+        v_sharded = ttnn.to_memory_config(v_dec, self._decode_kv_shard_mem)
+        k_dec.deallocate(True)
+        v_dec.deallocate(True)
+
+        # Update cache with tensor position index (trace-safe)
+        ttnn.experimental.paged_update_cache(self.k_cache, k_sharded, update_idxs_tensor=position_idx)
+        ttnn.experimental.paged_update_cache(self.v_cache, v_sharded, update_idxs_tensor=position_idx)
+        k_sharded.deallocate(True)
+        v_sharded.deallocate(True)
+
+        # SDPA decode: Q=[1, B, NQ, D], K=[B, NK, S, D], V=[B, NK, S, D]
+        q_dec = ttnn.permute(q, (2, 0, 1, 3))  # [1, B, NQ, D]
+        q.deallocate(True)
+
+        attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+            q_dec,
+            self.k_cache,
+            self.v_cache,
+            cur_pos_tensor=position_idx,
+            scale=scale,
+        )
+        q_dec.deallocate(True)
+
+        # attn_out: [1, B, NQ, D] → [B, NQ, 1, D] for O-proj
+        attn_out = ttnn.permute(attn_out, (1, 2, 0, 3))
+
+        return self._o_proj_allreduce(attn_out, B, 1)
+
+    def clear_cache(self):
+        """Zero the KV cache in-place on device."""
+        ttnn.mul(self.k_cache, 0, output_tensor=self.k_cache)
+        ttnn.mul(self.v_cache, 0, output_tensor=self.v_cache)
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
