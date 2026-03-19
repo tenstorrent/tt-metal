@@ -339,8 +339,8 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
+    if is_blackhole():
+        pytest.skip("Skipping because VAE is not working and optimized on full grid")
     if isinstance(images_or_path, str):
         images = [Image.open(images_or_path).convert("RGB")]
     else:

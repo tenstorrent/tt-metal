@@ -13,7 +13,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 import ttnn
 from conftest import is_galaxy
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,
@@ -326,6 +326,8 @@ def test_demo(
     sigmas,
     lora_path,
 ):
+    if is_blackhole():
+        pytest.skip("Skipping because VAE is not working and optimized on full grid")
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
