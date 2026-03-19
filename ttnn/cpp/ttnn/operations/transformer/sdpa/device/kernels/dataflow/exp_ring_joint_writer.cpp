@@ -13,9 +13,11 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "api/debug/dprint.h"
+using namespace tt::tt_fabric::linear::experimental;
 #endif
 
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
@@ -409,8 +411,9 @@ void kernel_main() {
     }
 
     // ---- MUX writer setup: parsed by all MUX writers with valid connections ----
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_injector_sem = nullptr;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_scatter_hdr = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_unicast_hdr = nullptr;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem_inc = nullptr;
     uint32_t ag_output_Wt = 0, ag_output_Ht = 0;
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
     uint32_t injector_noc_x = 0, injector_noc_y = 0;
@@ -430,25 +433,35 @@ void kernel_main() {
         // OpSignaler constructor advances argidx past its RT args
         OpSignaler(argidx);
 
-        // Allocate two packet header slots: data writes and injector sem_inc
-        cb_reserve_back(ag_pkt_hdr_cb_id, 1);
-        const uint32_t pkt_hdr_write_addr = get_write_ptr(ag_pkt_hdr_cb_id);
-        cb_push_back(ag_pkt_hdr_cb_id, 1);
-        cb_reserve_back(ag_pkt_hdr_cb_id, 1);
-        const uint32_t pkt_hdr_injector_sem_l1 = get_write_ptr(ag_pkt_hdr_cb_id);
-        cb_push_back(ag_pkt_hdr_cb_id, 1);
+        pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+        pkt_unicast_hdr = PacketHeaderPool::allocate_header();
+        pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
-        pkt_hdr_write = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_write_addr);
-        pkt_hdr_injector_sem = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_injector_sem_l1);
+        // Pre-configure scatter write header: chunk sizes and payload size are constant
+        uint64_t dummy_addrs[2] = {0, 0};
+        uint16_t scatter_chunk_sizes[1] = {static_cast<uint16_t>(ag_page_size)};
+        fabric_unicast_noc_scatter_write_set_state<
+            UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+            pkt_scatter_hdr, 1,
+            NocUnicastScatterCommandHeader(dummy_addrs, scatter_chunk_sizes, 2),
+            ag_page_size * 2);
 
-        fabric_set_unicast_route<false>(pkt_hdr_write, 1);
-        fabric_set_unicast_route<false>(pkt_hdr_injector_sem, 1);
+        // Pre-configure unicast write header: payload size is constant
+        fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            pkt_unicast_hdr, 1, nullptr, ag_page_size);
 
-        // Packet header for signaling the injector core on the next device
+        // Pre-configure atomic inc header for signaling the injector core on the next device
         const uint64_t injector_out_ready_sem_noc_addr =
             safe_get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr, 0);
-        pkt_hdr_injector_sem->to_noc_unicast_atomic_inc(
+        fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
+            UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_sem_inc, 1,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{injector_out_ready_sem_noc_addr, 1});
+
+        fabric_set_unicast_route<false>(pkt_scatter_hdr, 1);
+        fabric_set_unicast_route<false>(pkt_unicast_hdr, 1);
+        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
 
         DPRINT << "injector sem x,y: " << injector_noc_x << "," << injector_noc_y << " addr: " << out_ready_sem_addr << ENDL();
     }
@@ -641,15 +654,19 @@ void kernel_main() {
                                     if (have_second) {
                                         const uint32_t dest_id1 = bh_offset
                                             + (kv_global_start_tile + row + 1) * ag_output_Wt + col;
-                                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
-                                            ag_page_size, pkt_hdr_write, dest_id0, dest_id1, gathered_k_writer);
-                                        tt::tt_fabric::fabric_async_write(
-                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size * 2);
+                                        uint64_t k_noc_addrs[2] = {
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_k_writer, dest_id0, 0),
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_k_writer, dest_id1, 0)};
+                                        uint16_t k_cs[1] = {static_cast<uint16_t>(ag_page_size)};
+                                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                            &mux_conn, pkt_scatter_hdr, src_l1_addr,
+                                            NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, 2));
                                     } else {
-                                        tt::tt_fabric::linear::to_noc_unicast_write(
-                                            ag_page_size, pkt_hdr_write, dest_id0, gathered_k_writer);
-                                        tt::tt_fabric::fabric_async_write(
-                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                        uint64_t k_noc_addr =
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_k_writer, dest_id0, 0);
+                                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                            &mux_conn, pkt_unicast_hdr, src_l1_addr,
+                                            NocUnicastCommandHeader{k_noc_addr});
                                     }
                                     noc_async_write_barrier();
                                 }
@@ -675,15 +692,19 @@ void kernel_main() {
                                     if (have_second) {
                                         const uint32_t dest_id1 = bh_offset
                                             + (kv_global_start_tile + row) * ag_output_Wt + col + 1;
-                                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
-                                            ag_page_size, pkt_hdr_write, dest_id0, dest_id1, gathered_v_writer);
-                                        tt::tt_fabric::fabric_async_write(
-                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size * 2);
+                                        uint64_t v_noc_addrs[2] = {
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_v_writer, dest_id0, 0),
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_v_writer, dest_id1, 0)};
+                                        uint16_t v_cs[1] = {static_cast<uint16_t>(ag_page_size)};
+                                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                            &mux_conn, pkt_scatter_hdr, src_l1_addr,
+                                            NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, 2));
                                     } else {
-                                        tt::tt_fabric::linear::to_noc_unicast_write(
-                                            ag_page_size, pkt_hdr_write, dest_id0, gathered_v_writer);
-                                        tt::tt_fabric::fabric_async_write(
-                                            mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
+                                        uint64_t v_noc_addr =
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_v_writer, dest_id0, 0);
+                                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                                            &mux_conn, pkt_unicast_hdr, src_l1_addr,
+                                            NocUnicastCommandHeader{v_noc_addr});
                                     }
                                     noc_async_write_barrier();
                                 }
@@ -694,8 +715,7 @@ void kernel_main() {
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
 
                         if (!is_last_ring_iter) {
-
-                            tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_injector_sem);
+                            fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc_async_writes_flushed();
                         }
                     }
