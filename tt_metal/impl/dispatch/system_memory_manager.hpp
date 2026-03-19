@@ -20,6 +20,8 @@ using ChipId = int;
 
 namespace tt::tt_metal {
 
+class Buffer;
+
 class SystemMemoryManager {
 public:
     // Create a SystemMemoryManager for accessing system memory accessible by the given device
@@ -99,8 +101,16 @@ public:
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
+    bool is_dram_backed() const;
+
+    uint32_t get_dram_region_start_addr(uint8_t cq_id) const;
+
 private:
     bool is_mock_device() const;
+
+    bool use_dram_for_cq_storage() const;
+
+    void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
     ContextId context_id;
     ChipId device_id = 0;
@@ -121,6 +131,9 @@ private:
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset = 0;
+
+    std::unique_ptr<char[]> dram_region_staging_buffer;
+    std::shared_ptr<Buffer> dram_region_buffer;
 };
 
 }  // namespace tt::tt_metal

@@ -168,6 +168,22 @@ void issue_wait_for_event_commands(
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, cq_id);
 }
 
+void read_completion_queue(
+    void* dst,
+    uint32_t size_bytes,
+    ChipId device_id,
+    uint16_t channel,
+    uint32_t cq_id,
+    uint32_t addr,
+    const SystemMemoryManager& sysmem_manager) {
+    if (sysmem_manager.is_dram_backed()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, 0, sysmem_manager.get_dram_region_start_addr(cq_id) + addr);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+    }
+}
+
 void read_events_from_completion_queue(
     ReadEventDescriptor& event_descriptor,
     ChipId mmio_device_id,
@@ -186,12 +202,14 @@ void read_events_from_completion_queue(
     uint32_t read_ptr = sysmem_manager.get_completion_queue_read_ptr(cq_id);
     thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
         (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+    read_completion_queue(
         dispatch_cmd_and_event.data(),
         sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
-        read_ptr,
         mmio_device_id,
-        channel);
+        channel,
+        cq_id,
+        read_ptr,
+        sysmem_manager);
 
     CQDispatchCmd* dispatch_cmd = reinterpret_cast<CQDispatchCmd*>(dispatch_cmd_and_event.data());
     uint32_t expected_padding_value = HugepageDeviceCommand::random_padding_value();
