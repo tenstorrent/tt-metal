@@ -106,6 +106,8 @@ constexpr std::array<float, 241> SOFTPLUS_LUT = {{
 
 #endif
 
+// Boundary clamping: softplus(x) → 0 as x→-∞, softplus(x) → x as x→+∞
+
 template <bool APPROXIMATION_MODE>
 inline void calculate_softplus_body(const float beta, const float beta_reciprocal, const float threshold) {
     sfpi::vFloat x = beta * sfpi::dst_reg[0];
