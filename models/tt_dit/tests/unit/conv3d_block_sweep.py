@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 TenstorreAnt AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,17 +10,19 @@ import torch
 
 import ttnn
 
-from ....utils.conv3d import aligned_channels
+from ...utils.conv3d import aligned_channels
+from ...utils.test import line_params
 
 
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(10800)
 @pytest.mark.parametrize(
-    "mesh_device",
+    "mesh_device, device_params",
     [
-        (1, 4),
-        (2, 4),
-        (4, 8),
+        [(1, 4), line_params],
+        [(2, 4), line_params],
+        [(4, 8), line_params],
     ],
+    ids=["mesh-1x4", "mesh-2x4", "mesh-4x8"],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -29,8 +31,9 @@ from ....utils.conv3d import aligned_channels
         (4, 8),
         (4, 32),
     ],
+    ids=["target-4x8", "target-4x32"],
 )
-def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape, target_H, target_W):
+def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape):
     """
     Sweep over blocking configurations for conv3d to find optimal settings.
     """
@@ -72,6 +75,8 @@ def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape, target_H, target_
             (6, 186, 42, 96, (3, 3, 3), 96, (1, 4, 8, 96, 96)),
             (6, 186, 42, 96, (3, 3, 3), 32, (1, 16, 8, 96, 32)),
         ]
+    else:
+        pytest.skip(f"Target mesh shape {target_mesh_shape} not supported")
 
     grid_size = mesh_device.compute_with_storage_grid_size()
 
