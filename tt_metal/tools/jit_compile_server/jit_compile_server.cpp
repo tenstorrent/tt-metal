@@ -21,6 +21,26 @@
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
 
+// Remote JIT compile server — cache / invalidation vs local `jit_build/build.cpp`
+//
+// Local builds (`JitBuildState` in build.cpp) compute `build_state_hash_` over effective
+// compile/link inputs (gpp, cflags, defines, includes, lflags, linker script, extra link
+// objs, src list, opt levels), persist it in each output dir as `.build_state`, and treat a
+// mismatch as "state changed" to force recompile/relink even when individual `.o` dependency
+// hashes might still look fresh.
+//
+// This server does not implement `.build_state` / `build_state_hash_`. It partitions the
+// on-disk cache by `build_key` and kernel path, and decides compile/link via
+// `dependencies_up_to_date` + `.dephash` (same helper family as local JIT). That matches
+// common cases when the client uses a fresh cache subtree (e.g. kernel path includes a
+// compile hash) or when sources and listed link inputs change on disk.
+//
+// Limitation: without an explicit recipe/state fingerprint in the cache dir, reusing the
+// same `build_key` + kernel path while changing only flags or other recipe fields that are
+// not reflected in dependency tracking could theoretically reuse stale `.o`/`.elf` in edge
+// cases where local build.cpp would invalidate via `build_state_hash_`. Prefer relying on
+// client `build_key` / kernel cache path updates when the full recipe changes.
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -29,16 +49,8 @@ std::atomic<bool> g_keep_running{true};
 std::atomic<int> g_outstanding_compiles{0};
 
 constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
-constexpr const char* kMetalHomeEnv = "TT_METAL_HOME";
 constexpr const char* kDefaultEndpoint = "0.0.0.0:9876";
 constexpr const char* kServerCacheRoot = "/tmp/tt-metal-cache/";
-constexpr const char* kPrecompiledPathSuffix = "tt_metal/pre-compiled";
-constexpr const char* kPrecompiledWarning =
-    "WARNING: PoC precompiled-firmware mode is enabled. This server currently requires "
-    "matching precompiled firmware for each build_key and does not synchronize artifacts across hosts. "
-    "TODO: replace this with robust cross-host artifact synchronization.";
-
-fs::path g_precompiled_root;
 
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
     return std::string(kServerCacheRoot) + std::to_string(build_key) + "/kernels/" + kernel_name;
@@ -50,56 +62,32 @@ std::string target_cache_dir(std::uint64_t build_key, const std::string& kernel_
 
 void handle_signal(int /*signal*/) { g_keep_running.store(false); }
 
-fs::path resolve_precompiled_firmware_path(
-    std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
-    const fs::path build_dir = g_precompiled_root / std::to_string(build_key);
-    if (!fs::is_directory(build_dir)) {
-        throw std::runtime_error(fmt::format(
-            "{} Missing precompiled directory for build_key {} at {}",
-            kPrecompiledWarning,
-            build_key,
-            build_dir.string()));
-    }
+std::string firmware_cache_dir(std::uint64_t build_key, const std::string& target_name) {
+    return std::string(kServerCacheRoot) + std::to_string(build_key) + "/firmware/" + target_name + "/";
+}
 
+// Resolve firmware path from the server cache populated by uploadFirmware RPC.
+// PoC limitation: uploaded firmware is assumed durable in kServerCacheRoot.
+// If the server cache is cleared after upload, compile will fail until the client re-uploads.
+fs::path resolve_uploaded_firmware_path(std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
     if (target.weakened_firmware_name.empty()) {
         throw std::runtime_error(
             fmt::format("Internal error: expected non-empty weakened_firmware_name for target {}", target.target_name));
     }
     const std::string firmware_file = fs::path(target.weakened_firmware_name).filename().string();
-
-    // Client sends only filename; server infers the rest from build_key + target_name.
-    fs::path candidate = build_dir / target.target_name / firmware_file;
+    const std::string fw_dir = firmware_cache_dir(build_key, target.target_name);
+    fs::path candidate = fs::path(fw_dir) / firmware_file;
     if (fs::exists(candidate)) {
         return candidate;
     }
 
     throw std::runtime_error(fmt::format(
-        "{} Precompiled firmware not found for build_key {} target {}. Tried [{}].",
-        kPrecompiledWarning,
+        "Firmware artifact not found for build_key {} target {} file {}. "
+        "Expected at {}. Ensure the client uploads firmware via uploadFirmware RPC before compiling.",
         build_key,
         target.target_name,
+        firmware_file,
         candidate.string()));
-}
-
-bool initialize_precompiled_root() {
-    const char* root_env = std::getenv(kMetalHomeEnv);
-    fs::path root = (root_env != nullptr) ? fs::path(root_env) : fs::current_path();
-    root = fs::absolute(root);
-    g_precompiled_root = root / kPrecompiledPathSuffix;
-
-    if (!fs::is_directory(g_precompiled_root)) {
-        log_error(
-            tt::LogMetal,
-            "{} Required precompiled firmware directory is missing at {}. "
-            "Set TT_METAL_HOME correctly or ensure this directory exists before starting the server.",
-            kPrecompiledWarning,
-            g_precompiled_root.string());
-        return false;
-    }
-
-    log_warning(tt::LogMetal, "{}", kPrecompiledWarning);
-    log_info(tt::LogMetal, "Using precompiled firmware root {}", g_precompiled_root.string());
-    return true;
 }
 
 void build_failure(
@@ -331,7 +319,7 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
             tt::tt_metal::jit_server::TargetRecipe resolved_target = target;
             if (!resolved_target.weakened_firmware_name.empty()) {
                 resolved_target.weakened_firmware_name =
-                    resolve_precompiled_firmware_path(request.build_key, resolved_target).string();
+                    resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
             build_target(request.gpp, request.kernel_name, resolved_target, out_dir, response);
@@ -352,19 +340,68 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
     return response;
 }
 
+tt::tt_metal::jit_server::UploadFirmwareResponse upload_firmware_callback(
+    const tt::tt_metal::jit_server::UploadFirmwareRequest& request) {
+    tt::tt_metal::jit_server::UploadFirmwareResponse response;
+    try {
+        log_info(
+            tt::LogMetal, "uploadFirmware build_key={}: artifacts={}", request.build_key, request.artifacts.size());
+
+        for (const auto& artifact : request.artifacts) {
+            std::string safe_target = fs::path(artifact.target_name).filename().string();
+            std::string safe_file = fs::path(artifact.file_name).filename().string();
+            if (safe_target.empty() || safe_file.empty() || safe_target.find("..") != std::string::npos ||
+                safe_file.find("..") != std::string::npos) {
+                throw std::runtime_error(fmt::format(
+                    "Invalid firmware artifact names: target='{}' file='{}'",
+                    artifact.target_name,
+                    artifact.file_name));
+            }
+
+            std::string fw_dir = firmware_cache_dir(request.build_key, safe_target);
+            fs::create_directories(fw_dir);
+            std::string target_path = fw_dir + safe_file;
+
+            tt::jit_build::utils::FileRenamer tmp(target_path);
+            std::ofstream out(tmp.path(), std::ios::binary);
+            if (!out.is_open()) {
+                throw std::runtime_error("Cannot create firmware file: " + target_path);
+            }
+            out.write(
+                reinterpret_cast<const char*>(artifact.data.data()),
+                static_cast<std::streamsize>(artifact.data.size()));
+            if (!out) {
+                throw std::runtime_error("Failed to write firmware file: " + target_path);
+            }
+
+            log_info(
+                tt::LogMetal,
+                "  persisted firmware artifact: build_key={} target={} file={} size={}",
+                request.build_key,
+                safe_target,
+                safe_file,
+                artifact.data.size());
+        }
+
+        response.success = true;
+    } catch (const std::exception& e) {
+        response.success = false;
+        response.error_message = e.what();
+        log_warning(tt::LogMetal, "uploadFirmware FAIL: {}", response.error_message);
+    }
+    return response;
+}
+
 }  // namespace
 
 int main() {
     const char* endpoint_env = std::getenv(kEndpointEnv);
     const std::string endpoint = endpoint_env != nullptr ? endpoint_env : kDefaultEndpoint;
-    if (!initialize_precompiled_root()) {
-        return 1;
-    }
 
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);
 
-    tt::tt_metal::jit_server::JitCompileServerController server(compile_callback);
+    tt::tt_metal::jit_server::JitCompileServerController server(compile_callback, upload_firmware_callback);
     server.start(endpoint);
     log_info(tt::LogMetal, "JIT compile server listening on {}", endpoint);
 

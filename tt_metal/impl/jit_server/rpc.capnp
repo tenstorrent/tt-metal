@@ -57,6 +57,24 @@ struct CompileResponse {
     elfBlobs @2 :List(ElfBlob);
 }
 
+struct FirmwareArtifact {
+    targetName @0 :Text;
+    fileName @1 :Text;
+    isKernelObject @2 :Bool;
+    data @3 :Data;
+}
+
+struct UploadFirmwareRequest {
+    buildKey @0 :UInt64;
+    artifacts @1 :List(FirmwareArtifact);
+}
+
+struct UploadFirmwareResponse {
+    success @0 :Bool;
+    errorMessage @1 :Text;
+}
+
 interface JitCompile {
     compile @0 (request :CompileRequest) -> (response :CompileResponse);
+    uploadFirmware @1 (request :UploadFirmwareRequest) -> (response :UploadFirmwareResponse);
 }

@@ -15,8 +15,9 @@
 
 namespace tt::tt_metal::jit_server {
 
-JitCompileServerController::JitCompileServerController(JitCompileService::CompileCallback compile_callback) :
-    jit_compile_service_(std::move(compile_callback)) {}
+JitCompileServerController::JitCompileServerController(
+    JitCompileService::CompileCallback compile_callback, JitCompileService::UploadFirmwareCallback upload_fw_callback) :
+    jit_compile_service_(std::move(compile_callback), std::move(upload_fw_callback)) {}
 
 JitCompileServerController::~JitCompileServerController() { stop(); }
 

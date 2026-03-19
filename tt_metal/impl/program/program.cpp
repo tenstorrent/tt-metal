@@ -217,8 +217,9 @@ jit_server::TargetRecipe BuildTargetRecipe(const JitBuildState& build_state, con
     target.lflags = build_state.get_lflags();
     target.extra_link_objs = build_state.get_extra_link_objs();
     target.linker_script = build_state.get_linker_script();
-    // Send only the weakened firmware filename. Remote server reconstructs
-    // the full path from build_key + target_name + precompiled root.
+    // Send only the weakened firmware filename. Remote server resolves the
+    // full path from build_key + target_name against its firmware cache
+    // (populated by the uploadFirmware RPC handshake).
     target.weakened_firmware_name = fs::path(build_state.get_weakened_firmware_name()).filename().string();
     target.firmware_is_kernel_object = build_state.get_firmware_is_kernel_object();
     return target;
@@ -278,6 +279,43 @@ private:
     RemoteBuildCache() = default;
     mutable std::mutex mutex_;
     std::unordered_map<size_t, std::shared_future<void>> cache_;
+};
+
+// Thread-safe gate: ensures firmware is uploaded exactly once per (endpoint, build_key).
+// First caller performs the upload RPC and fulfills the promise; followers block until done.
+// Modeled after RemoteBuildCache above.
+class FirmwareUploadGate {
+public:
+    struct GateResult {
+        std::shared_future<void> future;
+        bool is_owner = false;
+        std::shared_ptr<std::promise<void>> promise;
+        void complete() { promise->set_value(); }
+        void fail(std::exception_ptr ex) { promise->set_exception(ex); }
+    };
+
+    static FirmwareUploadGate& instance() {
+        static FirmwareUploadGate inst;
+        return inst;
+    }
+
+    GateResult acquire(const std::string& endpoint, uint64_t build_key) {
+        std::string key = endpoint + ":" + std::to_string(build_key);
+        std::lock_guard lock(mutex_);
+        auto it = cache_.find(key);
+        if (it != cache_.end()) {
+            return {it->second, false, {}};
+        }
+        auto p = std::make_shared<std::promise<void>>();
+        auto future = p->get_future().share();
+        cache_[key] = future;
+        return {future, true, std::move(p)};
+    }
+
+private:
+    FirmwareUploadGate() = default;
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::shared_future<void>> cache_;
 };
 
 std::vector<jit_server::GeneratedFile> CollectGenfiles(
@@ -1688,6 +1726,72 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         };
         std::vector<std::vector<PendingEntry>> pending_by_endpoint(remote_jit_compile_endpoints.size());
         std::vector<std::unique_ptr<jit_server::JitCompileRpcSession>> sessions(remote_jit_compile_endpoints.size());
+
+        // Ensure firmware artifacts have been uploaded to each endpoint for this build_key.
+        // Uses FirmwareUploadGate: first thread per (endpoint, build_key) performs the upload;
+        // all others block until the upload acknowledgment is received.
+        {
+            auto& upload_gate = FirmwareUploadGate::instance();
+            for (size_t ep_idx = 0; ep_idx < remote_jit_compile_endpoints.size(); ++ep_idx) {
+                auto gate = upload_gate.acquire(remote_jit_compile_endpoints[ep_idx], build_env.build_key());
+                if (gate.is_owner) {
+                    try {
+                        jit_server::UploadFirmwareRequest fw_request;
+                        fw_request.build_key = build_env.build_key();
+
+                        // Collect unique firmware artifacts from all kernel build states for this device.
+                        std::set<std::string> seen_targets;
+                        const auto& hal = MetalContext::instance().hal();
+                        for (uint32_t pct = 0; pct < hal.get_programmable_core_type_count(); ++pct) {
+                            uint32_t pc_count = hal.get_processor_classes_count(hal.get_programmable_core_type(pct));
+                            for (uint32_t pc = 0; pc < pc_count; ++pc) {
+                                int proc_count = hal.get_processor_types_count(pct, pc);
+                                for (int pi = 0; pi < proc_count; ++pi) {
+                                    const auto& bs = BuildEnvManager::get_instance().get_kernel_build_state(
+                                        device->build_id(), pct, pc, pi);
+                                    const auto& fw_path = bs.get_weakened_firmware_name();
+                                    if (fw_path.empty()) {
+                                        continue;
+                                    }
+                                    std::string target_name = bs.get_target_name();
+                                    if (!seen_targets.insert(target_name).second) {
+                                        continue;
+                                    }
+                                    auto fw_data = read_file_content(fw_path);
+                                    TT_FATAL(!fw_data.empty(), "Cannot read firmware file: {}", fw_path);
+                                    jit_server::FirmwareArtifact artifact;
+                                    artifact.target_name = target_name;
+                                    artifact.file_name = fs::path(fw_path).filename().string();
+                                    artifact.is_kernel_object = bs.get_firmware_is_kernel_object();
+                                    artifact.data = std::move(fw_data);
+                                    fw_request.artifacts.push_back(std::move(artifact));
+                                }
+                            }
+                        }
+
+                        if (!fw_request.artifacts.empty()) {
+                            if (!sessions[ep_idx]) {
+                                sessions[ep_idx] = std::make_unique<jit_server::JitCompileRpcSession>(
+                                    remote_jit_compile_endpoints[ep_idx]);
+                            }
+                            auto resp = sessions[ep_idx]->upload_firmware(fw_request);
+                            TT_FATAL(
+                                resp.success,
+                                "Firmware upload failed for endpoint {} build_key {}: {}",
+                                remote_jit_compile_endpoints[ep_idx],
+                                build_env.build_key(),
+                                resp.error_message);
+                        }
+                        gate.complete();
+                    } catch (...) {
+                        gate.fail(std::current_exception());
+                        throw;
+                    }
+                } else {
+                    gate.future.get();
+                }
+            }
+        }
 
         // Phase 1: prepare each kernel, generate genfiles, enqueue unique requests.
         for (auto& kernels : kernels_) {

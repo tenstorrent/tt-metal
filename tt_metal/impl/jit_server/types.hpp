@@ -48,6 +48,23 @@ struct ElfBlob {
     std::vector<std::uint8_t> data;
 };
 
+struct FirmwareArtifact {
+    std::string target_name;
+    std::string file_name;
+    bool is_kernel_object = false;
+    std::vector<std::uint8_t> data;
+};
+
+struct UploadFirmwareRequest {
+    std::uint64_t build_key = 0;
+    std::vector<FirmwareArtifact> artifacts;
+};
+
+struct UploadFirmwareResponse {
+    bool success = false;
+    std::string error_message;
+};
+
 struct CompileResponse {
     bool success = false;
     std::string error_message;

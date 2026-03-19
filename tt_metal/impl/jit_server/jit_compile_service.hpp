@@ -20,15 +20,18 @@ namespace tt::tt_metal::jit_server {
 class JitCompileService final : public rpc::JitCompile::Server {
 public:
     using CompileCallback = std::function<CompileResponse(const CompileRequest&)>;
+    using UploadFirmwareCallback = std::function<UploadFirmwareResponse(const UploadFirmwareRequest&)>;
 
-    explicit JitCompileService(CompileCallback compile_callback);
+    explicit JitCompileService(CompileCallback compile_callback, UploadFirmwareCallback upload_fw_callback = {});
 
     kj::Promise<void> compile(CompileContext context) override;
+    kj::Promise<void> uploadFirmware(UploadFirmwareContext context) override;
 
 private:
     std::string make_dedup_key(const CompileRequest& request) const;
 
     CompileCallback compile_callback_;
+    UploadFirmwareCallback upload_fw_callback_;
     InFlightCompileDeduper<CompileResponse> compile_deduper_;
     tf::Executor thread_pool_{std::thread::hardware_concurrency()};
 };
