@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "rotary_embedding_llama_fused_qk.hpp"
