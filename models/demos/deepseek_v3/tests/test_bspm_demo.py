@@ -429,7 +429,7 @@ def test_bspm_vs_uniform_5layers_decode(
         (bspm_state_dict,),
         cache_path,
         mesh_device,
-        True,  # force_recalculate: BSPM weights differ per run; never reuse cache
+        force_recalculate_weight_config,
         test_name="test_bspm_demo",
         layer_id=f"bspm_{NUM_LAYERS}layers_{bspm_model_name}_{bspm_variant}_{bspm_budget}",
         real_weights=True,
