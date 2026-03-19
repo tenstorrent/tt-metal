@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_dtype
 #include "ttnn/tensor/tensor_utils.hpp"   // for is_cpu_tensor
@@ -58,7 +57,11 @@ inline Tensor typecast_impl(
 }
 }  // namespace detail
 
-Tensor Typecast::invoke(
+}  // namespace ttnn::operations::copy
+
+namespace ttnn {
+
+Tensor typecast(
     const Tensor& input,
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -70,11 +73,11 @@ Tensor Typecast::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    return detail::typecast_impl(input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
+    return operations::copy::detail::typecast_impl(
+        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
 }
 
-// eltwise_typecast is not currently supported on Grayskull
-Tensor Typecast::invoke(
+Tensor typecast(
     const Tensor& input_tensor,
     const DataType& tt_input_dtype,
     const DataType& tt_output_dtype,
@@ -87,7 +90,8 @@ Tensor Typecast::invoke(
             tt_output_dtype == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
-    return detail::typecast_impl(input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
+    return operations::copy::detail::typecast_impl(
+        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
 }
 
-}  // namespace ttnn::operations::copy
+}  // namespace ttnn
