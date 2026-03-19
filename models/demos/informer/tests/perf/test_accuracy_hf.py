@@ -71,6 +71,11 @@ class TestInformerAccuracyHF:
         if ttnn_state is None or torch_state is None:
             pytest.skip("Checkpoint missing ttnn or torch weights.")
 
+        checkpoint_info = state.get("checkpoint_info") or {}
+        eval_mode = str(checkpoint_info.get("training_mode", "free_running")).lower()
+        if eval_mode not in {"free_running", "teacher_forcing"}:
+            raise ValueError(f"Unsupported ETTh1 evaluation mode: {eval_mode}")
+
         cfg = build_config_from_checkpoint(cfg_override)
         from models.demos.informer.reference.torch_reference import TorchInformerModel
 
@@ -129,10 +134,11 @@ class TestInformerAccuracyHF:
 
             past_time = time_features[start : start + cfg.seq_len].unsqueeze(0)
             future_time = time_features[start + cfg.seq_len : start + cfg.seq_len + cfg.pred_len].unsqueeze(0)
+            model_future_values = future_values if eval_mode == "teacher_forcing" else None
 
             with torch.no_grad():
-                torch_out = torch_model(past_values, past_time, future_time, future_values)
-            ttnn_out = to_torch(ttnn_model(past_values, past_time, future_time, future_values=future_values))
+                torch_out = torch_model(past_values, past_time, future_time, model_future_values)
+            ttnn_out = to_torch(ttnn_model(past_values, past_time, future_time, future_values=model_future_values))
             baseline = past_values[:, -1:, :].repeat(1, cfg.pred_len, 1)
 
             mse, mae, corr = compute_metrics(ttnn_out, future_values)
@@ -162,6 +168,7 @@ class TestInformerAccuracyHF:
         avg_mae_baseline = sum(mae_baseline) / len(mae_baseline)
         avg_corr_baseline = sum(corr_baseline) / len(corr_baseline)
 
+        logger.info("Real-data (ETTh1) eval mode: {}", eval_mode)
         logger.info(
             "Real-data (ETTh1) TTNN vs GT: MSE {:.6f}, MAE {:.6f}, Corr {:.4f}",
             avg_mse,

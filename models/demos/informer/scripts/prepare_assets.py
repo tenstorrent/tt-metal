@@ -443,6 +443,7 @@ def create_trained_checkpoint(
         "checkpoint_info": {
             "source": "trained_local",
             "trained": True,
+            "training_mode": "free_running",
             "seed": seed,
             "train_steps": train_steps,
             "train_batch_size": train_batch_size,
