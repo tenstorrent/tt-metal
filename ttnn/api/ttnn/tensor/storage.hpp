@@ -29,10 +29,12 @@ public:
     // Creates HostStorage from a HostTensor.
     explicit HostStorage(HostTensor tensor);
 
-    // Copy a HostStorage with a new TensorSpec and TensorTopology, this is meant for transition
+    // Transitional constructors: accept a pre-transition HostStorage (constructed
+    // without TensorSpec and TensorTopology) and assign them during construction.
+    // Overrides any existing spec/topology in the HostStorage.
+    //
+    // TODO(#40348): Remove these.
     HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology);
-
-    // Move a HostStorage with a new TensorSpec and TensorTopology
     HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology);
 
     // Returns the distributed host buffer.
