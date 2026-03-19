@@ -9,13 +9,16 @@
 
 ## Table of Contents
 
-1. [Features](#features)
-2. [Prerequisites](#prerequisites)
-3. [Build & Install](#build--install)
-4. [Running the Profiler](#running-the-profiler)
-5. [Output Artifacts](#output-artifacts)
-6. [Analysing Results](#analysing-results)
-7. [Problems](#problems)
+- [TT‑Metal Profiler Guide](#ttmetal-profiler-guide)
+  - [Table of Contents](#table-of-contents)
+  - [Features](#features)
+  - [Prerequisites](#prerequisites)
+  - [Build \& Install](#build--install)
+  - [Running the Profiler](#running-the-profiler)
+    - [What do those variables mean?](#what-do-those-variables-mean)
+  - [Output Artifacts](#output-artifacts)
+  - [Analysing Results](#analysing-results)
+  - [Problems](#problems)
 
 ---
 
@@ -74,6 +77,14 @@ TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR \
 python -m tracy -r -v -p ${TT_METAL_HOME}/build/tt-train/sources/examples/nano_gpt/nano_gpt
 ```
 
+Alternatively you can use this script, passing your full training command (binary or python script) as the argument:
+
+```bash
+./tt-train/run_profiler.sh ./tt-train/sources/examples/nano_gpt/train_nanogpt.py --config ./tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml
+# or for a compiled binary:
+./tt-train/run_profiler.sh ./build/tt-train/sources/examples/nano_gpt/nano_gpt --config tt-train/configs/training_configs/training_shakespeare_tinyllama.yaml
+```
+
 ### What do those variables mean?
 
 | Variable                                 | Default | Description                                                                         |
@@ -109,7 +120,7 @@ Custom markers can be emitted via `ctx().get_profiler().read_results(device, "my
 Install pandas, matplotlib and ipywidgets to use companion jupyter notebook. Open the companion notebook and point it to your freshly‑generated CSV:
 
 ```bash
-jupyter lab notebooks/profiler_results.ipynb
+jupyter lab tt-train/tools/profiling/profiling_analysis_single_exp.ipynb
 ```
 
 The notebook walks you through:
