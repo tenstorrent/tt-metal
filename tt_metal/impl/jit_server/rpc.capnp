@@ -12,41 +12,38 @@ struct GeneratedFile {
     content @1 :Data;
 }
 
-struct PrepareGenfilesRequest {
-    buildKey @0 :UInt64;
-    kernelName @1 :Text;
-    files @2 :List(GeneratedFile);
-}
+struct TargetRecipe {
+    targetName @0 :Text;
 
-struct PrepareGenfilesResponse {
-    success @0 :Bool;
-    errorMessage @1 :Text;
+    # Compile recipe.
+    cflags @1 :Text;
+    defines @2 :Text;
+    includes @3 :Text;
+    compilerOptLevel @4 :Text;
+    srcs @5 :List(Text);
+    objs @6 :List(Text);
+
+    # Link recipe.
+    lflags @7 :Text;
+    extraLinkObjs @8 :Text;
+    linkerScript @9 :Text;
+    weakenedFirmwareName @10 :Text;
+    firmwareIsKernelObject @11 :Bool;
+    linkerOptLevel @12 :Text;
 }
 
 struct CompileRequest {
     buildKey @0 :UInt64;
     kernelName @1 :Text;
-    targetName @2 :Text;
 
-    # Toolchain.
-    gpp @3 :Text;
+    # Toolchain (shared by all targets).
+    gpp @2 :Text;
 
-    # Compile recipe.
-    cflags @4 :Text;
-    defines @5 :Text;
-    includes @6 :Text;
-    compilerOptLevel @7 :Text;
-    srcs @8 :List(Text);
-    objs @9 :List(Text);
+    # Per-target compile/link recipes.
+    targets @3 :List(TargetRecipe);
 
-    # Link recipe.
-    lflags @10 :Text;
-    extraLinkObjs @11 :Text;
-    linkerScript @12 :Text;
-    weakenedFirmwareName @13 :Text;
-    firmwareIsKernelObject @14 :Bool;
-    linkerOptLevel @15 :Text;
-
+    # Generated files to write before compiling (shared by all targets).
+    generatedFiles @4 :List(GeneratedFile);
 }
 
 struct ElfBlob {
@@ -61,6 +58,5 @@ struct CompileResponse {
 }
 
 interface JitCompile {
-    prepareGenfiles @0 (request :PrepareGenfilesRequest) -> (response :PrepareGenfilesResponse);
-    compile @1 (request :CompileRequest) -> (response :CompileResponse);
+    compile @0 (request :CompileRequest) -> (response :CompileResponse);
 }

@@ -20,20 +20,16 @@ namespace tt::tt_metal::jit_server {
 class JitCompileService final : public rpc::JitCompile::Server {
 public:
     using CompileCallback = std::function<CompileResponse(const CompileRequest&)>;
-    using PrepareGenfilesCallback = std::function<PrepareGenfilesResponse(const PrepareGenfilesRequest&)>;
 
-    JitCompileService(CompileCallback compile_callback, PrepareGenfilesCallback prepare_genfiles_callback);
+    explicit JitCompileService(CompileCallback compile_callback);
 
-    kj::Promise<void> prepareGenfiles(PrepareGenfilesContext context) override;
     kj::Promise<void> compile(CompileContext context) override;
 
 private:
-    std::string make_compile_dedup_key(const CompileRequest& request) const;
+    std::string make_dedup_key(const CompileRequest& request) const;
 
     CompileCallback compile_callback_;
-    PrepareGenfilesCallback prepare_genfiles_callback_;
     InFlightCompileDeduper<CompileResponse> compile_deduper_;
-    InFlightCompileDeduper<PrepareGenfilesResponse> genfiles_deduper_;
     tf::Executor thread_pool_{std::thread::hardware_concurrency()};
 };
 
