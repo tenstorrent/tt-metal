@@ -69,7 +69,6 @@ constexpr uint32_t sender_channel_5_free_slots_stream_id = NAMED_CT_ARG("SENDER_
 constexpr uint32_t sender_channel_6_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_7_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_8_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID");
-constexpr uint32_t sender_channel_9_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t tensix_relay_local_free_slots_stream_id = NAMED_CT_ARG("TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = NAMED_CT_ARG("MULTI_RISC_TEARDOWN_SYNC_STREAM_ID");
 constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_LINK_SYNC_STREAM_ID");

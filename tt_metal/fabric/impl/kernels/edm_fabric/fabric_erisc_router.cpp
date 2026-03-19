@@ -314,8 +314,7 @@ static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_fr
     sender_channel_5_free_slots_stream_id,
     sender_channel_6_free_slots_stream_id,
     sender_channel_7_free_slots_stream_id,
-    sender_channel_8_free_slots_stream_id,
-    sender_channel_9_free_slots_stream_id};
+    sender_channel_8_free_slots_stream_id};
 static_assert(sender_channel_free_slots_stream_ids[0] == 22);
 static_assert(sender_channel_free_slots_stream_ids[1] == 23);
 static_assert(sender_channel_free_slots_stream_ids[2] == 24);
