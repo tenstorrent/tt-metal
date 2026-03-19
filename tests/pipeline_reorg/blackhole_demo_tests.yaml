@@ -289,6 +289,15 @@
   team: models
   model-name: flux.1-dev
 
+- name: Mochi BH QuietBox 2 performance (2x2sp0tp1)
+  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/genmo TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB" --timeout=1800
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+  owner_id: U06BXU8RWQ2 # Kevin Mi
+  team: models
+  model-name: mochi
+
 - name: Wan2.2-T2V-A14B BH QuietBox 2 performance
   cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Wan-AI TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "2x2sp0tp1 and resolution_480p and t2v" --timeout=1200
   skus:
