@@ -149,8 +149,7 @@ TEST(HostTensorTest, MoveAssignment) {
 TEST(HostTensorTest, CopyConstruction) {
     Shape shape{2, 64};
     auto tensor = create_simple_host_tensor(shape);
-    const HostTensor copied_tensor(tensor);
-    (void)copied_tensor;
+    const HostTensor copied_tensor(tensor);  // NOLINT(performance-unnecessary-copy-initialization)
 
     EXPECT_EQ(copied_tensor.logical_shape(), shape);
     EXPECT_EQ(copied_tensor.dtype(), DataType::BFLOAT16);
