@@ -28,21 +28,6 @@ Tensor unary_impl(
 
 }  // namespace detail
 
-// The ExecuteUnaryTSVariant and ExecuteUnaryWithFloatParameter structures are
-// necessary to `invoke()` for the `fmod`, `minimum` and `maximum` operations --
-// these three are also implemented as binary versions, and declaring binary
-// minimum as a const variable while the unary minimum is defined as a free function
-// will lead to the build error due to the type redefinition. Once the #39697 is merged
-// these two can be migrated.
-template <UnaryOpType unary_op_type>
-struct ExecuteUnaryTSVariant {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        ScalarVariant parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-};
-
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(

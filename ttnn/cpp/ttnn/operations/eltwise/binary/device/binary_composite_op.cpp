@@ -105,8 +105,11 @@ Tensor minimum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::unary::ExecuteUnaryTSVariant<ttnn::unary::UnaryOpType::MINIMUM>::invoke(
-                input_a, input_b, memory_config, optional_output_tensor);
+            return unary::detail::unary_impl(
+                input_a,
+                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)}},
+                memory_config,
+                optional_output_tensor);
         },
         value);
 }
@@ -148,8 +151,11 @@ Tensor maximum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::unary::ExecuteUnaryTSVariant<ttnn::unary::UnaryOpType::MAXIMUM>::invoke(
-                input_a, input_b, memory_config, optional_output_tensor);
+            return unary::detail::unary_impl(
+                input_a,
+                {unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)}},
+                memory_config,
+                optional_output_tensor);
         },
         value);
 }
