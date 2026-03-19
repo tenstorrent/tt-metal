@@ -57,14 +57,16 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W = get_arg_val<uint32_t>(9);
+    const uint32_t tile_width = get_arg_val<uint32_t>(10);
+    const uint32_t tile_height = get_arg_val<uint32_t>(11);
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(10);
+    const uint32_t H_logical = get_arg_val<uint32_t>(12);
 #endif
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
+    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0(cb_id_in0);
@@ -94,7 +96,7 @@ void kernel_main() {
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t cb_id_in_rm = tt::CBIndex::c_27;
+    constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
 
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
@@ -118,19 +120,22 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
+    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("cb_scaler");
+    constexpr uint32_t cb_eps = get_named_compile_time_arg_val("cb_eps");
+
     if constexpr (!use_welford) {
         // Scaler(s) for reduce
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        generate_reduce_scaler(cb_scaler, scaler);
+        const auto partial_last_tile_cols = W % tile_width;
         if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
+                cb_scaler, scaler, partial_last_tile_cols, tile_height, tile_width);
         }
     }
-    constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
+
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(cb_eps, eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;

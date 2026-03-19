@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 using namespace sfpi;
@@ -77,7 +77,7 @@ inline vFloat softplus(vFloat x) {
      Positive values, we use the polynomial approximation using remez minmax algorithm.
     */
     vFloat result = x;
-    v_if(x < -5.0f) { result = _sfpu_exp_21f_<is_fp32_dest_acc_en>(x); }
+    v_if(x < -5.0f) { result = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(x); }
     v_elseif(x < 4.0f) {
         result = PolynomialEvaluator::eval(
             x,

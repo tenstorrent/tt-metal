@@ -17,9 +17,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
+    COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
     even_int_div,
+    get_dequantized_tensor,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -62,7 +63,7 @@ class LMHead1D(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["weight"].permute(
+        weight_tensor = get_dequantized_tensor(state_dict, "weight").permute(
             1, 0
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
@@ -74,7 +75,7 @@ class LMHead1D(AbstractModule):
                     weight_tensor,
                     shard_dims=(None, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -89,7 +90,7 @@ class LMHead1D(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -109,7 +110,7 @@ class LMHead1D(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,

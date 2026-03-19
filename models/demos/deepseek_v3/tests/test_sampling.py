@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, make_deepseek_sampling_args
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, make_deepseek_sampling_args
 
 
 def _make_lm_head_sharded_logits(torch_input, mesh_device):
@@ -67,7 +67,7 @@ def _sample_device_tokens(mesh_device, ccl, args, torch_input, user_params):
         {"temperature": 1.0, "top_k": 1, "top_p": 0.00, "seed": 42},  # top-k=1 (always argmax)
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
 def test_deepseek_device_sampling_argmax_path(mesh_device, ccl, hf_config, device_params, sampling_params):
     vocab_size = int(hf_config.vocab_size)
     args = make_deepseek_sampling_args(mesh_device, vocab_size=vocab_size)
@@ -99,8 +99,9 @@ def test_deepseek_device_sampling_argmax_path(mesh_device, ccl, hf_config, devic
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_config, device_params):
+@pytest.mark.parametrize("device_params", [{"fabric_config": get_fabric_config()}], indirect=True)
+@pytest.mark.parametrize("use_tracing", [False, True], ids=["no_trace", "trace_mode"])
+def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_config, device_params, use_tracing):
     vocab_size = int(hf_config.vocab_size)
     args = make_deepseek_sampling_args(mesh_device, vocab_size=vocab_size)
     batch_size = USERS_PER_ROW * int(mesh_device.shape[0])
@@ -122,7 +123,7 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     )
 
     tt_input = _make_lm_head_sharded_logits(torch_input, mesh_device)
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=ccl, enable_internal_trace=use_tracing)
     params = format_sampling_params(user_params, max_batch_size=batch_size)
     sampling.reset_sampling_params(params)
     sampling.reset_prompt_tokens(torch.zeros((USERS_PER_ROW, 1), dtype=torch.int64))
@@ -133,13 +134,19 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     try:
         for _ in range(num_samples):
             sampling.seed_manager.get_new_values()
-            tt_tokens, tt_log_probs = sampling.sample(tt_input, enable_trace=False)
+            tt_tokens, tt_log_probs = sampling.sample(tt_input, enable_trace=use_tracing)
             device_tokens = _extract_all_tokens(tt_tokens, mesh_device, USERS_PER_ROW)
             sampled_tokens.append(int(device_tokens[0].item()))
-            ttnn.deallocate(tt_tokens)
-            if tt_log_probs is not None:
-                ttnn.deallocate(tt_log_probs)
+            # In trace mode, sampling reuses captured output tensors across iterations.
+            # Deallocating those per-step breaks subsequent trace replays.
+            if not use_tracing:
+                ttnn.deallocate(tt_tokens)
+                if tt_log_probs is not None:
+                    ttnn.deallocate(tt_log_probs)
     finally:
+        if use_tracing:
+            # Release cached trace metadata/tensors before exiting the test.
+            sampling.reset_trace()
         ttnn.deallocate(tt_input)
 
     candidate_set = set(candidate_tokens.tolist())
