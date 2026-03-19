@@ -539,40 +539,8 @@ class TestConfig:
         self.runtime_arguments_struct = lines
 
     def write_runtimes_to_L1(self, location: str = "0,0"):
-        TILE_SIZES = {
-            DataFormat.Bfp8_b: 68,
-            DataFormat.Bfp4_b: 36,
-            DataFormat.Float32: 256,
-        }
-
-        if self.formats_config is None:
-            pack_size, unpack_size_a, unpack_size_b = 128, 128, 128
-        else:
-            pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
-            unpack_size_a = TILE_SIZES.get(self.formats_config[0].input_format, 128)
-            unpack_size_b = TILE_SIZES.get(self.formats_config[0].input_format, 128)
-
-        if len(self.runtimes) > 0:
-            itd_param = next(
-                (param for param in self.runtimes if isinstance(param, IN_TILE_DIMS)),
-                None,
-            )
-            faces_param = next(
-                (param for param in self.runtimes if isinstance(param, NUM_FACES)), None
-            )
-            if itd_param and faces_param:
-                temp_num_faces_A = (
-                    faces_param.num_faces_A
-                    if faces_param.num_faces_A
-                    else faces_param.num_faces
-                )
-                if itd_param.in0_r_dim <= 16:
-                    pack_size = (pack_size // faces_param.num_faces) * (
-                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                    )
-                    unpack_size_a = (unpack_size_a // temp_num_faces_A) * (
-                        itd_param.in0_r_dim // self.variant_stimuli.face_r_dim
-                    )
+        if TestConfig.SPEED_OF_LIGHT:
+            return
 
         argument_data = [
             self.pack_size,  # uint32_t TILE_SIZE_PACK;
