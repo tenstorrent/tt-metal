@@ -4951,6 +4951,7 @@ class MoeOp:
             downstream_sockets=downstream_sockets,
             cb_id_context=cb_id_context,
             persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+            persistent_mode=persistent_mode,
         )
 
         # ==================================================================
