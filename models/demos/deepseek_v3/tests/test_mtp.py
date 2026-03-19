@@ -20,7 +20,11 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
-from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN, DeepseekGenerator, _build_verify_alias_page_table_host
+from models.demos.deepseek_v3.tt.generator import (
+    DEFAULT_MAX_SEQ_LEN,
+    DeepseekGenerator,
+    _build_verify_alias_page_table_host,
+)
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
@@ -506,7 +510,7 @@ class _MtpModuleRunner:
         self.enable_mtp = True
 
         self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-        self.hf_config.max_seq_len = MAX_SEQ_LEN
+        self.hf_config.max_seq_len = DEFAULT_MAX_SEQ_LEN
         if int(getattr(self.hf_config, "num_nextn_predict_layers", 0)) <= 0:
             raise RuntimeError("MTP module runner requires a model config with num_nextn_predict_layers > 0.")
 
