@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <vector>
 
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
@@ -16,24 +17,23 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 template <typename T>
-void validate_datatype(const Tensor& tensor) {
+void validate_datatype(DataType dtype) {
     using BaseType = std::remove_cvref_t<T>;
     if constexpr (std::is_same_v<BaseType, uint32_t>) {
         TT_FATAL(
-            tensor.dtype() == DataType::UINT32 or tensor.dtype() == DataType::BFLOAT8_B or
-                tensor.dtype() == DataType::BFLOAT4_B,
+            dtype == DataType::UINT32 or dtype == DataType::BFLOAT8_B or dtype == DataType::BFLOAT4_B,
             "Incorrect data type {}",
-            tensor.dtype());
+            dtype);
     } else if constexpr (std::is_same_v<BaseType, int32_t>) {
-        TT_FATAL(tensor.dtype() == DataType::INT32, "Incorrect data type {}", tensor.dtype());
+        TT_FATAL(dtype == DataType::INT32, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, float>) {
-        TT_FATAL(tensor.dtype() == DataType::FLOAT32, "Incorrect data type {}", tensor.dtype());
+        TT_FATAL(dtype == DataType::FLOAT32, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, bfloat16>) {
-        TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Incorrect data type {}", tensor.dtype());
+        TT_FATAL(dtype == DataType::BFLOAT16, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, uint16_t>) {
-        TT_FATAL(tensor.dtype() == DataType::UINT16, "Incorrect data type {}", tensor.dtype());
+        TT_FATAL(dtype == DataType::UINT16, "Incorrect data type {}", dtype);
     } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
-        TT_FATAL(tensor.dtype() == DataType::UINT8, "Incorrect data type {}", tensor.dtype());
+        TT_FATAL(dtype == DataType::UINT8, "Incorrect data type {}", dtype);
     } else {
         static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
     }
@@ -42,16 +42,19 @@ void validate_datatype(const Tensor& tensor) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-HostBuffer get_host_buffer(const Tensor& tensor) {
-    TT_FATAL(is_cpu_tensor(tensor), "Tensor must have HostStorage");
-    const auto& storage = tensor.host_storage();
+HostBuffer get_host_buffer(const HostTensor& tensor) {
     std::vector<HostBuffer> buffers;
-    storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+    tensor.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
     TT_FATAL(
         buffers.size() == 1,
         "Can't get a single buffer from host storage distributed over mesh shape {}",
-        storage.buffer().shape());
+        tensor.buffer().shape());
     return buffers.front();
+}
+
+HostBuffer get_host_buffer(const Tensor& tensor) {
+    TT_FATAL(is_cpu_tensor(tensor), "Tensor must have on host");
+    return get_host_buffer(tensor.host_tensor());
 }
 
 template <typename T>
@@ -65,15 +68,22 @@ ttsl::Span<T> get_as(HostBuffer& buffer) {
 }
 
 template <typename T>
+ttsl::Span<const T> get_as(const HostTensor& tensor) {
+    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
+    HostBuffer buffer = get_host_buffer(tensor);
+    return buffer.template view_as<T>();
+}
+
+template <typename T>
 ttsl::Span<const T> get_as(const Tensor& tensor) {
-    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor);
+    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();
 }
 
 template <typename T>
 ttsl::Span<T> get_as(Tensor& tensor) {
-    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor);
+    CMAKE_UNIQUE_NAMESPACE::validate_datatype<T>(tensor.dtype());
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();
 }
@@ -84,6 +94,8 @@ ttsl::Span<T> get_as(Tensor& tensor) {
     template ttsl::Span<const T> get_as<const T>(const HostBuffer&); \
     template ttsl::Span<T> get_as<T>(HostBuffer&);                   \
     template ttsl::Span<const T> get_as<const T>(HostBuffer&);       \
+    template ttsl::Span<const T> get_as<T>(const HostTensor&);       \
+    template ttsl::Span<const T> get_as<const T>(const HostTensor&); \
     template ttsl::Span<const T> get_as<T>(const Tensor&);           \
     template ttsl::Span<const T> get_as<const T>(const Tensor&);     \
     template ttsl::Span<T> get_as<T>(Tensor&);                       \
