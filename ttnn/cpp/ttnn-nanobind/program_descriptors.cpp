@@ -851,6 +851,9 @@ void py_module_types(nb::module_& mod) {
         .def(
             "append_common_runtime_args_from",
             [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                if (&self == &other) {
+                    throw std::runtime_error("Cannot append a kernel's common_runtime_args from itself");
+                }
                 self.common_runtime_args.insert(
                     self.common_runtime_args.end(), other.common_runtime_args.begin(), other.common_runtime_args.end());
             },
