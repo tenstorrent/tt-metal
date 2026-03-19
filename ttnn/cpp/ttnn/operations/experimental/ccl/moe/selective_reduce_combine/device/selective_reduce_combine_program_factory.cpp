@@ -260,18 +260,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         CircularBufferConfig(aligned_token_counts_buffer_size, {{token_counts_cb_id, token_counts_data_format}})
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
 
-    // token activations metadata
-    // page size: total tokens * (2 * experts_per_device + 1 + 3) * sizeof(uint32_t)
-    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
-
-    const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
-    const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);
-    constexpr auto token_activations_cb_id = tt::CBIndex::c_3;
-    CircularBufferConfig cb_token_activations_config =
-        CircularBufferConfig(
-            aligned_token_activations_page_size_bytes, {{token_activations_cb_id, tt::DataFormat::UInt32}})
-            .set_page_size(token_activations_cb_id, token_activations_page_size_bytes);
-
     // client interface
     constexpr auto num_headers = 3;  // data unicast headers and atomic inc "multicast" headers
     constexpr auto client_interface_cb_id = tt::CBIndex::c_3;
@@ -280,7 +268,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
     // create circular buffers
-    const auto data_cb_handle = CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
+    CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_dense_token_maps_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_counts_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, client_interface_cb_config);
@@ -461,7 +449,6 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         std::move(program),
         {.reader_kernel_id = ternary_reader_kernel_id,
          .writer_kernel_id = unary_writer_kernel_id,
-         .data_cb_handle = data_cb_handle,
          .cores = sender_cores,
          .init_semaphore = init_semaphore,
          .cross_device_semaphore = cross_device_semaphore}};
@@ -483,11 +470,7 @@ void UnifiedSelectReduce::override_runtime_arguments(
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& reader_kernel_id = shared_variables.reader_kernel_id;
         const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-        const auto& data_cb_handle = shared_variables.data_cb_handle;
         const auto& cores = shared_variables.cores;
-
-        tt::tt_metal::UpdateDynamicCircularBufferAddress(
-            program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
