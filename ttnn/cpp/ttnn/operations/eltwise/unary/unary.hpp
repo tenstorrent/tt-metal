@@ -17,16 +17,20 @@ enum class SigmoidMode {
     ACCURATE,
 };
 
+}  // namespace operations::unary
+
 namespace detail {
 
 Tensor unary_impl(
     const Tensor& input_tensor,
-    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const std::vector<operations::unary::EltwiseUnaryWithParam>& op_chain,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 }  // namespace detail
+
+namespace operations::unary {
 
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
@@ -46,7 +50,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,    \
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,               \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {               \
-        return operations::unary::detail::unary_impl(                                     \
+        return ttnn::detail::unary_impl(                                                  \
             input_tensor,                                                                 \
             {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::op_type}}, \
             memory_config,                                                                \
@@ -61,7 +65,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,                    \
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,                               \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {                               \
-        return operations::unary::detail::unary_impl(                                                     \
+        return ttnn::detail::unary_impl(                                                                  \
             input_tensor,                                                                                 \
             {operations::unary::UnaryWithParam{                                                           \
                 operations::unary::UnaryOpType::op_type, static_cast<float>(fast_and_approximate_mode)}}, \
@@ -77,7 +81,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,    \
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,               \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {               \
-        return operations::unary::detail::unary_impl(                                     \
+        return ttnn::detail::unary_impl(                                                  \
             input_tensor,                                                                 \
             {operations::unary::UnaryWithParam{                                           \
                 operations::unary::UnaryOpType::op_type, static_cast<float>(parameter)}}, \
@@ -94,7 +98,7 @@ struct ExecuteUnaryWithFloatParameter {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt) {                                     \
         return std::visit(                                                                                        \
             [&](auto param) {                                                                                     \
-                return operations::unary::detail::unary_impl(                                                     \
+                return ttnn::detail::unary_impl(                                                                  \
                     input_tensor,                                                                                 \
                     {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::op_type, (param)}}, \
                     memory_config,                                                                                \

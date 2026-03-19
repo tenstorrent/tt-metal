@@ -32,48 +32,7 @@ enum class UnaryCompositeOpType {
     NORMALIZE_GLOBAL,
     FRAC,
 };
-Tensor digamma(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _variance_impl(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
-Tensor _variance_impl(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor var_hw(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
-Tensor std_hw(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor normalize_hw(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor glu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor reglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor geglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor swiglu(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor tril(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor triu(const Tensor&, int32_t diag = 0, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
-Tensor logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor frac(const Tensor&, const std::optional<MemoryConfig>&);
-
-Tensor clip(
-    const Tensor& a,
-    std::optional<float> min = std::nullopt,
-    std::optional<float> max = std::nullopt,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor clip(
-    const Tensor& a,
-    std::optional<Tensor> min = std::nullopt,
-    std::optional<Tensor> max = std::nullopt,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-Tensor clamp(
-    const Tensor& input_a,
-    std::optional<std::variant<float, int32_t>> min = std::nullopt,
-    std::optional<std::variant<float, int32_t>> max = std::nullopt,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
-Tensor clamp(
-    const Tensor& a,
-    std::optional<Tensor> min = std::nullopt,
-    std::optional<Tensor> max = std::nullopt,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
+Tensor is_odd(const Tensor&, const std::optional<MemoryConfig>&);
 
 }  // namespace ttnn::operations::unary

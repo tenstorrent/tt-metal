@@ -29,18 +29,20 @@ Tensor where_operation_with_scalar(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
+}  // namespace operations::binary
+
 namespace detail {
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
     const Tensor& rhs,
-    BinaryOpType binary_op_type,
+    operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids);
@@ -48,13 +50,13 @@ Tensor invoke_binary_ng(
 Tensor invoke_binary_ng(
     const Tensor& lhs,
     float rhs,
-    BinaryOpType binary_op_type,
+    operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids);
@@ -62,20 +64,18 @@ Tensor invoke_binary_ng(
 Tensor invoke_binary_ng(
     const Tensor& lhs,
     int32_t rhs,
-    BinaryOpType binary_op_type,
+    operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<bool>& fast_and_approximate_mode,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
 }  // namespace detail
-
-}  // namespace operations::binary
 
 // Binary public API uses the same two-layer pattern as ternary: free function -> implementation
 // (detail::invoke_binary_ng). Related structs remain for internal
