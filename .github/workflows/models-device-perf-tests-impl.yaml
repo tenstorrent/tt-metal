@@ -166,7 +166,7 @@ jobs:
         id: check-device-perf-report
         if: ${{ !cancelled() && steps.generate-device-perf-report.outputs.device_perf_report_filename != '' }}
         run: |
-          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+          test -f "${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}"
       - name: Clean test name for artifact
         if: ${{ !cancelled() && steps.generate-device-perf-report.outputs.device_perf_report_filename != '' }}
         run: |
