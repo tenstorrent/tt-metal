@@ -1605,10 +1605,21 @@ class Generator(WarmupForwardMixin):
             else:
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
 
-        # If any DP rank returned LogProbsResult (tuple of tensors), return as tuple
-        if log_probs and isinstance(log_probs[0], tuple):
-            all_lp = torch.cat([lp[0] for lp in log_probs], 0)
-            all_idx = torch.cat([lp[1] for lp in log_probs], 0)
+        # Check if any DP rank returned new-path tuples (topk_lp, topk_idx)
+        has_topk = any(isinstance(lp, tuple) for lp in log_probs)
+        if has_topk:
+            # New path: all DP ranks should have tuples. For ranks that
+            # returned a dummy tensor (e.g. sz=0), create matching dummy tuples.
+            normalized = []
+            for lp in log_probs:
+                if isinstance(lp, tuple):
+                    normalized.append(lp)
+                else:
+                    # Dummy: shape [B, 32] zeros to match tuple format
+                    B = lp.shape[0]
+                    normalized.append((torch.zeros(B, 32, dtype=torch.float32), torch.zeros(B, 32, dtype=torch.int32)))
+            all_lp = torch.cat([lp[0] for lp in normalized], 0)
+            all_idx = torch.cat([lp[1] for lp in normalized], 0)
             return (torch.cat(logits, 0), (all_lp, all_idx))
         return (torch.cat(logits, 0), torch.cat(log_probs, 0))
 
