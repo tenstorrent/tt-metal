@@ -132,6 +132,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         std::vector<uint32_t> zero_init(4, 0);  // 2 words for DM + 2 words for TRISC0
         for (const auto& core : core_range) {
             tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, compute_scratch_addr, zero_init);
         }
 
         distributed::MeshWorkload workload;
@@ -147,7 +148,7 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
                 .compile_args = {l1_unreserved_base}});
 
         CreateKernel(
-            program, rta_crta_kernel_path, core_range_set, ComputeConfig{.compile_args = {l1_unreserved_base}});
+            program, rta_crta_kernel_path, core_range_set, ComputeConfig{.compile_args = {compute_scratch_addr}});
 
         // No SetRuntimeArgs called - all cores have RTA/CRTA offset = 0xFFFF pattern
         workload.add_program(device_range, std::move(program));

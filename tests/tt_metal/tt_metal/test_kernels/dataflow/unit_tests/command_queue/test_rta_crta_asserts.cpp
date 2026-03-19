@@ -64,7 +64,7 @@ static FORCE_INLINE void trigger_bounds_check_assert() {
 #endif
 }
 
-// Helper: write RTA/CRTA metadata and values to L1 (DM only)
+// Helper: write RTA/CRTA metadata and values to L1
 static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
     experimental::CoreLocalMem<uint32_t> ptr(l1_write_addr);
     ptr[0] = rta_count;
@@ -90,7 +90,7 @@ void core_agnostic_main() {
     uint32_t thread_idx = get_my_thread_id();
 
 #if defined(TEST_MULTI_DM_RTA)
-    // Multi-DM mode: sync barrier so all DMs hit the bounds-check access together
+    // Multi-DM mode: Spin-wait for all DMs to reach barrier so all hit the bounds-check access together
     // Compile args: [num_dms, l1_sync_addr]
     constexpr uint32_t num_dms = get_compile_time_arg_val(0);
     constexpr uint32_t l1_sync_addr = get_compile_time_arg_val(1);
