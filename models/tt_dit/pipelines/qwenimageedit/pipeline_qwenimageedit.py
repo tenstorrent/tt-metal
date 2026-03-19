@@ -21,6 +21,7 @@ from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_qwenimage import AutoencoderKLQwenImage
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
+from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2VLProcessor
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -267,6 +268,14 @@ class QwenImageEditPipeline:
                 is_fsdp=True,
             )
 
+        # Load VL processor and keep torch VL model for image-conditioned encoding
+        logger.info("loading VL processor for image conditioning...")
+        self._vl_processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+        self._torch_vl_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            checkpoint_name, subfolder="text_encoder"
+        )
+        self._torch_vl_model.eval()
+
         if not dynamic_load_encoder or use_torch_text_encoder:
             self._load_transformers(self.encoder_submesh_idx)
 
@@ -307,7 +316,7 @@ class QwenImageEditPipeline:
         self._traces = None
 
         logger.info("warming up for tracing...")
-        self.run_single_edit(prompt="test edit", image=None, num_inference_steps=1, seed=0, traced=False)
+        self.run_single_edit(prompt="test edit", image=None, num_inference_steps=1, seed=0, traced=False, skip_vae=True)
 
     def _load_transformers(self, idx) -> None:
         if self.transformers[idx].is_loaded():
@@ -553,6 +562,7 @@ class QwenImageEditPipeline:
         traced: bool = True,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
+        skip_vae: bool = False,
     ) -> list[Image.Image]:
         return self(
             prompts=[prompt],
@@ -564,6 +574,7 @@ class QwenImageEditPipeline:
             traced=traced,
             profiler=profiler,
             profiler_iteration=profiler_iteration,
+            skip_vae=skip_vae,
         )
 
     def __call__(
@@ -579,6 +590,7 @@ class QwenImageEditPipeline:
         traced: bool = False,
         profiler: BenchmarkProfiler = None,
         profiler_iteration: int = 0,
+        skip_vae: bool = False,
     ) -> list[Image.Image]:
         prompt_count = len(prompts)
 
@@ -818,52 +830,56 @@ class QwenImageEditPipeline:
                             profiler_iteration=profiler_iteration,
                         )
 
-            logger.info("decoding image...")
+            if skip_vae:
+                logger.info("skipping VAE decode (warmup mode)")
+                output = []
+            else:
+                logger.info("decoding image...")
 
-            with profiler("vae", profiler_iteration) if profiler else nullcontext():
-                ttnn.synchronize_device(self.vae_device)
+                with profiler("vae", profiler_iteration) if profiler else nullcontext():
+                    ttnn.synchronize_device(self.vae_device)
 
-                tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
-                    tt_latents_step_list[self.vae_submesh_idx],
-                    dim=1,
-                    mesh_axis=sp_axis,
-                    use_hyperparams=True,
-                )
+                    tt_latents = self._ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
+                        tt_latents_step_list[self.vae_submesh_idx],
+                        dim=1,
+                        mesh_axis=sp_axis,
+                        use_hyperparams=True,
+                    )
 
-                torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
+                    torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
 
-                # Slice to noise-only tokens (exclude image condition tokens)
-                torch_latents = torch_latents[:, :noise_seq_len]
+                    # Slice to noise-only tokens (exclude image condition tokens)
+                    torch_latents = torch_latents[:, :noise_seq_len]
 
-                latents_height = self._height // self._vae_scale_factor
-                latents_width = self._width // self._vae_scale_factor
+                    latents_height = self._height // self._vae_scale_factor
+                    latents_width = self._width // self._vae_scale_factor
 
-                # Unpatchify: (B, seq, patch*patch*C) -> (B, H, W, C=16) channel-last
-                torch_latents = self.transformers[0].unpatchify(
-                    torch_latents,
-                    height=latents_height,
-                    width=latents_width,
-                )
+                    # Unpatchify: (B, seq, patch*patch*C) -> (B, H, W, C=16) channel-last
+                    torch_latents = self.transformers[0].unpatchify(
+                        torch_latents,
+                        height=latents_height,
+                        width=latents_width,
+                    )
 
-                # Denormalize latents
-                torch_latents = torch_latents / self._latents_scaling + self._latents_shift
+                    # Denormalize latents
+                    torch_latents = torch_latents / self._latents_scaling + self._latents_shift
 
-                if self._vae_decoder is None:
-                    torch_latents = torch_latents.permute(0, 3, 1, 2).unsqueeze(2)
-                    with torch.no_grad():
-                        decoded_output = self._torch_vae.decode(torch_latents).sample[:, :, 0]
-                else:
-                    self.prepare_vae()
+                    if self._vae_decoder is None:
+                        torch_latents = torch_latents.permute(0, 3, 1, 2).unsqueeze(2)
+                        with torch.no_grad():
+                            decoded_output = self._torch_vae.decode(torch_latents).sample[:, :, 0]
+                    else:
+                        self.prepare_vae()
 
-                    with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
-                        tt_latents, logical_h = self._vae_decoder.prepare_input(torch_latents)
-                        tt_decoded_output, logical_h = self._vae_decoder.forward(tt_latents, logical_h)
-                        decoded_output = self._vae_decoder.postprocess_output(tt_decoded_output, logical_h)
+                        with self.mesh_reshape(self.vae_device, self.vae_mesh_shape):
+                            tt_latents, logical_h = self._vae_decoder.prepare_input(torch_latents)
+                            tt_decoded_output, logical_h = self._vae_decoder.forward(tt_latents, logical_h)
+                            decoded_output = self._vae_decoder.postprocess_output(tt_decoded_output, logical_h)
 
-                image = self._image_processor.postprocess(decoded_output, output_type="pt")
-                assert isinstance(image, torch.Tensor)
+                    image = self._image_processor.postprocess(decoded_output, output_type="pt")
+                    assert isinstance(image, torch.Tensor)
 
-                output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+                    output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
 
         return output
 
@@ -994,8 +1010,9 @@ class QwenImageEditPipeline:
 
             sigma_difference_device = sigma_difference
 
-        # True CFG with norm preservation (only when actually doing CFG)
+        # True CFG: uncond + scale * (cond - uncond), done on-device with ttnn.lerp
         if do_true_cfg and self._parallel_config.cfg_parallel.factor > 1:
+            # With cfg_parallel > 1 and SP > 1, gather full sequence for CFG combine
             uncond = tensor.to_torch(
                 noise_pred_list[0].cpu(blocking=True),
                 mesh_axes=[None, sp_axis, None],
@@ -1007,11 +1024,7 @@ class QwenImageEditPipeline:
                 composer_device=self._submesh_devices[1],
             ).to(torch.float32)
 
-            combined = uncond + true_cfg_scale * (cond - uncond)
-
-            cond_norm = torch.norm(cond, dim=-1, keepdim=True)
-            combined_norm = torch.norm(combined, dim=-1, keepdim=True)
-            torch_noise_pred = combined * (cond_norm / (combined_norm + 1e-8))
+            torch_noise_pred = uncond + true_cfg_scale * (cond - uncond)
 
             for submesh_id, submesh_device in enumerate(self._submesh_devices):
                 noise_pred_list[submesh_id] = tensor.from_torch(
@@ -1024,6 +1037,12 @@ class QwenImageEditPipeline:
             ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
 
         return latents
+
+    def _extract_masked_hidden(self, hidden_states: torch.Tensor, mask: torch.Tensor):
+        bool_mask = mask.bool()
+        valid_lengths = bool_mask.sum(dim=1).long()
+        selected = hidden_states[bool_mask]
+        return torch.split(selected, valid_lengths.tolist(), dim=0)
 
     def _encode_prompts(
         self,
@@ -1040,20 +1059,21 @@ class QwenImageEditPipeline:
 
         negative_prompts = [x if x is not None else "" for x in negative_prompts]
 
-        img_prompt_prefix = ""
-        if images:
-            img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
-            for i in range(len(images)):
-                img_prompt_prefix += img_prompt_template.format(i + 1)
-
-        # For true CFG with cfg_parallel > 1, encode negative + positive as a batch
-        # so that submesh 0 gets negative embeds and submesh 1 gets positive embeds
         if do_true_cfg and self._parallel_config.cfg_parallel.factor > 1:
             all_prompts = negative_prompts + prompts
         else:
             all_prompts = prompts
 
+        img_prompt_prefix = ""
+        if images:
+            img_prompt_template = "Picture {}: <|vision_start|><|image_pad|><|vision_end|>"
+            for idx in range(len(images)):
+                img_prompt_prefix += img_prompt_template.format(idx + 1)
+
         all_prompts = [PROMPT_TEMPLATE_EDIT.format(img_prompt_prefix + e) for e in all_prompts]
+
+        if images:
+            return self._encode_prompts_with_images(all_prompts, images, num_images_per_prompt)
 
         embeds, mask = self._text_encoder.encode(
             all_prompts,
@@ -1062,8 +1082,46 @@ class QwenImageEditPipeline:
         )
 
         embeds[torch.logical_not(mask)] = 0.0
-
         return embeds[:, PROMPT_DROP_IDX_EDIT:], mask[:, PROMPT_DROP_IDX_EDIT:]
+
+    def _encode_prompts_with_images(
+        self,
+        formatted_prompts: list[str],
+        images: list,
+        num_images_per_prompt: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode prompts with image conditioning using the torch VL model."""
+        model_inputs = self._vl_processor(
+            text=formatted_prompts,
+            images=images,
+            padding=True,
+            return_tensors="pt",
+        )
+
+        with torch.no_grad():
+            outputs = self._torch_vl_model(
+                input_ids=model_inputs.input_ids,
+                attention_mask=model_inputs.attention_mask,
+                pixel_values=model_inputs.pixel_values.to(self._torch_vl_model.dtype),
+                image_grid_thw=model_inputs.image_grid_thw,
+                output_hidden_states=True,
+            )
+
+        hidden_states = outputs.hidden_states[-1]
+        split_hidden = self._extract_masked_hidden(hidden_states, model_inputs.attention_mask)
+        split_hidden = [e[PROMPT_DROP_IDX_EDIT:] for e in split_hidden]
+        attn_masks = [torch.ones(e.size(0), dtype=torch.long) for e in split_hidden]
+
+        max_seq = max(e.size(0) for e in split_hidden)
+        prompt_embeds = torch.stack([torch.cat([u, u.new_zeros(max_seq - u.size(0), u.size(1))]) for u in split_hidden])
+        encoder_mask = torch.stack([torch.cat([u, u.new_zeros(max_seq - u.size(0))]) for u in attn_masks])
+
+        prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
+        encoder_mask = encoder_mask.repeat_interleave(num_images_per_prompt, dim=0)
+
+        prompt_embeds[torch.logical_not(encoder_mask.bool())] = 0.0
+
+        return prompt_embeds, encoder_mask
 
     def synchronize_devices(self):
         for device in self._submesh_devices:
