@@ -116,8 +116,11 @@ class TTNNDistributedRMSNorm(TTNNModule):
     def move_weights_to_device_impl(self):
         """Move weights to TTNN device."""
         dim = self.torch_layer.weight.shape[0]
+        # Convert weight to bfloat16 before creating TTNN tensor
+        weight_bf16 = self.torch_layer.weight.to(torch.bfloat16)
         self.weight_distributed = ttnn.as_tensor(
-            self.torch_layer.weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]),
+            weight_bf16.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]),
+            dtype=ttnn.bfloat16,  # Explicitly specify bfloat16
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
         )
