@@ -122,8 +122,9 @@ void kernel_main() {
     noc_semaphore_wait(zero_init_sem_ptr, 1);
 
 #ifdef DEST_CHIP_ID
-    constexpr uint8_t dest_chip_ids[num_chips] = DEST_CHIP_ID;
-    constexpr uint8_t dest_mesh_ids[num_chips] = DEST_MESH_ID;
+    constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
+    constexpr uint8_t dest_chip_ids[total_mesh_devices] = DEST_CHIP_ID;
+    constexpr uint8_t dest_mesh_ids[total_mesh_devices] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
@@ -145,7 +146,8 @@ void kernel_main() {
         mesh_rows,
         mesh_cols,
         axis,
-        num_chips>(fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+        total_mesh_devices>(
+        fabric_connections, sem_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
 
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
@@ -212,7 +214,7 @@ void kernel_main() {
             mesh_rows,
             mesh_cols,
             axis,
-            num_chips>(
+            total_mesh_devices>(
             fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, exit_noc_semaphore_addr);
 
         volatile tt_l1_ptr uint32_t* exit_sem_ptr =
