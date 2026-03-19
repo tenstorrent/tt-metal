@@ -34,6 +34,7 @@ public:
     ~JitCompileRpcSession();
 
     void send(const CompileRequest& request);
+    CompileResponse send_and_wait(const CompileRequest& request);
     std::vector<CompileResponse> wait_all();
 
 private:
