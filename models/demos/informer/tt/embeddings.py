@@ -10,8 +10,15 @@ import torch
 
 import ttnn
 
-from .config import InformerConfig, get_ttnn_dtype
-from .ops import apply_dropout, linear, max_pool1d, sinusoidal_position_encoding, slice_to_length
+from .config import TILE_SIZE, InformerConfig, align_to_tile, get_ttnn_dtype
+from .ops import (
+    apply_dropout,
+    linear,
+    max_pool1d,
+    pad_last_dim_to_multiple,
+    sinusoidal_position_encoding,
+    slice_to_length,
+)
 from .state_io import to_float_tensor
 
 
@@ -30,9 +37,11 @@ class LinearEmbedding:
     ):
         weight_dtype = weight_dtype or dtype
         self.device = device
+        self.input_dim = input_dim
+        self.padded_input_dim = align_to_tile(input_dim)
         self.weight_torch = torch.randn((d_model, input_dim), generator=rng, dtype=torch.float32) * 0.02
         self.bias_torch = torch.zeros((d_model,), dtype=torch.float32) if use_bias else None
-        self.weight = ttnn.from_torch(self.weight_torch, device=device, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
+        self.weight = self._to_ttnn_weight(self.weight_torch, dtype=weight_dtype)
         self.bias = (
             ttnn.from_torch(self.bias_torch, device=device, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
             if self.bias_torch is not None
@@ -40,6 +49,13 @@ class LinearEmbedding:
         )
         self.dtype = dtype
         self.memory_config = memory_config
+
+    def _to_ttnn_weight(self, weight: torch.Tensor, *, dtype: ttnn.DataType) -> ttnn.Tensor:
+        if self.padded_input_dim != self.input_dim:
+            padded = torch.zeros((weight.shape[0], self.padded_input_dim), dtype=weight.dtype)
+            padded[:, : self.input_dim] = weight
+            weight = padded
+        return ttnn.from_torch(weight, device=self.device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
 
     def load_hf_state_dict(self, state: dict[str, torch.Tensor], *, strict: bool = True) -> dict[str, list[str]]:
         used: set[str] = set()
@@ -51,12 +67,7 @@ class LinearEmbedding:
         else:
             used.add("weight")
             self.weight_torch = to_float_tensor(weight)
-            self.weight = ttnn.from_torch(
-                self.weight_torch,
-                device=self.device,
-                dtype=self.weight.dtype,
-                layout=ttnn.TILE_LAYOUT,
-            )
+            self.weight = self._to_ttnn_weight(self.weight_torch, dtype=self.weight.dtype)
 
         bias = state.get("bias")
         if self.bias is None:
@@ -85,6 +96,8 @@ class LinearEmbedding:
         return self.load_hf_state_dict(state, strict=strict)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if self.padded_input_dim != self.input_dim:
+            x, _ = pad_last_dim_to_multiple(x, multiple=TILE_SIZE, value=0.0)
         return linear(x, self.weight, self.bias, dtype=self.dtype, memory_config=self.memory_config)
 
 
@@ -268,6 +281,8 @@ class ConvDistillLayer:
         else:
             output = result
             out_length = output.shape[1]
+        if output.memory_config().is_sharded():
+            output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
         output = ttnn.reshape(output, (batch, out_length, channels))
         output = ttnn.to_memory_config(output, self.output_memory_config)
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)

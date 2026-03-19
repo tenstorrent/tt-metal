@@ -50,9 +50,9 @@ informer/
 
 ## Setup
 ```bash
-./build_metal.sh
 ./create_venv.sh
 source python_env/bin/activate
+./build_metal.sh
 pip install -r models/demos/informer/requirements.txt
 ```
 
