@@ -163,20 +163,16 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     }
 }
 
-// TODO(jit-server-refactor): BuildCompileRequest currently pulls many fields
+// TODO(jit-server-refactor): BuildTargetRecipe currently pulls many fields
 // from JitBuildState via PoC-only getters. Move this to a dedicated builder API
 // owned by jit_build so ProgramImpl does not encode JitBuildState layout details.
-jit_server::CompileRequest BuildCompileRequest(
-    const JitBuildState& build_state, const std::shared_ptr<Kernel>& kernel, const std::string& kernel_path_suffix) {
-    jit_server::CompileRequest request;
-    request.build_key = build_state.get_env().get_build_key();
-    request.kernel_name = kernel_path_suffix;
-    request.target_name = build_state.get_target_name();
-    request.gpp = build_state.get_env().get_gpp();
-    request.cflags = build_state.get_cflags();
-    request.includes = build_state.get_includes();
-    request.compiler_opt_level = std::string(kernel->get_compiler_opt_level());
-    request.linker_opt_level = std::string(kernel->get_linker_opt_level());
+jit_server::TargetRecipe BuildTargetRecipe(const JitBuildState& build_state, const std::shared_ptr<Kernel>& kernel) {
+    jit_server::TargetRecipe target;
+    target.target_name = build_state.get_target_name();
+    target.cflags = build_state.get_cflags();
+    target.includes = build_state.get_includes();
+    target.compiler_opt_level = std::string(kernel->get_compiler_opt_level());
+    target.linker_opt_level = std::string(kernel->get_linker_opt_level());
 
     std::string defines = build_state.get_defines();
     if (build_state.get_process_defines_at_compile()) {
@@ -205,25 +201,25 @@ jit_server::CompileRequest BuildCompileRequest(
             defines += "\" ";
         }
     });
-    request.defines = std::move(defines);
+    target.defines = std::move(defines);
 
-    std::string includes = request.includes;
+    std::string includes = target.includes;
     kernel->process_include_paths([&includes](const std::string& path) { includes += "-I" + path + " "; });
-    request.includes = std::move(includes);
+    target.includes = std::move(includes);
 
     for (const auto& src : build_state.get_srcs()) {
-        request.srcs.push_back(src);
+        target.srcs.push_back(src);
     }
     for (const auto& obj : build_state.get_objs()) {
-        request.objs.push_back(obj);
+        target.objs.push_back(obj);
     }
 
-    request.lflags = build_state.get_lflags();
-    request.extra_link_objs = build_state.get_extra_link_objs();
-    request.linker_script = build_state.get_linker_script();
-    request.weakened_firmware_name = build_state.get_weakened_firmware_name();
-    request.firmware_is_kernel_object = build_state.get_firmware_is_kernel_object();
-    return request;
+    target.lflags = build_state.get_lflags();
+    target.extra_link_objs = build_state.get_extra_link_objs();
+    target.linker_script = build_state.get_linker_script();
+    target.weakened_firmware_name = build_state.get_weakened_firmware_name();
+    target.firmware_is_kernel_object = build_state.get_firmware_is_kernel_object();
+    return target;
 }
 
 std::vector<std::uint8_t> read_file_content(const std::string& path) {
@@ -238,20 +234,13 @@ std::vector<std::uint8_t> read_file_content(const std::string& path) {
     return data;
 }
 
-void SendGenfilesToServer(
-    jit_server::JitCompileRpcClient& rpc_client,
-    std::uint64_t build_key,
-    const std::string& kernel_name,
-    const std::string& genfiles_dir,
-    const std::shared_ptr<Kernel>& kernel) {
-    jit_server::PrepareGenfilesRequest request;
-    request.build_key = build_key;
-    request.kernel_name = kernel_name;
-
+std::vector<jit_server::GeneratedFile> CollectGenfiles(
+    const std::string& genfiles_dir, const std::shared_ptr<Kernel>& kernel) {
+    std::vector<jit_server::GeneratedFile> files;
     auto add_file = [&](const std::string& name) {
         auto content = read_file_content(genfiles_dir + name);
         if (!content.empty()) {
-            request.files.push_back(jit_server::GeneratedFile{name, std::move(content)});
+            files.push_back(jit_server::GeneratedFile{name, std::move(content)});
         }
     };
 
@@ -265,99 +254,7 @@ void SendGenfilesToServer(
     } else {
         add_file("kernel_includes.hpp");
     }
-
-    auto response = rpc_client.prepareGenfiles(request);
-    TT_FATAL(
-        response.success, "Remote prepareGenfiles failed for kernel {}: {}", kernel->name(), response.error_message);
-}
-
-struct RemoteCompileResult {
-    int index;
-    std::string elf_path;
-    jit_server::CompileResponse response;
-};
-
-void RemoteJitCompileKernel(
-    const std::string& endpoint,
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    JitBuildOptions& build_options,
-    const DeviceBuildEnv& build_env) {
-    try {
-        jit_build_genfiles_descriptors(build_env.build_env, build_options);
-
-        const std::string& kernel_path_suffix = build_options.name;
-        uint32_t core_type_idx = MetalContext::instance().hal().get_programmable_core_type_index(
-            kernel->get_kernel_programmable_core_type());
-        uint32_t proc_class_idx = enchantum::to_underlying(kernel->get_kernel_processor_class());
-
-        if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-            jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
-        } else {
-            jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
-        }
-
-        std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
-        {
-            jit_server::JitCompileRpcClient rpc_client(endpoint);
-            SendGenfilesToServer(rpc_client, build_env.build_key(), kernel_path_suffix, genfiles_dir, kernel);
-        }
-
-        const int num_binaries = kernel->expected_num_binaries();
-        std::vector<std::future<RemoteCompileResult>> futures;
-        futures.reserve(num_binaries);
-
-        for (int i = 0; i < num_binaries; ++i) {
-            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-                device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
-
-            auto request = BuildCompileRequest(build_state, kernel, kernel_path_suffix);
-            std::string elf_path = build_state.get_target_out_path(kernel_path_suffix);
-
-            futures.push_back(std::async(
-                std::launch::async, [endpoint, request = std::move(request), elf_path = std::move(elf_path), i]() {
-                    jit_server::JitCompileRpcClient rpc_client(endpoint);
-                    RemoteCompileResult result;
-                    result.index = i;
-                    result.elf_path = elf_path;
-                    result.response = rpc_client.compile(request);
-                    return result;
-                }));
-        }
-
-        std::vector<std::string> elf_paths(num_binaries);
-        for (auto& future : futures) {
-            auto result = future.get();
-            TT_FATAL(
-                result.response.success,
-                "Remote JIT compile failed for kernel {}: {}",
-                kernel->name(),
-                result.response.error_message);
-            TT_FATAL(
-                result.response.elf_blobs.size() == 1,
-                "Expected 1 ELF blob but got {} for kernel {}",
-                result.response.elf_blobs.size(),
-                kernel->name());
-
-            // TODO(jit-server-refactor): load ELF blob directly into ll_api::memory
-            // via a from-bytes constructor + set_binaries, avoiding the file round-trip.
-            // Blocked on ll_api::memory only supporting file-path construction (mmap).
-            fs::create_directories(fs::path(result.elf_path).parent_path());
-            {
-                tt::jit_build::utils::FileRenamer tmp(result.elf_path);
-                std::ofstream elf_file(tmp.path(), std::ios::binary);
-                TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
-                elf_file.write(
-                    reinterpret_cast<const char*>(result.response.elf_blobs[0].data.data()),
-                    static_cast<std::streamsize>(result.response.elf_blobs[0].data.size()));
-            }
-            elf_paths[result.index] = std::move(result.elf_path);
-        }
-
-        kernel->set_elf_paths(build_env.build_key(), std::move(elf_paths));
-    } catch (std::runtime_error& ex) {
-        TT_THROW("Remote JIT compile failed for {} {}", kernel->name(), ex.what());
-    }
+    return files;
 }
 
 #ifdef GENERATE_HASH_LOG
@@ -1723,76 +1620,159 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         !remote_jit_compile_enabled || !remote_jit_compile_endpoint.empty(),
         "Remote JIT compile is enabled via TT_METAL_JIT_SERVER_ENABLE=1, but TT_METAL_JIT_SERVER_ENDPOINT is not set");
 
-    std::random_device rd;
-    std::mt19937 rng(rd());
-    for (auto& kernels : kernels_) {
-        std::vector<KernelHandle> order;
-        order.reserve(kernels.size());
-        for (const auto& [id, k] : kernels) {
-            order.push_back(id);
-        }
-        std::shuffle(order.begin(), order.end(), rng);
-        for (KernelHandle id : order) {
-            auto& kernel = kernels.at(id);
-            validate_kernel_placement(force_slow_dispatch, kernel);
-            auto build_fn =
-                [kernel, device, this, &build_env, remote_jit_compile_enabled, remote_jit_compile_endpoint] {
-                    JitBuildOptions build_options(build_env.build_env);
-                    kernel->set_build_options(build_options);
-                    if (this->compiled_.empty()) {
-                        this->set_remote_circular_buffer_init(kernel);
-                    }
-                    this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
-
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
-
-                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-                    kernel->set_full_name(kernel_path_suffix);
-                    build_options.set_name(kernel_path_suffix);
-
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                        tt::TargetDevice::Mock) {
-                        kernel->register_kernel_elf_paths_with_watcher(*device);
-                    }
-
-                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                                   tt::TargetDevice::Mock;
-
-                    if (!is_mock) {
-                        jit_build_once(kernel_hash, [&] {
-                            if (remote_jit_compile_enabled) {
-                                RemoteJitCompileKernel(
-                                    remote_jit_compile_endpoint, device, kernel, build_options, build_env);
-                            } else {
-                                GenerateBinaries(device, build_options, kernel);
-                            }
-                        });
-                    } else {
-                        std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
-                        kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
-                    }
-
-                    Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                };
-            if (remote_jit_compile_enabled) {
-                static tf::Executor remote_compile_executor(std::thread::hardware_concurrency());
-                auto task = std::make_shared<std::packaged_task<void()>>(build_fn);
-                std::shared_future<void> fut(task->get_future());
-                remote_compile_executor.silent_async([task]() { (*task)(); });
-                events.emplace_back(std::move(fut));
-            } else {
-                launch_build_step(build_fn, events);
-            }
-        }
-    }
-    sync_build_steps(events);
-
-    // Mock devices don't have binaries to read
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
+
+    if (remote_jit_compile_enabled && !is_mock) {
+        // Single connection for entire program. Prepare each kernel sequentially,
+        // send compile requests immediately (pipelined), then collect all responses.
+        jit_server::JitCompileRpcSession session(remote_jit_compile_endpoint);
+
+        struct KernelElfInfo {
+            std::shared_ptr<Kernel> kernel;
+            std::vector<std::string> elf_paths;
+        };
+        std::vector<KernelElfInfo> kernel_infos;
+
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel);
+
+                JitBuildOptions build_options(build_env.build_env);
+                kernel->set_build_options(build_options);
+                if (this->compiled_.empty()) {
+                    this->set_remote_circular_buffer_init(kernel);
+                }
+                this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+                this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+                this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+                this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+
+                auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+                const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+                kernel->set_full_name(kernel_path_suffix);
+                build_options.set_name(kernel_path_suffix);
+                kernel->register_kernel_elf_paths_with_watcher(*device);
+
+                jit_build_genfiles_descriptors(build_env.build_env, build_options);
+                if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+                    jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
+                } else {
+                    jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
+                }
+
+                std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
+                uint32_t core_type_idx = MetalContext::instance().hal().get_programmable_core_type_index(
+                    kernel->get_kernel_programmable_core_type());
+                uint32_t proc_class_idx = enchantum::to_underlying(kernel->get_kernel_processor_class());
+
+                jit_server::CompileRequest request;
+                request.build_key = build_env.build_key();
+                request.kernel_name = kernel_path_suffix;
+                request.gpp = build_env.build_env.get_gpp();
+                request.generated_files = CollectGenfiles(genfiles_dir, kernel);
+
+                KernelElfInfo info;
+                info.kernel = kernel;
+                for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
+                    const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
+                        device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
+                    request.targets.push_back(BuildTargetRecipe(build_state, kernel));
+                    info.elf_paths.push_back(build_state.get_target_out_path(kernel_path_suffix));
+                }
+                session.send(request);
+
+                Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                kernel_infos.push_back(std::move(info));
+            }
+        }
+
+        // Collect all responses and write ELFs.
+        auto all_responses = session.wait_all();
+        TT_FATAL(
+            all_responses.size() == kernel_infos.size(),
+            "Expected {} responses but got {}",
+            kernel_infos.size(),
+            all_responses.size());
+        for (size_t k = 0; k < kernel_infos.size(); ++k) {
+            auto& info = kernel_infos[k];
+            auto& resp = all_responses[k];
+            TT_FATAL(
+                resp.success, "Remote JIT compile failed for kernel {}: {}", info.kernel->name(), resp.error_message);
+            TT_FATAL(
+                resp.elf_blobs.size() == info.elf_paths.size(),
+                "Expected {} ELF blobs but got {} for kernel {}",
+                info.elf_paths.size(),
+                resp.elf_blobs.size(),
+                info.kernel->name());
+
+            std::vector<std::string> elf_paths;
+            elf_paths.reserve(info.elf_paths.size());
+            for (size_t i = 0; i < info.elf_paths.size(); ++i) {
+                fs::create_directories(fs::path(info.elf_paths[i]).parent_path());
+                {
+                    tt::jit_build::utils::FileRenamer tmp(info.elf_paths[i]);
+                    std::ofstream elf_file(tmp.path(), std::ios::binary);
+                    TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
+                    elf_file.write(
+                        reinterpret_cast<const char*>(resp.elf_blobs[i].data.data()),
+                        static_cast<std::streamsize>(resp.elf_blobs[i].data.size()));
+                }
+                elf_paths.push_back(info.elf_paths[i]);
+            }
+            info.kernel->set_elf_paths(build_env.build_key(), std::move(elf_paths));
+        }
+    } else {
+        // Local compile path (original flow).
+        std::random_device rd;
+        std::mt19937 rng(rd());
+        for (auto& kernels : kernels_) {
+            std::vector<KernelHandle> order;
+            order.reserve(kernels.size());
+            for (const auto& [id, k] : kernels) {
+                order.push_back(id);
+            }
+            std::shuffle(order.begin(), order.end(), rng);
+            for (KernelHandle id : order) {
+                auto& kernel = kernels.at(id);
+                validate_kernel_placement(force_slow_dispatch, kernel);
+                launch_build_step(
+                    [kernel, device, this, &build_env, is_mock] {
+                        JitBuildOptions build_options(build_env.build_env);
+                        kernel->set_build_options(build_options);
+                        if (this->compiled_.empty()) {
+                            this->set_remote_circular_buffer_init(kernel);
+                        }
+                        this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+                        this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+                        this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+                        this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+
+                        auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+                        const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+                        kernel->set_full_name(kernel_path_suffix);
+                        build_options.set_name(kernel_path_suffix);
+
+                        if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                            tt::TargetDevice::Mock) {
+                            kernel->register_kernel_elf_paths_with_watcher(*device);
+                        }
+
+                        if (!is_mock) {
+                            jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
+                        } else {
+                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
+                        }
+
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                    },
+                    events);
+            }
+        }
+        sync_build_steps(events);
+    }
+
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {

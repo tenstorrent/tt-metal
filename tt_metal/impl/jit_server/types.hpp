@@ -15,26 +15,10 @@ struct GeneratedFile {
     std::vector<std::uint8_t> content;
 };
 
-struct PrepareGenfilesRequest {
-    std::uint64_t build_key = 0;
-    std::string kernel_name;
-    std::vector<GeneratedFile> files;
-};
-
-struct PrepareGenfilesResponse {
-    bool success = false;
-    std::string error_message;
-};
-
-struct CompileRequest {
-    std::uint64_t build_key = 0;
-    std::string kernel_name;
+struct TargetRecipe {
     std::string target_name;
 
-    // Toolchain.
-    std::string gpp;
-
-    // Compile recipe (per-source).
+    // Compile recipe.
     std::string cflags;
     std::string defines;
     std::string includes;
@@ -49,6 +33,14 @@ struct CompileRequest {
     std::string weakened_firmware_name;
     bool firmware_is_kernel_object = false;
     std::string linker_opt_level;
+};
+
+struct CompileRequest {
+    std::uint64_t build_key = 0;
+    std::string kernel_name;
+    std::string gpp;
+    std::vector<TargetRecipe> targets;
+    std::vector<GeneratedFile> generated_files;
 };
 
 struct ElfBlob {

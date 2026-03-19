@@ -15,10 +15,8 @@
 
 namespace tt::tt_metal::jit_server {
 
-JitCompileServerController::JitCompileServerController(
-    JitCompileService::CompileCallback compile_callback,
-    JitCompileService::PrepareGenfilesCallback prepare_genfiles_callback) :
-    jit_compile_service_(std::move(compile_callback), std::move(prepare_genfiles_callback)) {}
+JitCompileServerController::JitCompileServerController(JitCompileService::CompileCallback compile_callback) :
+    jit_compile_service_(std::move(compile_callback)) {}
 
 JitCompileServerController::~JitCompileServerController() { stop(); }
 
