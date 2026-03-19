@@ -12,8 +12,6 @@ import ttnn
 from models.demos.deepseek_v3.tt.blaze_moe_gate import MoEGate
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
-
-# from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,

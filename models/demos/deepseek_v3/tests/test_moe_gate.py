@@ -8,13 +8,12 @@ import os
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.blaze_moe_gate import MoEGate
-
-# from models.demos.deepseek_v3.tt.moe_gate import MoEGate
+from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -24,7 +23,10 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     run_module_forward,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.ttnn.utils_for_testing import comp_pcc
+
+# from models.demos.deepseek_v3.tt.blaze_moe_gate import MoEGate
 
 
 def _clone_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -94,6 +96,13 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"trace_region_size": 7000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
 @pytest.mark.parametrize(
     "mode,batch_size_per_row,seq_len",
     [
@@ -182,7 +191,44 @@ def test_forward_pass(
     )
 
     # TTNN forward pass using utility function
+    profiler = BenchmarkProfiler()
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
+    run_config["topk_fallback"] = False
+    tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+    ttnn.synchronize_device(mesh_device)
+    # capture warmup trace
+    trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    warmup_iters = 5
+    num_iters = 10
+    for i in range(warmup_iters):
+        tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+    ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture main trace
+    logger.info(f"Capturing main trace with {num_iters} iterations")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for i in range(num_iters):
+        tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Execute warmup trace
+    logger.info("Executing warmup trace")
+    profiler.start("warmup")
+    ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id_warmup)
+    profiler.end("warmup")
+
+    # Execute main trace with signposts
+    logger.info("Executing main trace")
+    signpost("start")
+    profiler.start("main")
+    ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+    ttnn.release_trace(mesh_device, trace_id)
+    profiler.end("main")
+    signpost("stop")
+
     tt_topk_weights, tt_topk_indices = run_module_forward(MoEGate, mode, tt_input, run_config)
 
     # Verify output memory config matches expected
