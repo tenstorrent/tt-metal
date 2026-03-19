@@ -34,35 +34,47 @@ std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(con
         }
     }
 
-    // Add intra-mesh edges from MESH connections (device-device within a mesh, populated by descriptor)
-    if (mgd.has_connections_of_type("MESH")) {
-        for (ConnectionId conn_id : mgd.connections_by_type("MESH")) {
-            const auto& conn = mgd.get_connection(conn_id);
-            const auto& src_inst = mgd.get_instance(conn.nodes[0]);
-            const auto& dst_inst = mgd.get_instance(conn.nodes[1]);
-            if (src_inst.kind != NodeKind::Device || dst_inst.kind != NodeKind::Device) {
-                continue;
-            }
-            GlobalNodeId src_mesh_global = src_inst.hierarchy.back();
-            GlobalNodeId dst_mesh_global = dst_inst.hierarchy.back();
-            if (src_mesh_global != dst_mesh_global) {
-                continue;
-            }
-            const auto& mesh_inst = mgd.get_instance(src_mesh_global);
-            MeshId mesh_id(mesh_inst.local_id);
-            FabricNodeId src_node(mesh_id, src_inst.local_id);
-            FabricNodeId dst_node(mesh_id, dst_inst.local_id);
-            if (src_node == dst_node) {
-                continue;
-            }
-            auto it = adjacency_maps.find(mesh_id);
-            if (it != adjacency_maps.end()) {
-                for (uint32_t i = 0; i < conn.count; ++i) {
-                    it->second[src_node].push_back(dst_node);
+    // Add intra-mesh/intra-switch edges from MESH and SWITCH connections (device-device within a mesh/switch, populated
+    // by descriptor) Both MESH and SWITCH connection types contain intra-connections for their respective instance
+    // types
+    auto process_intra_connections = [&](const std::string& connection_type) {
+        if (mgd.has_connections_of_type(connection_type)) {
+            for (ConnectionId conn_id : mgd.connections_by_type(connection_type)) {
+                const auto& conn = mgd.get_connection(conn_id);
+                const auto& src_inst = mgd.get_instance(conn.nodes[0]);
+                const auto& dst_inst = mgd.get_instance(conn.nodes[1]);
+                if (src_inst.kind != NodeKind::Device || dst_inst.kind != NodeKind::Device) {
+                    continue;
+                }
+                GlobalNodeId src_mesh_or_switch_global = src_inst.hierarchy.back();
+                GlobalNodeId dst_mesh_or_switch_global = dst_inst.hierarchy.back();
+                if (src_mesh_or_switch_global != dst_mesh_or_switch_global) {
+                    continue;
+                }
+                const auto& mesh_or_switch_inst = mgd.get_instance(src_mesh_or_switch_global);
+                // Handle both meshes and switches (switches are treated as meshes for adjacency graph purposes)
+                if (mesh_or_switch_inst.kind != NodeKind::Mesh && mesh_or_switch_inst.kind != NodeKind::Switch) {
+                    continue;
+                }
+                MeshId mesh_id(mesh_or_switch_inst.local_id);
+                FabricNodeId src_node(mesh_id, src_inst.local_id);
+                FabricNodeId dst_node(mesh_id, dst_inst.local_id);
+                if (src_node == dst_node) {
+                    continue;
+                }
+                auto it = adjacency_maps.find(mesh_id);
+                if (it != adjacency_maps.end()) {
+                    for (uint32_t i = 0; i < conn.count; ++i) {
+                        it->second[src_node].push_back(dst_node);
+                    }
                 }
             }
         }
-    }
+    };
+
+    // Process both MESH and SWITCH connection types
+    process_intra_connections("MESH");
+    process_intra_connections("SWITCH");
 
     std::map<MeshId, AdjacencyGraph<FabricNodeId>> result;
     for (auto& [mesh_id, adj_map] : adjacency_maps) {

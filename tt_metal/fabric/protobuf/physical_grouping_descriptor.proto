@@ -108,7 +108,9 @@ package tt.tt_fabric.proto;
 // ASIC Location - predefined constants for ASIC positions 1-8 within a tray
 // These enum values are always available for use in grouping definitions
 enum AsicLocation {
-    // Reserved value - protobuf requires enum to start at 0
+    // Unspecified location - means "any ASIC ID" (no constraint during solving)
+    // When used, the solver will not add an ASIC location constraint, allowing
+    // the ASIC to be assigned to any available ASIC ID
     ASIC_LOCATION_UNSPECIFIED = 0;
 
     // ASIC locations 1-8 (predefined constants)

@@ -610,6 +610,8 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
 
     for (std::size_t stage_index = 0; stage_index < physical_pipeline_stage_configs.size(); stage_index++) {
         const auto& stage_config = physical_pipeline_stage_configs[stage_index];
+        // FIXME: With topology mapper, stage_index % num_procs may no longer map to the rank that owns
+        // the entry/exit ASICs (tray_id, asic_location); multi-rank-per-host can place those chips on a different rank.
         auto stage_hostname = physical_system_descriptor.get_hostname_for_rank(stage_index % num_procs);
         auto entry_node_asic_id = physical_system_descriptor.get_asic_id(
             stage_hostname,

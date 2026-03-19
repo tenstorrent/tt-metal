@@ -107,9 +107,6 @@ PhysicalGroupingDescriptor::PhysicalGroupingDescriptor(const std::string& text_p
 
     TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse PhysicalGroupingDescriptor textproto");
 
-    // Uniquify duplicate names before validation
-    uniquify_duplicate_names(temp_proto);
-
     // Validate the proto
     std::vector<std::string> all_errors = static_validate(temp_proto);
 
@@ -163,19 +160,16 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_name(cons
     auto name_it = resolved_groupings_cache_.find(grouping_name);
     if (name_it != resolved_groupings_cache_.end()) {
         std::vector<GroupingInfo> result;
-        // Collect all groupings with this name (across all types)
         for (const auto& [type, groupings] : name_it->second) {
             result.insert(result.end(), groupings.begin(), groupings.end());
         }
         return result;
     }
-    // Fallback: return empty vector if not found in cache
     return {};
 }
 
 std::vector<GroupingInfo> PhysicalGroupingDescriptor::get_groupings_by_type(const std::string& grouping_type) const {
     std::vector<GroupingInfo> result;
-    // Search through all names to find groupings with the specified type
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         auto type_it = type_map.find(grouping_type);
         if (type_it != type_map.end()) {
@@ -232,61 +226,6 @@ std::string PhysicalGroupingDescriptor::get_validation_report(const std::vector<
     return report.str();
 }
 
-// Uniquify duplicate names in the proto by adding unique IDs
-void PhysicalGroupingDescriptor::uniquify_duplicate_names(proto::PhysicalGroupings& proto) {
-    std::unordered_map<std::string, uint32_t> name_counters;
-    std::unordered_set<std::string> used_names;
-
-    for (int i = 0; i < proto.groupings_size(); ++i) {
-        auto* grouping = proto.mutable_groupings(i);
-        std::string current_name = PhysicalGroupingDescriptor::get_grouping_name(*grouping);
-
-        if (current_name.empty()) {
-            continue;  // Skip if name is empty (will be caught by other validation)
-        }
-
-        // If this name is already used, uniquify it
-        if (used_names.contains(current_name)) {
-            // Generate unique name with ID suffix
-            uint32_t& counter = name_counters[current_name];
-            std::string unique_name;
-            do {
-                counter++;
-                unique_name = fmt::format("{}_{}", current_name, counter);
-            } while (used_names.contains(unique_name));
-
-            // Update the proto with the unique name
-            grouping->set_name(unique_name);
-            used_names.insert(unique_name);
-        } else {
-            // First occurrence, keep as is
-            used_names.insert(current_name);
-            name_counters[current_name] = 0;  // Initialize counter
-        }
-    }
-}
-
-// Validate that all grouping names are unique (should be true after uniquification)
-void PhysicalGroupingDescriptor::validate_unique_names(
-    const proto::PhysicalGroupings& proto, std::vector<std::string>& errors) {
-    std::unordered_set<std::string> names;
-
-    for (int i = 0; i < proto.groupings_size(); ++i) {
-        const auto& grouping = proto.groupings(i);
-        std::string name = PhysicalGroupingDescriptor::get_grouping_name(grouping);
-
-        if (name.empty()) {
-            continue;  // Empty names are caught by other validation
-        }
-
-        if (names.contains(name)) {
-            errors.push_back(fmt::format(
-                "Grouping name '{}' appears multiple times (internal error: uniquification failed).", name));
-        }
-        names.insert(name);
-    }
-}
-
 std::vector<std::string> PhysicalGroupingDescriptor::static_validate(const proto::PhysicalGroupings& proto) {
     std::vector<std::string> all_errors;
 
@@ -302,7 +241,6 @@ std::vector<std::string> PhysicalGroupingDescriptor::static_validate(const proto
         validate_grouping_references(proto, all_errors);
         validate_counts(proto, all_errors);
         validate_grouping_structure(proto, all_errors);
-        validate_unique_names(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -502,19 +440,16 @@ void PhysicalGroupingDescriptor::instance_validate(std::vector<std::string>& err
 }
 
 void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string>& errors) const {
-    // Build dependency graph and identify leaf vs non-leaf groupings
-    std::unordered_map<std::string, bool> has_asic_locations;  // grouping -> true if uses ASIC locations
-    std::unordered_map<std::string, bool> has_grouping_refs;   // grouping -> true if uses grouping refs
-    std::unordered_set<std::string> all_grouping_types;
-
-    // First pass: identify all groupings and their characteristics
+    // Validation: At least one leaf grouping uses ASIC locations
+    // A leaf grouping is one that has ASIC locations and no grouping references
+    bool has_leaf_with_asic = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         for (const auto& [type, groupings] : type_map) {
-            all_grouping_types.insert(type);
-            bool has_asic = false;
-            bool has_refs = false;
-
+            // Check each individual grouping
             for (const auto& grouping : groupings) {
+                bool has_asic = false;
+                bool has_refs = false;
+
                 for (const auto& item : grouping.items) {
                     if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
                         has_asic = true;
@@ -522,20 +457,18 @@ void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string
                         has_refs = true;
                     }
                 }
+
+                // A leaf grouping has ASIC locations but no grouping references
+                if (has_asic && !has_refs) {
+                    has_leaf_with_asic = true;
+                    break;
+                }
             }
-
-            // Update flags for this type (may be set by multiple names with same type)
-            has_asic_locations[type] = has_asic_locations[type] || has_asic;
-            has_grouping_refs[type] = has_grouping_refs[type] || has_refs;
+            if (has_leaf_with_asic) {
+                break;
+            }
         }
-    }
-
-    // Validation: At least one leaf grouping uses ASIC locations
-    // A leaf grouping is one that has ASIC locations and no grouping references
-    bool has_leaf_with_asic = false;
-    for (const auto& type : all_grouping_types) {
-        if (has_asic_locations[type] && !has_grouping_refs[type]) {
-            has_leaf_with_asic = true;
+        if (has_leaf_with_asic) {
             break;
         }
     }
@@ -545,19 +478,17 @@ void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string
 }
 
 void PhysicalGroupingDescriptor::validate_asic_location_usage(std::vector<std::string>& errors) const {
-    // Build dependency graph and identify groupings
-    std::unordered_map<std::string, bool> has_asic_locations;  // grouping -> true if uses ASIC locations
-    std::unordered_map<std::string, bool> has_grouping_refs;   // grouping -> true if uses grouping refs
-    std::unordered_set<std::string> all_grouping_types;
-
-    // First pass: identify all groupings and their characteristics
+    // Validation: Only leaf groupings should use ASIC locations, others should not
+    // A single grouping should not mix ASIC locations and grouping references
+    // However, different groupings of the same type can have different structures
+    // (e.g., some MESH groupings can be leaf with ASIC locations, others can reference other groupings)
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         for (const auto& [type, groupings] : type_map) {
-            all_grouping_types.insert(type);
-            bool has_asic = false;
-            bool has_refs = false;
-
+            // Check each individual grouping
             for (const auto& grouping : groupings) {
+                bool has_asic = false;
+                bool has_refs = false;
+
                 for (const auto& item : grouping.items) {
                     if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
                         has_asic = true;
@@ -565,22 +496,18 @@ void PhysicalGroupingDescriptor::validate_asic_location_usage(std::vector<std::s
                         has_refs = true;
                     }
                 }
+
+                // A single grouping should not have both ASIC locations and grouping references
+                if (has_asic && has_refs) {
+                    errors.push_back(fmt::format(
+                        "Grouping '{}' (name: '{}') uses ASIC locations but also has grouping references. A single "
+                        "grouping should be either a leaf grouping (using ASIC locations) or reference other "
+                        "groupings, "
+                        "but not both.",
+                        type,
+                        name));
+                }
             }
-
-            // Update flags for this type (may be set by multiple names with same type)
-            has_asic_locations[type] = has_asic_locations[type] || has_asic;
-            has_grouping_refs[type] = has_grouping_refs[type] || has_refs;
-        }
-    }
-
-    // Validation: Only leaf groupings should use ASIC locations, others should not
-    // A grouping that has grouping references should not have ASIC locations
-    for (const auto& type : all_grouping_types) {
-        if (has_grouping_refs[type] && has_asic_locations[type]) {
-            errors.push_back(fmt::format(
-                "Grouping '{}' uses ASIC locations but also has grouping references. Only leaf groupings should use "
-                "ASIC locations",
-                type));
         }
     }
 }
@@ -819,14 +746,9 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
             // Validate ASIC location enum value
             if (has_asic_location) {
                 proto::AsicLocation loc = instance.asic_location();
-                if (loc == proto::ASIC_LOCATION_UNSPECIFIED) {
-                    errors.push_back(fmt::format(
-                        "Grouping '{}' instance {} uses ASIC_LOCATION_UNSPECIFIED; must use ASIC_LOCATION_1 through "
-                        "ASIC_LOCATION_8",
-                        name,
-                        j));
-                }
-                if (static_cast<int>(loc) < 1 || static_cast<int>(loc) > 8) {
+                // ASIC_LOCATION_UNSPECIFIED (0) is allowed - it means "any ASIC ID" (no constraint)
+                // Only validate that the value is in the valid range (0-8)
+                if (static_cast<int>(loc) < 0 || static_cast<int>(loc) > 8) {
                     errors.push_back(fmt::format(
                         "Grouping '{}' instance {} uses invalid ASIC location value {}",
                         name,
