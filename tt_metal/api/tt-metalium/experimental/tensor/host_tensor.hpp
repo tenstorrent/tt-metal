@@ -65,7 +65,16 @@ public:
      */
     HostTensor();
 
+    /**
+     * Constructs a host tensor from a distributed host buffer.
+     */
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
+
+    /**
+     * Constructs a host tensor from a single device host storage.
+     * The buffer is occupies the 0x0 shard of the distributed host buffer.
+     */
+    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     /**
      * Move constructor with new spec and topology.

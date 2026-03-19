@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal {
@@ -69,6 +70,24 @@ TEST(HostTensorTest, ConstructionWithSpec) {
     EXPECT_EQ(tensor.logical_shape(), shape);
     EXPECT_EQ(tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
+}
+
+TEST(HostTensorTest, ConstructionWithHostBuffer) {
+    Shape shape{2, 32};
+    auto spec = create_simple_spec(shape, DataType::FLOAT32);
+    auto topology = TensorTopology();
+
+    std::vector<float> data(shape.volume(), 1.0f);
+    HostBuffer host_buffer(std::move(data));
+
+    HostTensor tensor(std::move(host_buffer), std::move(spec), std::move(topology));
+
+    EXPECT_EQ(tensor.logical_shape(), shape);
+    EXPECT_EQ(tensor.dtype(), DataType::FLOAT32);
+    EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
+
+    const auto& buffer = tensor.buffer();
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(0, 0)).has_value());
 }
 
 TEST(HostTensorTest, LogicalVolume) {
