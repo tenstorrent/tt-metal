@@ -135,8 +135,10 @@ HostTensor pad(
     const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
-Tensor unpad(
-    const Tensor& tensor, const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end);
+HostTensor unpad(
+    const HostTensor& tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

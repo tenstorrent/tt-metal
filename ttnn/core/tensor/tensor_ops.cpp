@@ -191,7 +191,7 @@ Tensor unpad(
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
-    auto output = tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
+    auto output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
