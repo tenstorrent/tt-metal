@@ -92,33 +92,30 @@ class MoE(SharedStateAddOn, AbstractModule):
             f"(num_devices={num_devices}, experts_per_device={num_experts_per_device})..."
         )
         expert_mapping_start = perf_counter()
-        expert_mapping_tensors = ttnn.from_torch(
-            torch.eye(num_devices, dtype=torch.int32)
-            .repeat_interleave(num_experts_per_device, dim=0)
-            .unsqueeze(0)
-            .unsqueeze(0),
+
+        # optimized ops (exclusive to quad with ring fabric) use a different mapping format
+        if is_ring_fabric(fabric_config) and num_dispatch_device_rows == 16:
+            num_experts = num_devices * num_experts_per_device
+            torch_expert_mapping_tensor = (
+                (torch.arange(num_experts) // num_experts_per_device).unsqueeze(0).repeat(num_devices, 1)
+            )
+        else:
+            torch_expert_mapping_tensor = (
+                torch.eye(num_devices, dtype=torch.int32)
+                .repeat_interleave(num_experts_per_device, dim=0)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+        expert_mapping_tensor = ttnn.from_torch(
+            torch_expert_mapping_tensor,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.uint16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        logger.info(f"Created MoE expert mapping tensor in {perf_counter() - expert_mapping_start:.2f}s")
 
-        logger.info(
-            "Creating MoE shared state: remap topk mask "
-            f"(dispatch_rows={num_dispatch_device_rows}, experts={hf_config.n_routed_experts})..."
-        )
-        remap_mask_start = perf_counter()
-        remap_topk_mask = ttnn.from_torch(
-            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        logger.info(f"Created MoE remap topk mask in {perf_counter() - remap_mask_start:.2f}s")
+        logger.info(f"Created MoE expert mapping tensor in {perf_counter() - expert_mapping_start:.2f}s")
 
         config = {
             "expert_mapping_tensor": expert_mapping_tensor,

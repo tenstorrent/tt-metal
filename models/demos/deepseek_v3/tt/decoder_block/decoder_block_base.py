@@ -91,7 +91,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mlp_shared_state = cls.create_mlp_shared_state(
             hf_config,
             mesh_device,
-            fabric_config(),
+            fabric_config,
         )
         logger.info(f"Created {cls.__name__} MLP shared state in {perf_counter() - mlp_start:.2f}s")
         state = {
