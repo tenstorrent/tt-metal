@@ -62,24 +62,6 @@ static vector<uint32_t> run_fp8_typecast(
                                              .set_page_size(tt::CBIndex::c_16, output_tile_size);
     CreateCircularBuffer(program, core, cb_dst_config);
 
-    std::map<std::string, std::string> defines = {};
-    if (!fp32_dest_acc_en and input_fmt == tt::DataFormat::Fp8_e4m3) {
-        if (output_fmt == tt::DataFormat::Float16_b) {
-            defines["PACK_A_TO_B"] = "DataFormat::Float16";
-        } else if (output_fmt == tt::DataFormat::Bfp8_b) {
-            defines["PACK_A_TO_B"] = "DataFormat::Bfp8";
-        } else {
-            throw std::runtime_error("Invalid output format");
-        }
-    }
-    if (!fp32_dest_acc_en and output_fmt == tt::DataFormat::Fp8_e4m3) {
-        if (input_fmt == tt::DataFormat::Float16_b or input_fmt == tt::DataFormat::Bfp8_b) {
-            defines["PACK_B_TO_A"] = "DataFormat::Float16_b";
-        } else {
-            throw std::runtime_error("Invalid input format");
-        }
-    }
-
     auto reader = CreateKernel(
         program,
         "tt_metal/kernels/dataflow/reader_unary.cpp",
@@ -96,7 +78,7 @@ static vector<uint32_t> run_fp8_typecast(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_fp8.cpp",
         core,
-        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}, .defines = defines});
+        ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = {num_tiles}});
 
     detail::WriteToBuffer(src_buffer, src_vec);
     SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
@@ -330,6 +312,111 @@ TEST_F(BlackholeSingleCardFixture, TensixBfp8bToFp8e4m3Fp32Dest) {
     auto dst_floats = fp8_to_floats(result_vec);
     EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.015625f));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
+}
+
+// ============================================================================
+// Bfp8_b → Bfp8_b (identity)
+// Same format on both sides. The unpack→Dest→repack round-trip through the
+// shared-exponent blocking process may introduce minor rounding, but PCC
+// should remain very high.
+// ============================================================================
+
+TEST_F(BlackholeSingleCardFixture, TensixBfp8bToBfp8b) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    constexpr uint32_t num_tiles = 64;
+    auto src_vec = tt::test_utils::create_random_vector_of_bfp8(
+        tt::tile_size(tt::DataFormat::Bfp8_b) * num_tiles,
+        /*is_exp_a=*/false,
+        /*rand_max_float=*/20,
+        /*seed=*/42,
+        /*offset=*/-10.0f);
+    auto result_vec = run_fp8_typecast(
+        dev, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+    auto src_floats = bfp8_to_floats(src_vec);
+    auto dst_floats = bfp8_to_floats(result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.3f, /*atol=*/0.3f));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.9999));
+}
+
+TEST_F(BlackholeSingleCardFixture, TensixBfp8bToBfp8bFp32Dest) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    constexpr uint32_t num_tiles = 64;
+    auto src_vec = tt::test_utils::create_random_vector_of_bfp8(
+        tt::tile_size(tt::DataFormat::Bfp8_b) * num_tiles,
+        /*is_exp_a=*/false,
+        /*rand_max_float=*/20,
+        /*seed=*/42,
+        /*offset=*/-10.0f);
+    auto result_vec = run_fp8_typecast(
+        dev, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+    auto src_floats = bfp8_to_floats(src_vec);
+    auto dst_floats = bfp8_to_floats(result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.3f, /*atol=*/0.3f));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.9999));
+}
+
+// ============================================================================
+// fp8_e4m3 → fp8_e4m3 (identity)
+// Same format on both sides. The round-trip should be lossless since every
+// fp8 value survives the unpack→Dest→repack cycle exactly.
+// ============================================================================
+
+TEST_F(BlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    constexpr uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_float8_e4m3(
+        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result_vec = run_fp8_typecast(
+        dev, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Fp8_e4m3, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+    auto src_floats = fp8_to_floats(src_vec);
+    auto dst_floats = fp8_to_floats(result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+}
+
+TEST_F(BlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3Fp32Dest) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    constexpr uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_float8_e4m3(
+        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result_vec = run_fp8_typecast(
+        dev, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Fp8_e4m3, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+    auto src_floats = fp8_to_floats(src_vec);
+    auto dst_floats = fp8_to_floats(result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+}
+
+// ============================================================================
+// Float16_b → Float16_b (identity)
+// Same format on both sides. The round-trip should be lossless since every
+// BF16 value survives the unpack→Dest→repack cycle exactly.
+// ============================================================================
+
+TEST_F(BlackholeSingleCardFixture, TensixFloat16bToFloat16b) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    constexpr uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result_vec = run_fp8_typecast(
+        dev, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+    auto src_floats = bf16_to_floats(src_vec);
+    auto dst_floats = bf16_to_floats(result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
+}
+
+TEST_F(BlackholeSingleCardFixture, TensixFloat16bToFloat16bFp32Dest) {
+    IDevice* dev = devices_[0]->get_devices()[0];
+    constexpr uint32_t num_tiles = 64;
+    auto src_vec = create_random_vector_of_bfloat16(
+        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
+    auto result_vec = run_fp8_typecast(
+        dev, tt::DataFormat::Float16_b, tt::DataFormat::Float16_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
+    auto src_floats = bf16_to_floats(src_vec);
+    auto dst_floats = bf16_to_floats(result_vec);
+    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
 }  // namespace tt::tt_metal

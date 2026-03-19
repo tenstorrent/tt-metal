@@ -17,14 +17,6 @@ void kernel_main() {
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_init(tt::CBIndex::c_0);
 
-#ifdef PACK_A_TO_B
-    cfg_reg_rmw_tensix<THCON_SEC0_REG1_In_data_format_RMW>(to_underlying(PACK_A_TO_B));
-#endif
-#ifdef PACK_B_TO_A
-    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(to_underlying(PACK_B_TO_A));
-    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Round_10b_mant_RMW>(1);
-#endif
-
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         acquire_dst();
 
