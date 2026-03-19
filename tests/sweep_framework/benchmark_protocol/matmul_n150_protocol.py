@@ -113,6 +113,10 @@ def cmd_report(args: argparse.Namespace) -> int:
         with open(outp, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2)
         print(f"Wrote JSON report -> {outp}")
+    print("\n=== report rows ===")
+    print(f"  total_result_rows_raw: {report.get('total_result_rows_raw')}")
+    print(f"  total_result_rows_deduped: {report.get('total_result_rows_deduped')}")
+    print(f"  duplicate_result_rows_dropped: {report.get('duplicate_result_rows_dropped')}")
 
     def fmt_part(title: str, d: dict) -> None:
         print(f"\n=== {title} ===")

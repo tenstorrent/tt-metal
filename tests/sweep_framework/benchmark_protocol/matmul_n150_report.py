@@ -90,6 +90,42 @@ def load_result_file(path: Path) -> list[dict[str, Any]]:
     raise ValueError(f"Unrecognized results format: {path}")
 
 
+def _record_time_key(rec: dict[str, Any]) -> tuple[str, str]:
+    """Prefer end timestamp, then start timestamp, as sortable keys."""
+    end_ts = str(rec.get("test_end_ts") or rec.get("end_time_ts") or "")
+    start_ts = str(rec.get("test_start_ts") or rec.get("start_time_ts") or "")
+    return (end_ts, start_ts)
+
+
+def dedupe_latest_by_input_hash(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """
+    Deduplicate records by input_hash, keeping the latest record per hash.
+
+    Records without an input_hash are preserved unchanged.
+    """
+    latest_by_hash: dict[str, dict[str, Any]] = {}
+    without_hash: list[dict[str, Any]] = []
+    duplicate_rows_dropped = 0
+
+    for rec in records:
+        input_hash = rec.get("input_hash")
+        if not isinstance(input_hash, str) or not input_hash:
+            without_hash.append(rec)
+            continue
+
+        prev = latest_by_hash.get(input_hash)
+        if prev is None:
+            latest_by_hash[input_hash] = rec
+            continue
+
+        duplicate_rows_dropped += 1
+        if _record_time_key(rec) >= _record_time_key(prev):
+            latest_by_hash[input_hash] = rec
+
+    deduped = list(latest_by_hash.values()) + without_hash
+    return deduped, duplicate_rows_dropped
+
+
 def aggregate_partition(records: list[dict[str, Any]], hashes: set[str]) -> dict[str, Any]:
     subset = [r for r in records if r.get("input_hash") in hashes]
     n = len(hashes)
@@ -132,9 +168,10 @@ def build_report(
     manifest: dict[str, Any],
     result_paths: list[Path],
 ) -> dict[str, Any]:
-    all_records: list[dict[str, Any]] = []
+    all_records_raw: list[dict[str, Any]] = []
     for p in result_paths:
-        all_records.extend(load_result_file(p))
+        all_records_raw.extend(load_result_file(p))
+    all_records, duplicate_rows_dropped = dedupe_latest_by_input_hash(all_records_raw)
 
     smoke_h = set(manifest["smoke"])
     train_h = set(manifest["train"])
@@ -156,7 +193,9 @@ def build_report(
         "protocol_version": manifest.get("protocol_version"),
         "module_name": manifest.get("module_name"),
         "result_files": [str(p) for p in result_paths],
-        "total_result_rows": len(all_records),
+        "total_result_rows_raw": len(all_records_raw),
+        "total_result_rows_deduped": len(all_records),
+        "duplicate_result_rows_dropped": duplicate_rows_dropped,
         "smoke": smoke_agg,
         "train": train_agg,
         "holdout": hold_agg,

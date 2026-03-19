@@ -84,10 +84,20 @@ run_sweeps() {
 }
 
 run_report() {
-  python3 "${SWEEP_FW}/benchmark_protocol/matmul_n150_protocol.py" report \
-    --manifest "${MANIFEST}" \
-    --results-glob "${SWEEP_FW}/results_export/model_traced_*.json" \
-    --json-out "${REPORT_JSON}"
+  local latest_result=""
+  latest_result="$(ls -1t "${SWEEP_FW}"/results_export/model_traced_*.json 2>/dev/null | head -n 1 || true)"
+  if [[ -n "${latest_result}" ]]; then
+    python3 "${SWEEP_FW}/benchmark_protocol/matmul_n150_protocol.py" report \
+      --manifest "${MANIFEST}" \
+      --results "${latest_result}" \
+      --json-out "${REPORT_JSON}"
+  else
+    # Fallback to glob mode if no model_traced result files are present yet.
+    python3 "${SWEEP_FW}/benchmark_protocol/matmul_n150_protocol.py" report \
+      --manifest "${MANIFEST}" \
+      --results-glob "${SWEEP_FW}/results_export/model_traced_*.json" \
+      --json-out "${REPORT_JSON}"
+  fi
   echo "Report JSON: ${REPORT_JSON}"
 }
 

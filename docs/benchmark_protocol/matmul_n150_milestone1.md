@@ -66,6 +66,8 @@ python3 tests/sweep_framework/benchmark_protocol/matmul_n150_protocol.py report 
   --json-out tests/sweep_framework/benchmark_protocol/generated/matmul_n150_last_report.json
 ```
 
+If multiple prior runs exist, prefer `--results <latest_file.json>` to avoid mixing rows from different runs.
+
 **One-shot** (same steps; optional `MEASURE_MEMORY=1` adds graph memory capture):
 
 ```bash
