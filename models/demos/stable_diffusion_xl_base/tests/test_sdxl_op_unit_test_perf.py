@@ -5,7 +5,6 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_llk_assert_enabled
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
@@ -134,11 +133,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Different expected values based on LLK assert configuration
-    if is_llk_assert_enabled():
-        expected_duration_ns = 2485890  # Measured: 2.49ms with LLK asserts enabled
-    else:
-        expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
+    expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -174,11 +169,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Different expected values based on LLK assert configuration
-    if is_llk_assert_enabled():
-        expected_duration_ns = 132324  # Measured: ~132μs with LLK asserts enabled (64% overhead)
-    else:
-        expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
+    expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -214,11 +205,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Different expected values based on LLK assert configuration
-    if is_llk_assert_enabled():
-        expected_duration_ns = 1236134  # Measured: ~1.24ms with LLK asserts enabled (64% overhead)
-    else:
-        expected_duration_ns = 564334  # Measured: ~564μs for GroupNorm SDXL negative mask
+    expected_duration_ns = 564334  # Measured: ~564μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -254,11 +241,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Different expected values based on LLK assert configuration
-    if is_llk_assert_enabled():
-        expected_duration_ns = 346883  # Measured: 347μs with LLK asserts enabled (64% overhead)
-    else:
-        expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
+    expected_duration_ns = 238419  # Measured: 238μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
@@ -294,11 +277,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Different expected values based on LLK assert configuration
-    if is_llk_assert_enabled():
-        expected_duration_ns = 1325460  # Measured: 1.35ms with LLK asserts enabled (64% overhead)
-    else:
-        expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
+    expected_duration_ns = 1088021  # Measured: 1.09ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(
@@ -334,11 +313,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    # Different expected values based on LLK assert configuration
-    if is_llk_assert_enabled():
-        expected_duration_ns = 4053958  # Measured: 4.05ms with LLK asserts enabled (64% overhead)
-    else:
-        expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(
