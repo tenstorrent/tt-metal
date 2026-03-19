@@ -23,11 +23,11 @@ from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
 from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN, DeepseekGenerator, _build_verify_alias_page_table_host
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_fabric_config
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config, get_weight_config
@@ -495,11 +495,13 @@ class _MtpModuleRunner:
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
         model_path: Path,
         cache_path: Path,
         force_recalculate: bool,
     ) -> None:
         self.mesh_device = mesh_device
+        self.fabric_config = fabric_config
         self.model_path = Path(model_path)
         self.cache_path = Path(cache_path)
         self.force_recalculate = force_recalculate
@@ -562,11 +564,12 @@ class _MtpModuleRunner:
         self.model_shared_state = MTP2D.create_shared_state(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
+            fabric_config=self.fabric_config,
         )
         self.model_decode_cfg = MTP2D.decode_model_config(
             hf_config=self.hf_config,
             mesh_device=self.mesh_device,
-            fabric_config=get_fabric_config(),
+            fabric_config=self.fabric_config,
         )
         mtp_decode_run_config = create_run_config(
             self.model_decode_cfg,
@@ -627,12 +630,14 @@ class _MtpModuleRunner:
 
 def _prepare_mtp_module_runner(
     mesh_device: ttnn.MeshDevice,
+    fabric_config: ttnn.FabricConfig,
     model_path: Path,
     cache_path: Path,
     force_recalculate: bool,
 ) -> _MtpModuleRunner:
     return _MtpModuleRunner(
         mesh_device=mesh_device,
+        fabric_config=fabric_config,
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate,
@@ -1200,7 +1205,7 @@ def test_generate_mtp_reference_io(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": get_fabric_config(),
             "trace_region_size": TRACE_REGION_SIZE,
         }
     ],
@@ -1215,6 +1220,7 @@ def test_generate_mtp_reference_io(
     ],
 )
 def test_mtp_accept_rate_and_perf(
+    device_params,
     min_accept_rate,
     enable_trace,
     mesh_device,
@@ -1229,6 +1235,7 @@ def test_mtp_accept_rate_and_perf(
 
     with _prepare_mtp_module_runner(
         mesh_device=mesh,
+        fabric_config=device_params["fabric_config"],
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
