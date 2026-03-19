@@ -531,27 +531,32 @@ void WatcherServer::Impl::poll_watcher_data() {
     log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
-        fprintf(logfile_, "-----\n");
-        fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
+        // Need to hold the lock here as well to prevent kernel_names_ being modified from the main thread while being
+        // read out to a file in the dump function
+        {
+            const std::lock_guard<std::mutex> lock(watch_mutex_);
+            fprintf(logfile_, "-----\n");
+            fprintf(logfile_, "Dump #%d at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
 
-        if (device_id_to_reader_.empty()) {
-            fprintf(logfile_, "No active devices\n");
-        }
-
-        try {
-            dump();
-        } catch (std::runtime_error& e) {
-            // Depending on whether test mode is enabled, catch and stop server, or re-throw.
-            if (rtoptions.get_test_mode_enabled()) {
-                server_killed_due_to_error_ = true;
-                break;
+            if (device_id_to_reader_.empty()) {
+                fprintf(logfile_, "No active devices\n");
             }
-            throw e;
-        }
 
-        fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
-        fflush(logfile_);
-        dump_count_++;
+            try {
+                dump();
+            } catch (const std::runtime_error& e) {
+                // Depending on whether test mode is enabled, catch and stop server, or re-throw.
+                if (rtoptions.get_test_mode_enabled()) {
+                    server_killed_due_to_error_ = true;
+                    break;
+                }
+                throw;
+            }
+
+            fprintf(logfile_, "Dump #%d completed at %.3lfs\n", dump_count_.load(), get_elapsed_secs());
+            fflush(logfile_);
+            dump_count_++;
+        }
 
         // Wait for the interval, but check stop flag frequently to exit early
         constexpr auto poll_interval = std::chrono::milliseconds(100);
