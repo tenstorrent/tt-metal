@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.common.utility_functions import skip_for_blackhole, skip_with_llk_assert
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 from ttnn.operations.pool import golden_upsample
@@ -58,7 +58,6 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         raise ValueError("Invalid ncores")
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shapes",
@@ -114,7 +113,6 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     assert isequal
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 def upsample_multicore_common(
     device,
     input_shape,
@@ -252,7 +250,6 @@ def upsample_multicore_common(
     return (torch_result, output_tensor)
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -346,7 +343,6 @@ def test_upsample_multicore_corerange(
     assert isequal
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width, scale_h, scale_w",
@@ -428,7 +424,6 @@ def test_bilinear_multi_core(
     assert passing
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "scale_h, scale_w",

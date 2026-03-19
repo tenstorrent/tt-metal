@@ -337,6 +337,16 @@ inline void llk_pack_debug_dump(std::uint8_t* data, std::uint32_t byte_size) { _
 
 inline void llk_pack_debug_dump_seek(std::uint8_t offset) { _llk_pack_debug_dump_seek_(offset); }
 
+/**
+ * Reconfigure the packer data format for a new output operand.
+ *
+ * Tile geometry (face_r_dim, tile_c_dim, num_faces) is derived from the output
+ * operand metadata registered in the circular buffer interface.
+ *
+ * @tparam is_fp32_dest_acc_en       Enable FP32 accumulation in the destination register.
+ * @tparam is_tile_dim_reconfig_en   Enable tile dimension reconfiguration.
+ * @param  new_output                Output operand index to configure the packer for.
+ */
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
     const std::uint32_t output_id = get_output_id(new_output);
@@ -355,6 +365,51 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         false);  // narrow_tile
 }
 
+/**
+ * Reconfigure the packer data format with explicit face geometry.
+ *
+ * Unlike the single-argument overload, which derives face_r_dim and num_faces
+ * from the output operand metadata, this overload accepts caller-supplied
+ * values. This is useful when the actual tile layout differs from what is
+ * recorded in the CB interface (e.g. non-standard tile dimensions).
+ *
+ * @tparam is_fp32_dest_acc_en       Enable FP32 accumulation in the destination register.
+ * @tparam is_tile_dim_reconfig_en   Enable tile dimension reconfiguration.
+ * @param  new_output                Output operand index to configure the packer for.
+ * @param  face_r_dim                Row dimension of each face (overrides operand metadata).
+ * @param  num_faces                 Number of faces (overrides operand metadata).
+ */
+template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
+inline void llk_pack_reconfig_data_format(
+    const std::uint32_t new_output, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
+    const std::uint32_t output_id = get_output_id(new_output);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
+
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_local_cb_interface(output_id).fifo_page_size,
+        face_r_dim,
+        tile_c_dim,
+        num_faces == 0 ? 1 : num_faces,
+        false,   // partial_face
+        false);  // narrow_tile
+}
+
+/**
+ * Conditionally reconfigure the packer data format when switching output operands.
+ *
+ * Compares the old and new output formats; reconfiguration is only performed
+ * if the destination formats differ (and neither is Invalid). When formats
+ * match but is_tile_dim_reconfig_en is set, only the MOP tile-dimension
+ * configuration is updated. This avoids redundant full reconfiguration when
+ * consecutive outputs share the same data format.
+ *
+ * @tparam is_fp32_dest_acc_en       Enable FP32 accumulation in the destination register.
+ * @tparam is_tile_dim_reconfig_en   Enable tile dimension reconfiguration.
+ * @param  old_output                Output operand index of the previous output.
+ * @param  new_output                Output operand index of the new output.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
 inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
