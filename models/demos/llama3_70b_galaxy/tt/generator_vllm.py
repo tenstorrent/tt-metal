@@ -163,13 +163,17 @@ def initialize_vllm_text_transformer_olmo(
     optimizations=LlamaOptimizations.performance,
 ):
     # OLMo uses TP=32 (full Galaxy mesh), DP=1 - no Llama-style attention-DP splitting.
+    # max_batch_size is always 32 regardless of vLLM concurrency: the TT decode trace is
+    # fixed at batch=32 (on-device sampling requires target_len % 32 == 0), while vLLM
+    # limits concurrent users to 1 via max_num_seqs=1 in the server config.
+    TT_OLMO_BATCH_SIZE = 32
     submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
     model_args = []
     for submesh in submesh_devices:
         model_args_i = TtOlmoModelArgs(
             submesh,
             instruct=True,  # OLMo-3.1-32B-Think is always instruct/think mode
-            max_batch_size=max_batch_size // tt_data_parallel,
+            max_batch_size=TT_OLMO_BATCH_SIZE,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
         )
