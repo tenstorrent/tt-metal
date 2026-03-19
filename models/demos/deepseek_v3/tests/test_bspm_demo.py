@@ -190,8 +190,11 @@ def _preprocess_experts_with_bspm(
         bspm_data = load_bspm_for_layer(str(bspm_file))
         bspm_codes = bspm_data["codes"]  # np.ndarray (n_experts, 3, tiles_per_proj)
         n_experts_bspm = bspm_codes.shape[0]
+        n_experts = min(hf_config.n_routed_experts, n_experts_bspm)
 
-        for expert_idx in range(min(hf_config.n_routed_experts, n_experts_bspm)):
+        from tqdm import tqdm
+
+        for expert_idx in tqdm(range(n_experts), desc=f"layer {layer_idx} experts", unit="expert", leave=True):
             for proj_name, proj_idx in PROJ_IDX.items():
                 key = f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.{proj_name}.weight"
                 if key not in state_dict:
