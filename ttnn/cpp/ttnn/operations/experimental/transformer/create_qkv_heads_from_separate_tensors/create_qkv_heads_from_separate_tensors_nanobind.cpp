@@ -9,6 +9,7 @@
 #include <optional>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/array.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
