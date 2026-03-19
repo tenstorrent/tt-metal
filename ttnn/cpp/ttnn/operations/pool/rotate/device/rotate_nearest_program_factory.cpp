@@ -139,7 +139,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
     const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
     // CB total size must be an even multiple of batch_size (required by cb_push_back/cb_pop_front API)
-    num_cb_pages = (num_cb_pages / batch_size) * batch_size;
+    num_cb_pages = round_down(num_cb_pages, batch_size);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
