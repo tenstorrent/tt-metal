@@ -217,6 +217,7 @@ class RotarySetup:
             A list containing the cos matrix, sin matrix, and transformation matrix.
             If return_rot_idxs is True, it will also return the rotary positional embedding indices.
         """
+
         device = self.device
 
         # If position_idxs is a torch tensor, get the TTNN version of it
@@ -237,9 +238,12 @@ class RotarySetup:
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
 
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
+        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
+
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
-            cos = cos[:, :, : self.batch_size_per_row, :]
-            sin = sin[:, :, : self.batch_size_per_row, :]
+            cos = cos[:, : self.batch_size_per_row, :, :]
+            sin = sin[:, : self.batch_size_per_row, :, :]
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.dim),
@@ -249,37 +253,12 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
-        # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
-        cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(cos, mem_config)
-        sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(sin, mem_config)
-
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
-        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
         cos = ttnn.interleaved_to_sharded(cos, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
         sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
 
         if return_rot_idxs:
-            return {
-                "cos_matrix": cos,
-                "sin_matrix": sin,
-                "trans_matrix": self.transformation_mat,
-                "cos_matrix_prefill_shape": cos_matrix_prefill_shape,
-                "sin_matrix_prefill_shape": sin_matrix_prefill_shape,
-                "trans_matrix_prefill_shape": self.transformation_mat_prefill,
-            }, rot_idxs
-        return {
-            "cos_matrix": cos,
-            "sin_matrix": sin,
-            "trans_matrix": self.transformation_mat,
-            "cos_matrix_prefill_shape": cos_matrix_prefill_shape,
-            "sin_matrix_prefill_shape": sin_matrix_prefill_shape,
-            "trans_matrix_prefill_shape": self.transformation_mat_prefill,
-        }
+            return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
+        return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}
 
     def get_rot_mats_from_rot_idxs(
         self, rot_idxs: ttnn.Tensor, return_rot_idxs: bool = False
@@ -298,7 +277,6 @@ class RotarySetup:
         """
         assert isinstance(rot_idxs, ttnn.Tensor), "rot_idxs must be a TTNN tensor"
         assert len(rot_idxs.shape) == 2 and rot_idxs.shape[0] == 1, "rot_idxs must be a [1, batch] tensor"
-
         # All operations below are pure ttnn ops (no from_torch/as_tensor)
         embedding_layout = ttnn.TILE_LAYOUT
         cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, dim]
@@ -307,9 +285,12 @@ class RotarySetup:
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, dim]
 
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
+        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
+
         if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
-            cos = cos[:, :, : self.batch_size_per_row, :]
-            sin = sin[:, :, : self.batch_size_per_row, :]
+            cos = cos[:, : self.batch_size_per_row, :, :]
+            sin = sin[:, : self.batch_size_per_row, :, :]
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.dim),
@@ -319,34 +300,9 @@ class RotarySetup:
             use_height_and_width_as_shard_shape=True,
         )
 
-        # For using height-sharded prefill-mode in decode with batch reinterpreted as seq_len
-        # Possible because `rotary_embedding_llama` is (almost) an eltwise op.
-        cos_matrix_prefill_shape = ttnn.to_memory_config(
-            cos, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(cos, mem_config)
-        sin_matrix_prefill_shape = ttnn.to_memory_config(
-            sin, memory_config=mem_config
-        )  # ttnn.interleaved_to_sharded(sin, mem_config)
-
-        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
-        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
         cos = ttnn.interleaved_to_sharded(cos, mem_config)
         sin = ttnn.interleaved_to_sharded(sin, mem_config)
 
         if return_rot_idxs:
-            return {
-                "cos_matrix": cos,
-                "sin_matrix": sin,
-                "trans_matrix": self.transformation_mat,
-                "cos_matrix_prefill_shape": cos_matrix_prefill_shape,
-                "sin_matrix_prefill_shape": sin_matrix_prefill_shape,
-                "trans_matrix_prefill_shape": self.transformation_mat_prefill,
-            }, rot_idxs
-        return {
-            "cos_matrix": cos,
-            "sin_matrix": sin,
-            "trans_matrix": self.transformation_mat,
-            "cos_matrix_prefill_shape": cos_matrix_prefill_shape,
-            "sin_matrix_prefill_shape": sin_matrix_prefill_shape,
-            "trans_matrix_prefill_shape": self.transformation_mat_prefill,
-        }
+            return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
+        return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}
