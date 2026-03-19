@@ -145,7 +145,7 @@
   model: qwen2.5-32b
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 10
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -162,7 +162,7 @@
   model: qwen2.5-coder-32b
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 15
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -220,7 +220,7 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 21
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
