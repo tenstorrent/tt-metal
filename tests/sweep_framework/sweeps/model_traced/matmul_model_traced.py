@@ -102,10 +102,9 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    # Skip traced program_config: block dimensions are computed for the original
-    # device grid. Keep all memory configs (including sharded) as they are required
-    # for correct op behavior.
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"})
+    # Keep all traced params including program_config — they are required for
+    # correct matmul behavior with sharded memory configs.
+    op_kwargs = build_op_kwargs(kwargs)
 
     # Use output_memory_config as fallback for memory_config in op_kwargs
     if "memory_config" not in op_kwargs and output_memory_config is not None:
