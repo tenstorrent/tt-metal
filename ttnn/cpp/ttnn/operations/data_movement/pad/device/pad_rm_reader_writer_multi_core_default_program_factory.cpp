@@ -20,14 +20,12 @@ using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
 
-uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
-    uint32_t W = input_tensor.padded_shape()[3];
-    uint32_t W_bytes = W * input_tensor.element_size();
+uint32_t get_num_stick_per_barrier(uint32_t stick_size_padded_aligned) {
     uint32_t num_stick_per_barrier = 0;
-    for (uint32_t cur_bytes = 0; cur_bytes < max_read_size; cur_bytes += W_bytes) {
+    for (uint32_t cur_bytes = 0; cur_bytes < max_read_size; cur_bytes += stick_size_padded_aligned) {
         num_stick_per_barrier++;
     }
-    return num_stick_per_barrier;
+    return std::max(num_stick_per_barrier, uint32_t{1});
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm(
@@ -40,7 +38,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const CoreRangeSet& core_group_2,
     uint32_t num_w_sticks_per_core_group_2,
     uint32_t num_input_pages_in_row,
-    uint32_t num_output_pages_in_row) {
+    uint32_t num_output_pages_in_row,
+    uint32_t stick_size_padded_aligned) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
@@ -70,7 +69,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             num_sticks_per_core = 0;
         }
 
-        uint32_t num_sticks_per_barrier = get_num_stick_per_barrier(input_tensor);
+        uint32_t num_sticks_per_barrier = get_num_stick_per_barrier(stick_size_padded_aligned);
         // reader
         std::vector<uint32_t> reader_runtime_args = {
             input_buffer->address(),
@@ -275,14 +274,15 @@ PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
         core_group_2,
         num_sticks_padded_per_core_group_2,
         num_input_pages_in_row,
-        num_output_pages_in_row);
+        num_output_pages_in_row,
+        stick_size_padded_aligned);
 
     for (uint32_t i = 0; i < cores_in_order.size(); i++) {
         CoreCoord core = cores_in_order[i];
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
     }
-    uint32_t cb_npages = get_num_stick_per_barrier(a);
+    uint32_t cb_npages = get_num_stick_per_barrier(stick_size_padded_aligned);
     const uint32_t buffer_reader_writer_async_factor = 16;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
@@ -344,6 +344,10 @@ void PadRmReaderWriterMultiCoreDefaultProgramFactory::override_runtime_arguments
         num_output_pages_in_row = tt::div_up(operation_attributes.output_padded_shape[-1], output_shard_width);
     }
 
+    uint32_t W_padded = operation_attributes.output_padded_shape[3];
+    auto stick_size_padded = W_padded * src_tensor.element_size();
+    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
+
     auto all_runtime_args = get_runtime_args_rm(
         src_tensor,
         dst_tensor,
@@ -354,7 +358,8 @@ void PadRmReaderWriterMultiCoreDefaultProgramFactory::override_runtime_arguments
         core_group_2,
         num_sticks_padded_per_core_group_2,
         num_input_pages_in_row,
-        num_output_pages_in_row);
+        num_output_pages_in_row,
+        stick_size_padded_aligned);
 
     for (uint32_t i = 0; i < cores_in_order.size(); i++) {
         CoreCoord core = cores_in_order[i];
