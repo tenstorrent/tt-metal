@@ -12,8 +12,6 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/eltwise_unary/trigonometry.h"
 
-namespace NAMESPACE {
-
 constexpr uint32_t neg_two = 0xc0000000u;        // -2.0f
 constexpr uint32_t two_pi = 0x40c90fdbu;         //  2pi
 constexpr uint32_t flt_min = 0x00800000u;        //  FLT_MIN
@@ -82,7 +80,7 @@ inline void generate_standard_normal_tiles(uint32_t dst_cb_id) {
     cb_push_back(dst_cb_id, num_out_tiles);
 }
 
-void MAIN {
+void kernel_main() {
     // -------------------------------------------------------------------------
     // Box-Muller transform
     //
@@ -114,5 +112,4 @@ void MAIN {
     if (is_odd) {
         generate_standard_normal_tiles<false>(dst_cb_id);
     }
-}
-}  // namespace NAMESPACE
+}  // void kernel_main()
