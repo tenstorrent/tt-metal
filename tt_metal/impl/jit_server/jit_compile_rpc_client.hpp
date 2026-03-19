@@ -17,6 +17,7 @@ public:
     explicit JitCompileRpcClient(std::string endpoint);
 
     static bool enabled();
+    static std::vector<std::string> endpoints_from_env();
     static std::string endpoint_from_env();
 
     CompileResponse compile(const CompileRequest& request) const;

@@ -29,8 +29,16 @@ std::atomic<bool> g_keep_running{true};
 std::atomic<int> g_outstanding_compiles{0};
 
 constexpr const char* kEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
+constexpr const char* kMetalHomeEnv = "TT_METAL_HOME";
 constexpr const char* kDefaultEndpoint = "0.0.0.0:9876";
 constexpr const char* kServerCacheRoot = "/tmp/tt-metal-cache/";
+constexpr const char* kPrecompiledPathSuffix = "tt_metal/pre-compiled";
+constexpr const char* kPrecompiledWarning =
+    "WARNING: PoC precompiled-firmware mode is enabled. This server currently requires "
+    "matching precompiled firmware for each build_key and does not synchronize artifacts across hosts. "
+    "TODO: replace this with robust cross-host artifact synchronization.";
+
+fs::path g_precompiled_root;
 
 std::string kernel_cache_dir(std::uint64_t build_key, const std::string& kernel_name) {
     return std::string(kServerCacheRoot) + std::to_string(build_key) + "/kernels/" + kernel_name;
@@ -41,6 +49,58 @@ std::string target_cache_dir(std::uint64_t build_key, const std::string& kernel_
 }
 
 void handle_signal(int /*signal*/) { g_keep_running.store(false); }
+
+fs::path resolve_precompiled_firmware_path(
+    std::uint64_t build_key, const tt::tt_metal::jit_server::TargetRecipe& target) {
+    const fs::path build_dir = g_precompiled_root / std::to_string(build_key);
+    if (!fs::is_directory(build_dir)) {
+        throw std::runtime_error(fmt::format(
+            "{} Missing precompiled directory for build_key {} at {}",
+            kPrecompiledWarning,
+            build_key,
+            build_dir.string()));
+    }
+
+    if (target.weakened_firmware_name.empty()) {
+        throw std::runtime_error(
+            fmt::format("Internal error: expected non-empty weakened_firmware_name for target {}", target.target_name));
+    }
+    const std::string firmware_file = fs::path(target.weakened_firmware_name).filename().string();
+
+    // Client sends only filename; server infers the rest from build_key + target_name.
+    fs::path candidate = build_dir / target.target_name / firmware_file;
+    if (fs::exists(candidate)) {
+        return candidate;
+    }
+
+    throw std::runtime_error(fmt::format(
+        "{} Precompiled firmware not found for build_key {} target {}. Tried [{}].",
+        kPrecompiledWarning,
+        build_key,
+        target.target_name,
+        candidate.string()));
+}
+
+bool initialize_precompiled_root() {
+    const char* root_env = std::getenv(kMetalHomeEnv);
+    fs::path root = (root_env != nullptr) ? fs::path(root_env) : fs::current_path();
+    root = fs::absolute(root);
+    g_precompiled_root = root / kPrecompiledPathSuffix;
+
+    if (!fs::is_directory(g_precompiled_root)) {
+        log_error(
+            tt::LogMetal,
+            "{} Required precompiled firmware directory is missing at {}. "
+            "Set TT_METAL_HOME correctly or ensure this directory exists before starting the server.",
+            kPrecompiledWarning,
+            g_precompiled_root.string());
+        return false;
+    }
+
+    log_warning(tt::LogMetal, "{}", kPrecompiledWarning);
+    log_info(tt::LogMetal, "Using precompiled firmware root {}", g_precompiled_root.string());
+    return true;
+}
 
 void build_failure(
     const std::string& target, const std::string& op, const std::string& cmd, const std::string& log_file) {
@@ -268,8 +328,13 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
 
         // Build each target.
         for (const auto& target : request.targets) {
+            tt::tt_metal::jit_server::TargetRecipe resolved_target = target;
+            if (!resolved_target.weakened_firmware_name.empty()) {
+                resolved_target.weakened_firmware_name =
+                    resolve_precompiled_firmware_path(request.build_key, resolved_target).string();
+            }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, request.kernel_name, target, out_dir, response);
+            build_target(request.gpp, request.kernel_name, resolved_target, out_dir, response);
         }
 
         response.success = true;
@@ -292,6 +357,9 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
 int main() {
     const char* endpoint_env = std::getenv(kEndpointEnv);
     const std::string endpoint = endpoint_env != nullptr ? endpoint_env : kDefaultEndpoint;
+    if (!initialize_precompiled_root()) {
+        return 1;
+    }
 
     std::signal(SIGINT, handle_signal);
     std::signal(SIGTERM, handle_signal);

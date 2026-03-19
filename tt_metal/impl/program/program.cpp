@@ -218,7 +218,9 @@ jit_server::TargetRecipe BuildTargetRecipe(const JitBuildState& build_state, con
     target.lflags = build_state.get_lflags();
     target.extra_link_objs = build_state.get_extra_link_objs();
     target.linker_script = build_state.get_linker_script();
-    target.weakened_firmware_name = build_state.get_weakened_firmware_name();
+    // Send only the weakened firmware filename. Remote server reconstructs
+    // the full path from build_key + target_name + precompiled root.
+    target.weakened_firmware_name = fs::path(build_state.get_weakened_firmware_name()).filename().string();
     target.firmware_is_kernel_object = build_state.get_firmware_is_kernel_object();
     return target;
 }
@@ -1672,20 +1674,17 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
     const bool remote_jit_compile_enabled = jit_server::JitCompileRpcClient::enabled();
-    const std::string remote_jit_compile_endpoint =
-        remote_jit_compile_enabled ? jit_server::JitCompileRpcClient::endpoint_from_env() : std::string{};
+    const std::vector<std::string> remote_jit_compile_endpoints =
+        remote_jit_compile_enabled ? jit_server::JitCompileRpcClient::endpoints_from_env() : std::vector<std::string>{};
     TT_FATAL(
-        !remote_jit_compile_enabled || !remote_jit_compile_endpoint.empty(),
-        "Remote JIT compile is enabled via TT_METAL_JIT_SERVER_ENABLE=1, but TT_METAL_JIT_SERVER_ENDPOINT is not set");
+        !remote_jit_compile_enabled || !remote_jit_compile_endpoints.empty(),
+        "Remote JIT compile is enabled via TT_METAL_JIT_SERVER_ENABLE=1, but neither "
+        "TT_METAL_JIT_SERVER_ENDPOINTS nor TT_METAL_JIT_SERVER_ENDPOINT is set");
 
     bool is_mock =
         tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     if (remote_jit_compile_enabled && !is_mock) {
-        // Single connection for entire program. Prepare each kernel sequentially,
-        // send compile requests immediately (pipelined), then collect all responses.
-        jit_server::JitCompileRpcSession session(remote_jit_compile_endpoint);
-
         auto& build_cache = RemoteBuildCache::instance();
 
         struct KernelFuture {
@@ -1701,7 +1700,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             std::vector<std::string> elf_paths;
             RemoteBuildCache::PendingBuild pending;
         };
-        std::vector<PendingEntry> local_pending;
+        std::vector<std::vector<PendingEntry>> pending_by_endpoint(remote_jit_compile_endpoints.size());
+        std::vector<std::unique_ptr<jit_server::JitCompileRpcSession>> sessions(remote_jit_compile_endpoints.size());
 
         // Phase 1: prepare each kernel, generate genfiles, enqueue unique requests.
         for (auto& kernels : kernels_) {
@@ -1739,6 +1739,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                 kernel_futures.push_back({kernel, elf_paths, result.future});
 
                 if (result.is_new) {
+                    const size_t endpoint_index = kernel_hash % remote_jit_compile_endpoints.size();
                     jit_build_genfiles_descriptors(build_env.build_env, build_options);
                     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
                         jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
@@ -1759,9 +1760,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
                         request.targets.push_back(BuildTargetRecipe(bs, kernel));
                     }
-
-                    session.send(request);
-                    local_pending.push_back({std::move(request), std::move(elf_paths), std::move(result.pending)});
+                    if (!sessions[endpoint_index]) {
+                        sessions[endpoint_index] = std::make_unique<jit_server::JitCompileRpcSession>(
+                            remote_jit_compile_endpoints[endpoint_index]);
+                    }
+                    sessions[endpoint_index]->send(request);
+                    pending_by_endpoint[endpoint_index].push_back(
+                        {std::move(request), std::move(elf_paths), std::move(result.pending)});
                 }
 
                 Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
@@ -1769,16 +1774,28 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
 
         // Phase 2: collect responses (requests already sent during phase 1), write ELFs, fulfill futures.
-        if (!local_pending.empty()) {
-            auto responses = session.wait_all();
-            TT_FATAL(responses.size() == local_pending.size(), "Response count mismatch");
+        for (size_t endpoint_index = 0; endpoint_index < pending_by_endpoint.size(); ++endpoint_index) {
+            if (pending_by_endpoint[endpoint_index].empty()) {
+                continue;
+            }
+            TT_FATAL(
+                sessions[endpoint_index] != nullptr,
+                "Internal error: missing RPC session for endpoint {}",
+                remote_jit_compile_endpoints[endpoint_index]);
+            auto responses = sessions[endpoint_index]->wait_all();
+            auto& local_pending = pending_by_endpoint[endpoint_index];
+            TT_FATAL(
+                responses.size() == local_pending.size(),
+                "Response count mismatch for endpoint {}",
+                remote_jit_compile_endpoints[endpoint_index]);
             for (size_t i = 0; i < local_pending.size(); ++i) {
                 auto& resp = responses[i];
                 auto& pend = local_pending[i];
                 TT_FATAL(
                     resp.success,
-                    "Remote JIT compile failed for kernel {}: {}",
+                    "Remote JIT compile failed for kernel {} (endpoint {}): {}",
                     pend.request.kernel_name,
+                    remote_jit_compile_endpoints[endpoint_index],
                     resp.error_message);
                 TT_FATAL(
                     resp.elf_blobs.size() == pend.elf_paths.size(),

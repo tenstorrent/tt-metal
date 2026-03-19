@@ -5,6 +5,7 @@
 #include "impl/jit_server/jit_compile_rpc_client.hpp"
 
 #include <capnp/ez-rpc.h>
+#include <cctype>
 #include <cstddef>
 #include <cstdlib>
 #include <stdexcept>
@@ -18,7 +19,38 @@ namespace tt::tt_metal::jit_server {
 namespace {
 
 constexpr const char* kJitServerEndpointEnv = "TT_METAL_JIT_SERVER_ENDPOINT";
+constexpr const char* kJitServerEndpointsEnv = "TT_METAL_JIT_SERVER_ENDPOINTS";
 constexpr const char* kJitServerEnableEnv = "TT_METAL_JIT_SERVER_ENABLE";
+
+std::string trim_ascii_whitespace(std::string_view input) {
+    size_t begin = 0;
+    while (begin < input.size() && std::isspace(static_cast<unsigned char>(input[begin]))) {
+        ++begin;
+    }
+    size_t end = input.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(input[end - 1]))) {
+        --end;
+    }
+    return std::string(input.substr(begin, end - begin));
+}
+
+std::vector<std::string> parse_endpoint_list(std::string_view endpoints) {
+    std::vector<std::string> parsed;
+    size_t start = 0;
+    while (start <= endpoints.size()) {
+        size_t comma = endpoints.find(',', start);
+        size_t end = (comma == std::string_view::npos) ? endpoints.size() : comma;
+        std::string token = trim_ascii_whitespace(endpoints.substr(start, end - start));
+        if (!token.empty()) {
+            parsed.push_back(std::move(token));
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+    return parsed;
+}
 
 void fill_target_recipe(rpc::TargetRecipe::Builder& builder, const TargetRecipe& target) {
     builder.setTargetName(target.target_name);
@@ -95,6 +127,22 @@ std::string JitCompileRpcClient::endpoint_from_env() {
         return {};
     }
     return endpoint_value;
+}
+
+std::vector<std::string> JitCompileRpcClient::endpoints_from_env() {
+    const char* endpoints_value = std::getenv(kJitServerEndpointsEnv);
+    if (endpoints_value != nullptr) {
+        auto parsed = parse_endpoint_list(endpoints_value);
+        if (!parsed.empty()) {
+            return parsed;
+        }
+    }
+
+    const std::string endpoint = endpoint_from_env();
+    if (!endpoint.empty()) {
+        return {endpoint};
+    }
+    return {};
 }
 
 CompileResponse JitCompileRpcClient::compile(const CompileRequest& request) const {
