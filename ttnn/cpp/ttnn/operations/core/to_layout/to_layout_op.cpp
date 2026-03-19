@@ -222,13 +222,18 @@ Tensor to_layout_impl(
 }  // namespace
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
-Tensor ToLayout::invoke(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+}  // namespace ttnn::operations::core
+
+namespace ttnn {
+
+Tensor to_layout(
+    const Tensor& tensor_arg,
+    Layout layout,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids);
+    return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
+        tensor_arg, layout, dtype, memory_config, sub_core_grids);
 }
 
-}  // namespace ttnn::operations::core
+}  // namespace ttnn
