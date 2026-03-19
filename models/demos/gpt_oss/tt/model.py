@@ -440,7 +440,9 @@ class Model:
         """
         # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
         actual_batch = current_pos.shape[-1]
-        if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
+        # Slice to actual_batch: for row-sharded with users_per_row<32, tokens buffer
+        # is padded to 32 slots but only actual_batch slots have real tokens.
+        if tokens.shape[-1] > actual_batch:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
             tokens_for_embed = tokens
@@ -798,8 +800,8 @@ class Model:
                 pad_per_row = nearest_32(users_per_row)
                 row_positions = torch.zeros(num_rows, pad_per_row, dtype=torch.int64)
                 for slot in range(B):
-                    row = slot % num_rows
-                    local_slot = slot // num_rows
+                    row = slot // users_per_row
+                    local_slot = slot % users_per_row
                     row_positions[row, local_slot] = rot_current_pos[slot]
                 mesh_mapper = ttnn.ShardTensor2dMesh(
                     self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
@@ -852,13 +854,28 @@ class Model:
             mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape)
         else:
             mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        if not self.users_row_sharded and tokens.view(-1).shape[-1] < 32:
+            tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens.view(-1))), constant, 0)
+        elif self.users_row_sharded:
+            # Pad tokens to 32 slots per row so the sampling module can write back
+            # 32 sampled tokens into the buffer without buffer overflow.
+            # For users_per_row=1 (B=4 case): tokens=[4] -> pad to [4*32//... wait
+            # Actually: shard [B] to [users_per_row] per row; if users_per_row < 32
+            # pad [B] to [num_rows*32] so each row gets 32 slots.
+            num_rows = self.mesh_device.shape[0]
+            users_per_row = max(1, B // num_rows)
+            sampling_batch = 32  # TTSampling max_batch_size per row
+            if users_per_row < sampling_batch:
+                padded_size = num_rows * sampling_batch
+                tokens_flat = tokens.view(-1)
+                tokens = torch.zeros(padded_size, dtype=tokens_flat.dtype)
+                tokens[: tokens_flat.shape[0]] = tokens_flat
         tokens = ttnn.from_torch(tokens.squeeze(), device=None, dtype=ttnn.uint32, mesh_mapper=mesh_mapper)
+        current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
+
         tokens = ttnn.unsqueeze_to_4D(tokens)
 
         rope_idxs = self.get_tt_pos_idx(current_pos)
-
-        # Prepare current position tensor
-        current_pos_tt = ttnn.from_torch(current_pos, device=None, dtype=ttnn.int32, mesh_mapper=mesh_mapper)
 
         # Prepare page table if provided
         if page_table is not None:
@@ -959,7 +976,12 @@ class Model:
                 # but with row-sharding we need exactly [num_rows, blocks] so each
                 # mesh row gets its user's single [1, blocks] page table entry.
                 num_rows = self.mesh_device.shape[0]
-                page_table_rows = page_table[:num_rows]  # [num_rows, blocks]
+                # user_id contains the actual slot indices for this batch (e.g. [4,5,6,7]).
+                # Select those rows rather than always taking [:num_rows].
+                if isinstance(user_id, (list, range)) and len(user_id) == num_rows:
+                    page_table_rows = page_table[list(user_id), :]
+                else:
+                    page_table_rows = page_table[:num_rows]
                 tt_page_table = ttnn.from_torch(
                     page_table_rows,
                     device=device,
@@ -1029,11 +1051,12 @@ class Model:
                 # after sampling's internal all-gather).
                 num_rows = self.mesh_device.shape[0]
                 num_cols = self.mesh_device.shape[1]
+                users_per_row = max(1, B // num_rows)
                 device_tensors = ttnn.get_device_tensors(tt_out)
                 result = torch.zeros(B, dtype=torch.long)
                 for slot in range(B):
-                    row = slot % num_rows
-                    local_slot = slot // num_rows
+                    row = slot // users_per_row
+                    local_slot = slot % users_per_row
                     dev_idx = row * num_cols  # column 0 of this row
                     row_tokens = ttnn.to_torch(device_tensors[dev_idx]).flatten()
                     result[slot] = row_tokens[local_slot].long()
