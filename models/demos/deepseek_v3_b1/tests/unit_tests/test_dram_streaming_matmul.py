@@ -264,7 +264,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation, fp32_dest_acc_
             ttnn_output,
             fp32_dest_acc_en=fp32_dest_acc_en,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
             num_loop_iters=num_loop_iters,
@@ -477,7 +477,7 @@ def test_dram_streaming_matmul_indexed(device, k, n, m, num_experts, fused_activ
             index_tensor=index_t,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
         )
@@ -662,7 +662,7 @@ def test_dram_streaming_matmul_with_mul(device, k, n, m, fused_activation):
             ttnn_output,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
             mul_tensor=mul_t,
@@ -852,7 +852,7 @@ def test_dram_streaming_matmul_with_all_experts(
     if k == 7168:
         subblock_k = k // tile_w // 4
     else:
-        subblock_k = k // tile_w // 2
+        subblock_k = k // tile_w
 
     # ========== Compute PyTorch golden reference ==========
     # Compute each selected expert's full matmul result, then arrange to match
@@ -895,7 +895,7 @@ def test_dram_streaming_matmul_with_all_experts(
             index_tensor=index_t,
             fp32_dest_acc_en=True,
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
+            math_approx_mode=False,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
             selected_experts_k=selected_experts_k,
