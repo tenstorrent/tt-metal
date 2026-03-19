@@ -1040,13 +1040,13 @@ def main():
     print("=" * 70)
     print()
 
-    # Set TT_METAL_RUNTIME_ROOT if not set and TT_METAL_HOME is available
+    # Set TT_METAL_RUNTIME_ROOT if not set and a valid runtime root is available
     # This is needed for the runtime to find kernel files like moreh_mean
     if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_home = get_tt_metal_home()
-        if tt_metal_home and os.path.exists(tt_metal_home):
-            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_home
-            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_home} (from get_tt_metal_home)")
+        tt_metal_root = get_tt_metal_runtime_root()
+        if tt_metal_root and os.path.exists(tt_metal_root):
+            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_root
+            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_root} (from get_tt_metal_runtime_root)")
         else:
             # Try to auto-detect from current directory
             current_dir = os.getcwd()
@@ -1069,7 +1069,7 @@ def main():
     print()
 
     # Load configs using ttml.common.config utilities
-    tt_train_root = f"{get_tt_metal_home()}/tt-train"
+    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
     configs_root = f"{tt_train_root}/configs"
     try:
         print(f"Loading training config from: {args.config}")

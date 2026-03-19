@@ -9,7 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "untilize_with_unpadding.hpp"
 
 namespace ttnn::operations::data_movement::detail {
@@ -30,31 +30,22 @@ void bind_untilize_with_unpadding(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
 
         Returns:
-            List of ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor.
     )doc";
 
-    using OperationType = decltype(ttnn::untilize_with_unpadding);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"untilize_with_unpadding">(
         mod,
-        ttnn::untilize_with_unpadding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& output_tensor_end,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, output_tensor_end, memory_config, use_multicore, sub_core_grids);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("output_tensor_end"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("sub_core_grids") = nb::none()});
+        &ttnn::untilize_with_unpadding,
+        nb::arg("input_tensor"),
+        nb::arg("output_tensor_end"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail
