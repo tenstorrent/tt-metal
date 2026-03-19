@@ -259,6 +259,19 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
 
         response.success = true;
 
+        {
+            static std::mutex stats_mutex;
+            std::lock_guard lock(stats_mutex);
+            std::ofstream stats("/tmp/tt-jit-compile-server-stats.log", std::ios::app);
+            if (stats) {
+                auto now = std::chrono::system_clock::now();
+                std::time_t t = std::chrono::system_clock::to_time_t(now);
+                char buf[32];
+                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+                stats << buf << "  " << request.kernel_name << "  targets=" << request.targets.size() << "\n";
+            }
+        }
+
         auto elapsed_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - request_start)
                 .count();
