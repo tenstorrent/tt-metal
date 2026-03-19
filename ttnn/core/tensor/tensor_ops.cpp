@@ -177,7 +177,8 @@ Tensor pad(
         return input_tensor;
     }
 
-    auto output = tensor_impl::pad(input_tensor, output_padded_shape, input_tensor_start, pad_value);
+    auto output =
+        Tensor(tensor_impl::pad(input_tensor.host_tensor(), output_padded_shape, input_tensor_start, pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -190,7 +191,7 @@ Tensor unpad(
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
-    auto output = tensor_impl::unpad(input_tensor, output_tensor_start, output_tensor_end);
+    auto output = Tensor(tensor_impl::unpad(input_tensor.host_tensor(), output_tensor_start, output_tensor_end));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -198,26 +199,7 @@ Tensor unpad(
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
-    uint32_t height = input_tensor.padded_shape()[-2];
-    uint32_t width = input_tensor.padded_shape()[-1];
-    uint32_t padded_height = round_up(height, constants::TILE_HEIGHT);
-    uint32_t padded_width = round_up(width, constants::TILE_WIDTH);
-
-    ttsl::SmallVector<uint32_t> padded_shape;
-    ttsl::SmallVector<uint32_t> input_tensor_start;
-
-    for (auto index = 0; index < static_cast<int>(input_tensor.padded_shape().rank()) - 2; index++) {
-        padded_shape.push_back(input_tensor.padded_shape()[index]);
-        input_tensor_start.push_back(0);
-    }
-
-    padded_shape.push_back(padded_height);
-    padded_shape.push_back(padded_width);
-    input_tensor_start.push_back(0);
-    input_tensor_start.push_back(0);
-
-    auto output = input_tensor.pad(
-        tt::tt_metal::Shape(std::move(padded_shape)), tt::tt_metal::Shape{std::move(input_tensor_start)}, pad_value);
+    auto output = Tensor(tensor_impl::pad_to_tile(input_tensor.host_tensor(), pad_value));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
@@ -225,26 +207,7 @@ Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
 
 Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape) {
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
-
-    for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {
-        TT_ASSERT(
-            input_tensor.logical_shape()[index] == output_tensor_shape[index],
-            "Input shape must match output shape apart from last 2 dims");
-    }
-    TT_ASSERT(
-        input_tensor.padded_shape()[-2] % constants::TILE_HEIGHT == 0 &&
-            input_tensor.padded_shape()[-1] % constants::TILE_WIDTH == 0,
-        "Last 2 dims of input shape must be multiples of 32");
-    TT_ASSERT(
-        input_tensor.padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
-            input_tensor.padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
-        "Last 2 dims of output must be within range to have been padded to input");
-    Shape output_tensor_start(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
-    Shape output_tensor_end(ttsl::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
-    for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
-        output_tensor_end[index] = output_tensor_shape[index];
-    }
-    auto output = input_tensor.unpad(output_tensor_start, output_tensor_end);
+    auto output = Tensor(tensor_impl::unpad_from_tile(input_tensor.host_tensor(), output_tensor_shape));
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
