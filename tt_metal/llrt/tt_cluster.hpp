@@ -206,6 +206,8 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
+    tt::umd::PCIDevice* get_pci_device(ChipId chip_id) const { return driver_->get_pci_device(chip_id); }
+
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals

@@ -14,6 +14,14 @@ target_sources(
         test_mesh_device_view.cpp
         test_mesh_workload.cpp
         test_mesh_socket.cpp
+        test_hd_sockets.cpp
+        test_dram_stream.cpp
+        test_pcie_to_dram.cpp
+        test_pcie_to_dram_grid.cpp
+        test_pcie_to_dram_full_grid.cpp
+        test_dram_to_pcie_full_grid.cpp
+        test_persistent_dma.cpp
+        test_socket_bandwidth.cpp
         test_mesh_sub_device.cpp
         test_mesh_allocator.cpp
         test_mesh_events.cpp
@@ -69,6 +77,46 @@ target_include_directories(
 
 set_target_properties(
     distributed_benchmarks
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
+add_executable(socket_bw_bench socket_bw_bench.cpp)
+target_link_libraries(
+    socket_bw_bench
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+target_include_directories(
+    socket_bw_bench
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+)
+set_target_properties(
+    socket_bw_bench
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
+
+add_executable(persistent_dma_bench persistent_dma_bench.cpp)
+target_link_libraries(
+    persistent_dma_bench
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+target_include_directories(
+    persistent_dma_bench
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+)
+set_target_properties(
+    persistent_dma_bench
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
