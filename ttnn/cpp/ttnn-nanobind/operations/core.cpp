@@ -364,6 +364,8 @@ void py_module(nb::module_& mod) {
             layout (ttnn.Layout): the desired layout, either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
             dtype (ttnn.DataType, optional): the optional output data type.
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
+            sub_core_grids (ttnn.CoreRangeSet, optional): the optional sub core grids. Defaults to `None`.
+            pad_value (float, optional): the optional pad value. Defaults to `0.0f`.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
@@ -374,14 +376,16 @@ void py_module(nb::module_& mod) {
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, sub_core_grids);
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const float pad_value) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, sub_core_grids, pad_value);
             },
             nb::arg("tensor"),
             nb::arg("layout"),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("pad_value") = 0.0f});
 
     mod.def(
         "num_cores_to_corerangeset",
