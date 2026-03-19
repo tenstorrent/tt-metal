@@ -56,21 +56,22 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(18);
     // batch args
     constexpr uint32_t MtKt = get_compile_time_arg_val(19);  // if 0
-    constexpr uint32_t batch = get_compile_time_arg_val(20);
+    constexpr uint32_t in0_B = get_compile_time_arg_val(20);
+    constexpr uint32_t in1_B = get_compile_time_arg_val(21);
 
     // sparsity args
 
-    constexpr uint32_t batchB = get_compile_time_arg_val(21);
-    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(22);
+    constexpr uint32_t batchB = get_compile_time_arg_val(22);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(23);
     // Boolean that is set when input A is sparse. If set, both input A and B are assumed to be sparse.
     // Based on the sparsity tensor, the corresponding batch in input A and B are skipped.
-    constexpr bool bcast_A = (bool)get_compile_time_arg_val(23);
+    constexpr bool bcast_A = (bool)get_compile_time_arg_val(24);
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
-    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(24);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(25);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
 
-    constexpr auto in0_args = TensorAccessorArgs<26>();
+    constexpr auto in0_args = TensorAccessorArgs<27>();
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
@@ -102,74 +103,85 @@ void kernel_main() {
     // DPRINT << "in0_block_h: " << in0_block_h << ENDL();
     // DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
 
-    for (uint32_t b = 0; b < batch; ++b) {
-        uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
-        for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
-            for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
-                uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
-                for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
-                    // Operand 0
-                    // Common for sharded and interleaved paths
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-                    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+    constexpr uint32_t max_batch_size = (in0_B > in1_B) ? in0_B : in1_B;
+    for (uint32_t b = 0; b < max_batch_size; ++b) {
+        if (in0_B == 1 && in1_B > 1 && b > 0) {
+            // DPRINT << "in 0 reader, batch " << b << "dummy reading " << in0_block_num_tiles << " tiles from DRAM" <<
+            // ENDL();
+            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+            // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+            // DPRINT_DATA1({ DPRINT << " in0 reader - batch: " << b << " data at read pointer: " << TileSlice(0, 0, sr,
+            // TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true,false) << ENDL(); });
+            cb_push_back(cb_id_in0, in0_block_num_tiles);
+        } else {
+            uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
+            for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+                for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                    uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
+                    for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                        // Operand 0
+                        // Common for sharded and interleaved paths
+                        cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                        uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
-                    // Copy in0 block into CB, as the default kernel
-                    uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
-                    // uint32_t help1 = in0_tensor_row_start_tile_id;
-                    // uint32_t help2 = 0;
-                    for (uint32_t h = 0; h < in0_block_h; ++h) {
-                        uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
-                        for (uint32_t w = 0; w < in0_block_w; ++w) {
-                            if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
-                                noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
-                            }
-
-                            // Zero out padded regions for the very last tile
-                            if constexpr (in0_last_ktile_w > 0) {
-                                if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
-                                    noc_async_read_barrier();
-                                    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                                    pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                        // Copy in0 block into CB, as the default kernel
+                        uint32_t in0_tensor_row_start_tile_id = in0_tensor_current_inner_dim_block_start_tile_id;
+                        uint32_t help1 = in0_tensor_row_start_tile_id;
+                        uint32_t help2 = 0;
+                        for (uint32_t h = 0; h < in0_block_h; ++h) {
+                            uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
+                            for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
+                                    noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                                 }
-                            }
-                            if constexpr (in0_last_ktile_h > 0) {
-                                if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
-                                    noc_async_read_barrier();
-                                    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                                    pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(l1_write_addr_in0);
-                                }
-                            }
 
-                            l1_write_addr_in0 += in0_single_tile_size_bytes;
-                            in0_tensor_tile_id += in0_tensor_stride_w;
-                            // help2 = in0_tensor_tile_id;
+                                // Zero out padded regions for the very last tile
+                                if constexpr (in0_last_ktile_w > 0) {
+                                    if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
+                                        noc_async_read_barrier();
+                                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                                    }
+                                }
+                                if constexpr (in0_last_ktile_h > 0) {
+                                    if ((block == num_blocks_inner_dim - 1) && (w == in0_block_w - 1)) {
+                                        noc_async_read_barrier();
+                                        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(l1_write_addr_in0);
+                                    }
+                                }
+
+                                l1_write_addr_in0 += in0_single_tile_size_bytes;
+                                in0_tensor_tile_id += in0_tensor_stride_w;
+                                help2 = in0_tensor_tile_id;
+                            }
+                            in0_tensor_row_start_tile_id += in0_tensor_stride_h;
                         }
-                        in0_tensor_row_start_tile_id += in0_tensor_stride_h;
+                        in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
+
+                        // Barrier! make sure the reads are done
+                        noc_async_read_barrier();
+                        // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                        // DPRINT_DATA1({ DPRINT << " in0 reader - batch: " << b << ", block: " << block << " from DRAM
+                        // " << in0_block_num_tiles << " tiles: (" << help1 << " - " << help2 << ")"  << TileSlice(0, 0,
+                        // sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true,false) << ENDL(); });
+
+                        // DPRINT << "finished reading " << in0_block_num_tiles << " tiles from DRAM to core" << ENDL();
+
+                        // Common for sharded and interleaved paths
+                        cb_push_back(cb_id_in0, in0_block_num_tiles);
+                        // DPRINT << "PUSHED BACK " << in0_block_num_tiles << " tiles to CB0" << ENDL();
                     }
-                    in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
-
-                    // Barrier! make sure the reads are done
-                    noc_async_read_barrier();
-                    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
-                    // DPRINT_DATA1({ DPRINT << " in0 reader - from DRAM " << in0_block_num_tiles << " tiles: (" <<
-                    // help1 << " - " << help2 << ")"  << TileSlice(0, 0, sr, TSLICE_OUTPUT_CB, TSLICE_WR_PTR, true,
-                    // false) << ENDL(); });
-
-                    // DPRINT << "finished reading " << in0_block_num_tiles << " tiles from DRAM to core" << ENDL();
-
-                    // Common for sharded and interleaved paths
-                    cb_push_back(cb_id_in0, in0_block_num_tiles);
-                    // DPRINT << "PUSHED BACK " << in0_block_num_tiles << " tiles to CB0" << ENDL();
                 }
+                in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
             }
-            in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
-        }
-        // DPRINT << "finished reading " << in0_block_num_tiles << " in0 tiles from batch " << b << ENDL();
-        if constexpr (!bcast_A) {
-            in0_tensor_start_tile_id += MtKt;
-        }
-        if constexpr (bcast_A) {
-            in0_tensor_start_tile_id += MtKt;
+            // DPRINT << "finished reading " << in0_block_num_tiles << " in0 tiles from batch " << b << ENDL();
+            if constexpr (!bcast_A) {
+                in0_tensor_start_tile_id += MtKt;
+            }
+            if constexpr (bcast_A) {
+                in0_tensor_start_tile_id += MtKt;
+            }
         }
     }
     noc_async_write_barrier();
