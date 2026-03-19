@@ -9,11 +9,11 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.blaze_moe_gate import BlazeMoeGate
+from models.demos.deepseek_v3.tt.blaze_moe_gate import MoEGate
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 
-# from models.demos.deepseek_v3.tt.moe_gate import MoEGate as BlazeMoeGate
+# from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
@@ -58,7 +58,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         assert state_dict is not None
 
         return {
-            "moe_gate": BlazeMoeGate.convert_weights(
+            "moe_gate": MoEGate.convert_weights(
                 hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
             ),
             "moe_experts": MoEExperts.convert_weights(
@@ -149,7 +149,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "num_links": 4,
             },
             "ccl": ccl,
-            "moe_gate": BlazeMoeGate.create_state(hf_config, mesh_device),
+            "moe_gate": MoEGate.create_state(hf_config, mesh_device),
         }
 
     @classmethod
@@ -200,7 +200,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": BlazeMoeGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -249,7 +249,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": BlazeMoeGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -376,7 +376,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _fwd_moe_gate(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return BlazeMoeGate.forward(x, cfg["moe_gate"])
+        return MoEGate.forward(x, cfg["moe_gate"])
 
     @classmethod
     def _fwd_repeat_permute_expert_weights(

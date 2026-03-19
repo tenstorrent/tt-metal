@@ -35,7 +35,7 @@ from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekM
 MAX_BATCH_SIZE_PER_CORE = 1
 
 
-class BlazeMoeGate(AbstractModule):
+class MoEGate(AbstractModule):
     """MoE gate module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
