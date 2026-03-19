@@ -1,0 +1,18 @@
+training_config:
+  project_name: "grpo_capitals_batched_vs_single"
+  tokenizer_type: "bpe"
+  model_config: "model_configs/llama3_2_1B.yaml"
+
+grpo_config:
+  max_tokens_to_complete: 50
+  group_size: 1
+
+eval_config:
+  temperature: 0.0
+  repetition_penalty: 1.0
+  top_k: 50
+  top_p: 1.0
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
