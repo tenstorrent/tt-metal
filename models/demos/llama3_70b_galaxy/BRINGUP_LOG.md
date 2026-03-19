@@ -387,6 +387,201 @@ SDPA [1,8,32,128] → to_DRAM, ROW_MAJOR
   | Prefill 64L | **0.9773** (hidden) / **0.9463** (logits) | — | PASS |
 - **Block Hash**: `5ef4dc5bc0` — `olmo: eliminate DRAM roundtrips in decode QK-norm and WO gather`
 
+### 2026-03-18 (Session 13) — Option A: Q-Norm Pre-Head Optimization
+
+**Status**: COMPLETE (bug fixed in Session 15). PCC maintained after fix (0.9991 64L hidden). See Session 15.
+
+**Problem**: Q-norm prefill path had 4 expensive standalone ops per layer:
+- TransposeDeviceOperation (#1): 722 us → 2930 us (8k → 16k)
+- ReshapeViewDeviceOperation (#1): 1971 us → 8339 us
+- ReshapeViewDeviceOperation (#2): 2466 us → 9743 us
+- TransposeDeviceOperation (#2): 641 us → 2598 us
+- **Total: 5800 us/layer at 8k → 23,610 us/layer at 16k**
+
+**Root cause**: Q has 5 local heads `[1, 5, seq, 128]` requiring flatten to `[1, 1, seq, 640]` for
+`rms_norm_pre_all_gather`. The current code did this AFTER `nlp_create_qkv_heads`, requiring
+expensive round-trip: transpose→reshape→norm→reshape→transpose.
+
+**Fix (Option A in `llama_attention.py`)**: Apply Q-norm BEFORE `nlp_create_qkv_heads`.
+Q is already flat in `xqkv_fused[..., :640]`. Slice Q → norm → concat with KV slice →
+`nlp_create_qkv_heads` on the normed tensor (head split done internally, cheaply).
+Eliminates ALL 4 standalone transpose/reshape ops.
+
+**New ops (replaces 4 old ops):**
+- SliceDeviceOperation ×2: 52 + 22 = 74 us
+- TypecastDeviceOperation ×2: 93 + 39 = 132 us (bf8b→bf16 for ISL≥4096 only)
+- ConcatDeviceOperation ×1: 150 us
+- **Total: 356 us/layer at 8k (vs 5800 us before) = 16× faster Q-norm path**
+
+**Net saving**: 5444 us/layer at 8k × 64 layers = **~348 ms off prefill at 8k ISL**
+Projected at 16k: 23,254 us/layer × 64 = **~1.49 s off prefill at 16k ISL**
+
+**PCC Results (test_olmo_prefill_pcc_stepwise)**:
+- Hidden states PCC: 0.9999 (all tokens), 0.9993 (last token) ✓
+- TTNN logits vs HF: 0.9991 ✓
+- Token match: True ✓
+
+**Block Hash**: llama_attention.py Option A Q-norm (batch_size==1 only, batch>1 uses fallback)
+
+---
+
+### 2026-03-18 (Session 15) — Option A Bug Fix: Persistent Buffer Deallocation
+
+**Status**: FIXED. 64L PCC restored. TTFT improvement at 8k ISL confirmed.
+
+**Bug**: Option A called `ttnn.deallocate(xqkv_fused)` which freed the **persistent all_gather
+output buffer** (`all_gather_buffers[seqlen]["QKV_BF16"/"QKV"]`) for ISL ≤ 4096. These seqlens
+(128, 1024, 2048, 4096) are in `support_seqlens` and the `ring_all_gather` writes the QKV
+all_reduce output DIRECTLY into these persistent buffers. Deallocating the buffer corrupted
+all subsequent layers (1-63) in the 64L model, reducing 64L ISL=128 PCC from 0.9991 → 0.375.
+The 1L test was unaffected (no layer 1 to corrupt). For ISL ≥ 8192 (not in support_seqlens),
+there is no persistent buffer so the original deallocation was safe.
+
+**Fix**: Remove `ttnn.deallocate(xqkv_fused)` from Option A. The persistent buffer is already
+tracked by `all_gather_buffers` and must NOT be freed. For non-persistent ISL (8k, 16k), Python
+GC releases the device memory when `xqkv_fused = xqkv_normed` is assigned.
+
+**64L PCC Results (after fix)**:
+| Test | Hidden PCC | Logits PCC | Result |
+|------|-----------|-----------|--------|
+| Prefill 64L (ISL=128) | **0.9991** | — | PASS |
+| Prefill 64L (ISL=2k) | **0.9982** | — | PASS |
+
+**TTFT improvement at 8k ISL (profiler: olmo_session12 vs option_a_8k)**:
+| Metric | Baseline (Session 12) | Option A (fixed) | Delta |
+|--------|----------------------|-----------------|-------|
+| Total prefill/layer | 20,611 us | 15,047 us | **−5,564 us (−27%)** |
+| ReshapeViewDeviceOperation | 4,437 us | 0 us | −4,437 us |
+| TransposeDeviceOperation | 1,363 us | 0 us | −1,363 us |
+| ConcatDeviceOperation | 50 us | 198 us | +148 us |
+| SliceDeviceOperation | 19 us | 93 us | +74 us |
+| NlpCreateHeadsDeviceOperation | 84 us | 147 us | +63 us |
+
+**Total TTFT improvement at 8k ISL (64 layers):** 5,564 us × 64 = **~356 ms faster**
+(1,319 ms → 963 ms, 27% reduction in prefill time per layer)
+
+**Block Hash**: `20b1b21448` (partial) — `updates` (Option A Q-norm + persistent buffer fix)
+
+---
+
+### 2026-03-18 (Session 14) — Decode Q-Norm Tilize Optimization Attempts
+
+**Status**: INVESTIGATED, NO IMPROVEMENT POSSIBLE with current TTNN primitives.
+
+**Problem**: Decode Q-norm tilize runs on 1 core at 93 us (full Q-norm path: 245 us/layer).
+Compared to K-norm tilize at 26 us on 8 cores, this is a ~4× slower tilize.
+
+**Root Cause Analysis**:
+- K-norm: shape `[1, batch, 1, 128]` → batch in dim1 → 8 outer slices for tilize kernel → 8 cores
+- Q-norm: shape `[1, 1, batch, 640]` → batch in dim2 → 1 outer slice for tilize kernel → 1 core
+- `TilizeWithValPaddingDeviceOperation` parallelizes over dim0×dim1 outer slices
+
+**Attempts**:
+
+**1. SHARD8 trick** (InterleavedToSharded→ShardedToInterleaved before tilize):
+- Added `OLMO_Q_FLAT_SHARD8_MEMCFG` HEIGHT_SHARDED config across 8 cores
+- Double `to_memory_config` (shard → interleaved) to force 8 L1 banks
+- **Result**: Q-norm tilize still 93 us on 1 core — ShardedToInterleaved consolidates data
+- **Conclusion**: Artificial sharding doesn't preserve multi-bank distribution for tilize
+
+**2. Shape change `[1, 8, 1, 640]`** (batch in dim1, same as K-norm):
+- Reshape q_flat to `[1, q_batch, 1, n_local_heads * head_dim]` instead of `[1, 1, q_batch, ...]`
+- PCC test passed (0.9999 hidden, 0.9991 logits, token match ✓)
+- **Profiler result (20260318_090019 vs 20260318_081201)**:
+  - Tilize: 93 → 124 us (8 cores, but 8× more tiles due to height=1 → 31/32 rows zero-padded)
+  - AllGather Q-stats: 64 → 126 us (shape change affects gather buffer layout)
+  - **Total decode layer: 16222 → 16308 us (+86 us, WORSE)**
+- **Reverted** to `[1, 1, q_batch, 640]`
+
+**Fundamental constraint**: 640 elements per token requires 20 tile-cols per outer slice.
+- With 1 outer slice: 20 tiles on 1 core (fast per tile, serial)
+- With 8 outer slices: 160 tiles on 8 cores (parallel but 8× total work due to height=1 padding)
+Neither is significantly better than the other; 1-core is actually faster (93 vs 124 us).
+
+**Current decode Q-norm baseline** (per layer, 8k ISL):
+- TilizeWithValPadding: 93 us (1 core)
+- LayerNormPreAllGather: 22 us (1 core)
+- AllGather: 64 us
+- LayerNormPostAllGather: 44 us (1 core)
+- Untilize: 22 us (1 core)
+- **Total: ~245 us/layer → 15.7 ms per 64-layer decode step**
+
+**Code state**: Both SHARD8 code and [1,8,1,640] reshape reverted. `llama_attention.py` uses
+`[1, 1, q_batch, n_local_heads * head_dim]` (original). `OLMO_Q_FLAT_SHARD8_MEMCFG` removed
+from `olmo_model_config.py`.
+
+**PCC**: 0.9999 hidden, 0.9991 logits, token match ✓ (confirmed after revert)
+
+---
+
+### 2026-03-18 (session) — AGMM FF2 Fix + E2E Performance Sweep (Batch=1)
+
+**Status**: AGMM temporarily disabled. E2E batch=1 perf numbers captured.
+
+**AGMM FF2 (Fused AllGather+Matmul for decode FF2)**:
+- **L1 OOM fix**: Removed static L1 pre-allocation of `w2_l1` per layer. Changed to dynamic allocation:
+  - `llama_mlp.py`: passes `self.w2_interleaved` (DRAM) to `olmo_ff2_all_gather_matmul`
+  - `llama_ccl.py`: `olmo_ff2_all_gather_matmul` converts `w2` → L1 via `ttnn.to_memory_config`, runs AGMM, then deallocates. Only 1 layer's `w2` in L1 at a time (~470KB, vs 64×470KB before).
+- **Root cause of low PCC (0.59)**: `llama_1d_mm_fusion.cpp` overrides `in0_block_w = Kt_total / 4` internally. For OLMo, `Kt_total = 27` (not divisible by 4), so `27/4=6` (integer division), silently dropping 3 tiles of K per layer → accumulated error.
+- **Current state**: `USE_AGMM_FF2 = False` (disabled pending fix or padding `intermediate_dim` to be divisible by 4×tile_size).
+
+**Large ISL PCC Tests Added** (`test_olmo_e2e_pcc.py`):
+- `test_decode_pcc_64layers_16k`: start_pos=16383, max_seq_len=16384, max_num_blocks=4096
+- `test_decode_pcc_64layers_32k`: start_pos=32767, max_seq_len=32768, max_num_blocks=4096
+- `test_decode_pcc_64layers_64k`: start_pos=65535, max_seq_len=65536, max_num_blocks=8192
+  - KV cache at 64k: 8192×1×64×128×2×64L ≈ 8 GB/device ≤ 12 GB ✓
+- `_run_decode_pcc` now computes `max_num_blocks = max(4096, batch_per_dg × ceil(max_seq_len/64))`
+
+**Large ISL Demo Entries Added** (`demo_olmo_decode.py`):
+- `isl-32k-b1`: max_num_blocks=4128 (capacity 32976 tokens ≥ 32778)
+- `isl-64k-b1`: max_num_blocks=8208 (capacity 65664 tokens ≥ 65546)
+- Note: KV cache with n_local_kv_heads=1 (not 2), 64k needs 8.6 GB/device ≤ 12 GB ✓
+
+**E2E Performance — Batch=1 ISL Sweep** (64L, `LlamaOptimizations.performance`, no AGMM):
+
+| ISL    | TTFT (ms) | Decode (tok/s/user) | Output Coherent |
+|--------|-----------|---------------------|-----------------|
+| 128    | 267.31    | 18.04               | ✓ (Frankenstein)|
+| 1k     | 270.46    | 17.71               | ✓ (Frankenstein)|
+| 2k     | ~397      | ~17.52              | ✓ (Frankenstein)|
+| 4k     | 756.94    | 17.19               | ✓ (Frankenstein)|
+| 8k     | 1543.37   | 17.06               | ✓ (Frankenstein)|
+
+Notes:
+- TTFT for 2k derived from timestamps (`profiler.end("inference_prefill")` - `profiler.start`).
+- Decode speed is nearly flat across ISLs (KV cache memory-bandwidth bound).
+- TTFT from 128→1k is nearly flat (~270ms); non-linear scaling at small ISL due to constant overhead dominating.
+
+**Next Steps**:
+1. Run batch=32 E2E demo (`full-batch32`) — capture TTFT + tok/s
+2. Run large ISL PCC tests (16k/32k/64k)
+3. Run large ISL demo (32k/64k batch=1) — capture TTFT + tok/s
+4. Fix AGMM: either pad `intermediate_dim` to multiple of 4×32 or use a different matmul config
+
+---
+
+### 2026-03-19 — Batch=1 ISL Sweep Fix & Verified E2E
+
+**Bug Fixed**: `TT_FATAL: Illegal Runtime Args on (x=1,y=3)` during decode trace compilation.
+
+**Root Cause**: In `rotary_embedding_llama_fused_qk`, the kernel is created on `all_cores_bb = bounding_box(cos/sin shard grid)`. For OLMo decode, the cos/sin rotation matrices used `rope_sub_core_grids = {(0,0)-(6,9)}` (full 70-core grid) starting at `(0,0)`, giving bounding box `{(0,0)-(6,2)}` (y≤2 only). However, K_expanded (after expanding K from 1→8 heads) was placed on `sub_core_grids` cores 8–15 (positions y=3..5), which are outside the bounding box. This caused `core_to_runtime_args_[1][3]` to be an out-of-bounds vector access → undefined behavior → garbage `user_arg_count = 2^64 - 21` → TT_FATAL.
+
+**Fix** (`olmo_model_config.py`): Changed `rope_sub_core_grids = self.sub_core_grids` (50-core grid, same as ops) and `rope_start_core = self.start_core = (1,0)`. This ensures the 16-core cos/sin grid starts at `(1,0)` and has bounding box `{(1,0)-(3,5)}`, which covers both Q cores (0–7 of sub_core_grids, y≤2) and K cores (8–15 of sub_core_grids, y≤5).
+
+**Verified E2E Sweep** (64L, batch=1, `LlamaOptimizations.performance`):
+
+| ISL  | TTFT (ms) | Decode (tok/s) | TSU Failures | Output |
+|------|-----------|----------------|--------------|--------|
+| 128  | ~270      | 18.0           | 0            | ✓ Coherent |
+| 1k   | ~270      | 17.69          | 0            | ✓ Coherent |
+| 2k   | ~400      | ~17.5          | 0            | ✓ Coherent |
+| 4k   | ~757      | ~17.2          | 0            | ✓ Coherent |
+| 8k   | ~1543     | 17.06          | 0            | ✓ Coherent (Frankenstein continuation) |
+
+All tests PASSED with 0 TSU failures. Output is coherent at all ISLs (model continues Frankenstein text sensibly).
+
+---
+
 ### 2026-03-15 (session 1) — Decode PCC & LM Head Fixes
 - Decode PCC (1L, no prefetcher): 0.9983, token match ✓. `test_decode_pcc_1layer` PASSING.
 - Root cause of lm_head `inf`: `LM_HEAD_OUT_RING_RESHARD_MEMCFG` was 32×544=17408 but output had 24×544=13056. Fixed by skipping reshard for OLMo.

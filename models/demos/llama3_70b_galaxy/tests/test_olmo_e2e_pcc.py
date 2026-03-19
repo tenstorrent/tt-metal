@@ -412,6 +412,30 @@ class TestOlmoE2EPCC:
         self._run_decode_pcc(mesh_device, n_layers=64)
 
     @torch.no_grad()
+    def test_decode_pcc_64layers_8k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=8191 (ISL=8k) with 64-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=8191, max_seq_len=8192)
+
+    @torch.no_grad()
+    def test_decode_pcc_64layers_16k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=16383 (ISL=16k) with 64-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=16383, max_seq_len=16384)
+
+    @torch.no_grad()
+    def test_decode_pcc_64layers_32k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=32767 (ISL=32k) with 64-layer model."""
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=32767, max_seq_len=32768)
+
+    @torch.no_grad()
+    def test_decode_pcc_64layers_64k(self, mesh_device, reset_seeds, ensure_gc):
+        """Decode PCC: 1 decode step at start_pos=65535 (ISL=64k) with 64-layer model.
+
+        n_local_kv_heads=1 (8 KV heads / 8 devices_per_group), so KV cache per device at
+        max_num_blocks=8192 is 8192*1*64*128*2*64 = 8GB ≤ 12GB DRAM. Safe with batch=32.
+        """
+        self._run_decode_pcc(mesh_device, n_layers=64, start_pos=65535, max_seq_len=65536)
+
+    @torch.no_grad()
     def test_decode_pcc_32layers(self, mesh_device, reset_seeds, ensure_gc):
         """Decode PCC: 1 decode step, 32-layer model."""
         self._run_decode_pcc(mesh_device, n_layers=32)
@@ -1551,14 +1575,11 @@ class TestOlmoE2EPCC:
         logger.info("\n2-STEP DECODE ELEMENTWISE COMPLETE")
 
     @torch.no_grad()
-    def _run_decode_pcc(self, mesh_device, n_layers):
+    def _run_decode_pcc(self, mesh_device, n_layers, start_pos=127, max_seq_len=256, batch_size=32):
         """Shared implementation for decode PCC tests."""
         hf_model_path = os.environ.get("HF_MODEL")
         if not hf_model_path:
             pytest.skip("HF_MODEL not set")
-        max_seq_len = 256
-        batch_size = 32
-        start_pos = 127
         dtype = ttnn.bfloat8_b
 
         logger.info("Loading HF state dict...")
@@ -1604,7 +1625,12 @@ class TestOlmoE2EPCC:
         model_args.n_layers = n_layers
         state_dict = model_args.load_state_dict()
 
-        paged_attention_config = PagedAttentionConfig(block_size=64, max_num_blocks=4096)
+        block_size = 64
+        # batch_size_per_device_group = max(batch_size // 4, 1) for TG (4 KV-head device groups)
+        batch_per_dg = max(batch_size // 4, 1)
+        min_blocks = batch_per_dg * math.ceil(max_seq_len / block_size)
+        max_num_blocks = max(4096, min_blocks)
+        paged_attention_config = PagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
 
         tt_model = TtTransformer(
             args=model_args,

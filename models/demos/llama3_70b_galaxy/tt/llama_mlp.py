@@ -306,11 +306,31 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
+        if is_olmo and mode == "decode" and self.model_config.get("USE_AGMM_FF2", False):
+            # Fused AllGather + Matmul: replaces line_all_gather + ttnn.linear + to_memory_config
+            # ff1ff3 is [32, 864] DRAM; AGMM gathers across 4 TP col-devices then runs matmul
+            # w2_interleaved is DRAM; converted to L1-sharded inside olmo_ff2_all_gather_matmul
+            # Output: [32, 1280] L1 in FF2_OUT_RING_MEMCFG_OLMO (10 cores) — ready for all_reduce
+            w2_out_sharded = self.tt_ccl.olmo_ff2_all_gather_matmul(
+                ff1ff3,
+                self.w2_interleaved,  # DRAM-interleaved; moved to L1 inside AGMM call
+                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                sub_device_id=self.tt_ccl.worker_sub_device_id,
+            )
+            ttnn.deallocate(ff1ff3)
+            w2_out_reduced = self.tt_ccl.line_all_reduce(
+                w2_out_sharded,
+                cluster_axis=0,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                use_optimal_ccl_for_llama=True,
+            )
+            ttnn.deallocate(w2_out_sharded)
+            self._debug_check_mlp("w2_out_reduced", w2_out_reduced)
+            return w2_out_reduced
+
         if is_olmo and mode == "decode":
-            # Use the pre-allocated bfloat16 persistent buffer (BINARY_MUL_BF16) so the
-            # all_gather does not allocate a new tensor on every call — allocating inside
-            # a Metal trace is unsafe and causes a segfault after ~30 decode iterations.
-            # use_optimal_ccl_for_llama=False avoids the C++ path that assumes bfloat8_b.
+            # Original path: separate all_gather + linear (fallback when USE_AGMM_FF2=False)
             w2_in = self.tt_ccl.line_all_gather(
                 ff1ff3,
                 dim=3,

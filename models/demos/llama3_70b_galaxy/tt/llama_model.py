@@ -70,6 +70,8 @@ class TtTransformer(LightweightModule):
             original_max_position_embeddings=getattr(args, "orig_context_len", 8192),
             beta_fast=getattr(args, "yarn_beta_fast", 32.0),
             beta_slow=getattr(args, "yarn_beta_slow", 1.0),
+            sub_core_grids=getattr(args, "rope_sub_core_grids", None),
+            start_core=getattr(args, "rope_start_core", None),
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 

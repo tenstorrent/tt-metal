@@ -108,6 +108,12 @@ class TT_CCL:
             self.all_gather_buffers = self.get_all_gather_buffers()
             self.reduce_scatter_buffers = self.get_decode_reduce_scatter_buffers()
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
+            if is_olmo and self.model_config.get("USE_AGMM_FF2", False):
+                self.agmm_ff2_intermediate_buffers = self.get_agmm_ff2_intermediate_buffers()
+                self.agmm_ff2_buffer_idx = 0
+            else:
+                self.agmm_ff2_intermediate_buffers = None
+                self.agmm_ff2_buffer_idx = 0
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
@@ -184,7 +190,9 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        temp_shape = [8, batch_size, 32, 128]
+        # Minimum batch=4 required: ShardTensor2dMesh splits dim1 across 4 column devices
+        buffer_batch_size = max(batch_size, 4)
+        temp_shape = [8, buffer_batch_size, 32, 128]
         intermediate_tensor = torch.zeros(temp_shape, dtype=torch.bfloat16)
         tt_intermediate_tensor = ttnn.from_torch(
             intermediate_tensor,
@@ -515,6 +523,73 @@ class TT_CCL:
         )
 
         return persistent_buffers
+
+    def get_agmm_ff2_intermediate_buffers(self):
+        """Pre-allocate double-buffered intermediate tensors for FF2 AllGather+Matmul (OLMo decode).
+
+        The intermediate holds the gathered in0 (ff1ff3 after all-gather) used by the fused
+        llama_all_gather_matmul_async kernel.  Shape: [32, 3456] (intermediate_dim_per_tp)
+        split across 4 L1 cores at (3,0)-(3,3), each holding [32, 864].
+        """
+        cluster_shape = (8, 4)
+        intermediate_mem_config = self.model_config["FF2_AGMM_INTERMEDIATE_MEMCFG"]
+        buffers = []
+        # intermediate_dim_per_tp = 3456; 4 col TP-devices → 864 per device → 3456 total gathered
+        total_width = 3456  # intermediate_dim_per_tp
+        for _ in range(self.num_cbs):
+            tt_buffer = ttnn.from_torch(
+                torch.zeros((*cluster_shape, 32, total_width)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=intermediate_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            buffers.append(tt_buffer)
+        return buffers
+
+    def olmo_ff2_all_gather_matmul(self, ff1ff3, w2, compute_kernel_config, sub_device_id):
+        """Fused AllGather+Matmul for OLMo FF2 decode using llama_all_gather_matmul_async.
+
+        Replaces the separate line_all_gather + ttnn.linear steps.
+        ff1ff3: [32, 864] DRAM (silu*gate output after reduce_scatter along cluster_axis=1)
+        w2:     DRAM-interleaved [1,1,3456,1280]; moved to L1 here (freed after AGMM call)
+        Returns: [32, 1280] L1 WIDTH_SHARDED on 10 cores (FF2_OUT_RING_MEMCFG_OLMO)
+        """
+        cluster_axis = 1
+        intermediate = self.agmm_ff2_intermediate_buffers[self.agmm_ff2_buffer_idx]
+        semaphore = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+
+        # Move ff1ff3 to L1 sharded (required by llama_all_gather_matmul_async)
+        ff1ff3_l1 = ttnn.to_memory_config(ff1ff3, self.model_config["FF2_AGMM_INPUT_MEMCFG"])
+
+        # Move w2 from DRAM-interleaved to L1 WIDTH_SHARDED for AGMM kernel.
+        # Allocated and freed within this call — avoids per-layer L1 pressure during model init.
+        w2_l1 = ttnn.to_memory_config(w2, self.model_config["W2_AGMM_MEMCFG"])
+
+        mm_out = ttnn.experimental.llama_all_gather_matmul_async(
+            ff1ff3_l1,
+            w2_l1,
+            intermediate,
+            dim=3,
+            cluster_axis=cluster_axis,
+            mesh_device=self.mesh_device,
+            multi_device_global_semaphore=semaphore,
+            ag_memory_config=self.model_config["FF2_AGMM_INTERMEDIATE_MEMCFG"],
+            mm_memory_config=self.model_config["FF2_OUT_RING_MEMCFG_OLMO"],
+            topology=ttnn.Topology.Linear,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            subdevice_id=sub_device_id,
+            program_config=self.model_config["FF2_AGMM_PROGCFG"],
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat8_b,
+        )
+
+        ttnn.deallocate(ff1ff3_l1)
+        ttnn.deallocate(w2_l1)
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.agmm_ff2_buffer_idx = (self.agmm_ff2_buffer_idx + 1) % self.num_cbs
+        return mm_out  # [32, 1280] in FF2_OUT_RING_MEMCFG_OLMO (10 cores × [32, 128])
 
     def get_prefill_reduce_scatter_buffers(self):
         """

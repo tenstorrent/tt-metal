@@ -57,6 +57,8 @@ class TtLlamaRotarySetup(LightweightModule):
         original_max_position_embeddings: int = 8192,
         beta_fast: float = 32.0,
         beta_slow: float = 1.0,
+        sub_core_grids: ttnn.CoreRangeSet = None,
+        start_core: ttnn.CoreCoord = None,
     ):
         super().__init__()
 
@@ -74,13 +76,17 @@ class TtLlamaRotarySetup(LightweightModule):
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
         num_cores = self.core_grid.x * self.core_grid.y
-        self.sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
-        self.start_core = ttnn.CoreCoord(1, 0)
+        if sub_core_grids is not None:
+            self.sub_core_grids = sub_core_grids
+        else:
+            # Default: 50-core grid for prefetcher-ON models (avoids prefetcher receiver cores)
+            self.sub_core_grids = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            )
+        self.start_core = start_core if start_core is not None else ttnn.CoreCoord(1, 0)
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         if use_yarn:

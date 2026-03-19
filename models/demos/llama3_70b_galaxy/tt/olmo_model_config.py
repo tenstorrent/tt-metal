@@ -43,6 +43,11 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 class TtOlmoModelArgs(TtModelArgs):
     """OLMo-3.1-32B model configuration for TT Galaxy."""
 
+    # OLMo doesn't support batched prefill: batch*seq tensors (e.g. 32*128=4096)
+    # would fall through to ISL=4096 CCL buffers, which have a dtype mismatch
+    # with the bfloat16 QKV/WO buffers allocated for short ISLs.
+    supports_batched_prefill = False
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -154,6 +159,16 @@ class TtOlmoModelArgs(TtModelArgs):
             ]
         )
         self.start_core = ttnn.CoreCoord(1, 0)
+
+        # RoPE MUST use the same sub_core_grids as ops (not the full 70-core grid).
+        # fused_qk creates its kernel on all_cores_bb = bounding_box(cos/sin grid).
+        # Q comes from llama_rs_create_heads on sub_core_grids cores 0-7 (y≤2).
+        # K comes from llama_rs_create_heads on sub_core_grids cores 8-15 (y up to 5).
+        # If rope uses the full 70-core grid starting at (0,0), cos/sin bbox only covers y≤2,
+        # causing K cores at y=3..5 to be outside → OOB access in core_to_runtime_args_.
+        # Using sub_core_grids starting at (1,0): 16 cores → bbox {(1,0)-(3,5)}, covers K ✓
+        self.rope_sub_core_grids = self.sub_core_grids
+        self.rope_start_core = self.start_core  # CoreCoord(1, 0)
 
         # Load from HF_MODEL environment variable
         HF_MODEL = os.getenv("HF_MODEL")
@@ -558,11 +573,68 @@ class TtOlmoModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
 
+        # ==== AGMM (AllGather+Matmul) configs for FF2 fused decode ====
+        # in0 input (ff1ff3) after reduce_scatter: [32, 864] per device on 1 L1 core
+        AGMM_INPUT_CORES = 1
+        agmm_input_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+        self.model_config["FF2_AGMM_INPUT_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                agmm_input_core_range_set,
+                [32, self.intermediate_dim_per_tp // 4],  # [32, 864]
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        # Intermediate buffer (gathered in0): [32, 3456] across 4 L1 cores at (3,0)-(3,3)
+        AGMM_INTER_CORES = 4
+        agmm_inter_core_range_set = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, AGMM_INTER_CORES - 1))]
+        )
+        self.model_config["FF2_AGMM_INTERMEDIATE_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.intermediate_dim_per_tp // AGMM_INTER_CORES),  # (32, 864) per shard
+            core_grid=agmm_inter_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
         # OLMo-specific FF2 output config for decode: dim_per_tp=1280, not padded 1536
         # 1280 / 10 cores = 128 per shard (tile-aligned)
         OLMO_OUT_RING_SIZE = 10
+
+        # AGMM program config: gather_in0=True, K_per_device=864, N=1280, 10 output cores
+        # in0_block_w = K_per_device / TILE_SIZE = (intermediate/4) / 32 = 864/32 = 27
+        # per_core_N = N / OLMO_OUT_RING_SIZE / TILE_SIZE = 1280/10/32 = 4
+        _agmm_k_per_device = self.intermediate_dim_per_tp // 4  # 864
+        _agmm_in0_block_w = _agmm_k_per_device // self.tile_size  # 27
+        _agmm_per_core_n = self.dim_per_tp // OLMO_OUT_RING_SIZE // self.tile_size  # 4
+        # compute_with_storage_grid_size: bounding box of 10 output cores (cols 1-2, 5-6, rows 0-2)
+        self.model_config["FF2_AGMM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(7, 3),  # bounding box: cols 0-6 x rows 0-2
+            in0_block_w=_agmm_in0_block_w,  # 27
+            out_subblock_h=1,
+            out_subblock_w=4,  # per_core_N=4, 4*1=4 ≤ 8
+            per_core_M=1,
+            per_core_N=_agmm_per_core_n,  # 4
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=ttnn.CoreRangeSet([]),
+            num_global_cb_receivers=1,  # no prefetcher
+            untilize_out=False,
+        )
+        # Output cores must NOT include column x=3 (used by intermediate/AllGather receiver cores).
+        # Use sub_core_grids excluding col 3 (cols 1-2 + cols 5-6) so there is no kernel overlap.
+        # 10 cores row-wise: (1,0),(2,0),(5,0),(6,0),(1,1),(2,1),(5,1),(6,1),(1,2),(2,2)
+        _agmm_out_sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 9)),  # cols 1-2
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),  # cols 5-6
+            ]
+        )
         olmo_out_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-            self.start_core, OLMO_OUT_RING_SIZE, self.sub_core_grids, row_wise=True
+            self.start_core, OLMO_OUT_RING_SIZE, _agmm_out_sub_core_grids, row_wise=True
         )
         self.model_config["FF2_OUT_RING_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
             shape=(32, self.dim_per_tp // OLMO_OUT_RING_SIZE),  # (32, 128)
@@ -571,6 +643,19 @@ class TtOlmoModelArgs(TtModelArgs):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        # AGMM in1 (w2) must be L1-sharded on the SAME cores as output.
+        # Shard shape: [K_gathered, N_per_core] = [3456, 128].
+        # Each of the 10 output cores holds one column-shard of w2 (≈432 KB at bfloat8_b).
+        self.model_config["W2_AGMM_MEMCFG"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                olmo_out_core_range_set,
+                [self.intermediate_dim_per_tp, self.dim_per_tp // OLMO_OUT_RING_SIZE],  # [3456, 128]
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        self.model_config["USE_AGMM_FF2"] = False  # temporarily disabled for PCC baseline
 
         # ==== Reduce Scatter Configs ====
         PACKET_WORKER_CRS = ttnn.CoreRangeSet(
@@ -660,12 +745,10 @@ class TtOlmoModelArgs(TtModelArgs):
         )
 
         # ==== Decode QK-norm L1 Configs ====
-        # Both K and Q norm ops use L1 INTERLEAVED to avoid DRAM roundtrips.
-        # K: [1, 8, 1, 128] HEIGHT_SHARDED in L1 → move to L1 INTERLEAVED (2KB fits in one bank).
-        # Q: [1, 1, 8, 640] (row-major after reshape) → L1 INTERLEAVED before tilize (10KB fits).
-        # LayerNormShardedMultiCoreProgramConfig requires CoreGrid from origin (0,0), which
-        # conflicts with sub_core_grids starting at x=1, so we use default (single-core) program
-        # config but keep the data in L1 to eliminate the DRAM bus roundtrip.
+        # Both K and Q norm use L1 INTERLEAVED to avoid DRAM roundtrips.
+        # K: [1, batch, 1, 128] HEIGHT_SHARDED in L1 → move to L1 INTERLEAVED → tilize 8 cores.
+        # Q: reshaped to [1, batch, 1, 640] (batch in dim1, matching K-norm pattern) → 8 cores.
+        # Tilize parallelizes over dim0×dim1 outer slices, so keeping batch in dim1 gives 8 cores.
         self.model_config["OLMO_K_NORM_L1_MEMCFG"] = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1
         )
