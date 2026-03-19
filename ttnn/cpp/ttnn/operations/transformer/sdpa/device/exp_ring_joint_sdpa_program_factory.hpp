@@ -26,6 +26,9 @@ struct ExpRingJointSDPASharedVariables {
     uint32_t writer_fabric_ag_rt_offset = 0;
     // Offset into reader RT args where the fused-op global semaphore address lives
     uint32_t reader_fused_op_sem_rt_offset = 0;
+    // Offset into reader RT args where per-link semaphore addresses begin
+    uint32_t reader_per_link_sem_rt_offset = 0;
+    uint32_t num_links = 0;
     // MUX kernel handle and core positions
     tt::tt_metal::KernelHandle ccl_mux_kernel_id{};
     std::vector<CoreCoord> ccl_mux_backward_cores;
