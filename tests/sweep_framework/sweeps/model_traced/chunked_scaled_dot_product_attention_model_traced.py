@@ -169,10 +169,12 @@ def run(
 
     output_memory_config = kwargs.get("output_memory_config", ttnn.DRAM_MEMORY_CONFIG)
 
-    chunk_start_idx = kwargs.get("chunk_start_idx", 0)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Read chunk_start_idx from op_kwargs (from traced config) or use default
+    chunk_start_idx = op_kwargs.get("chunk_start_idx", 0)
     if chunk_start_idx is None:
         chunk_start_idx = 0
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Extract shapes for Q and K/V paged from separate inputs or dict fallback
     if isinstance(input_a_shape, dict):
@@ -305,6 +307,8 @@ def run(
         )
 
     start_time = start_measuring_time()
+    # Pop chunk_start_idx from op_kwargs since it's passed as a positional argument
+    op_kwargs.pop("chunk_start_idx", None)
     output_tensor = ttnn.transformer.chunked_scaled_dot_product_attention(
         q_tensor, k_tensor, v_tensor, page_table_tensor, chunk_start_idx, **op_kwargs
     )

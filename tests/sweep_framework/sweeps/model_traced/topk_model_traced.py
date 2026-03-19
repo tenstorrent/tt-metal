@@ -88,10 +88,11 @@ def run(
     if dim is None:
         dim = kwargs.get("arg2", -1)
     dim_val = dim
-    largest = kwargs.get("largest", True)
+    # Read largest and sorted from op_kwargs (from traced config)
+    largest = op_kwargs.get("largest", True)
     if largest is None:
         largest = True
-    sorted_flag = kwargs.get("sorted", True)
+    sorted_flag = op_kwargs.get("sorted", True)
     if sorted_flag is None:
         sorted_flag = True
     if output_memory_config is None and memory_config is not None:
@@ -132,7 +133,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag, **op_kwargs)
+    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

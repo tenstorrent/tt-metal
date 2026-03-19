@@ -82,7 +82,8 @@ def run(
 
     if dim is None:
         dim = kwargs.get("arg1", None)
-    keepdim = kwargs.get("keepdim", True)
+    # Read keepdim from op_kwargs (from traced config), defaulting to True
+    keepdim = op_kwargs.get("keepdim", True)
     if keepdim is None:
         keepdim = True
     if output_memory_config is None and memory_config is not None:
@@ -126,7 +127,7 @@ def run(
     if dim is None:
         output_tensor = ttnn.sum(input_tensor_a, **op_kwargs)
     else:
-        output_tensor = ttnn.sum(input_tensor_a, dim=dim, keepdim=keepdim, **op_kwargs)
+        output_tensor = ttnn.sum(input_tensor_a, dim=dim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

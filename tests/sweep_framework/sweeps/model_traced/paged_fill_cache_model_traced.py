@@ -201,9 +201,9 @@ def run(
         input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=layout_b)
         input_tensor_c = ttnn.from_torch(torch_input_tensor_c, dtype=dtype_c, layout=layout_c)
 
-    batch_idx = kwargs.get("batch_idx", 0)
-    if batch_idx is None:
-        batch_idx = 0
+    # Ensure batch_idx has a default value in op_kwargs
+    if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
+        op_kwargs["batch_idx"] = 0
 
     start_time = start_measuring_time()
     try:
@@ -211,7 +211,6 @@ def run(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
-            batch_idx=batch_idx,
             **op_kwargs,
         )
     except TypeError:
@@ -219,7 +218,6 @@ def run(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
-            batch_idx=batch_idx,
             **op_kwargs,
         )
     # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a

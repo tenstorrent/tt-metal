@@ -93,6 +93,10 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    # Build op_kwargs early so we can read dim from traced config for golden
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    dim = op_kwargs.pop("dim", dim)
+
     torch_output_tensor = torch.nn.functional.softmax(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
@@ -132,10 +136,6 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
-
-    # Build op kwargs from traced config; exclude program_config since ttnn.softmax
-    # doesn't accept it (sharded program config is computed internally)
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Sharded softmax with random test data needs numeric_stable=True to avoid
     # exp() overflow producing all-zero output

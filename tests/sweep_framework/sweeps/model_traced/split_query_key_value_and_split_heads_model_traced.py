@@ -84,7 +84,13 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     output_memory_config = kwargs.get("output_memory_config", None)
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"compute_with_storage_grid_size"}, output_memory_config=output_memory_config
+    )
+
+    # Read num_heads from op_kwargs if present (traced config), falling back to function param
+    num_heads = op_kwargs.get("num_heads", num_heads)
+
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
         shape = tuple(input_a_shape)
@@ -156,7 +162,7 @@ def run(
     start_time = start_measuring_time()
     # This operation splits QKV and heads - returns tuple of (Q, K, V)
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor_a, num_heads=num_heads, **op_kwargs
+        input_tensor_a, **op_kwargs
     )
     query_tensor = mesh_tensor_to_torch(query_tensor, device if is_mesh_device else None)
     key_tensor = mesh_tensor_to_torch(key_tensor, device if is_mesh_device else None)

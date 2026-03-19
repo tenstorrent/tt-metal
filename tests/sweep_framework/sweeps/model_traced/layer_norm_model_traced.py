@@ -81,8 +81,6 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    # Exclude program_config: traced configs have block_w computed for the original device grid;
-    # letting ttnn auto-compute program_config ensures it matches the local device
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Handle tuple input_a_shape for sample suite

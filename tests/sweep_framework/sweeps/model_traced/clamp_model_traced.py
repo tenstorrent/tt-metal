@@ -87,16 +87,16 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    # Extract min/max from kwargs (avoid shadowing Python built-ins)
-    min_val = kwargs.get("min", None)
-    max_val = kwargs.get("max", None)
-
     # Extract placement information from kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
 
     # Check if device is mesh device
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"max"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Extract min/max from op_kwargs for golden computation (avoid shadowing Python built-ins)
+    min_val = op_kwargs.get("min", None)
+    max_val = op_kwargs.get("max", None)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
@@ -139,7 +139,7 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.clamp(input_tensor_a, min=min_val, max=max_val, **op_kwargs)
+    output_tensor = ttnn.clamp(input_tensor_a, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

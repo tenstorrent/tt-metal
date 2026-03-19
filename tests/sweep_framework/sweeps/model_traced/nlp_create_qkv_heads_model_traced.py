@@ -87,9 +87,9 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Map alternative param names from traced config
+    # num_heads flows through op_kwargs; read it for golden computation
     if num_q_heads is None:
-        num_q_heads = kwargs.get("num_heads")
+        num_q_heads = op_kwargs.get("num_heads", kwargs.get("num_heads"))
 
     # Convert input_a_shape to tuple (loader should always provide this)
     if isinstance(input_a_shape, (tuple, list)):
@@ -163,9 +163,11 @@ def run(
     # nlp_create_qkv_heads signature: (input, input_kv=None, *, num_heads, num_kv_heads=None, ...)
     # Note: The function uses num_heads (not num_q_heads), and num_kv_heads is optional
     # Returns a tuple of tensors (q_heads, k_heads, v_heads)
-    output_result = ttnn.experimental.nlp_create_qkv_heads(
-        input_tensor_a, num_heads=num_q_heads, num_kv_heads=num_kv_heads, **op_kwargs
-    )
+    # num_heads and num_kv_heads flow through op_kwargs from traced config.
+    # Ensure num_kv_heads default matches our golden computation.
+    if "num_kv_heads" not in op_kwargs and num_kv_heads is not None:
+        op_kwargs["num_kv_heads"] = num_kv_heads
+    output_result = ttnn.experimental.nlp_create_qkv_heads(input_tensor_a, **op_kwargs)
     # Handle tuple return - convert to torch
     if isinstance(output_result, tuple):
         # Take the first tensor (q_heads) for comparison, or concatenate all

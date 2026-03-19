@@ -133,10 +133,10 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Use output_dtype if provided, otherwise default to bfloat16
-    if output_dtype is None:
-        output_dtype = ttnn.bfloat16
-    output_tensor = ttnn.experimental.convert_to_chw(input_tensor_a, dtype=output_dtype, **op_kwargs)
+    # dtype flows through op_kwargs from traced config; fall back to output_dtype or bfloat16
+    if "dtype" not in op_kwargs:
+        op_kwargs["dtype"] = output_dtype if output_dtype is not None else ttnn.bfloat16
+    output_tensor = ttnn.experimental.convert_to_chw(input_tensor_a, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

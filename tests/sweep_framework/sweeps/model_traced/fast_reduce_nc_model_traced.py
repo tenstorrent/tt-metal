@@ -83,9 +83,10 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    # Extract dims from kwargs (from traced config) or use default
-    dims = kwargs.get("dims", [0, 1])
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # Extract dims from op_kwargs for golden computation
+    dims = op_kwargs.get("dims", [0, 1])
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
@@ -125,7 +126,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, dims=dims, output=None, **op_kwargs)
+    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, output=None, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)

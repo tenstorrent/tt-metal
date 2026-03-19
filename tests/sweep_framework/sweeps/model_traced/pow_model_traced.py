@@ -101,9 +101,11 @@ def run(
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Default exponent if not provided
+    # Get exponent from op_kwargs (from traced config), falling back to function param or default
     if exponent is None:
-        exponent = kwargs.get("exponent", 2.0)
+        exponent = op_kwargs.get("exponent", 2.0)
+    else:
+        exponent = op_kwargs.get("exponent", exponent)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=0.1, high=100, dtype=torch.float32), input_a_dtype
@@ -136,6 +138,8 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
+    # Pop exponent from op_kwargs since ttnn.pow takes it as a positional argument
+    op_kwargs.pop("exponent", None)
     output_tensor = ttnn.pow(input_tensor_a, exponent, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

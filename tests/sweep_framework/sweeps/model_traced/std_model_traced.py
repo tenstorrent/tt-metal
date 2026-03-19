@@ -85,6 +85,9 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
+    # Read keepdim from op_kwargs if present (traced config), falling back to function param
+    keepdim = op_kwargs.get("keepdim", keepdim)
+
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -125,7 +128,7 @@ def run(
     if dim is None:
         output_tensor = ttnn.std(input_tensor_a, **op_kwargs)
     else:
-        output_tensor = ttnn.std(input_tensor_a, dim=dim, keepdim=keepdim, **op_kwargs)
+        output_tensor = ttnn.std(input_tensor_a, dim=dim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -95,8 +95,9 @@ def run(
         shape = (1, 1, 32, 32)
         stats_shape_from_trace = None
 
-    eps = kwargs.get("epsilon", 1e-5)
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    eps = op_kwargs.get("epsilon", 1e-5)
     hidden_dim = shape[-1]
 
     # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
@@ -179,9 +180,7 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rms_norm_post_all_gather(
-        input_tensor, stats_tensor, epsilon=eps, weight=weight_tensor, **op_kwargs
-    )
+    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats_tensor, weight=weight_tensor, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

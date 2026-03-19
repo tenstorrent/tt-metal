@@ -150,12 +150,17 @@ def run(
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    # Let core_grid and memory_config flow through op_kwargs so they get parsed from dicts
-    # Exclude params we handle explicitly as named parameters
+    # Let core_grid, memory_config, num_groups, epsilon flow through op_kwargs
+    # so they get parsed from dicts. Exclude only non-op params.
     op_kwargs = build_op_kwargs(
         kwargs,
+        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford"},
         output_memory_config=output_memory_config,
     )
+
+    # Read num_groups and epsilon from op_kwargs (from traced config), falling back to function params
+    num_groups = op_kwargs.get("num_groups", num_groups)
+    epsilon = op_kwargs.get("epsilon", epsilon)
 
     if input_a_memory_config is None:
         input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -283,6 +288,7 @@ def run(
     # The core_grid.y value determines the num_cores_across_channel parameter
     _op_kwargs_copy = build_op_kwargs(
         kwargs,
+        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford"},
         output_memory_config=output_memory_config,
     )
     if "core_grid" in _op_kwargs_copy:
@@ -401,10 +407,8 @@ def run(
     else:
         core_grid = op_kwargs.pop("core_grid")
 
-    # Build group_norm arguments
+    # Build group_norm arguments - num_groups and epsilon already flow through op_kwargs
     group_norm_kwargs = {
-        "num_groups": num_groups,
-        "epsilon": epsilon,
         "inplace": actual_inplace,
         "core_grid": core_grid,
         "memory_config": output_memory_config,

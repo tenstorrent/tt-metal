@@ -102,9 +102,9 @@ def run(
         shape_a = input_a_shape
         shape_b = shape_a
 
-    # Get head_size from scalar if provided (as traced configs do)
-    # Ensure it's an int, not float
-    head_size = int(scalar) if scalar is not None else None
+    # Get head_size from op_kwargs if provided (traced configs provide it as a kwarg),
+    # otherwise fall back to scalar
+    head_size = op_kwargs.get("head_size", int(scalar) if scalar is not None else None)
 
     # Generate input tensor
     torch_input_tensor = gen_func_with_cast_tt(
@@ -203,9 +203,7 @@ def run(
     # Note: attention_softmax_ does NOT support numeric_stable parameter
     # Do NOT use causal_mask parameter - use the binary mask instead
     start_time = start_measuring_time()
-    result = ttnn.transformer.attention_softmax_(
-        input_tensor, head_size=head_size, attention_mask=mask_tensor, **op_kwargs
-    )
+    result = ttnn.transformer.attention_softmax_(input_tensor, attention_mask=mask_tensor, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
