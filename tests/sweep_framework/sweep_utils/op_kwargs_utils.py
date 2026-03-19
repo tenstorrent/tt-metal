@@ -87,11 +87,6 @@ def _is_infrastructure_key(key: str) -> bool:
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
         return True
-    # memory_config from traced kwargs should not leak into op_kwargs.
-    # It is handled via the output_memory_config parameter in sweep module run() functions.
-    # Passing it through causes "incompatible function arguments" for ops that don't accept it.
-    if key == "memory_config":
-        return True
     # Any key ending with _tensor_placement is tensor placement metadata
     if key.endswith("_tensor_placement"):
         return True
