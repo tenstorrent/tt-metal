@@ -121,7 +121,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short -k random
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill
