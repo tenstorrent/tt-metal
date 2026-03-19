@@ -1011,6 +1011,7 @@ void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manag
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
+    auto lock = lock_api();
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
 }
