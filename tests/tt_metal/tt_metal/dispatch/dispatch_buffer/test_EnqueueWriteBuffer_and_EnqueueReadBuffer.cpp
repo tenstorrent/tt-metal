@@ -647,17 +647,17 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue_sub_buffer(
 
     for (const uint32_t region_start_page : region_start_pages) {
         const BufferRegion region(region_start_page * page_size, region_num_pages * page_size);
-        for (uint i = 0; i < cqs.size(); i++) {
+        for (auto cq : cqs) {
             distributed::DeviceLocalBufferConfig local_config{
                 .page_size = page_size, .buffer_type = buffer_type, .bottom_up = false};
             auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
-            clear_buffer(cqs[i], buffer);
+            clear_buffer(cq, buffer);
             auto src = generate_arange_vector(region.size);
-            EnqueueWriteMeshSubBuffer(cqs[i], buffer, src, region, false);
+            EnqueueWriteMeshSubBuffer(cq, buffer, src, region, false);
 
             vector<uint32_t> result(region.size / sizeof(uint32_t));
-            EnqueueReadMeshSubBuffer(cqs[i], result, buffer, region, true);
+            EnqueueReadMeshSubBuffer(cq, result, buffer, region, true);
             pass &= (src == result);
         }
     }
@@ -677,17 +677,17 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue_single_sub_buffer
     const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_num_pages * page_size};
     const BufferRegion region(region_start_page * page_size, region_num_pages * page_size);
 
-    for (uint i = 0; i < cqs.size(); i++) {
+    for (auto cq : cqs) {
         distributed::DeviceLocalBufferConfig local_config{
             .page_size = page_size, .buffer_type = buffer_type, .bottom_up = false};
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
-        clear_buffer(cqs[i], buffer);
+        clear_buffer(cq, buffer);
         auto src = generate_arange_vector(region.size);
-        EnqueueWriteMeshSubBuffer(cqs[i], buffer, src, region, false);
+        EnqueueWriteMeshSubBuffer(cq, buffer, src, region, false);
 
         vector<uint32_t> result(region.size / sizeof(uint32_t));
-        EnqueueReadMeshSubBuffer(cqs[i], result, buffer, region, true);
+        EnqueueReadMeshSubBuffer(cq, result, buffer, region, true);
         pass &= (src == result);
     }
 

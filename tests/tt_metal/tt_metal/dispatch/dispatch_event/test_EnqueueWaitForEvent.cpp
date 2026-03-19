@@ -89,7 +89,7 @@ bool RunCrossCqReadWriteWithWaitForEvent(
 bool RunBurstWritesThenSingleCrossCqEvent(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshCoordinate& zero_coord,
-    TestBufferConfig config,
+    const TestBufferConfig& config,
     size_t num_buffers) {
     vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
         mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
@@ -129,7 +129,7 @@ bool RunBurstWritesThenSingleCrossCqEvent(
 bool RunDeviceOnlyEventChainWithPerIterationValidation(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshCoordinate& zero_coord,
-    TestBufferConfig config,
+    const TestBufferConfig& config,
     size_t num_iterations) {
     vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
         mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
