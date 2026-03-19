@@ -78,7 +78,9 @@ def test_ttnn_linear(
     output_memory_config = sharded_memory_config if output_is_sharded else interleaved_memory_config
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=k_size // 32,
         out_subblock_h=8 // (n_size // 32),
         out_subblock_w=n_size // 32,

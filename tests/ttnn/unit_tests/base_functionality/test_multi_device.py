@@ -582,7 +582,6 @@ def test_sharded_matmul(mesh_device):
         q_heads_1B4D,
         keys_1BDP,
         dtype=ttnn.bfloat16,
-        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 
@@ -610,7 +609,6 @@ def test_4b_tensor(mesh_device):
     tensor = ttnn.matmul(
         x,
         tensor,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         ),

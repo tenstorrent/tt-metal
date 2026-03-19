@@ -167,7 +167,9 @@ def test_sdxl_matmul(
     out_mem_config = test_config["out_mem_config"]
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(compute_grid.x, compute_grid.y),
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+        ),
         in0_block_w=test_config["in0_block_w"],
         out_subblock_h=test_config["out_subblock_h"],
         out_subblock_w=test_config["out_subblock_w"],

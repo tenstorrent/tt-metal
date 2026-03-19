@@ -90,7 +90,9 @@ def run_sparse_matmul(device, m, kn, num_experts, tile_h, tile_w, in1_dtype, cor
         output_tile=output_tile,
         is_input_a_sparse=True,
         program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=ttnn.CoreCoord(core_x, core_y),
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_x - 1, core_y - 1))}
+            ),
             in0_block_w=2,
             out_subblock_h=1,
             out_subblock_w=1,
