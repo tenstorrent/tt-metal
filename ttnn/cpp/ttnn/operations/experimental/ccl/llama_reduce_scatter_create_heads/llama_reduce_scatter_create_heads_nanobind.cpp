@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 
 #include "llama_reduce_scatter_create_heads.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
