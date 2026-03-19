@@ -22,7 +22,9 @@ struct type_caster<ttsl::Span<T, Extent>> {
     using ValueItem = std::remove_cv_t<std::remove_reference_t<T>>;
     using ValueType = ttsl::Span<T, Extent>;
     using Storage = std::vector<ValueItem>;
-    NB_TYPE_CASTER(ValueType, const_name("list"));
+    NB_TYPE_CASTER(
+        ValueType,
+        io_name("collections.abc.Sequence", "span") + const_name("[") + make_caster<ValueItem>::Name + const_name("]"));
 
     bool from_python(handle src, std::uint8_t, cleanup_list*) {
         if (!isinstance<list>(src)) {
