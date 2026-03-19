@@ -69,7 +69,7 @@ template <
     ReduceDim reduce_dim,
     typename AccumulateT,
     bool enforce_fp32_accumulation,
-    bool use_matmul = false>
+    bool use_matmul>
 ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first

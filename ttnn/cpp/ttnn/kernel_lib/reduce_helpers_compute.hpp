@@ -292,8 +292,14 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate);
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_SCALAR, etc.)
  * @tparam AccumulateT Either Accumulate (enables accumulation) or NoAccumulation (zero overhead)
  * @tparam enforce_fp32_accumulation Whether to enforce FP32 accumulation
+ * @tparam use_matmul Whether to use mm_init_short_with_dt instead of reduce_init_short_with_dt
  */
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool enforce_fp32_accumulation>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    typename AccumulateT,
+    bool enforce_fp32_accumulation,
+    bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate);
 
 // =============================================================================
