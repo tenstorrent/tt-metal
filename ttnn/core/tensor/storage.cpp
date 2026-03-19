@@ -12,7 +12,7 @@
 
 namespace tt::tt_metal {
 
-DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
+static DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
     auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
     distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
     return distributed_buffer;
