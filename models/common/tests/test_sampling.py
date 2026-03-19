@@ -387,7 +387,7 @@ def test_top_k_log_probs_returns_none_when_not_needed(shape, mesh_device):
     assert result is None, "Expected None when logprobs disabled"
 
     calc.set_log_probs_mode(True, num_logprobs=0)
-    assert not calc.topk_logprobs_needed
+    assert calc.topk_logprobs_needed  # needed for sampled token logprob
     result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
     assert result is not None, "Expected LogProbsResult when logprobs enabled"
 
@@ -456,7 +456,7 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
     calc.set_log_probs_mode(True)
     assert calc.enable_log_probs is True
     assert all(calc.logprobs_enabled)
-    assert not calc.topk_logprobs_needed
+    assert calc.topk_logprobs_needed  # needed for sampled token logprob
 
     calc.set_log_probs_mode(True, num_logprobs=5)
     assert calc.topk_logprobs_needed is True
@@ -475,7 +475,7 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
 
     calc.set_log_probs_mode(True, num_logprobs=0)
     assert calc.enable_log_probs is True
-    assert not calc.topk_logprobs_needed
+    assert calc.topk_logprobs_needed  # needed for sampled token logprob
 
     calc.set_log_probs_mode(False, num_logprobs=0)
     calc.set_log_probs_mode([True, True], num_logprobs=[10, 15], empty_slots=[2, 5])

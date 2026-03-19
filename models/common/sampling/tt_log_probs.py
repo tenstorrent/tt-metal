@@ -249,7 +249,10 @@ class LogProbsCalculator:
 
         # Recompute derived flags from the full arrays
         self.enable_log_probs = any(self.logprobs_enabled)
-        self.topk_logprobs_needed = any(n > 0 for n in self.num_logprobs)
+        # Top-K computation is needed whenever logprobs are enabled (even with
+        # num_logprobs=0) because the sampled token's logprob is extracted from
+        # the top-K results in the new path.
+        self.topk_logprobs_needed = self.enable_log_probs
 
     def _compute_global_stats(
         self,
