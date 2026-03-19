@@ -14,7 +14,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
+from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import (
+    MatmulCustomCompressed,
+    create_runtime_fmt_tensors,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
 
 
@@ -123,8 +126,16 @@ def _run_matmul_custom_compressed(
         tile=out_tile,
     )
 
+    # Create fmt tensors for runtime path
+    fmt_tensors = None
+    if impl == "runtime":
+        all_cores = ttnn.corerange_to_cores(core_grid)
+        num_tiles_k = K // 32
+        out_w = n_per_core // 32
+        fmt_tensors = create_runtime_fmt_tensors(ct, core_grid, num_tiles_k * out_w, device, all_cores)
+
     # Run custom compressed matmul
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl, fmt_tensors=fmt_tensors)
 
     output_torch = ttnn.to_torch(ttnn_result)
     assert output_torch.shape == (M, N), f"Expected shape ({M}, {N}), got {output_torch.shape}"

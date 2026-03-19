@@ -401,27 +401,24 @@ class CompressedTensor:
                 memory_config=data_memory_config,
             )
 
-        # Assignment tensor (always lockstep)
+        # Assignment tensor — only created when caller provides a memory config for it
         if assignment_memory_config is not None:
             assert (
                 assignment_memory_config.is_sharded()
             ), "assignment_memory_config must be sharded when data memory_config is sharded"
-            assign_buffer_type = assignment_memory_config.buffer_type
-        else:
-            assign_buffer_type = memory_config.buffer_type
-        assign_bytes, assign_mem = self._pack_sharded_assignment(
-            tensor.shape,
-            memory_config,
-            assign_buffer_type,
-            assignment_memory_config,
-        )
-        self.assignment = ttnn.from_torch(
-            assign_bytes,
-            dtype=ttnn.uint8,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=assign_mem,
-        )
+            assign_bytes, assign_mem = self._pack_sharded_assignment(
+                tensor.shape,
+                memory_config,
+                assignment_memory_config.buffer_type,
+                assignment_memory_config,
+            )
+            self.assignment = ttnn.from_torch(
+                assign_bytes,
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=assign_mem,
+            )
 
     def _create_per_core_tensors(self, shard_chunks, shard_raw_sizes, alignment, memory_config, device):
         """Create one single-core ttnn tensor per core with its actual compressed size.

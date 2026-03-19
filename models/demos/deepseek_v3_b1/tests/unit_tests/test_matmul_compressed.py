@@ -47,7 +47,9 @@ def _run_matmul_compressed(
     assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats)
     b_shard_spec = ttnn.ShardSpec(core_grid, [K, N], ttnn.ShardOrientation.ROW_MAJOR)
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec)
-    ct = CompressedTensor.from_torch(torch_b, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        torch_b, assigner, device=device, memory_config=b_mem_config, assignment_memory_config=b_mem_config
+    )
 
     logger.info(f"Compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
