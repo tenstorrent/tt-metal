@@ -311,23 +311,28 @@ class DRAMStreamingMatmul:
             mul_dtype = mul_tensor.dtype
             mul_tile_size = mul_tile_16x16.get_tile_size(mul_dtype)
 
+            # Number of 16x16 tiles needed for the mul view of per-core output
+            total_elements = M * per_core_N * in1_tile_shape[1]
+            mul_num_tiles = math.ceil(total_elements / 256)
+            mul_cb_total_size = mul_num_tiles * mul_tile_size
+
             # CB 4: output with 16x16 tile format, backed by output_tensor's memory
             cb4_descriptor = ttnn.cb_descriptor_from_sharded_tensor(4, output_tensor)
-            cb4_descriptor.total_size = mul_tile_size  # 1 tile of 16x16
+            cb4_descriptor.total_size = mul_cb_total_size
             cb4_descriptor.format_descriptors[0].tile = mul_tile_desc
             cb4_descriptor.format_descriptors[0].page_size = mul_tile_size
             cb_descriptors.append(cb4_descriptor)
 
             # CB 6: mul_in1 with 16x16 tile format, backed by mul_tensor's memory
             cb6_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mul_in1, mul_tensor)
-            cb6_descriptor.total_size = mul_tile_size  # 1 tile of 16x16
+            cb6_descriptor.total_size = mul_cb_total_size
             cb6_descriptor.format_descriptors[0].tile = mul_tile_desc
             cb6_descriptor.format_descriptors[0].page_size = mul_tile_size
             cb_descriptors.append(cb6_descriptor)
 
             # CB 7: mul_in0 with 16x16 tile format, backed by mm_out_tensor's memory
             cb7_descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_id_mul_in0, mm_out_tensor)
-            cb7_descriptor.total_size = mul_tile_size  # 1 tile of 16x16
+            cb7_descriptor.total_size = mul_cb_total_size
             cb7_descriptor.format_descriptors[0].tile = mul_tile_desc
             cb7_descriptor.format_descriptors[0].page_size = mul_tile_size
             cb_descriptors.append(cb7_descriptor)
@@ -417,13 +422,7 @@ class DRAMStreamingMatmul:
             "models/demos/deepseek_v3_b1/micro_ops/dram_streaming_matmul/kernels/dram_streaming_matmul_kernel.cpp"
         )
 
-        # Number of output tiles for mul (using 16x16 tiles)
-        # Total elements per core = M * per_core_N * tile_width
-        # 16x16 tile = 256 elements
-        if enable_mul:
-            total_elements = M * per_core_N * in1_tile_shape[1]  # M * N_tiles * tile_width
-            mul_num_tiles = math.ceil(total_elements / 256)
-        else:
+        if not enable_mul:
             mul_num_tiles = 0
 
         # Named compile-time args for NCRISC (DRAM streaming - uses NOC_0)
