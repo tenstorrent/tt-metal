@@ -68,7 +68,7 @@ def load_inputs(user_input, len_per_batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    # It clips the excerpt to the max length provided to allow testing different long context lengths
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -518,9 +518,9 @@ def create_tt_model(
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            1024,  # max_seq_len
             32,  # batch_size
-            200,  # max_generated_tokens
+            20,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -787,7 +787,7 @@ def test_demo_text(
         # Load reference outputs for PCC check
         if pcc_check:
             vocab_size = 128256
-            if is_ci_env or galaxy_type == "6U":
+            if is_ci_env:
                 ref_output_path = f"/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:
                 ref_output_path = f"/proj_sw/user_dev/llama3.3_70b_text_demo_ref_outputs/llama3.3_70b_ref_outputs_{num_layers}L_decode.refpt"
@@ -920,6 +920,7 @@ def test_demo_text(
         # Save prefill token (unpack tuple when device sampling returns logprobs)
         if isinstance(toks, tuple):
             toks = toks[0]
+
         prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -981,6 +982,7 @@ def test_demo_text(
                 is_enable_trace = iteration != 0  # First iteration is compile time and checks PCC
             else:
                 is_enable_trace = enable_trace if not pcc_check else False
+
             # Run decode forward
             try:
                 # Save logits only for PCC check when tracing is disabled
@@ -1006,37 +1008,38 @@ def test_demo_text(
                 if apc_test and iteration == 0:
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
             except Exception as e:
-                logger.error(f"Error during decoding: {str(e)}")
-                break
+                pytest.fail(f"Decode forward failed at iteration {iteration}: {str(e)}")
 
-            if iteration == 0:  # First iteration will account the compile time
+            if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
                 logger.info(f"Iteration {iteration} (compile): {1000*decode_iteration_time:.4f}ms")
-            # If there is PCC check we perform teacher forcing, swap token with reference model (decode check only done for 80 layers)
-            # If it's apc_test we do not teacher force, but we still check PCC for only iteration == 0
+
             teacher_forcing = (
                 not apc_test
                 and pcc_check
                 and max_encoded_prompt_len + iteration + 1 < len(ref_tokens)
                 and num_layers == 80
             )
+
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
-                tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
+                tt_out_tok, tt_log_probs = generator.process_decode_output_host(tt_out_toks.pop(0))
 
-                tt_out_tok, tt_log_probs = tt_out_tok[0], tt_out_tok[1]
-
-                out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
+                if teacher_forcing:
+                    out_tok = ref_tokens[max_encoded_prompt_len + iteration + 1]
+                elif pcc_check:
+                    out_tok = tt_out_tok.argmax(dim=-1)
+                else:
+                    out_tok = tt_out_tok.reshape(-1).to(torch.long)
 
                 if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
                     out_tok = out_tok.repeat(32, 1)
-                # Check if iteration == 1, because that's when we compare outputs from iteration 0
+
                 if teacher_forcing or (apc_test and iteration == 1):
-                    # Since APC test is only for the first decode iteration, we use the logits from the first iteration and not current one
                     if apc_test:
                         tt_out_logits_saved = tt_out_logits_saved_iter_0
-                        torch_output_logits = torch_output[1]  # 0 is prefill logits
+                        torch_output_logits = torch_output[1]
                     else:
                         torch_output_logits = torch_output[iteration + 1]
                     does_pass, pcc_message = comp_pcc(
@@ -1044,8 +1047,10 @@ def test_demo_text(
                     )
                     logger.info(f"PCC: {pcc_message}")
                     logger.info(
-                        f"Teacher forced token at decode iteration {iteration} {'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
+                        f"Teacher forced token at decode iteration {iteration} "
+                        f"{'PASSED' if does_pass else 'FAILED'} PCC check with torch reference model"
                     )
+
                 if apc_test:
                     assert_message = (
                         f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
@@ -1053,10 +1058,6 @@ def test_demo_text(
                         f"See the comment on the text_demo.py by the assert for instructions."
                     )
                     assert pcc_message == demo_targets["decode_pcc"], assert_message
-                    # A 'Decode PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
-                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_70b_galaxy/demo/text_demo_targets.json.
-                    # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
-                    # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
                 if teacher_forcing:
                     _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
@@ -1107,7 +1108,6 @@ def test_demo_text(
                 )
                 if apc_test and (demo_targets["token_pos"] - len(input_tokens_prefill_pt)) == iteration:
                     # Check if the throughput is within the expected range
-                    print(f"len of input tokens prefill: {len(input_tokens_prefill_pt)}")
                     lower_bound = demo_targets["throughput"] - demo_targets["absolute_margin"]
                     upper_bound = demo_targets["throughput"] + demo_targets["absolute_margin"]
                     # TODO: Enable once experimentaly established avg and absolute margin

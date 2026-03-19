@@ -17,10 +17,9 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "impl/buffers/semaphore.hpp"

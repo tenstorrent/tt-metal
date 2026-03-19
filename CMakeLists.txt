@@ -13,7 +13,7 @@ set_directory_properties(
 )
 
 ############################################
-# Project setup
+# Project setup stage
 ############################################
 
 # For single-config generators, default to RelWithDebInfo if unspecified
@@ -259,11 +259,15 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
 )
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(metal_common_pch)
+endif()
 
 ############################################################################################################################
 # Build subdirectories
 ############################################################################################################################
 
+include(helper_functions)
 add_subdirectory(tt_stl)
 add_subdirectory(tools)
 add_subdirectory(tt_metal)

@@ -4,17 +4,16 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 
 enum class ExpectedResult { OK, ERROR };
 
 struct MatmulInput {
-    ttnn::SmallVector<uint32_t> shape_a;
-    ttnn::SmallVector<uint32_t> shape_b;
+    ttsl::SmallVector<uint32_t> shape_a;
+    ttsl::SmallVector<uint32_t> shape_b;
     bool transpose_a{false};
     bool transpose_b{false};
 };

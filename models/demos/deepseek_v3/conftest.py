@@ -204,7 +204,7 @@ def hf_config_short(request, hf_config):
     if max_seq_len_override is not None:
         hf_config_out.max_seq_len = int(max_seq_len_override)
     else:
-        hf_config_out.max_seq_len = 128
+        hf_config_out.max_seq_len = 512
     return hf_config_out
 
 
@@ -298,6 +298,10 @@ def pytest_configure(config):
         "requires_device(device_types): mark test to run only on specified device types. "
         "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
         "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
+    )
+    config.addinivalue_line(
+        "markers",
+        "ci_fused_op: mark curated DeepSeek fused-op functional tests used by CI folder-based execution",
     )
 
 

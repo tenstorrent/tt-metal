@@ -17,6 +17,25 @@ SKIP_FILES = {
     "dataflow_buffer.hpp",  # TODO: #37324: remove once dataflow buffer has proper host-dev interface
 }
 
+# Headers that must never be included from tt-metalium public API headers.
+# These are heavyweight implementation headers whose transitive cost (compile time,
+# dependency surface) is too high for the public interface.
+BANNED_HEADERS = {
+    "tt_stl/reflection.hpp": "reflection.hpp pulls in <reflect> and <nlohmann/json.hpp>; use forward declarations or move usage to .cpp files",
+    "tt_stl/concepts.hpp": "concepts.hpp pulls in <reflect>; use sizeof(T)==0 for always_false_v, or move usage to .cpp files",
+}
+
+# Exhaustive set of UMD headers allowed in the public API.
+# New UMD includes should NOT be added; the goal is to reduce (and eventually remove)
+# the UMD surface from public headers.  If you need a UMD type in a public header,
+# prefer forward declarations or move the dependency to a .cpp file.
+ALLOWED_UMD_HEADERS = {
+    "umd/device/types/arch.hpp",
+    "umd/device/types/cluster_descriptor_types.hpp",
+    "umd/device/types/core_coordinates.hpp",
+    "umd/device/types/xy_pair.hpp",
+}
+
 # Mapping from tt-metalium experimental tensor headers to their TTNN forward headers.
 #
 # NOTE: experimental/tensor is a staging area for the tensor lowering effort and is short-lived.
@@ -229,6 +248,24 @@ class Include(NamedTuple):
 
         return None
 
+    def check_for_banned_header(self) -> Optional[str]:
+        """Check if include is a banned header that should not appear in public API."""
+        if self.path in BANNED_HEADERS:
+            reason = BANNED_HEADERS[self.path]
+            return f"{self.source_file}:{self.line_num}: " f"Banned include in public API: <{self.path}> ({reason})"
+        return None
+
+    def check_for_umd_header(self) -> Optional[str]:
+        """Error if a UMD include is not in the frozen allowlist."""
+        if self.prefix == "umd" and self.path not in ALLOWED_UMD_HEADERS:
+            return (
+                f"{self.source_file}:{self.line_num}: "
+                f"New UMD include not allowed in public API: <{self.path}> "
+                f"(only {', '.join(sorted(ALLOWED_UMD_HEADERS))} are permitted; "
+                f"prefer forward declarations or move usage to .cpp files)"
+            )
+        return None
+
     def check_for_forward_header_advice(self) -> Optional[str]:
         """Check if include should use a TTNN forward header instead of experimental tensor headers."""
         # Skip if this file is itself a forward header (it's allowed to include experimental headers)
@@ -261,6 +298,8 @@ def main() -> int:
 
     all_includes = [include for path in source_files for include in iter_includes(path)]
     errors = [err for include in all_includes if (err := include.check_for_errors(prefix_counts)) is not None]
+    errors += [err for include in all_includes if (err := include.check_for_banned_header()) is not None]
+    errors += [err for include in all_includes if (err := include.check_for_umd_header()) is not None]
     unused_prefixes = ALLOWED_PREFIXES - prefix_counts.keys()
 
     for error in errors:

@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include "impl/context/context_types.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_command_queue.hpp"
 #include "fd_mesh_command_queue.hpp"
@@ -36,8 +38,9 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
         return;
     }
 
-    fast_dispatch_enabled_ = MetalContext::instance().rtoptions().get_fast_dispatch();
-    const auto& cluster = MetalContext::instance().get_cluster();
+    ContextId context_id = extract_context_id(mesh_device);
+    fast_dispatch_enabled_ = MetalContext::instance(context_id).rtoptions().get_fast_dispatch();
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
     TT_FATAL(
         !fast_dispatch_enabled_,
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
@@ -46,13 +49,13 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
         cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE,
         "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
 
-    const auto& device_manager = MetalContext::instance().device_manager();
+    const auto& device_manager = MetalContext::instance(context_id).device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
 
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
-    MetalContext::instance().set_fast_dispatch_mode(true);
+    MetalContext::instance(context_id).set_fast_dispatch_mode(true);
 
     for (const auto& dev : active_devices) {
         TT_FATAL(dev->num_hw_cqs() == num_hw_cqs, "All devices must have the same number of command queues.");
@@ -91,7 +94,8 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     TT_FATAL(fast_dispatch_enabled_, "Can only manually terminate fast dispatch after initializing it.");
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch can only be manually terminated and torn down once.");
 
-    const auto& device_manager = MetalContext::instance().device_manager();
+    ContextId context_id = extract_context_id(mesh_device);
+    const auto& device_manager = MetalContext::instance(context_id).device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
@@ -120,7 +124,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     fast_dispatch_enabled_ = false;
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
-    MetalContext::instance().set_fast_dispatch_mode(false);
+    MetalContext::instance(context_id).set_fast_dispatch_mode(false);
 }
 
 void DispatchContext::enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device) {

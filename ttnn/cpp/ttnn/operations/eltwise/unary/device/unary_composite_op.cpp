@@ -16,9 +16,10 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
@@ -89,6 +90,17 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
     return ttnn::subtract(t_log_out, output, std::nullopt, output_mem_config);
 }
 
+Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
+    return operations::unary::detail::unary_impl(
+        x,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LGAMMA}},
+        output_mem_config,
+        std::nullopt,
+        std::nullopt);
+}
+
+// Existing implementation of lgamma.
+// TODO: Remove this once the lgamma kernel for float32 is supported.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {
@@ -342,35 +354,6 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         output_memory_config);
 }
 
-// Theano defines this differently...
-/**
- *
- *   alpha = 1.6732632423543772848170429916717
- *    scale = 1.0507009873554804934193349852946
- *    return scale * elu(x, alpha)
- *
- */
-// Function Selu - scaled exponential linear
-// use transformation y = scale *(max(0,x) + min(0,alpha * (exp(X)-1))) by broadcast
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
-Tensor _selu(
-    const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    // term 2
-    Tensor x_Exp_minus_1 = ttnn::expm1(x, output_mem_config);
-    Tensor result_t2_ = ttnn::multiply_(x_Exp_minus_1, alpha);
-    x_Exp_minus_1.deallocate();
-    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, std::nullopt, output_mem_config);
-    result_t2_.deallocate();
-
-    // term 1
-    Tensor x_max = ttnn::maximum(x, 0.0f, std::nullopt, output_mem_config);
-    Tensor sum_max_term2 = ttnn::add_(x_max, result_term2);
-    x_max.deallocate();
-    Tensor result_selu = ttnn::multiply_(sum_max_term2, scale);
-
-    return result_selu;
-}
-
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
@@ -399,7 +382,7 @@ Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig
         dim = 3;
     }
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], (int)VecMode::RC, Sigmoid::SigmoidMode::ACCURATE, output_mem_config);
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], (int)VecMode::RC, SigmoidMode::ACCURATE, output_mem_config);
     Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
@@ -533,3 +516,12 @@ Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& out
 }
 
 }  // namespace ttnn::operations::unary
+
+namespace ttnn {
+Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m) {
+    if (t.dtype() == DataType::BFLOAT16) {
+        return ttnn::operations::unary::_lgamma_fast(t, m);
+    }
+    return ttnn::operations::unary::_lgamma(t, m);
+}
+}  // namespace ttnn

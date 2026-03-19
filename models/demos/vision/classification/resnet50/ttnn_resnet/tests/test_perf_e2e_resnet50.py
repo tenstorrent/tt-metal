@@ -7,12 +7,13 @@ import pytest
 from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.perf_e2e_resnet50 import run_perf_resnet
 
+# T3000 baselines updated from last 10 CI runs (excluding watcher one-off), see #39824
 PERF_EXPECTATIONS = {
     "t3000": {
-        "test_perf": {"inference_time": 0.0157, "compile_time": 60},
+        "test_perf": {"inference_time": 0.0175, "compile_time": 60},
         "test_perf_trace": {"inference_time": 0.0038, "compile_time": 60},
-        "test_perf_2cqs": {"inference_time": 0.015, "compile_time": 60},
-        "test_perf_trace_2cqs": {"inference_time": 0.0031, "compile_time": 60},
+        "test_perf_2cqs": {"inference_time": 0.017, "compile_time": 60},
+        "test_perf_trace_2cqs": {"inference_time": 0.0033, "compile_time": 60},
     },
     "tg": {
         "test_perf": {"inference_time": 0.017, "compile_time": 60},

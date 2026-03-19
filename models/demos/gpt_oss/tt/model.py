@@ -150,8 +150,12 @@ class Model:
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
-        embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-        embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        if state_dict:
+            embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
+            embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        else:
+            embedding_weight = None
+
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
@@ -197,11 +201,14 @@ class Model:
         sampling_splits = mesh_device.shape[1]
         per_device_padded = compute_per_device_vocab(self.vocab_size, sampling_splits)
         padded_vocab_size = per_device_padded * sampling_splits
-        lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
-        if lm_head_weight.shape[1] < padded_vocab_size:
-            lm_head_weight = torch.nn.functional.pad(
-                lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
-            )
+        if state_dict:
+            lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
+            if lm_head_weight.shape[1] < padded_vocab_size:
+                lm_head_weight = torch.nn.functional.pad(
+                    lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
+                )
+        else:
+            lm_head_weight = None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             device=mesh_device,
@@ -348,7 +355,6 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=rope_mats,
@@ -388,19 +394,10 @@ class Model:
         hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
-        # Skip TP all-gather when sampling is active — TTSampling handles its own all-gather
-        skip_gather = sampling_on_device or self._prefill_sampling_active
         self._prefill_sampling_active = False
-        config = self.mesh_config.get_config(mode)
-        if config.tp > 1 and not skip_gather:
-            logits_gathered = self.mesh_config.allgather(
-                logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=-1
-            )
-            logits.deallocate(True)
-            logits = logits_gathered
-        # No post-matmul padding needed: the lm_head weight is pre-padded to
-        # padded_vocab_size before column-parallel sharding, so each device's
-        # matmul output is already tile-aligned (per_device_padded width).
+        # TP all-gather is deferred to process_output_prefill / process_output_decode
+        # (outside trace capture) since all_gather_async writes to device,
+        # which is forbidden during trace capture.
 
         return logits
 
@@ -628,6 +625,8 @@ class Model:
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batch_size=1,
+        user_id=0,
         batched_prefill=False,
     ):
         """Prepare inputs for prefill mode
@@ -735,15 +734,43 @@ class Model:
         )
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
-        """Process decode output and convert to torch tensors"""
-        concat_out = self.concat_device_output(tt_out)
+        """Process decode output and convert to torch tensors.
+
+        Host-side TP gather for logits: the generator moves output to CPU
+        before calling this method, so on-device allgather is not possible.
+        """
         if is_tokens or is_log_probs:
+            concat_out = self.concat_device_output(tt_out)
             # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
             return concat_out.reshape(-1)[:B]
 
-        torch_out = concat_out[:, 0, :, :]  # [1, 1, B, vocab_size]
-        # TODO: this view is dangerous, forces bad tensor shapes to work but we get garbage outputs if they're wrong
-        return torch_out.view(B, S, -1)
+        # Host-side TP gather: concatenate TP shards per row, then DP rows.
+        config = self.mesh_config.get_config(Mode.DECODE)
+        if config.tp > 1:
+            device_tensors = ttnn.get_device_tensors(tt_out)
+            tp = config.tp
+            if self.users_row_sharded:
+                # TP gather per row, then DP gather across rows (rows carry different users)
+                num_rows = len(device_tensors) // tp
+                rows = []
+                for r in range(num_rows):
+                    row_tensors = device_tensors[r * tp : (r + 1) * tp]
+                    row_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
+                    rows.append(row_out)
+                torch_out = torch.cat(rows, dim=-2) if num_rows > 1 else rows[0]
+            else:
+                # Rows are EP replicas with identical data; TP-gather first row only
+                row_tensors = device_tensors[:tp]
+                torch_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
+        else:
+            torch_out = self.concat_device_output(tt_out)
+        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, padded_vocab_size]
+        torch_out = torch_out.view(B, S, -1)
+        # Truncate to vocab_size — lm_head is padded to padded_vocab_size for
+        # on-device sampling (pow2 topk), but callers expect vocab_size width.
+        if torch_out.shape[-1] > self.vocab_size:
+            torch_out = torch_out[:, :, : self.vocab_size]
+        return torch_out
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
@@ -756,9 +783,18 @@ class Model:
             return ttnn.to_torch(tt_output_tensor)
 
     def process_output_prefill(self, tt_out, last_token_idx):
-        """Process prefill output and extract last token logits"""
-        tt_output_tensor = ttnn.get_device_tensors(tt_out)[0]
-        torch_output = ttnn.to_torch(tt_output_tensor)
+        """Process prefill output and extract last token logits.
+
+        Host-side TP gather: the generator moves logits to CPU before calling
+        this method, so on-device allgather is not possible here.
+        """
+        config = self.mesh_config.get_config(Mode.PREFILL)
+        if config.tp > 1:
+            device_tensors = ttnn.get_device_tensors(tt_out)
+            tp = config.tp
+            torch_output = torch.cat([ttnn.to_torch(device_tensors[i]) for i in range(tp)], dim=-1)
+        else:
+            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         result = torch_output[..., last_token_idx, : self.vocab_size]
         return result
 

@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "common/device_fixture.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "tt_fabric_test_config.hpp"
 #include <optional>
 #include <variant>
@@ -1190,9 +1191,6 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
         if (iteration_test.parametrized_name.empty()) {
             iteration_test.parametrized_name = iteration_test.name;
         }
-        if (max_iterations > 1) {
-            parametrize_core_sweep_test_name(iteration_test, sender_core_sweep_iterations, dest_core_sweep_iterations, sender_core_idx, dest_core_idx, all_cores, i);
-        }
 
         iteration_test.seed = std::uniform_int_distribution<uint32_t>()(this->gen_);
 
@@ -1250,6 +1248,10 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
         // After expansion and resolution, apply universal transformations like mcast splitting.
         split_all_unicast_or_multicast_patterns(iteration_test);
 
+        // In benchmark mode, ensure each sender feeds exactly one fabric connection
+        // by splitting senders with patterns going to different routing directions.
+        split_senders_by_direction_for_benchmark(iteration_test);
+
         // Convert to resolved TestConfig
         TestConfig resolved_test = resolve_test_config(iteration_test, i);
 
@@ -1259,28 +1261,6 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
     return expanded_tests;
 }
 
-void TestConfigBuilder::parametrize_core_sweep_test_name(ParsedTestConfig& iteration_test, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t sender_core_idx, uint32_t dest_core_idx, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t iteration_num){
-    // Build descriptive name with core coordinates for core sweep iteration logging
-    if (sender_core_sweep_iterations > 0 || dest_core_sweep_iterations > 0) {
-        if (sender_core_sweep_iterations > 0 && dest_core_sweep_iterations > 0) {
-            const auto& src = all_cores[sender_core_idx];
-            const auto& dst = all_cores[dest_core_idx];
-            iteration_test.parametrized_name += "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) +
-                                                "]_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) +
-                                                "]";
-        } else if (sender_core_sweep_iterations > 0) {
-            const auto& src = all_cores[sender_core_idx];
-            iteration_test.parametrized_name +=
-                "_src[" + std::to_string(src.x) + ":" + std::to_string(src.y) + "]";
-        } else {
-            const auto& dst = all_cores[dest_core_idx];
-            iteration_test.parametrized_name +=
-                "_dst[" + std::to_string(dst.x) + ":" + std::to_string(dst.y) + "]";
-        }
-    } else {
-        detail::append_with_separator(iteration_test.parametrized_name, "_", "iter", iteration_num);
-    }
-}
 std::vector<ParsedSenderConfig> TestConfigBuilder::expand_sender_core_sweep(
     const ParsedSenderConfig& input_sender,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
@@ -1872,8 +1852,6 @@ void TestConfigBuilder::expand_sequential_neighbor_exchange(
     // Select only the pair for this iteration
     if (iteration_idx < neighbor_pairs.size()) {
         const auto& pair = neighbor_pairs[iteration_idx];
-        // Append sender→receiver device IDs to test name for clarity
-        detail::append_with_separator(test.parametrized_name, "_", pair.first.chip_id, "to", pair.second.chip_id);
 
         std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {pair};
         add_senders_from_pairs(test, single_pair, base_pattern);
@@ -2098,6 +2076,63 @@ void TestConfigBuilder::split_all_unicast_or_multicast_patterns(ParsedTestConfig
             sender.patterns = std::move(new_patterns);
         }
     }
+}
+
+void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfig& test) {
+    if (test.performance_test_mode != PerformanceTestMode::BANDWIDTH) {
+        return;
+    }
+
+    std::vector<ParsedSenderConfig> new_senders;
+    new_senders.reserve(test.senders.size());
+
+    for (const auto& sender : test.senders) {
+        if (sender.patterns.size() <= 1) {
+            new_senders.push_back(sender);
+            continue;
+        }
+
+        // Resolve the sender device to FabricNodeId for direction lookups
+        FabricNodeId src_node = resolve_device_identifier(sender.device, device_info_provider_);
+
+        // Group patterns by their outgoing routing direction
+        std::map<RoutingDirection, std::vector<ParsedTrafficPatternConfig>> direction_groups;
+        for (const auto& pattern : sender.patterns) {
+            RoutingDirection dir;
+            if (pattern.destination.has_value() && pattern.destination->hops.has_value()) {
+                dir = route_manager_.get_forwarding_direction(pattern.destination->hops.value());
+            } else if (pattern.destination.has_value() && pattern.destination->device.has_value()) {
+                FabricNodeId dst_node =
+                    resolve_device_identifier(pattern.destination->device.value(), device_info_provider_);
+                dir = route_manager_.get_forwarding_direction(src_node, dst_node);
+            } else {
+                TT_THROW("Cannot determine routing direction for pattern without destination hops or device");
+            }
+            direction_groups[dir].push_back(pattern);
+        }
+
+        if (direction_groups.size() <= 1) {
+            // All patterns go the same direction — no split needed
+            new_senders.push_back(sender);
+        } else {
+            log_debug(
+                LogTest,
+                "Benchmark mode: splitting sender on device {} into {} senders (one per direction)",
+                src_node,
+                direction_groups.size());
+            for (auto& [dir, patterns] : direction_groups) {
+                ParsedSenderConfig split_sender;
+                split_sender.device = sender.device;
+                split_sender.core = sender.core;
+                split_sender.noc_id = sender.noc_id;
+                split_sender.link_id = sender.link_id;
+                split_sender.patterns = std::move(patterns);
+                new_senders.push_back(std::move(split_sender));
+            }
+        }
+    }
+
+    test.senders = std::move(new_senders);
 }
 
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {

@@ -192,7 +192,7 @@
   cmd: run_t3000_gpt_oss_unit_tests
   skus:
     wh_llmbox:
-      timeout: 30
+      timeout: 35
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
   model-name: gpt-oss
@@ -206,11 +206,20 @@
   team: models
   model-name: deepseek
 
+- name: t3k_deepseek_prefill_tests
+  cmd: run_t3000_deepseek_prefill_tests
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U07N3CUUN05 # Iva Potkonjak
+  team: models
+  model-name: deepseek prefill
+
 - name: t3k_tttv2_fast_unit_tests
   cmd: run_t3000_tttv2_fast_unit_tests
   skus:
     wh_llmbox:
-      timeout: 18
+      timeout: 21
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
   model-name: tttv2 modules

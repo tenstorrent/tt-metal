@@ -24,7 +24,7 @@ SingleHeadAttention::SingleHeadAttention(uint32_t embedding_dim, float dropout_p
 }
 
 ttml::autograd::TensorPtr SingleHeadAttention::operator()(
-    const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
+    const ttml::autograd::TensorPtr& x, const std::optional<ttml::autograd::TensorPtr>& mask) {
     auto query = (*q_linear)(x);
     auto key = (*k_linear)(x);
     auto value = (*v_linear)(x);

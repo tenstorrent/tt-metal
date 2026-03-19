@@ -113,7 +113,7 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True, use_pack_untilize=True)
+    b1 = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True)
     c1 = b1.cpu().to_torch()
 
     untilized_inp = untilize(inp)
@@ -156,7 +156,7 @@ def test_run_untilize_5d(dtype, shape, device):
 
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
-    our_untilized = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True, use_pack_untilize=True)
+    our_untilized = ttnn.untilize(a, memory_config=out_mem_config, use_multicore=True)
     our_untilized = our_untilized.cpu().to_torch()
 
     if dtype == ttnn.float32:
