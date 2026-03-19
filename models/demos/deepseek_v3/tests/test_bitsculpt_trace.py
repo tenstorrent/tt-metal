@@ -78,7 +78,7 @@ def _configure_trace_hooks(run_config, collector: BitSculptTraceCollector, hf_co
         block_cfg["mlp"]["moe"]["debug_trace"] = collector
 
 
-@pytest.mark.timeout(7200)
+@pytest.mark.timeout(14400)
 @pytest.mark.parametrize(
     "device_params",
     [

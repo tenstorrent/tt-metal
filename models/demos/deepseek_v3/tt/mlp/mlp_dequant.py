@@ -21,6 +21,7 @@ class MLPDequant(MLP):
 
     WEIGHT_TORCH_DTYPE = torch.float8_e4m3fn
     WEIGHT_SCALE_INV_TORCH_DTYPE = torch.float32
+    WEIGHT_DTYPE = ttnn.bfloat4_b
 
     @classmethod
     def convert_weights(

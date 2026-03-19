@@ -74,7 +74,7 @@ class LMHead1D(AbstractModule):
                     weight_tensor,
                     shard_dims=(None, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )

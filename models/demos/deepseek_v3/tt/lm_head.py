@@ -92,7 +92,7 @@ class LMHead(AbstractModule):
                     weight_tensor,
                     shard_dims=(-1, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=dram_sharded_weight_config(
                         hidden_dim,
