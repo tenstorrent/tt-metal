@@ -279,16 +279,11 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
         if rebind_vals:
             fused_kernel.extend_runtime_args_uniform(rebind_vals)
 
-    # 2. Rebuild common_runtime_args
+    # 2. Rebuild common_runtime_args via C++ append (avoids Python list conversion)
     for ki, fused_kernel in enumerate(desc.kernels):
-        common: List[int] = []
+        fused_kernel.common_runtime_args = []
         for op_idx, k_idx in spec.origin_kernel_map[ki]:
-            src_kernel = ops[op_idx].descriptor.kernels[k_idx]
-            try:
-                common.extend(list(src_kernel.common_runtime_args))
-            except (AttributeError, TypeError):
-                pass
-        fused_kernel.common_runtime_args = common
+            fused_kernel.append_common_runtime_args_from(ops[op_idx].descriptor.kernels[k_idx])
 
     # 3. Update sharded CB buffer pointers
     for merged_cb_idx, op_idx, orig_cb_idx in spec.sharded_cb_map:

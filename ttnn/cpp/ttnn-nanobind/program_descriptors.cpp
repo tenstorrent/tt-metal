@@ -847,7 +847,15 @@ void py_module_types(nb::module_& mod) {
                 }
             },
             nb::arg("values"),
-            "Extend all cores' runtime args with the same values");
+            "Extend all cores' runtime args with the same values")
+        .def(
+            "append_common_runtime_args_from",
+            [](tt::tt_metal::KernelDescriptor& self, const tt::tt_metal::KernelDescriptor& other) {
+                self.common_runtime_args.insert(
+                    self.common_runtime_args.end(), other.common_runtime_args.begin(), other.common_runtime_args.end());
+            },
+            nb::arg("other"),
+            "Append another kernel's common_runtime_args to this kernel's");
 
     // Bind SemaphoreDescriptor
     nb::class_<tt::tt_metal::SemaphoreDescriptor>(mod, "SemaphoreDescriptor", R"pbdoc(
