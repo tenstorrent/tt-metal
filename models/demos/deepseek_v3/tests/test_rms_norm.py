@@ -25,6 +25,103 @@ _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 
 
+def run_test_forward_pass_rms_norm(
+    *,
+    RMSNormClass,
+    hf_config_size_attr,
+    mode,
+    seq_len,
+    batch_size_per_row,
+    reference_layernorm_path,
+    hf_config,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    state_dict,
+):
+    num_module_layers, _ = mesh_device.shape
+
+    # Get the hidden_size of the norm
+    hidden_size = getattr(hf_config, hf_config_size_attr)
+
+    # Get the reference inputs and outputs
+    reference_model = DeepseekV3RMSNorm(
+        hidden_size=hidden_size,
+        eps=hf_config.rms_norm_eps,
+    ).eval()
+
+    if reference_layernorm_path is not None:
+        # Use real weights from the model
+        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
+        reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
+        state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
+    else:
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
+
+    torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
+    reference_model = reference_model.to(torch.float32)
+    reference_output = reference_model(torch_input)
+
+    # Generate module configs and state
+    weight_config = get_test_weight_config(
+        RMSNormClass,
+        hf_config,
+        [state_dict] * num_module_layers,
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_rms_norm",
+        real_weights=reference_layernorm_path is not None,
+        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
+    )
+    model_config = get_model_config(
+        RMSNormClass,
+        mode,
+        hf_config,
+        mesh_device,
+        batch_size_per_row=batch_size_per_row,
+    )
+    model_state = RMSNormClass.create_state(
+        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
+    )
+    run_config = create_run_config(model_config, weight_config, model_state)
+
+    # Convert the input to TTNN tensor
+    if RMSNormClass is DistributedRMSNorm:
+        memory_config = run_config["input_memory_config"]
+    else:
+        memory_config = ttnn.L1_MEMORY_CONFIG
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
+        ),
+        dtype=ttnn.bfloat16,
+        memory_config=memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # Run TTNN forward pass
+    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
+
+    # Convert output back to torch
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
+    )
+    if RMSNormClass is RMSNorm:
+        tt_output_torch = tt_output_torch[..., :hidden_size]
+
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_output)
+
+    # Check PCC
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": get_fabric_config()}],
@@ -72,86 +169,61 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict: dict[str, torch.Tensor],
 ):
-    num_module_layers, _ = mesh_device.shape
-
-    # Get the hidden_size of the norm
-    hidden_size = getattr(hf_config, hf_config_size_attr)
-
-    # Get the reference inputs and outputs
-    reference_model = DeepseekV3RMSNorm(
-        hidden_size=hidden_size,
-        eps=hf_config.rms_norm_eps,
-    ).eval()
-
-    if reference_layernorm_path is not None:
-        # Use real weights from the model
-        state_dict = sub_state_dict(state_dict, reference_layernorm_path + ".")
-        reference_model.load_state_dict({k: v.to(torch.float32) for k, v in state_dict.items()})
-        state_dict = {k: v.to(torch.bfloat16) for k, v in state_dict.items()}
-    else:
-        state_dict = reference_model.to(torch.bfloat16).state_dict()
-
-    torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
-    reference_model = reference_model.to(torch.float32)
-    reference_output = reference_model(torch_input)
-
-    # Generate module configs and state
-    weight_config = get_test_weight_config(
-        RMSNormClass,
-        hf_config,
-        [state_dict] * num_module_layers,
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_rms_norm",
-        real_weights=reference_layernorm_path is not None,
-        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
-    )
-    model_config = get_model_config(
-        RMSNormClass,
-        mode,
-        hf_config,
-        mesh_device,
+    run_test_forward_pass_rms_norm(
+        RMSNormClass=RMSNormClass,
+        hf_config_size_attr=hf_config_size_attr,
+        mode=mode,
+        seq_len=seq_len,
         batch_size_per_row=USERS_PER_ROW,
-    )
-    model_state = RMSNormClass.create_state(
-        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
-    )
-    run_config = create_run_config(model_config, weight_config, model_state)
-
-    # Convert the input to TTNN tensor
-    if RMSNormClass is DistributedRMSNorm:
-        memory_config = run_config["input_memory_config"]
-    else:
-        memory_config = ttnn.L1_MEMORY_CONFIG
-    tt_input = ttnn.from_torch(
-        torch_input,
-        device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, mesh_device.shape, dims=(0, -1 if RMSNormClass is DistributedRMSNorm else None)
-        ),
-        dtype=ttnn.bfloat16,
-        memory_config=memory_config,
-        layout=ttnn.TILE_LAYOUT,
+        reference_layernorm_path=reference_layernorm_path,
+        hf_config=hf_config,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
     )
 
-    # Run TTNN forward pass
-    tt_output = run_module_forward(RMSNormClass, mode, tt_input, run_config)
 
-    # Convert output back to torch
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_device.shape, dims=(0, -1)),
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "reference_layernorm_path, RMSNormClass, hf_config_size_attr",
+    [
+        ("model.layers.0.input_layernorm", DistributedRMSNorm, "hidden_size"),
+        ("model.layers.0.self_attn.kv_a_layernorm", RMSNorm, "kv_lora_rank"),
+    ],
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    RMSNormClass,
+    hf_config_size_attr,
+    device_params,
+    reference_layernorm_path,
+    hf_config,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
+):
+    run_test_forward_pass_rms_norm(
+        RMSNormClass=RMSNormClass,
+        hf_config_size_attr=hf_config_size_attr,
+        mode="decode",
+        seq_len=8,
+        batch_size_per_row=8,
+        reference_layernorm_path=reference_layernorm_path,
+        hf_config=hf_config,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
     )
-    if RMSNormClass is RMSNorm:
-        tt_output_torch = tt_output_torch[..., :hidden_size]
-
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
-
-    # Check PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

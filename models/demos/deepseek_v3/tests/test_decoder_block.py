@@ -296,5 +296,63 @@ def test_forward_pass(
     )
 
 
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "DecoderBlockClass, module_path, reference_layer_idx",
+    [
+        pytest.param(
+            DecoderBlock2D,
+            "model.layers.0",
+            0,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+        pytest.param(
+            MoEDecoderBlock2D,
+            "model.layers.3",
+            3,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+    ],
+)
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    DecoderBlockClass: type[DecoderBlock2DBase],
+    device_params,
+    module_path,
+    reference_layer_idx,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    model_path,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    run_test_forward_pass_decoder2d(
+        DecoderBlockClass,
+        device_params["fabric_config"],
+        module_path,
+        reference_layer_idx,
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        model_path=model_path,
+        ccl=ccl,
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

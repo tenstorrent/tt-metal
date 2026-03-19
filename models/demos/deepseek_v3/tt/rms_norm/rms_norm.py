@@ -62,7 +62,12 @@ class RMSNorm(RMSNormBase):
         )
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+    def decode_model_config(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        batch_size_per_row: int | None = None,
+    ) -> ModelDecodeConfig:
         return RMSNormConfig(
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
