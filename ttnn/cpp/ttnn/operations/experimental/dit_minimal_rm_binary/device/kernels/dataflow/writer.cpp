@@ -32,9 +32,16 @@
 
 constexpr uint32_t TILE_HEIGHT = 32;
 
+void print_cb_data(uint16_t* ptr, uint32_t len) {
+    for (uint32_t i = 0; i < len; i++) {
+        DPRINT << BF16(ptr[i]) << " ";
+    }
+    DPRINT << ENDL();
+}
+
 void kernel_main() {
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_size = get_compile_time_arg_val(1);
+    constexpr uint32_t stick_bytes = get_compile_time_arg_val(1);
     constexpr auto out_args = TensorAccessorArgs<2>();
     constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(out_args.next_compile_time_args_offset());
     constexpr uint32_t tile_width_bytes = get_compile_time_arg_val(out_args.next_compile_time_args_offset() + 1);
@@ -43,35 +50,41 @@ void kernel_main() {
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(2);
 
-    const auto dst = TensorAccessor(out_args, dst_addr, stick_size);
-
-    uint32_t stick_id = start_stick_id;
+    const auto dst = TensorAccessor(out_args, dst_addr, stick_bytes);
 
     const uint32_t num_full_blocks = num_sticks / TILE_HEIGHT;
     const uint32_t tail_rows = num_sticks % TILE_HEIGHT;
+    const uint32_t end_stick = start_stick_id + num_sticks;
+
+    DPRINT << "num sticks = " << num_sticks << ENDL();
+    DPRINT << "tail rows = " << tail_rows << ENDL();
+    DPRINT << "stick bytes = " << stick_bytes << ENDL();
 
     // Full blocks: pop ntiles_per_row pages, write TILE_HEIGHT rows.
     // Row k is at base_l1 + k * stick_size.
-    for (uint32_t i = 0; i < num_full_blocks; ++i) {
+
+    for (uint32_t stick_id = start_stick_id; stick_id < end_stick; stick_id += TILE_HEIGHT) {
+        // DPRINT << "Waiting for " << ntiles_per_row << " tiles from CB_OUT_TILED" << ENDL();
         cb_wait_front(cb_out_id, ntiles_per_row);
         uint32_t base_l1 = get_read_ptr(cb_out_id);
-        for (uint32_t k = 0; k < TILE_HEIGHT; ++k) {
-            noc_async_write(base_l1 + k * stick_size, dst.get_noc_addr(stick_id), stick_size);
-            ++stick_id;
+        uint32_t nrows = std::min(TILE_HEIGHT, end_stick - stick_id);
+
+        // DPRINT << "stick id = " << stick_id << ", nrows = " << nrows << ENDL();
+        uint32_t l1_ptr = base_l1;
+        for (uint32_t k = 0; k < nrows; ++k) {
+            // noc_async_write(l1_ptr, dst.get_noc_addr(stick_id + k), stick_bytes);
+            noc_async_write_page(stick_id + k, dst, l1_ptr);
+
+            // if (stick_id + k == 33) {
+            //     print_cb_data(reinterpret_cast<uint16_t*>(l1_ptr), 23);
+            // }
+
+            l1_ptr += stick_bytes;
         }
+
         noc_async_write_barrier();
         cb_pop_front(cb_out_id, ntiles_per_row);
     }
 
-    // Partial last block: pop ntiles_per_row pages, write only tail_rows rows.
-    if (tail_rows > 0) {
-        cb_wait_front(cb_out_id, ntiles_per_row);
-        uint32_t base_l1 = get_read_ptr(cb_out_id);
-        for (uint32_t k = 0; k < tail_rows; ++k) {
-            noc_async_write(base_l1 + k * stick_size, dst.get_noc_addr(stick_id), stick_size);
-            ++stick_id;
-        }
-        noc_async_write_barrier();
-        cb_pop_front(cb_out_id, ntiles_per_row);
-    }
+    DPRINT << "Writer completed" << ENDL();
 }
