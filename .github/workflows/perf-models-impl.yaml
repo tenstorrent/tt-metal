@@ -213,11 +213,6 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
 
-      # TODO: Fix the pipeline before enabling notifications.
-      #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      #  if: ${{ failure() }}
-      #  with:
-      #    slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !cancelled() }}
