@@ -111,7 +111,7 @@ def test_pad_rm_small_to_large_width_with_program_cache(device, shape, padding, 
         run_pad_rm_small_to_large_width_with_program_cache(device, shape, padding, torch_padding, value)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.from_torch(
+        ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.TILE_LAYOUT,

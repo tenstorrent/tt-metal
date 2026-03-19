@@ -4,6 +4,7 @@
 
 #include "pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 
+#include <algorithm>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
