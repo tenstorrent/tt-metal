@@ -2698,6 +2698,17 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
             }
             assigned = try_assign_port(true);
         }
+        if (!assigned) {
+            TT_FATAL(
+                false,
+                "Failed to assign logical port for exit_node on mesh {} (chip {}) -> mesh {}: "
+                "fabric_node_id={} src_eth_chan={} (NESW and Z ports exhausted).",
+                *my_mesh_id,
+                exit_node_chip,
+                *neighbor_mesh_id,
+                exit_node_fabric_node_id,
+                src_eth_chan);
+        }
     }
     return ports_to_neighbor;
 }
@@ -2763,25 +2774,28 @@ void ControlPlane::validate_requested_intermesh_connections(
         for (const auto& [dst_mesh, num_channels] : dst_mesh_map) {
             auto dst_mesh_id = MeshId(dst_mesh);
             const auto& ports = port_descriptors.at(src_mesh_id).at(dst_mesh_id);
-            // Debug: Print detailed port info when validation would fail or for diagnostics
-            std::string port_directions_str;
-            for (size_t i = 0; i < ports.size(); ++i) {
-                if (i > 0) {
-                    port_directions_str += ", ";
+            if (num_channels > ports.size()) {
+                std::string port_directions_str;
+                for (size_t i = 0; i < ports.size(); ++i) {
+                    if (i > 0) {
+                        port_directions_str += ", ";
+                    }
+                    port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
+                                           std::to_string(ports[i].port_id.second);
                 }
-                port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
-                                       std::to_string(ports[i].port_id.second);
+                TT_FATAL(
+                    false,
+                    "Requested {} channels between {} and {}, but only have {} physical links. "
+                    "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
+                    "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
+                    "generate_rank_bindings does not yet validate Z vs non-Z port capacity. "
+                    "Available port directions: {}.",
+                    num_channels,
+                    src_mesh,
+                    dst_mesh,
+                    ports.size(),
+                    port_directions_str);
             }
-            TT_FATAL(
-                num_channels <= ports.size(),
-                "Requested {} channels between {} and {}, but only have {} physical links. "
-                "If using assign_z_direction, reduce channels.count in the mesh graph descriptor to match "
-                "the physical Z-link capacity (e.g. 4 for torus wrap-around). "
-                "generate_rank_bindings does not yet validate Z vs non-Z port capacity.",
-                num_channels,
-                src_mesh,
-                dst_mesh,
-                ports.size());
         }
     }
 }
@@ -2809,17 +2823,6 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
                 }
             }
             std::string phys_loc_str;
-            if (topology_mapper_ != nullptr) {
-                try {
-                    FabricNodeId fn_id(my_mesh_id, src_device);
-                    auto hostname = topology_mapper_->get_hostname_for_fabric_node_id(fn_id);
-                    auto tray_id = topology_mapper_->get_tray_id_for_fabric_node_id(fn_id);
-                    auto asic_location = topology_mapper_->get_asic_location_for_fabric_node_id(fn_id);
-                    phys_loc_str = fmt::format(" (host={}, tray={}, loc={})", hostname, *tray_id, *asic_location);
-                } catch (const std::exception&) {
-                    phys_loc_str = " (physical_location_unavailable)";
-                }
-            }
             log_info(
                 tt::LogFabric,
                 "get_requested_exit_nodes: mesh {} -> {}, FabricNodeId M{}D{}{}: num_channels_requested={}, "
