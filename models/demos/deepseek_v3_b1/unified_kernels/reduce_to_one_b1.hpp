@@ -336,7 +336,6 @@ struct ReduceToOneB1 {
 
             // ROOT1: gather all shards to output tensor; each worker sends its shard downstream
             if constexpr (CTArgs::device_role == MESH_ROOT1) {
-                DPRINT << "ROOT1: waiting for data in scratch CB\n";
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
                 uint32_t dst_addr_0 = args.output_base_addr + args.shard_idx * CTArgs::payload_size_bytes;
@@ -345,15 +344,11 @@ struct ReduceToOneB1 {
                 noc_async_write(src_addr, dst_noc_addr_0, CTArgs::payload_size_bytes);
                 noc_async_write_barrier();
 
-                DPRINT << "enable downstream socket: " << (uint32_t)CTArgs::enable_downstream_socket << "\n";
                 if constexpr (CTArgs::enable_downstream_socket) {
-                    DPRINT << "ROOT1: sending data downstream via socket\n";
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
                     if (args.socket_config_addr != 0) {
-                        DPRINT << "socket config addr: " << (uint32_t)args.socket_config_addr << "\n";
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
                         set_sender_socket_page_size(sender_socket, useful_per_shard);
-                        DPRINT << "setting sender socket page size to " << useful_per_shard << "\n";
                         socket_reserve_pages(sender_socket, 1);
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
@@ -369,7 +364,6 @@ struct ReduceToOneB1 {
                         noc_async_write_barrier();
                         socket_barrier(sender_socket);
                         update_socket_config(sender_socket);
-                        DPRINT << "data sent downstream via socket\n";
                     }
                     if (args.persistent_enable != 0) {
                         volatile tt_l1_ptr uint32_t* agg_sem_ptr =
@@ -390,7 +384,6 @@ struct ReduceToOneB1 {
                 }
 
                 cb_pop_front(CTArgs::scratch_cb, CTArgs::num_tiles);
-                DPRINT << "ROOT1: done sending data downstream\n";
                 return;
             }
 
