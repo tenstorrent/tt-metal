@@ -171,6 +171,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
+        fabric_config = get_fabric_config()
+
         state: ModelState = {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "num_rows": mesh_device.shape[0],
@@ -186,7 +188,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     DecoderBlock2D.create_shared_state(
                         hf_config,
                         mesh_device,
-                        get_fabric_config(),
+                        fabric_config,
                     )
                 ],
             ),
@@ -197,14 +199,14 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     MoEDecoderBlock2D.create_shared_state(
                         hf_config,
                         mesh_device,
-                        get_fabric_config(),
+                        fabric_config,
                     )
                 ],
             ),
         ]
         if cls._has_mtp_layer(hf_config):
             shared_state_steps.append(
-                ("MTP shared state", "mtp", lambda: MTP2D.create_shared_state(hf_config, mesh_device))
+                ("MTP shared state", "mtp", lambda: MTP2D.create_shared_state(hf_config, mesh_device, fabric_config))
             )
 
         total_steps = len(shared_state_steps)
