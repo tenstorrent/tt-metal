@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "api/compute/reduce.h"
+#include "api/compute/matmul.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"

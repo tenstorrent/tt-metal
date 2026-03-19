@@ -21,21 +21,17 @@ std::map<std::string, std::string> get_defines(
     // TODO(AP): need a sync with Reduce::Max from HLK headers
     std::string reduce_dim_str;
     switch (reduce_dim) {
-        case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ReduceDim::REDUCE_ROW"; break;
-        case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ReduceDim::REDUCE_COL"; break;
-        case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ReduceDim::REDUCE_SCALAR"; break;
+        case tt::tt_metal::ReduceOpDim::W: reduce_dim_str = "ckernel::ReduceDim::REDUCE_ROW"; break;
+        case tt::tt_metal::ReduceOpDim::H: reduce_dim_str = "ckernel::ReduceDim::REDUCE_COL"; break;
+        case tt::tt_metal::ReduceOpDim::HW: reduce_dim_str = "ckernel::ReduceDim::REDUCE_SCALAR"; break;
         default: TT_THROW("Invalid reduce_op!");
     }
     switch (reduce_op) {
-        case tt::tt_metal::ReduceOpMath::MAX: defines["REDUCE_OP"] = "PoolType::MAX"; break;
-        case tt::tt_metal::ReduceOpMath::AVG: defines["REDUCE_OP"] = "PoolType::AVG"; break;
-        default: defines["REDUCE_OP"] = "PoolType::SUM"; break;
+        case tt::tt_metal::ReduceOpMath::MAX: defines["REDUCE_OP"] = "ckernel::PoolType::MAX"; break;
+        case tt::tt_metal::ReduceOpMath::AVG: defines["REDUCE_OP"] = "ckernel::PoolType::AVG"; break;
+        default: defines["REDUCE_OP"] = "ckernel::PoolType::SUM"; break;
     }
     defines["REDUCE_DIM"] = reduce_dim_str;
-    if (reduce_dim == tt::tt_metal::ReduceOpDim::W &&
-        (reduce_op == tt::tt_metal::ReduceOpMath::SUM || reduce_op == tt::tt_metal::ReduceOpMath::AVG)) {
-        defines["REDUCE_ROW_SUM_VIA_MM"] = "1";
-    }
     return defines;
 }
 

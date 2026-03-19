@@ -38,17 +38,28 @@ using ckernel::ReduceDim;
  * @brief Prepares a CB tile for reduce using a caller-provided float scaler
  *
  * Converts the float scaler to the appropriate bit representation based on
- * the circular buffer's data format, then fills row 0 of each face.
+ * the circular buffer's data format, then fills the tile with the scaler in
+ * the layout required by the reduction:
+ *   - Row-0 fill (reduce LLK path): used for REDUCE_COL, REDUCE_SCALAR, and MAX
+ *   - Col-0 fill (matmul path): used for REDUCE_ROW with SUM or AVG
+ *
  * Data format and tile shape (half/full) are deduced from the circular buffer.
  *
  * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX). Default MAX selects row-0 fill.
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR).
+ *         Default REDUCE_COL selects row-0 fill.
  * @tparam valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
  *         in the tile (1-32, default 32 = full tile). When the last tile along the reduce
  *         dimension is partially filled, this specifies how many row or column elements contain
  *         valid data; the remaining positions are zeroed out so they do not affect the result.
  * @param scaler_f Float scaler value to fill the tile with
  */
-template <uint32_t cb_id, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH>
+template <
+    uint32_t cb_id,
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
 
 /**

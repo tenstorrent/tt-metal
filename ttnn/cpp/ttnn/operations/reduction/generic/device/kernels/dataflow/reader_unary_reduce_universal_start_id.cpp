@@ -8,9 +8,6 @@
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#ifdef REDUCE_ROW_SUM_VIA_MM
-#include "ttnn/kernel/dataflow/generate_mm_scaler.hpp"
-#endif
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -20,15 +17,8 @@ void kernel_main() {
     constexpr auto tensor_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in2 = 2;
-#ifndef REDUCE_ROW_SUM_VIA_MM
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2>(scaler_f);
-#else
-    // Convert float bits to packed bf16 for mm_scaler (bf16 = upper 16 bits of float32)
-    constexpr uint16_t bf16_val = static_cast<uint16_t>(scaler_bits >> 16);
-    constexpr uint32_t packed_bf16 = static_cast<uint32_t>(bf16_val) | (static_cast<uint32_t>(bf16_val) << 16);
-    generate_mm_scaler(cb_id_in2, packed_bf16);
-#endif
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     constexpr uint32_t cb_id_in0 = 0;
 

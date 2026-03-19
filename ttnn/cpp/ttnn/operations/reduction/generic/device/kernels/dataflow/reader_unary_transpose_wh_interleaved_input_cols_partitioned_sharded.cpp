@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2>(scaler_f);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif
 
     constexpr uint32_t onetile = 1;
