@@ -50,6 +50,8 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.hf_model_utils import default_dequantized_model_path
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
@@ -69,6 +71,48 @@ MAX_SEQ_LEN = 128  # Trim KV cache tables for faster setup
 PCC_UNIFORM_VS_BSPM = 0.93  # direct comparison: uniform bfp4 vs BSPM pre-quantized
 PCC_BSPM_VS_REF = 0.95  # BSPM vs float reference (lower than baseline due to aggressive tiles)
 PCC_BASELINE_VS_REF = 0.97  # baseline vs float reference (same as test_model.py)
+
+
+# ---------------------------------------------------------------------------
+# Lazy state-dict wrapper that allows per-key overrides without materializing
+# the full underlying mapping
+# ---------------------------------------------------------------------------
+
+
+class _OverrideStateDict:
+    """Thin wrapper around a base Mapping that returns overridden values for
+    specific keys and delegates all other key accesses to the base mapping.
+
+    This avoids materializing the full (potentially multi-GB) state dict when
+    only a small subset of keys (MoE expert weights) need to be modified.
+    """
+
+    def __init__(self, base, overrides: dict):
+        self._base = base
+        self._overrides = overrides
+
+    def __getitem__(self, key):
+        return self._overrides[key] if key in self._overrides else self._base[key]
+
+    def __contains__(self, key):
+        return key in self._overrides or key in self._base
+
+    def __iter__(self):
+        return iter(self._base)
+
+    def __len__(self):
+        return len(self._base)
+
+    def keys(self):
+        return self._base.keys()
+
+    def items(self):
+        for k in self._base:
+            yield k, self[k]
+
+    def values(self):
+        for k in self._base:
+            yield self[k]
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +147,6 @@ def _preprocess_experts_with_bspm(
     3 → zero  (tile zeroed out, dead/pruned tiles)
     """
     try:
-        from models.demos.deepseek_v3.utils.config_helpers import get_dequantized_tensor
         from models.demos.deepseek_v3_b1.compressed_tensor.tile_utils import quantize_dequantize_bfp
     except ImportError as e:
         pytest.skip(f"Required module not importable for BSPM preprocessing: {e}")
@@ -122,8 +165,9 @@ def _preprocess_experts_with_bspm(
 
     first_k_dense = getattr(hf_config, "first_k_dense_replace", 3)
 
-    # Shallow-copy the state dict; expert weight tensors are replaced below
-    new_sd = dict(state_dict)
+    # Build an override dict; all other keys are lazily delegated to state_dict
+    # (avoids materializing the full multi-GB weight mapping in memory)
+    overrides: dict = {}
 
     layers_processed = 0
     for layer_idx in range(first_k_dense, num_layers):
@@ -145,11 +189,11 @@ def _preprocess_experts_with_bspm(
         for expert_idx in range(min(hf_config.n_routed_experts, n_experts_bspm)):
             for proj_name, proj_idx in PROJ_IDX.items():
                 key = f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.{proj_name}.weight"
-                if key not in new_sd:
+                if key not in state_dict:
                     continue
 
-                # Dequantize (handles FP8 source weights from R1-0528)
-                w_f32 = get_dequantized_tensor(new_sd, key, dtype=torch.float32)  # (N, K)
+                # Load as float32 — state_dict must be dequantized (BF16) before calling this
+                w_f32 = overrides[key].float() if key in overrides else state_dict[key].float()  # (N, K)
 
                 # Transpose to (K, N) — BitSculpt's tile convention
                 w_kn = w_f32.T.contiguous().numpy()  # (K, N)
@@ -172,9 +216,9 @@ def _preprocess_experts_with_bspm(
                             tile = w_tiled[r, :, c, :]  # (32, 32)
                             w_tiled[r, :, c, :] = quantize_dequantize_bfp(tile, mant_bits)
 
-                # Restore (N, K) orientation and replace in dict
+                # Restore (N, K) orientation and store in overrides
                 w_processed = torch.from_numpy(w_kn.reshape(K, N)).T.to(w_f32.dtype)
-                new_sd[key] = w_processed
+                overrides[key] = w_processed
 
         layers_processed += 1
 
@@ -184,8 +228,8 @@ def _preprocess_experts_with_bspm(
             f"for layers {first_k_dense}–{num_layers - 1}"
         )
 
-    logger.info(f"BSPM pre-quantization applied to {layers_processed} MoE layers")
-    return new_sd
+    logger.info(f"BSPM pre-quantization applied to {layers_processed} MoE layers ({len(overrides)} keys overridden)")
+    return _OverrideStateDict(state_dict, overrides)
 
 
 # ---------------------------------------------------------------------------
@@ -283,8 +327,8 @@ def test_bspm_vs_uniform_5layers_decode(
     device_params,
     mesh_device,
     hf_config,
+    model_path,
     cache_path,
-    state_dict,
     ccl,
     force_recalculate_weight_config,
 ):
@@ -306,8 +350,15 @@ def test_bspm_vs_uniform_5layers_decode(
     hf_config_5.num_hidden_layers = NUM_LAYERS
     hf_config_5.max_seq_len = MAX_SEQ_LEN
 
-    # Trim state dict: keep only weights for the first 5 layers
-    state_dict_5 = sub_state_dict(state_dict, "", NUM_LAYERS)
+    # Load from the dequantized (BF16) checkpoint — the raw HF checkpoint for
+    # DeepSeek-R1-0528 uses float8_e4m3fn; convert_weights requires BF16 tensors.
+    deq_path = default_dequantized_model_path(model_path)
+    if not deq_path.exists():
+        pytest.skip(
+            f"Dequantized checkpoint not found at {deq_path}. "
+            f"Run save_dequantized_hf_checkpoint() first to create it."
+        )
+    deq_state_dict_5 = sub_state_dict(LazyStateDict(deq_path), "", NUM_LAYERS)
 
     # ── Shared random decode inputs ─────────────────────────────────────────
     dp_factor = mesh_device.shape[1]
@@ -330,7 +381,7 @@ def test_bspm_vs_uniform_5layers_decode(
     weight_cfg_uniform = get_test_weight_config(
         RowBatchedModel,
         hf_config_5,
-        (state_dict_5,),
+        (deq_state_dict_5,),
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
@@ -364,7 +415,7 @@ def test_bspm_vs_uniform_5layers_decode(
 
     logger.info(f"=== Run 2: BSPM pre-quantized " f"({bspm_model_name}, variant {bspm_variant}, {bspm_budget} b/e) ===")
     bspm_state_dict = _preprocess_experts_with_bspm(
-        state_dict_5,
+        deq_state_dict_5,
         hf_config_5,
         bspm_results_dir,
         bspm_model_name,
