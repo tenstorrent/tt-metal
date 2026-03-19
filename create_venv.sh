@@ -371,7 +371,10 @@ fi
 if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
     echo "Generating git hooks"
     pre-commit install
-    pre-commit install --hook-type commit-msg
+    # Note: do NOT add `pre-commit install --hook-type commit-msg` here unless
+    # .pre-commit-config.yaml contains hooks with `stages: [commit-msg]`.
+    # Without matching hooks, the commit-msg invocation runs the default-stage
+    # hooks a second time, causing every `git commit` to run pre-commit twice.
 else
     echo "In worktree: not generating git hooks"
 fi

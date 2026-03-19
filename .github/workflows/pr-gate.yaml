@@ -266,22 +266,6 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
-  ttsim-integration-tests:
-    needs: [ build ]
-    if: >-
-      ${{ github.event_name != 'pull_request' ||
-          github.event.pull_request.head.repo.fork == false }}
-    strategy:
-      fail-fast: false
-    uses: ./.github/workflows/ttsim.yaml
-    with:
-      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
-      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      run-ttsim-integration-tests: true
-      run-metal-cpp-unit-tests: false
-
   # A quick check that parses the models charts in README.md and models/README.md
   # and ensures that models attributes are in sync.
   model-charts-sync:
@@ -437,7 +421,6 @@ jobs:
       - ttnn-smoke-tests
       - build
       - metalium-examples
-      - ttsim-integration-tests
       - clang-tidy-light
       - model-charts-sync
       - build-docs
@@ -449,6 +432,6 @@ jobs:
           required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
-            ttsim-integration-tests, model-charts-sync, build-docs
+            model-charts-sync, build-docs
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

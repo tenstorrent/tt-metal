@@ -441,6 +441,7 @@ def setup_sram_matmul(
     output_tensor,
     k_num_tiles,
     fused_activation=0,
+    fused_activation_approx_mode=False,
 ):
     """
     Set up parameters for an SRAM matmul operation.
@@ -456,7 +457,7 @@ def setup_sram_matmul(
         output_tensor: Output tensor (WIDTH_SHARDED in L1)
         k_num_tiles: K dimension in tiles
         fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
-
+        fused_activation_approx_mode: Whether to use approximate activation (default False)
     Returns:
         Dictionary with matmul parameters and CB descriptors
     """
@@ -477,6 +478,7 @@ def setup_sram_matmul(
         "k_num_tiles": k_num_tiles,
         "out_w": out_w,
         "fused_activation": fused_activation,
+        "fused_activation_approx_mode": fused_activation_approx_mode,
         # Core grid
         "core_grid": core_grid,
         "num_cores": core_grid.num_cores(),
@@ -1005,6 +1007,7 @@ class MoeRoutedExpert:
             output_tensor=gate_mm_output_tensor,
             k_num_tiles=num_tiles_k,
             fused_activation=MoeRoutedExpert.ACTIVATION_SIGMOID,
+            fused_activation_approx_mode=False,
         )
 
         # CB descriptors
@@ -1511,6 +1514,7 @@ class MoeRoutedExpert:
             ("gate_mm_k_num_tiles", gate_mm_params["k_num_tiles"]),
             ("gate_mm_out_w", gate_mm_params["out_w"]),
             ("gate_mm_fused_activation", gate_mm_params["fused_activation"]),
+            ("gate_mm_fused_activation_approx_mode", gate_mm_params["fused_activation_approx_mode"]),
             # Gate compute args (sender core)
             ("gate_input_cb", gate_params["input_cb"]),
             ("gate_bias_cb", gate_params["bias_cb"]),

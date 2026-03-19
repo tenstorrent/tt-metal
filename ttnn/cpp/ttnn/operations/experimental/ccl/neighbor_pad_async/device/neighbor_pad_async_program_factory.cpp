@@ -373,10 +373,12 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             is_last_w_device);
 
         // W fabric core coordinates (placed after H fabric cores in first row)
+        // Use per-device core mapping to get correct NOC coords for this device's harvesting.
+        auto* local_device = mesh_device->get_device(mesh_coordinate);
         for (uint32_t i = 0; i < num_w_fabric_cores; i++) {
             CoreCoord wc = {num_h_fabric_cores + i, 0};
             w_fabric_logical_cores.push_back(wc);
-            w_fabric_virtual_cores.push_back(mesh_device->worker_core_from_logical_core(wc));
+            w_fabric_virtual_cores.push_back(local_device->worker_core_from_logical_core(wc));
         }
         w_fabric_core_range =
             CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
@@ -796,6 +798,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 w_reader_rt_args.push_back(w_direction);                                         // direction
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
+                // Compute neighbor device NOC coords for W writer targets.
+                // W-axis devices span different UBBs with potentially different core harvesting,
+                // so we must use the NEIGHBOR device's worker_core_from_logical_core().
+                const auto& w_neighbor_coord = w_direction ? w_backward_coord : w_forward_coord;
+                CoreCoord w_neighbor_same_virtual = w_virtual_core;  // default: local (won't be used if no neighbor)
+                CoreCoord w_neighbor_opp_virtual = w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)];
+                if (w_neighbor_coord.has_value()) {
+                    auto* w_neighbor_dev = mesh_device->get_device(w_neighbor_coord.value());
+                    w_neighbor_same_virtual = w_neighbor_dev->worker_core_from_logical_core(w_core);
+                    CoreCoord opp_logical = w_fabric_logical_cores[(w_link * 2) + (1 - w_direction)];
+                    w_neighbor_opp_virtual = w_neighbor_dev->worker_core_from_logical_core(opp_logical);
+                }
+
                 // W writer runtime args (addresses in CRTAs, not here)
                 std::vector<uint32_t> w_writer_rt_args = {
                     w_link_start * output_num_sticks_per_halo_dim,  // outer_dim_offset_start_id (per-link)
@@ -805,13 +820,13 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_link_count,                                   // outer_dim_size (per-link)
                     w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
                     operation_attributes.pad2_left,                                                  // padding_left
-                    1,                 // num_sticks_to_read
-                    1,                 // num_sticks_per_halo_dim
-                    w_virtual_core.x,  // neighbor_sem_noc0_x
-                    w_virtual_core.y,  // neighbor_sem_noc0_y
-                    true,              // use_barrier_semaphore (W writers: W-axis startup barrier)
-                    w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,   // barrier_sem_noc0_x (opp W dir)
-                    w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y};  // barrier_sem_noc0_y (opp W dir)
+                    1,                          // num_sticks_to_read
+                    1,                          // num_sticks_per_halo_dim
+                    w_neighbor_same_virtual.x,  // neighbor_sem_noc0_x (NEIGHBOR device coords!)
+                    w_neighbor_same_virtual.y,  // neighbor_sem_noc0_y (NEIGHBOR device coords!)
+                    true,                       // use_barrier_semaphore (W writers: W-axis startup barrier)
+                    w_neighbor_opp_virtual.x,   // barrier_sem_noc0_x (opp W dir, NEIGHBOR device coords!)
+                    w_neighbor_opp_virtual.y};  // barrier_sem_noc0_y (opp W dir, NEIGHBOR device coords!)
                 // No Phase 2 signal targets (W writers ARE Phase 2)
                 // sem_addr omitted — kernel reads barrier_sem from CRTA[3]
                 constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
