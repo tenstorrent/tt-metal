@@ -10,7 +10,7 @@ Computes: out = A + decompress(B_compressed)
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
 
 
 class EltwiseAddCompressed:
@@ -26,6 +26,7 @@ class EltwiseAddCompressed:
         # Use only cores that have compressed data — empty cores (from uneven shards)
         # would hang because CB1 has no backing tensor on those cores.
         core_grid = ct.get_data_core_range_set()
+        all_cores = ttnn.corerange_to_cores(core_grid)
 
         # CB indices
         cb_in0 = 0
@@ -51,8 +52,6 @@ class EltwiseAddCompressed:
         # The kernel manually advances addr_b per tile.
         cb_in1_num_pages = 1
 
-        assign_l1_addr = ct.get_assignment_l1_address()
-
         compile_time_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
@@ -60,8 +59,20 @@ class EltwiseAddCompressed:
             ("num_tiles", num_tiles),
             ("cb_in0_num_pages", cb_in0_num_pages),
             ("cb_in1_num_pages", cb_in1_num_pages),
-            ("assign_l1_addr", assign_l1_addr),
         ]
+
+        # assign_l1_addr: per-core in per_core_allocation mode, uniform otherwise
+        per_core_descriptors = []
+        if ct._per_core_allocation:
+            per_core_descriptors.append(
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="assign_l1_addr",
+                    core_values=[(core, ct.get_assignment_l1_address_per_core(core)) for core in all_cores],
+                    other_value=0,
+                )
+            )
+        else:
+            compile_time_args.append(("assign_l1_addr", ct.get_assignment_l1_address()))
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/eltwise_add_compressed/kernel.cpp",
@@ -69,6 +80,7 @@ class EltwiseAddCompressed:
             ncrisc_named_compile_time_args=compile_time_args,
             brisc_named_compile_time_args=compile_time_args,
             trisc_named_compile_time_args=compile_time_args,
+            per_core_compile_time_descriptors=per_core_descriptors,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -83,6 +95,6 @@ class EltwiseAddCompressed:
             semaphores=[],
         )
 
-        io_tensors = [a_tensor, *ct.get_data_tensors(), output_tensor]
+        io_tensors = [a_tensor, *ct.get_data_tensors(), *ct.get_assignment_tensors(), output_tensor]
         ttnn.generic_op(io_tensors, program_descriptor)
         return output_tensor

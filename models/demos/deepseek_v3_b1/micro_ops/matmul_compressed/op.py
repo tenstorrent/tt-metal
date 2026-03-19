@@ -16,7 +16,7 @@ The kernel reconfigures srcA per K-tile based on the assignment.
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreCompileTimeDescriptor, UnifiedKernelDescriptor
 
 
 class MatmulCompressed:
@@ -29,7 +29,8 @@ class MatmulCompressed:
         """
         A [M, K] @ decompress(B_compressed [K, N]) = output [M, N].
         """
-        core_grid = a_tensor.memory_config().shard_spec.grid
+        core_grid = ct.get_data_core_range_set()
+        all_cores = ttnn.corerange_to_cores(core_grid)
 
         # CB indices
         cb_in0 = 0  # A (bf16, srcB in matmul)
@@ -55,8 +56,6 @@ class MatmulCompressed:
         cb_in0_num_pages = num_tiles_k
         cb_in1_num_pages = 1  # whole compressed shard as 1 page
 
-        assign_l1_addr = ct.get_assignment_l1_address()
-
         compile_time_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
@@ -65,8 +64,20 @@ class MatmulCompressed:
             ("out_w", out_w),
             ("cb_in0_num_pages", cb_in0_num_pages),
             ("cb_in1_num_pages", cb_in1_num_pages),
-            ("assign_l1_addr", assign_l1_addr),
         ]
+
+        # assign_l1_addr: per-core in per_core_allocation mode, uniform otherwise
+        per_core_descriptors = []
+        if ct._per_core_allocation:
+            per_core_descriptors.append(
+                PerCoreCompileTimeDescriptor(
+                    named_compile_time_arg="assign_l1_addr",
+                    core_values=[(core, ct.get_assignment_l1_address_per_core(core)) for core in all_cores],
+                    other_value=0,
+                )
+            )
+        else:
+            compile_time_args.append(("assign_l1_addr", ct.get_assignment_l1_address()))
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/matmul_compressed/kernels/matmul_compressed_kernel.cpp",
@@ -74,6 +85,7 @@ class MatmulCompressed:
             ncrisc_named_compile_time_args=compile_time_args,
             brisc_named_compile_time_args=compile_time_args,
             trisc_named_compile_time_args=compile_time_args,
+            per_core_compile_time_descriptors=per_core_descriptors,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=False,
@@ -88,6 +100,6 @@ class MatmulCompressed:
             semaphores=[],
         )
 
-        io_tensors = [a_tensor, *ct.get_data_tensors(), output_tensor]
+        io_tensors = [a_tensor, *ct.get_data_tensors(), *ct.get_assignment_tensors(), output_tensor]
         ttnn.generic_op(io_tensors, program_descriptor)
         return output_tensor

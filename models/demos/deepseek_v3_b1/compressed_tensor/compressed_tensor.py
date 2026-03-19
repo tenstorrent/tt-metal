@@ -185,7 +185,8 @@ class CompressedTensor:
         # --- Packed data on device ---
         self.data = None  # ttnn.Tensor: uint8, packed BFP tile bytes (lockstep mode)
         self._data_per_core = {}  # {(x,y): ttnn.Tensor} per-core mode: one tensor per core
-        self.assignment = None  # ttnn.Tensor: uint8, 2-bit packed format indices
+        self.assignment = None  # ttnn.Tensor: uint8, 2-bit packed format indices (lockstep)
+        self._assignment_per_core = {}  # {(x,y): ttnn.Tensor} per-core assignment tensors
         self.spec = None  # ttnn.TensorSpec: logical shape/dtype/layout
         self.max_shard_size = 0  # bytes per shard (max across cores)
 
@@ -274,8 +275,11 @@ class CompressedTensor:
             return list(self._data_per_core.values())
         return [self.data]
 
-    def get_assignment_tensor(self) -> ttnn.Tensor:
-        return self.assignment
+    def get_assignment_tensors(self) -> list:
+        """Return assignment tensor(s). Per-core list or single-element lockstep list."""
+        if self._assignment_per_core:
+            return list(self._assignment_per_core.values())
+        return [self.assignment] if self.assignment is not None else []
 
     def cb_descriptor_from_compressed_tensor(self, cb_index):
         """Create CB descriptor(s) for the compressed data tensor.
@@ -339,8 +343,16 @@ class CompressedTensor:
         return self.data.buffer_address()
 
     def get_assignment_l1_address(self) -> int:
+        """Get L1 address of assignment tensor (lockstep mode only)."""
+        assert self.assignment is not None, "Assignment tensor not created (pass assignment_memory_config)"
         assert ttnn.is_tensor_storage_on_device(self.assignment), "Assignment tensor not on device"
         return self.assignment.buffer_address()
+
+    def get_assignment_l1_address_per_core(self, core_coord) -> int:
+        """Get L1 address for a specific core's assignment tensor (per-core mode)."""
+        key = (core_coord.x, core_coord.y)
+        assert key in self._assignment_per_core, f"Core {core_coord} not found in per-core assignment"
+        return self._assignment_per_core[key].buffer_address()
 
     @property
     def data_bytes(self) -> int:
@@ -392,8 +404,9 @@ class CompressedTensor:
 
         if per_core_allocation:
             # Each core gets its own single-core tensor with its actual compressed size
+            # Per-core tensors use DRAM alignment (64B) as min size due to L1 allocator constraint
             self._data_per_core = self._create_per_core_tensors(
-                shard_chunks, shard_raw_sizes, alignment, memory_config, device
+                shard_chunks, shard_raw_sizes, _bfp_utils.get_dram_alignment(), memory_config, device
             )
         else:
             data_torch = self._concat_shards_padded(shard_chunks, shard_raw_sizes, self.max_shard_size, memory_config)
@@ -411,19 +424,24 @@ class CompressedTensor:
             assert (
                 assignment_memory_config.is_sharded()
             ), "assignment_memory_config must be sharded when data memory_config is sharded"
-            assign_bytes, assign_mem = self._pack_sharded_assignment(
-                tensor.shape,
-                memory_config,
-                assignment_memory_config.buffer_type,
-                assignment_memory_config,
-            )
-            self.assignment = ttnn.from_torch(
-                assign_bytes,
-                dtype=ttnn.uint8,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-                memory_config=assign_mem,
-            )
+            if per_core_allocation:
+                self._assignment_per_core = self._create_per_core_assignment_tensors(
+                    tensor.shape, memory_config, assignment_memory_config, device
+                )
+            else:
+                assign_bytes, assign_mem = self._pack_sharded_assignment(
+                    tensor.shape,
+                    memory_config,
+                    assignment_memory_config.buffer_type,
+                    assignment_memory_config,
+                )
+                self.assignment = ttnn.from_torch(
+                    assign_bytes,
+                    dtype=ttnn.uint8,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=assign_mem,
+                )
 
     def _create_per_core_tensors(self, shard_chunks, shard_raw_sizes, alignment, memory_config, device):
         """Create one single-core ttnn tensor per core with its actual compressed size.
@@ -483,6 +501,56 @@ class CompressedTensor:
         assign_config = self._make_sharded_mem_config(mem_cfg, shard_bytes)
 
         return assign_torch, assign_config
+
+    def _create_per_core_assignment_tensors(self, tensor_shape, memory_config, assign_memory_config, device):
+        """Create one single-core assignment tensor per core.
+
+        Same pattern as _create_per_core_tensors but for the 2-bit packed assignment.
+        Cores with no pages are skipped.
+        Returns {(x, y): ttnn.Tensor}.
+        """
+        if assign_memory_config is not None:
+            shard_mapping = compute_shard_page_mapping(tensor_shape, assign_memory_config, self.tile_hw)
+        else:
+            shard_mapping = self._shard_mapping
+
+        buffer_type = assign_memory_config.buffer_type if assign_memory_config else memory_config.buffer_type
+        # The L1 allocator's min_allocation_size is DRAM alignment (not L1 alignment),
+        # because L1 buffers must be DRAM-aligned for L1<->DRAM transfers.
+        # Per-core tensors must be padded to at least this size.
+        alignment = _bfp_utils.get_dram_alignment()
+        assignment_per_core = {}
+
+        for core, page_indices in shard_mapping:
+            if len(page_indices) == 0:
+                continue
+            packed = _pack_assignment(self._assignment_flat[list(page_indices)].astype(np.uint8))
+            raw_size = len(packed)
+            aligned_size = _align(max(raw_size, alignment), alignment)
+            pad = aligned_size - raw_size
+            if pad > 0:
+                packed = np.concatenate([packed, np.zeros(pad, dtype=np.uint8)])
+
+            core_torch = torch.from_numpy(packed.copy()).reshape(1, aligned_size)
+            core_shard_spec = ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
+                [1, aligned_size],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            core_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type,
+                core_shard_spec,
+                per_core_shard_sizes=[aligned_size],
+            )
+            assignment_per_core[(core.x, core.y)] = ttnn.from_torch(
+                core_torch,
+                dtype=ttnn.uint8,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=core_mem_config,
+            )
+        return assignment_per_core
 
     # ==================================================================
     # Packing helpers
