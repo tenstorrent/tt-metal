@@ -36,7 +36,8 @@ Hal::Hal(
     bool is_base_routing_fw_enabled,
     bool enable_2_erisc_mode,
     uint32_t profiler_dram_bank_size_per_risc_bytes,
-    bool is_simulator) :
+    bool is_simulator,
+    bool enable_blackhole_dram_programmable_cores) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
@@ -46,7 +47,11 @@ Hal::Hal(
         case tt::ARCH::QUASAR: initialize_qa(profiler_dram_bank_size_per_risc_bytes); break;
 
         case tt::ARCH::BLACKHOLE:
-            initialize_bh(enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes, is_simulator);
+            initialize_bh(
+                enable_2_erisc_mode,
+                profiler_dram_bank_size_per_risc_bytes,
+                is_simulator,
+                enable_blackhole_dram_programmable_cores);
             break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;

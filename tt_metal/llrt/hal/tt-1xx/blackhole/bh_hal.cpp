@@ -15,7 +15,6 @@
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
-#include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -260,7 +259,10 @@ public:
 };
 
 void Hal::initialize_bh(
-    bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool is_simulator) {
+    bool enable_2_erisc_mode,
+    std::uint32_t profiler_dram_bank_size_per_risc_bytes,
+    bool is_simulator,
+    bool enable_blackhole_dram_programmable_cores) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -276,8 +278,8 @@ void Hal::initialize_bh(
     HalCoreInfoType idle_eth_mem_map = blackhole::create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
 
-    if (!is_simulator) {
-        // Dram cores are not yet supported in simulator.
+    if (!is_simulator && enable_blackhole_dram_programmable_cores) {
+        // Dram cores are opt-in on Blackhole and are not yet supported in simulator.
         HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
         this->core_info_.push_back(dram_mem_map);
     }

@@ -522,8 +522,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     if (programmable_core_type == HalProgrammableCoreType::DRAM) {
         virtual_coord = logical_coord;
     } else {
-        virtual_coord =
-            reader.env.get_cluster().get_virtual_coordinate_from_logical_coordinates(reader.device_id, logical_coord, core_type);
+        virtual_coord = reader.env.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            reader.device_id, logical_coord, core_type);
     }
 
     // Print device id, core coords (logical)

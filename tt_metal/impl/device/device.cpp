@@ -290,13 +290,11 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint64_t go_message_addr =
-            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint32_t zero = 0;
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
         cluster.l1_barrier(id_);
-        uint64_t go_message_index_addr =
-            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
