@@ -1508,6 +1508,9 @@ def test_demo_text(
 # =============================================================================
 
 PREFILL_BENCHMARK_OUTPUT = Path(__file__).resolve().parent / "output" / "prefill_prefix_caching_benchmark.json"
+PREFILL_BENCHMARK_TARGETS = Path(__file__).resolve().parent / "prefill_prefix_caching_targets.json"
+PREFILL_BENCHMARK_MAX_SLOWDOWN = 1.05
+PREFILL_BENCHMARK_MIN_SPEEDUP = 0.80
 
 # Seq lengths (powers of 2 from 128 to 128k).
 PREFILL_BENCHMARK_SEQ_LENS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
@@ -1519,7 +1522,72 @@ def _make_synthetic_prefill_input(batch_size, seq_len, vocab_size, dtype=torch.l
     return torch.randint(0, vocab_size, (batch_size, seq_len), dtype=dtype)
 
 
+def _prefill_benchmark_result_key(result):
+    return (
+        result["seq_len"],
+        bool(result["use_prefix_caching"]),
+        int(round(result["prefix_cached_ratio"] * 100)),
+    )
+
+
+def _load_prefill_benchmark_targets():
+    with open(PREFILL_BENCHMARK_TARGETS, "r") as f:
+        payload = json.load(f)
+    return {_prefill_benchmark_result_key(result): result["prefill_s"] for result in payload["results"]}
+
+
+def _check_prefill_benchmark_results(results):
+    expected_results = _load_prefill_benchmark_targets()
+    measured_results = {_prefill_benchmark_result_key(result): result for result in results}
+
+    missing_targets = sorted(set(expected_results) - set(measured_results))
+    unexpected_results = sorted(set(measured_results) - set(expected_results))
+    assert not missing_targets, f"Missing measured benchmark rows for target keys: {missing_targets}"
+    assert not unexpected_results, f"Measured benchmark rows missing targets: {unexpected_results}"
+
+    failures = []
+    for key in sorted(expected_results):
+        expected_prefill_s = expected_results[key]
+        measured_prefill_s = measured_results[key]["prefill_s"]
+        lower_bound = expected_prefill_s * PREFILL_BENCHMARK_MIN_SPEEDUP
+        upper_bound = expected_prefill_s * PREFILL_BENCHMARK_MAX_SLOWDOWN
+
+        if measured_prefill_s > upper_bound:
+            failures.append(
+                f"{key}: measured {measured_prefill_s:.6f}s is slower than allowed upper bound "
+                f"{upper_bound:.6f}s (+5%) for target {expected_prefill_s:.6f}s"
+            )
+        elif measured_prefill_s < lower_bound:
+            failures.append(
+                f"{key}: measured {measured_prefill_s:.6f}s is faster than allowed lower bound "
+                f"{lower_bound:.6f}s (-20%) for target {expected_prefill_s:.6f}s. "
+                "Please update prefill_prefix_caching_targets.json."
+            )
+
+    assert not failures, "Prefill prefix-caching benchmark check failed:\n" + "\n".join(failures)
+
+
 @pytest.mark.timeout(1800)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 216580672,
+            "num_command_queues": 1,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "worker_l1_size": 1345000,
+            "fabric_config": True,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
 def test_prefill_prefix_caching_benchmark(mesh_device):
     """
     Measure prefill time (after warmup) for seq_len in [128..32k] (powers of 2),
@@ -1614,6 +1682,7 @@ def test_prefill_prefix_caching_benchmark(mesh_device):
     with open(PREFILL_BENCHMARK_OUTPUT, "w") as f:
         json.dump({"results": results}, f, indent=2)
     logger.info(f"Results written to {PREFILL_BENCHMARK_OUTPUT}")
+    _check_prefill_benchmark_results(results)
 
     # Print table
     by_len = {}

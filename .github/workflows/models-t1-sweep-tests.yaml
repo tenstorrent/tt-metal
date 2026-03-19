@@ -11,14 +11,16 @@ on:
         options:
           - all
           - llama3.1-8b
+          - llama3.3-70b
       sku:
-        description: "Select SKU to test"
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
         default: "all"
         type: choice
         options:
           - all
           - "wh_n150 (N150)"
+          - "wh_galaxy (Galaxy)"
       platform:
         required: false
         type: choice
@@ -57,7 +59,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150"
+          ALL_SKUS="wh_n150,wh_galaxy"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
