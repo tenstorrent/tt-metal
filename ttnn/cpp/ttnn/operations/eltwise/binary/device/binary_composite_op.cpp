@@ -233,9 +233,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt
-
-                    sub_core_grids);
+                use_legacy,
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -248,9 +248,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt
-
-                    sub_core_grids);
+                use_legacy,
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -370,9 +370,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt
-
-                    sub_core_grids);
+                use_legacy,
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids);
         }
         if (rounding_mode == "trunc") {
             return ttnn::detail::invoke_binary_ng(
@@ -385,9 +385,9 @@ Tensor div(
                 post_activations,
                 lhs_activations,
                 rhs_activations,
-                std::nullopt
-
-                    sub_core_grids);
+                use_legacy,
+                /*fast_and_approximate_mode=*/std::nullopt,
+                sub_core_grids);
         }
         // rounding_mode = None
         TT_FATAL(
@@ -1425,7 +1425,9 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy);
+        use_legacy,
+        /*fast_and_approximate_mode=*/std::nullopt,
+        sub_core_grids);
 }
 
 Tensor bias_gelu(
@@ -1465,7 +1467,7 @@ Tensor bias_gelu(
         post_activations,
         lhs_activations,
         rhs_activations,
-        std::nullopt,  // use_legads
+        std::nullopt);
 }
 
 }  // namespace ttnn
