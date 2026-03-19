@@ -4155,7 +4155,7 @@ class MoeOp:
                 worker_agg_sem_addr = agg_sem_addr
                 worker_agg_noc_x = persistent_core_noc_x
                 worker_agg_noc_y = persistent_core_noc_y
-                if shard_idx == 0 and self.downstream_sockets is not None:
+                if self.downstream_sockets is not None:
                     socket_config_addr = self.downstream_sockets[shard_idx].get_config_buffer_address()
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
