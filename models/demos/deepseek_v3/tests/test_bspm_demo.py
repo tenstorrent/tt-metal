@@ -186,8 +186,9 @@ def _preprocess_experts_with_bspm(
             logger.warning(f"BSPM file not found for layer {layer_idx}: {bspm_file}")
             continue
 
-        # (n_experts, 3, tiles_per_proj) int8 in tt-metal code space
-        bspm_codes = load_bspm_for_layer(str(bspm_file))
+        # dict with "codes": (n_experts, 3, tiles_per_proj) uint8 in tt-metal code space
+        bspm_data = load_bspm_for_layer(str(bspm_file))
+        bspm_codes = bspm_data["codes"]  # np.ndarray (n_experts, 3, tiles_per_proj)
         n_experts_bspm = bspm_codes.shape[0]
 
         for expert_idx in range(min(hf_config.n_routed_experts, n_experts_bspm)):
