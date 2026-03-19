@@ -236,8 +236,8 @@ class Model:
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
 
-            def _reset_with_flag(params, _orig=_orig_reset):
-                _orig(params)
+            def _reset_with_flag(params, _orig=_orig_reset, **kwargs):
+                _orig(params, **kwargs)
                 self._prefill_sampling_active = True
 
             self.sampling.reset_sampling_params = _reset_with_flag
