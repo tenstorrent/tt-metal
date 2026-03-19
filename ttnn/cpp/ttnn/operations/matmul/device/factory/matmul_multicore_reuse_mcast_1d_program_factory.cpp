@@ -1197,10 +1197,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_cores = num_blocks_total;
 
     std::cout << "in0_CB_tiles: (" << in0_CB_tiles << ")" << std::endl;
-    // std::cout << "in1_CB_tiles: (" << in1_CB_tiles << ")" << std::endl;
-    // std::cout << "in2_CB_tiles: (" << in2_CB_tiles << ")" << std::endl;
-    // std::cout << "in3_CB_tiles: (" << in3_CB_tiles << ")" << std::endl;
-    // std::cout << "out_CB_tiles: (" << out_CB_tiles << ")" << std::endl;
+    std::cout << "in1_CB_tiles: (" << in1_CB_tiles << ")" << std::endl;
+    std::cout << "in2_CB_tiles: (" << in2_CB_tiles << ")" << std::endl;
+    std::cout << "in3_CB_tiles: (" << in3_CB_tiles << ")" << std::endl;
+    std::cout << "out_CB_tiles: (" << out_CB_tiles << ")" << std::endl;
+    std::cout << "interm0_CB_tiles: (" << interm0_CB_tiles << ")" << std::endl;
     // std::cout << "interm0_CB_tiles: (" << interm0_CB_tiles << ")" << std::endl;
     // std::cout << "untilize_out: (" << untilize_out << ")" << std::endl;
     // std::cout << "in0_B: (" << in0_B << ")" << std::endl;
