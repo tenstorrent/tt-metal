@@ -4,7 +4,8 @@
 
 """
 Weight providers for the DeepSeek V3 B1 demo pipeline.
-CacheWeightProvider loads from disk; SyntheticWeightProvider builds deterministic synthetic weights.
+CacheWeightProvider loads from disk; SyntheticWeightProvider builds deterministic synthetic weights;
+StateDictWeightProvider loads HuggingFace safetensors and runs the same prepare_* path as synthetic.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Protocol
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.prepare_weights import (
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
@@ -263,3 +265,37 @@ class SyntheticWeightProvider:
         sd = _build_synthetic_dense_state_dict(layer_id)
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
+
+
+class StateDictWeightProvider:
+    """Load real HF safetensors via LazyStateDict and prepare weights at runtime (no tensorbin cache)."""
+
+    def __init__(self, model_path: Path) -> None:
+        model_path = Path(model_path)
+        assert model_path.exists(), f"Model path does not exist: {model_path}"
+        assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
+        self._state_dict = LazyStateDict(model_path)
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        return prepare_embedding_weights(self._state_dict, device, move_to_device=True)
+
+    def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
+
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+
+        bdw = BlitzDecodeWeights(device)
+        return prepare_moe_layer_weights(
+            bdw,
+            self._state_dict,
+            layer_id,
+            num_routed_experts=NUM_ROUTED_EXPERTS,
+            move_to_device=True,
+        )
+
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+
+        bdw = BlitzDecodeWeights(device)
+        return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
