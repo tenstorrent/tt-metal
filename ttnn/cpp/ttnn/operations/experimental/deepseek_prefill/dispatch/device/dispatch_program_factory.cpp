@@ -350,7 +350,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
         l1_alignment,
-        (uint32_t)std::min(operation_attributes.num_links, 1u),
+        static_cast<uint32_t>(operation_attributes.num_links),
         static_cast<uint32_t>(topology),
     };
 

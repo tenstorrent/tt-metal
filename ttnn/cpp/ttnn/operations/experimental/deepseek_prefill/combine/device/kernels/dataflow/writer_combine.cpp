@@ -120,6 +120,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_wait(zero_init_sem_ptr, 1);
+    noc_semaphore_set(zero_init_sem_ptr, 0);
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;

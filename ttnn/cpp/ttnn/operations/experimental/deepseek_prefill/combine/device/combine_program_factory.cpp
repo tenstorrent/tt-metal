@@ -283,7 +283,7 @@ ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFact
         // Fabric configuration (4)
         (uint32_t)fabric_max_packet_size,
         l1_alignment,
-        (uint32_t)std::min(num_links, 1u),
+        static_cast<uint32_t>(num_links),
         static_cast<uint32_t>(topology),
     };
 
