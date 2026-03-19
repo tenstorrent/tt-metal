@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import inspect
 import itertools
 import os
 from copy import deepcopy
@@ -517,7 +516,7 @@ def get_model_config(
     else:
         raise ValueError(f"Unsupported mode: {mode}. Supported modes are 'prefill' and 'decode'.")
 
-    if batch_size_per_row is not None and "batch_size_per_row" in inspect.signature(config_fn).parameters:
+    if mode == "decode" and batch_size_per_row is not None:
         kwargs.setdefault("batch_size_per_row", batch_size_per_row)
 
     return config_fn(*args, **kwargs)

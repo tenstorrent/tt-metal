@@ -133,11 +133,7 @@ class DecoderBlock2DBase(DecoderBlockBase):
             ttnn.deallocate(mla_norm_in)
 
         # MLA
-        mla_reshard_memory_config = ttnn.create_sharded_memory_config(
-            mla_norm_out.shape,
-            **cfg["mla_reshard"],
-        )
-        mla_norm_out = ttnn.to_memory_config(mla_norm_out, memory_config=mla_reshard_memory_config)
+        mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 

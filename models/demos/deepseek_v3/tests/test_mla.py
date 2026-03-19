@@ -286,11 +286,12 @@ def run_test_forward_pass_mla2d(
         tt_output = ttnn.to_memory_config(tt_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if mode == "prefill":
-            # Isolated MLA prefill returns the selected user's output while still updating the full row cache.
+            # Row-batched MLA prefill now returns the full selected row so downstream residual adds operate on
+            # the correct per-user outputs instead of a broadcasted single-user result.
             tt_output_torch = ttnn.to_torch(
                 tt_output,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
-            ).reshape(1, seq_len, hf_config_short.hidden_size)
+            ).reshape(-1, seq_len, hf_config_short.hidden_size)
         else:
             tt_output_torch = ttnn.to_torch(
                 tt_output,
@@ -306,15 +307,10 @@ def run_test_forward_pass_mla2d(
             mesh_device.get_num_devices(),
         )
         if mode == "prefill":
-            selected_user = user_id % batch_size_per_row
             row_start = (user_id // batch_size_per_row) * batch_size_per_row
             row_end = row_start + batch_size_per_row
             assert (
-                check_output_matches(
-                    tt_output_torch,
-                    reference_output[selected_user : selected_user + 1],
-                    pcc_required=PCC_REQUIRED,
-                )
+                check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
                 and check_cache_matches(
                     tt_cache[row_start:row_end, :, :seq_len],
                     output_cache,
