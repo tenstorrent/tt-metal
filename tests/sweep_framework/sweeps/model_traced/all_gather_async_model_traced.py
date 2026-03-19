@@ -537,8 +537,9 @@ def run(
                             "num_links": num_links,
                             "topology": topology,
                             "cluster_axis": cluster_axis,
-                            "mesh_device": device,
                         }
+                        if mesh_device is not None:
+                            op_kwargs["mesh_device"] = device
                         if subdevice_id is not None:
                             op_kwargs["subdevice_id"] = worker_sub_device_id
                         if output_memory_config is not None:
