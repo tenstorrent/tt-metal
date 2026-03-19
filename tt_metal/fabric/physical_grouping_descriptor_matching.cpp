@@ -885,9 +885,9 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         if (*item.tray_id > 0) {
             target_tray_traits[node_id] = item.tray_id;
         }
-        // Skip ASIC_LOCATION_UNSPECIFIED (0) - it means "any ASIC ID" (no constraint)
-        // Only add constraint for specified ASIC locations (1-8)
-        if (*item.asic_location > 0) {
+        // Skip ASIC_LOCATION_UNSPECIFIED (256) - it means "any ASIC ID" (no constraint)
+        // Only add constraint for specified ASIC locations (0-8)
+        if (*item.asic_location <= 8) {
             target_location_traits[node_id] = item.asic_location;
         }
     }
