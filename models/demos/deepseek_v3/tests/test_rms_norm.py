@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNo
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict, get_fabric_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
