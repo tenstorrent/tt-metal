@@ -1196,7 +1196,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
-    // std::cout << "in0_CB_tiles: (" << in0_CB_tiles << ")" << std::endl;
+    std::cout << "in0_CB_tiles: (" << in0_CB_tiles << ")" << std::endl;
     // std::cout << "in1_CB_tiles: (" << in1_CB_tiles << ")" << std::endl;
     // std::cout << "in2_CB_tiles: (" << in2_CB_tiles << ")" << std::endl;
     // std::cout << "in3_CB_tiles: (" << in3_CB_tiles << ")" << std::endl;
@@ -1248,8 +1248,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
-    // bool keep_in0_in_l1 = false;
-    bool keep_in0_in_l1 = in0_B == 1 && in1_B > 1;
+    bool keep_in0_in_l1 = false;
+    // bool keep_in0_in_l1 = in0_B == 1 && in1_B > 1;
     // if we have a special case where we want to keep in0 in L1 and go through in1 bathches,
     // we want to put whole in0 "row" in each core's L1, else, keep only one block in L1
     // in the same case, we can consider that in0_block_w is the whole row
@@ -1288,6 +1288,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // batch args
         (std::uint32_t)M * K,  // MtKt
         (std::uint32_t)in0_B,  // batch
+        (std::uint32_t)in1_B,  // batch
 
         // sparsity args
         (std::uint32_t)0,     // batchB
@@ -1546,12 +1547,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    const auto in0_block_num_tiles_for_compute = keep_in0_in_l1 ? per_core_M * K : in0_block_num_tiles;
+    // const auto in0_block_num_tiles_for_compute = keep_in0_in_l1 ? per_core_M * K : in0_block_num_tiles;
     std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,                      // in0_block_w
-        in0_num_subblocks,                // in0_num_subblocks
-        in0_block_num_tiles_for_compute,  // in0_block_num_tiles
-        in0_subblock_num_tiles,           // in0_subblock_num_tiles
+        in0_block_w,             // in0_block_w
+        in0_num_subblocks,       // in0_num_subblocks
+        in0_block_num_tiles,     // in0_block_num_tiles
+        in0_subblock_num_tiles,  // in0_subblock_num_tiles
 
         in1_num_subblocks,    // in1_num_subblocks
         in1_block_num_tiles,  // in1_block_num_tiles

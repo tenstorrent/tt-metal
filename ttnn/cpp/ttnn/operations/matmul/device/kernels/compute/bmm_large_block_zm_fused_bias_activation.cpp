@@ -94,15 +94,28 @@ void kernel_main() {
 
     constexpr uint32_t max_batch_size = (in0_batch > in1_batch) ? in0_batch : in1_batch;
     DPRINT_MATH(DPRINT << "max_batch_size: " << max_batch_size << ENDL());
-    DPRINT_MATH(DPRINT << "num_blocks_w_dim: " << num_blocks_w_dim << ENDL());
-    DPRINT_MATH(DPRINT << "num_blocks_h_dim: " << num_blocks_h_dim << ENDL());
-    DPRINT_MATH(DPRINT << "num_blocks_inner_dim: " << num_blocks_inner_dim << ENDL());
-    DPRINT_MATH(DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL());
-    DPRINT_MATH(DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL());
-    DPRINT_MATH(DPRINT << "in1_block_w: " << in1_block_w << ENDL());
+    // DPRINT_MATH(DPRINT << "num_blocks_w_dim: " << num_blocks_w_dim << ENDL());
+    // DPRINT_MATH(DPRINT << "num_blocks_h_dim: " << num_blocks_h_dim << ENDL());
+    // DPRINT_MATH(DPRINT << "num_blocks_inner_dim: " << num_blocks_inner_dim << ENDL());
+    // DPRINT_MATH(DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL());
+    // DPRINT_MATH(DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL());
+    // DPRINT_MATH(DPRINT << "in1_block_w: " << in1_block_w << ENDL());
+    // DPRINT_MATH(DPRINT << "in0_num_subblocks: " << in0_num_subblocks << ENDL());
+    // DPRINT_MATH(DPRINT << "in1_num_subblocks: " << in1_num_subblocks << ENDL());
+
+    // DPRINT_MATH(DPRINT << "in0 size: " << in0_block_num_tiles << ENDL());
+    // DPRINT_MATH(DPRINT << "in1 size: " << in1_block_num_tiles << ENDL());
+    // DPRINT_MATH(DPRINT << ENDL());
+    // DPRINT_MATH(DPRINT << "outer loop h: " << num_blocks_h_dim << ENDL());
+    // DPRINT_MATH(DPRINT << "outer loop w: " << num_blocks_w_dim << ENDL());
+    // DPRINT_MATH(DPRINT << ENDL());
+    // DPRINT_MATH(DPRINT << "num blocks inner dim: " << num_blocks_inner_dim << ENDL());
+    // DPRINT_MATH(DPRINT << ENDL());
+    // DPRINT_MATH(DPRINT << "inner loop h: " << in0_num_subblocks << ENDL());
+    // DPRINT_MATH(DPRINT << "inner loop w: " << in1_num_subblocks << ENDL());
 
     for (uint32_t b = 0; b < max_batch_size; b++) {
-        // DPRINT_MATH(DPRINT << "starting computation of batch: " << b << ENDL());
+        DPRINT_MATH(DPRINT << "starting computation of batch: " << b << ENDL());
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
             bool is_batch_valid = false;
@@ -125,34 +138,46 @@ void kernel_main() {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
 
-                    if (in0_batch == 1 && in1_batch > 1) {
-                        if (b == 0 and block == 0) {
-                            // DPRINT_MATH(DPRINT << "WAITING FOR " << in0_block_num_tiles << " tiles in CB0" <<
-                            // ENDL()); cb_wait_front(in0_cb_id, in0_block_num_tiles); DPRINT_MATH(DPRINT << "RECEIVED "
-                            // << in0_block_num_tiles << " tiles in CB0" << ENDL()); DPRINT_MATH(DPRINT << "get in0 data
-                            // for batch: " << b << ENDL());
-                        }
-                    } else {
-                        cb_wait_front(in0_cb_id, in0_block_num_tiles);
-                    }  // TODO JAKSA - clean this up
-                    cb_wait_front(in1_cb_id, in1_block_num_tiles);
-                    if (b == 0 && block == 0) {
-                        SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
-                        DPRINT_UNPACK({
-                            DPRINT << " compute, batch " << b << " data in in0 " << TileSlice(0, 0, sr, true, false)
-                                   << ENDL();
-                        });
-                        DPRINT_UNPACK({
-                            DPRINT << " compute, batch " << b << " data in in1 " << TileSlice(1, 0, sr, true, false)
-                                   << ENDL();
-                        });
+                    // if (in0_batch == 1 && in1_batch > 1) {
+                    //     if (b == 0 and block == 0) {
+                    //         // DPRINT_MATH(DPRINT << "WAITING FOR " << in0_block_num_tiles << " tiles in CB0" <<
+                    //         // ENDL()); cb_wait_front(in0_cb_id, in0_block_num_tiles); DPRINT_MATH(DPRINT <<
+                    //         "RECEIVED "
+                    //         // << in0_block_num_tiles << " tiles in CB0" << ENDL()); DPRINT_MATH(DPRINT << "get in0
+                    //         data
+                    //         // for batch: " << b << ENDL());
+                    //     }
+                    // } else {
+                    //     cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                    // }  // TODO JAKSA - clean this up
+                    if (b == 16 && block == 1) {
+                        DPRINT_MATH(DPRINT << "starting waiting for data in CBs for batch: " << b << ENDL());
                     }
+                    cb_wait_front(in0_cb_id, in0_block_num_tiles);
+                    cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                    if (b == 16 && block == 1) {
+                        DPRINT_MATH(DPRINT << "finished waiting for data in CBs for batch: " << b << ENDL());
+                    }
+                    // if (b == 0 && block == 0) {
+                    //     SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                    //     DPRINT_UNPACK({
+                    //         DPRINT << " compute, batch " << b << " data in in0 " << TileSlice(0, 0, sr, true, false)
+                    //                << ENDL();
+                    //     });
+                    //     DPRINT_UNPACK({
+                    //         DPRINT << " compute, batch " << b << " data in in1 " << TileSlice(1, 0, sr, true, false)
+                    //                << ENDL();
+                    //     });
+                    // }
                     // DPRINT_MATH(DPRINT << "get in1 data for batch: " << b << ENDL());
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                            if (b == 16 && block == 1) {
+                                DPRINT_MATH(DPRINT << "starting reload to dst for batch: " << b << ENDL());
+                            }
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -165,6 +190,9 @@ void kernel_main() {
                                     out_subblock_h,
                                     in0_block_w);
                             }
+                            if (b == 16 && block == 1) {
+                                DPRINT_MATH(DPRINT << "finished reload to dst for batch: " << b << ENDL());
+                            }
 
                             // Compute output sub-block
                             uint32_t dst_index =
@@ -176,29 +204,43 @@ void kernel_main() {
                             // uint32_t in0_index_help2 = 0;
                             // uint32_t in1_index_help1 = in1_index_subblock_offset;
                             // uint32_t in1_index_help2 = 0;
+
+                            // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 2, .ws = 1};
+                            // if (b == 0 && block == 0){
+                            //     // DPRINT_UNPACK({
+                            //     //     DPRINT << "batch: " << b << ", block: " << block
+                            //     //             << " - starting matmul of tiles: in0 - index " << in0_index
+                            //     //             << " values: " << TileSlice(in0_cb_id, in0_index, sr, true, false) <<
+                            //     ENDL();
+                            //     // });
+                            //     // DPRINT_UNPACK({
+                            //     //     DPRINT << "batch: " << b << ", block: " << block
+                            //     //             << " - starting matmul of tiles: in1 - index " << in1_index
+                            //     //             << " values: " << TileSlice(in1_cb_id, in1_index, sr, true, false) <<
+                            //     ENDL();
+                            //     // });
+                            //     for (uint32_t i = 0; i < 16; i++) {
+                            //         DPRINT_UNPACK({
+                            //             DPRINT << "batch: " << b << ", block: " << block
+                            //                     << " - starting matmul of blocks - in0: tile " << i
+                            //                     << " values: " << TileSlice(in0_cb_id, i, sr, true, false) << ENDL();
+                            //         });
+                            //     }
+                            //     for (uint32_t i = 0; i < 32; i++) {
+                            //         DPRINT_UNPACK({
+                            //             DPRINT << "batch: " << b << ", block: " << block
+                            //                     << " - starting matmul of blocks - in1: tile " << i
+                            //                     << " values: " << TileSlice(in1_cb_id, i, sr, true, false) << ENDL();
+                            //         });
+                            //     }
+                            // }
+                            if (b == 16 && block == 1) {
+                                DPRINT_MATH(DPRINT << "starting matmul for batch: " << b << ENDL());
+                            }
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                // if (in0_batch == 1 && in1_batch > 1) {
-                                //     uint32_t logical_row = h;
-                                //     uint32_t logical_col = (logical_col_start + w) % logical_width;
-                                //     uint32_t in0_index = logical_row * logical_width + logical_col;
-                                // }
-                                if (b == 0) {
-                                    SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
-                                    DPRINT_UNPACK({
-                                        DPRINT << "batch: " << b << ", block: " << block
-                                               << " - starting matmul of tiles: in0 - index " << in0_index
-                                               << " values: " << TileSlice(0, in0_index, sr, true, false) << ENDL();
-                                    });
-                                    DPRINT_UNPACK({
-                                        DPRINT << "batch: " << b << ", block: " << block
-                                               << " - starting matmul of tiles: in1 - index " << in1_index
-                                               << " values: " << TileSlice(1, in1_index, sr, true, false) << ENDL();
-                                    });
-                                }
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
@@ -209,14 +251,14 @@ void kernel_main() {
                                     out_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
-                                // if (!(in0_batch == 1 && in1_batch > 1)) {
-                                //     in0_index++;               // stride right by 1
-                                // }
                                 in0_index++;               // stride right by 1
                                 in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
                                                            // (should be called in1_block_w)
                                 // in0_index_help2 = in0_index;
                                 // in1_index_help2 = in1_index;
+                            }
+                            if (b == 16 && block == 1) {
+                                DPRINT_MATH(DPRINT << "finished matmul for batch: " << b << ENDL());
                             }
                             // if (b == 0) {
                             //     DPRINT_MATH({ DPRINT << " finished matmul with data: in0: " << in0_index_help1 << "-"
@@ -234,6 +276,17 @@ void kernel_main() {
                                 uint32_t start_dst_index = 0;
                                 pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
+                                // if (b == 0) {
+                                //     SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                                //     for (uint32_t i = 0; i < 8; i++) {
+                                //         DPRINT_PACK(
+                                //             DPRINT << "batch: " << b << ", block: " << block
+                                //                     << " - finished matmul for all blocks of tiles:"
+                                //                     << " output tile " << i << ": " << TileSlice(mm_out_cb_id, i, sr,
+                                //                     true, false) << ENDL();
+                                //         );
+                                //     }
+                                // }
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
 
@@ -252,6 +305,18 @@ void kernel_main() {
                                 uint32_t start_dst_index = 0;
                                 pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
+                                // if (b == 0 && block == 0) {
+                                //     SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+                                //     for (uint32_t i = 0; i < 8; i++) {
+                                //         DPRINT_PACK(
+                                //             DPRINT << "batch: " << b << ", block: " << block
+                                //                     << " - finished matmul of block of tiles:"
+                                //                     << " output tile " << i << ": " << TileSlice(mm_partials_cb_id,
+                                //                     i, sr, true, false) << ENDL();
+                                //         );
+                                //     }
+                                // }
+
                                 tile_regs_release();
                                 cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
                             }
@@ -264,16 +329,22 @@ void kernel_main() {
                         enable_reload = true;
                     }
 
-                    if (in0_batch == 1 && in1_batch > 1) {
-                        if (b == max_batch_size - 1) {
-                            // DPRINT_MATH(DPRINT << "poping in0 data for batch: " << b << ENDL());
-                            cb_pop_front(in0_cb_id, in0_block_num_tiles);
-                        }
-                    } else {
-                        cb_pop_front(in0_cb_id, in0_block_num_tiles);
-                    }  // TODO JAKSA - clean this up
-                    // DPRINT_MATH(DPRINT << "poping in1 data for batch: " << b << ENDL());
+                    // if (in0_batch == 1 && in1_batch > 1) {
+                    //     if (b == max_batch_size - 1) {
+                    //         // DPRINT_MATH(DPRINT << "poping in0 data for batch: " << b << ENDL());
+                    //         cb_pop_front(in0_cb_id, in0_block_num_tiles);
+                    //     }
+                    // } else {
+                    //     cb_pop_front(in0_cb_id, in0_block_num_tiles);
+                    // }  // TODO JAKSA - clean this up
+                    if (b == 16 && block == 1) {
+                        DPRINT_MATH(DPRINT << "starting poping CBs for batch: " << b << ENDL());
+                    }
+                    cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                    if (b == 16 && block == 1) {
+                        DPRINT_MATH(DPRINT << "finished poping CBs for batch: " << b << ENDL());
+                    }
                 }
                 if constexpr (max_batch_size > 1 || num_blocks_w_dim > 1 || num_blocks_h_dim > 1) {
                     // reconfigure unpacker df for src A
