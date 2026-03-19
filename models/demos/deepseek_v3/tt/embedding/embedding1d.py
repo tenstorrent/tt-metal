@@ -213,6 +213,8 @@ class Embedding1D(AbstractModule):
         _, _, original_seq_len = x.shape
         embeddings = cls._fwd_embedding(x, cfg, original_seq_len)
 
+        embeddings = ttnn.unsqueeze(embeddings, 0)
+
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
         ttnn.deallocate(embeddings)
 

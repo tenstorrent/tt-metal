@@ -22,6 +22,8 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     distribution_spec/test_buffer_distribution_spec.cpp
     tensor/test_tensor_sharding.cpp
+    tensor/test_host_tensor.cpp
+    tensor/test_mesh_tensor.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_buffer_region.cpp

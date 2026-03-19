@@ -30,6 +30,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     create_shared_expert_tensors,
     extract_routed_expert_output,
 )
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
 def create_fabric_router_config(max_payload_size):
@@ -121,7 +122,7 @@ def test_bcast_moe_reduce_pipeline(
     # ── Core setup for reduce aggregation ──
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
@@ -449,7 +450,7 @@ def test_bcast_moe_reduce_pipeline(
             shared_up_shard = s.torch_up_weights[:, dev_idx * K_down : (dev_idx + 1) * K_down]
             shared_down_shard = s.torch_down_weights[dev_idx * K_down : (dev_idx + 1) * K_down, :]
 
-            _, _, expected_final = MoeOp.golden(
+            _, _, expected_final = MoeOp.golden_single_device(
                 torch_input_row,
                 shared_gate_weights=shared_gate_shard,
                 shared_up_weights=shared_up_shard,
@@ -512,7 +513,7 @@ def test_bcast_moe_reduce_pipeline(
             shared_up_shard = s.torch_up_weights[:, dev_idx * K_down : (dev_idx + 1) * K_down]
             shared_down_shard = s.torch_down_weights[dev_idx * K_down : (dev_idx + 1) * K_down, :]
 
-            _, _, expected_final = MoeOp.golden(
+            _, _, expected_final = MoeOp.golden_single_device(
                 torch_input_row,
                 shared_gate_weights=shared_gate_shard,
                 shared_up_weights=shared_up_shard,
@@ -629,7 +630,7 @@ def test_persistent_mode_pipeline(
     # ── Core setup for reduce aggregation ──
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     aggregator_core = shard_cores_list[0]
