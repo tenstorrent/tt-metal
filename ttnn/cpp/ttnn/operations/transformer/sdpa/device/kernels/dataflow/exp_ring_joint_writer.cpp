@@ -825,7 +825,7 @@ void kernel_main() {
                 uint32_t KV_chunks_processed_in_iter = 0;
                 constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
                 constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
-                if (mux_connection_valid && !is_last_ring_iter) {
+                if (mux_connection_valid) {
                     const uint32_t rows_per_mux = (Sk_chunk_t + num_muxes_in_direction - 1) / num_muxes_in_direction;
                     const uint32_t my_row_start = my_mux_index * rows_per_mux;
                     const uint32_t my_row_end = std::min(my_row_start + rows_per_mux, (uint32_t)Sk_chunk_t);
@@ -843,6 +843,7 @@ void kernel_main() {
 
                         Slice kv_slice;
                         uint32_t end_seq_tile;
+                        ASSERT(kv_chunk_is_joint == false);
 
                         if (kv_chunk_is_joint) {
                             const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
@@ -851,34 +852,35 @@ void kernel_main() {
                                 Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
                             end_seq_tile = Lt;
                         } else {
-                            if (ring_iter == 0) {
-                                const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                                kv_slice = Slice(
-                                    nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                                end_seq_tile = std::min(logical_nt, local_padded_Nt);
-                            } else {
-                                const uint32_t gathered_kv_start_tile =
-                                    ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                                kv_slice = Slice(
-                                    nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                                end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
-                            }
+                            // if (ring_iter == 0) {
+                            //     const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
+                            //     kv_slice = Slice(
+                            //         nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                            //     end_seq_tile = std::min(logical_nt, local_padded_Nt);
+                            // } else {
+                            const uint32_t gathered_kv_start_tile =
+                                ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
+                            kv_slice = Slice(
+                                nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                            end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                            // }
                         }
 
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
                         // Wait for reader to fill K, forward this writer's row slice over fabric
                         cb_wait_front(cb_k_writer_in, k_chunk_tiles);
+                        if (!is_last_ring_iter) {
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
                             volatile tt_l1_ptr uint16_t* k_data_peek =
                                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_k_read_ptr);
-                            DPRINT << "MUX_FWD ri=" << ring_iter << " rid=" << ring_id
-                                   << " kc=" << k_chunk << " nb=" << nb << " nq=" << nq
-                                   << " glob_st=" << kv_global_start_tile
-                                   << " mux=" << my_mux_index << " rows=[" << my_row_start << "," << my_row_end << ")"
-                                   << " k_data[0]=0x" << HEX() << (uint32_t)k_data_peek[0] << DEC()
-                                   << ENDL();
+                            // DPRINT << "MUX_FWD ri=" << ring_iter << " rid=" << ring_id
+                            //        << " kc=" << k_chunk << " nb=" << nb << " nq=" << nq
+                            //        << " glob_st=" << kv_global_start_tile
+                            //        << " mux=" << my_mux_index << " rows=[" << my_row_start << "," << my_row_end << ")"
+                            //        << " k_data[0]=0x" << HEX() << (uint32_t)k_data_peek[0] << DEC()
+                            //        << ENDL();
                             for (uint32_t col = 0; col < DHt; ++col) {
                                 for (uint32_t row = my_row_start; row < my_row_end; row += 2) {
                                     if (kv_slice.d2_start + row >= end_seq_tile) break;
@@ -901,14 +903,17 @@ void kernel_main() {
                                         tt::tt_fabric::fabric_async_write(
                                             mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
                                     }
+                                    noc_async_write_barrier();
                                 }
                             }
                             noc_async_writes_flushed();
+                        }
                         }
                         cb_pop_front(cb_k_writer_in, k_chunk_tiles);
 
                         // Wait for reader to fill V, forward this writer's row slice over fabric
                         cb_wait_front(cb_v_writer_in, v_chunk_tiles);
+                        if (!is_last_ring_iter) {
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_v_read_ptr = get_read_ptr(cb_v_writer_in);
                             for (uint32_t row = my_row_start; row < my_row_end; ++row) {
@@ -932,9 +937,11 @@ void kernel_main() {
                                         tt::tt_fabric::fabric_async_write(
                                             mux_conn, pkt_hdr_write, src_l1_addr, ag_page_size);
                                     }
+                                    noc_async_write_barrier();
                                 }
                             }
                             noc_async_writes_flushed();
+                        }
                         }
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
                     }
