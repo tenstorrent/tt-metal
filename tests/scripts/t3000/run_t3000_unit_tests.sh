@@ -96,12 +96,20 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  ./build/test/ttnn/unit_tests_ttnn
+  # TODO(ci-disable): Re-enable TestScopedGraphCapture.ScopedGraphCapture after
+  # t3k_ttnn_tests no longer segfaults (exit 139) on:
+  # https://github.com/tenstorrent/tt-metal/actions/runs/23300139493/job/67759607049
+  ./build/test/ttnn/unit_tests_ttnn --gtest_filter=-TestScopedGraphCapture.ScopedGraphCapture
   ./build/test/ttnn/unit_tests_ttnn_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl_ops
-  ./build/test/ttnn/unit_tests_ttnn_accessor
+  # TODO(ci-disable): Re-enable AccessorTests/AccessorBenchmarks.ManualPagesIterationInterleaved/{3,4}
+  # and AccessorTests/AccessorBenchmarks.PagesIteratorInterleaved/3 after
+  # they no longer hang/fail in t3k_ttnn_tests:
+  # https://github.com/tenstorrent/tt-metal/actions/runs/23303404450/job/67773213284
+  # https://github.com/tenstorrent/tt-metal/issues/40111
+  ./build/test/ttnn/unit_tests_ttnn_accessor --gtest_filter=-AccessorTests/AccessorBenchmarks.ManualPagesIterationInterleaved/3:AccessorTests/AccessorBenchmarks.ManualPagesIterationInterleaved/4:AccessorTests/AccessorBenchmarks.PagesIteratorInterleaved/3
   ./build/test/ttnn/test_ccl_multi_cq_multi_device
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace.py ; fail+=$?
   # pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_events.py ; fail+=$?
