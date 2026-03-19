@@ -99,9 +99,11 @@ void PrefetchKernel::GenerateStaticConfigs() {
         bool is_mock = descriptor_.cluster().get_target_device_type() == tt::TargetDevice::Mock;
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = is_mock ? 0x10000 : device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = device_->sysmem_manager().is_dram_backed()
-                                                ? device_->sysmem_manager().get_dram_region_start_addr(cq_id_)
-                                                : get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr =
+            device_->sysmem_manager().is_dram_backed()
+                ? get_absolute_cq_offset(
+                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
+                : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = is_mock ? 0x10000 : device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -157,9 +159,11 @@ void PrefetchKernel::GenerateStaticConfigs() {
         channel = descriptor_.cluster().get_assigned_channel_for_device(servicing_device_id_);
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        uint32_t command_queue_start_addr = device_->sysmem_manager().is_dram_backed()
-                                                ? device_->sysmem_manager().get_dram_region_start_addr(cq_id_)
-                                                : get_absolute_cq_offset(channel, cq_id_, cq_size);
+        uint32_t command_queue_start_addr =
+            device_->sysmem_manager().is_dram_backed()
+                ? get_absolute_cq_offset(
+                      channel, cq_id_, cq_size, device_->sysmem_manager().get_dram_region_base_addr())
+                : get_absolute_cq_offset(channel, cq_id_, cq_size);
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
@@ -539,6 +543,14 @@ void PrefetchKernel::CreateKernel() {
         if (static_config_.is_2d_fabric.value_or(false)) {
             defines["FABRIC_2D"] = "1";
         }
+    }
+
+    if (device_->sysmem_manager().is_dram_backed()) {
+        const auto& soc_descriptor = descriptor_.cluster().get_soc_desc(device_id_);
+        CoreCoord dram_core = soc_descriptor.get_preferred_worker_core_for_dram_view(0, tt_metal::NOC::NOC_0);
+        auto dram_noc_coords = device_->virtual_noc0_coordinate(0, dram_core);
+        defines["CQ_DRAM_NOC_X"] = std::to_string(dram_noc_coords.x);
+        defines["CQ_DRAM_NOC_Y"] = std::to_string(dram_noc_coords.y);
     }
 
     // Runtime args offsets

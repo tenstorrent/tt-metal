@@ -49,7 +49,7 @@ void DispatchSettings::init_worker_defaults(uint32_t num_hw_cqs, bool is_galaxy_
     if (is_galaxy_cluster) {
         prefetch_q_entries = 1532 / num_hw_cqs;
     } else {
-        prefetch_q_entries = 1534;
+        prefetch_q_entries = 256;
     }
 
     this->num_hw_cqs(num_hw_cqs)

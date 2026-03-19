@@ -140,7 +140,9 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
             Buffer::create(device, this->cq_size * num_hw_cqs, this->cq_size * num_hw_cqs, BufferType::DRAM);
         this->dram_region_staging_buffer = std::make_unique<char[]>(this->cq_size * num_hw_cqs);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
-        this->channel_offset = 0;
+        this->channel_offset =
+            this->dram_region_buffer
+                ->address();  // change this to 0 and instead modify individual functions to subtract buf addr
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -210,7 +212,9 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
 
         const uint32_t alignment = ctx.hal().get_alignment(HalMemType::HOST);
-        this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start, alignment));
+        const uint32_t base = use_dram_for_cq_storage() ? this->get_dram_region_base_addr() : 0;
+        this->cq_interfaces.push_back(
+            SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start, alignment, base));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
         // must be as large as the max amount of space the prefetch queue can specify Plus 1 to handle wrapping plus
         // PREFETCH_MAX_OUTSTANDING_PCIE_READS to allow us to start writing to issue queue
@@ -407,8 +411,8 @@ void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
             this->get_completion_queue_size(cq_id),
             this->device_id,
             0,
-            this->get_dram_region_start_addr(cq_id) + cq_interfaces[cq_id].cq_start +
-                cq_interfaces[cq_id].command_issue_region_size);
+            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) +
+                cq_interfaces[cq_id].cq_start + cq_interfaces[cq_id].command_issue_region_size);
     }
     // The completion queue follows issue queue in contiguous memory
     // get_issue_queue_limit() returns absolute device address where the issue queue ends.
@@ -533,13 +537,13 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
             this->get_issue_queue_size(cq_id),
             this->device_id,
             0,
-            this->get_dram_region_start_addr(cq_id) + cq_interface.cq_start);
+            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + cq_interface.cq_start);
         MetalContext::instance().get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
             this->device_id,
             0,
-            this->get_dram_region_start_addr(cq_id) + issue_q_wr_ptr);
+            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + issue_q_wr_ptr);
         return;
     }
 
@@ -572,7 +576,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
             sizeof(uint32_t),
             this->device_id,
             0,
-            this->get_dram_region_start_addr(cq_id) + completion_q_rd_ptr);
+            this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + completion_q_rd_ptr);
         return;
     }
 
@@ -771,9 +775,9 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
 
 bool SystemMemoryManager::is_dram_backed() const { return this->dram_region_buffer != nullptr; }
 
-uint32_t SystemMemoryManager::get_dram_region_start_addr(uint8_t cq_id) const {
+uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
-    return this->dram_region_buffer->address() + get_relative_cq_offset(cq_id, this->cq_size);
+    return this->dram_region_buffer->address();
 }
 
 }  // namespace tt::tt_metal

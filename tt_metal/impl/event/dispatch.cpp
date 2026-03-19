@@ -173,12 +173,10 @@ void read_completion_queue(
     uint32_t size_bytes,
     ChipId device_id,
     uint16_t channel,
-    uint32_t cq_id,
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
-            dst, size_bytes, device_id, 0, sysmem_manager.get_dram_region_start_addr(cq_id) + addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(dst, size_bytes, device_id, 0, addr);
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
     }
@@ -207,7 +205,6 @@ void read_events_from_completion_queue(
         sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
         mmio_device_id,
         channel,
-        cq_id,
         read_ptr,
         sysmem_manager);
 

@@ -104,8 +104,7 @@ constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBOR
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 #if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
-constexpr uint64_t pcie_noc_xy =
-    uint64_t(NOC_XY_ENCODING(NOC_X_PHYS_COORD(CQ_DRAM_NOC_X), NOC_Y_PHYS_COORD(CQ_DRAM_NOC_Y))) << NOC_ADDR_LOCAL_BITS;
+constexpr uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(0, 0);
 #else
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));

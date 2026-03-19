@@ -103,7 +103,7 @@ public:
 
     bool is_dram_backed() const;
 
-    uint32_t get_dram_region_start_addr(uint8_t cq_id) const;
+    uint32_t get_dram_region_base_addr() const;
 
 private:
     bool is_mock_device() const;
