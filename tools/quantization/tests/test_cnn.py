@@ -26,6 +26,7 @@ BATCH_SIZE = 1
 KERNEL_SIZE = (3, 3)
 STRIDE = (1, 1)
 PADDING = (1, 1)
+MATH_FIDELITIES = [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4]
 
 LAYER_NAMES = tuple(f"conv{i}" for i in range(NUM_LAYERS))
 
@@ -48,8 +49,12 @@ class TorchCNN(torch.nn.Module):
 class TtnnCNN:
     """Minimal ttnn mirror of TorchCNN using ttnn.conv2d + ttnn.relu."""
 
-    def __init__(self, torch_model: TorchCNN, device):
+    def __init__(self, torch_model: TorchCNN, device, math_fidelity):
         self.device = device
+        ComputeConfigClass = (
+            ttnn.types.BlackholeComputeKernelConfig if ttnn.device.is_blackhole() else ttnn.WormholeComputeKernelConfig
+        )
+        self.compute_config = ComputeConfigClass(math_fidelity=math_fidelity)
         channels = [IN_CHANNELS] + [HIDDEN_CHANNELS] * (NUM_LAYERS - 1) + [OUT_CHANNELS]
         self.in_channels = [channels[i] for i in range(NUM_LAYERS)]
         self.out_channels = [channels[i + 1] for i in range(NUM_LAYERS)]
@@ -80,6 +85,7 @@ class TtnnCNN:
                 batch_size=BATCH_SIZE,
                 input_height=h,
                 input_width=w,
+                compute_config=self.compute_config,
                 return_output_dim=True,
             )
             if i < NUM_LAYERS - 1:
@@ -145,8 +151,9 @@ def _ttnn_forward(ttnn_model, device, dummy_input_nchw):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("math_fidelity", MATH_FIDELITIES)
 @pytest.mark.parametrize("num_iterations", [1, 5])
-def test_cnn_pcc_improves_after_rounding(device, num_iterations):
+def test_cnn_pcc_improves_after_rounding(device, num_iterations, math_fidelity, record_pcc_result):
     torch.manual_seed(42)
     torch_model = TorchCNN().eval()
     dummy_input = torch.randn(BATCH_SIZE, IN_CHANNELS, HEIGHT, WIDTH)
@@ -154,7 +161,7 @@ def test_cnn_pcc_improves_after_rounding(device, num_iterations):
     with torch.no_grad():
         ref_output = torch_model(dummy_input)
 
-    ttnn_model = TtnnCNN(torch_model, device)
+    ttnn_model = TtnnCNN(torch_model, device, math_fidelity)
 
     before_output = _ttnn_forward(ttnn_model, device, dummy_input)
     _, pcc_before = comp_pcc(ref_output, before_output)
@@ -172,5 +179,11 @@ def test_cnn_pcc_improves_after_rounding(device, num_iterations):
     after_output = _ttnn_forward(ttnn_model, device, dummy_input)
     _, pcc_after = comp_pcc(ref_output, after_output)
 
-    print(f"PCC before={pcc_before:.6f}, after={pcc_after:.6f}")
+    record_pcc_result(
+        test="CNN",
+        fidelity=math_fidelity,
+        iters=num_iterations,
+        pcc_before=pcc_before,
+        pcc_after=pcc_after,
+    )
     assert pcc_after > pcc_before, f"PCC did not improve: before={pcc_before:.6f}, after={pcc_after:.6f}"

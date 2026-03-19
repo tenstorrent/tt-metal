@@ -22,7 +22,7 @@ WeightMapping = List[Tuple[str, Callable[[], torch.Tensor], Callable[[torch.Tens
 def bf16_gradient_round(
     fp32_weight: torch.Tensor,
     grad: torch.Tensor,
-    grad_percentile: float = 50.0,
+    grad_percentile: float = 90.0,
 ) -> torch.Tensor:
     """
     For each fp32 weight element, choose between its two nearest bf16

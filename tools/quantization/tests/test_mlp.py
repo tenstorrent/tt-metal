@@ -17,11 +17,12 @@ from models.common.utility_functions import comp_pcc
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 from tools.quantization.gradient_guided_rounding import gradient_guided_bf16_rounding
 
-NUM_LAYERS = 28
+NUM_LAYERS = 16
 HIDDEN = 256
 IN_FEATURES = 256
 OUT_FEATURES = 256
 BATCH_SIZE = 32
+MATH_FIDELITIES = [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4]
 
 LAYER_NAMES = tuple(f"fc{i}" for i in range(NUM_LAYERS))
 
@@ -44,8 +45,12 @@ class TorchMLP(torch.nn.Module):
 class TtnnMLP:
     """Minimal ttnn mirror of TorchMLP using ttnn.linear + ttnn.relu."""
 
-    def __init__(self, torch_model: TorchMLP, device):
+    def __init__(self, torch_model: TorchMLP, device, math_fidelity):
         self.device = device
+        ComputeConfigClass = (
+            ttnn.types.BlackholeComputeKernelConfig if ttnn.device.is_blackhole() else ttnn.WormholeComputeKernelConfig
+        )
+        self.compute_kernel_config = ComputeConfigClass(math_fidelity=math_fidelity, math_approx_mode=True)
         for name in LAYER_NAMES:
             layer = getattr(torch_model, name)
             weight = preprocess_linear_weight(layer.weight.data, dtype=ttnn.bfloat16)
@@ -59,6 +64,7 @@ class TtnnMLP:
                 x,
                 getattr(self, f"{name}_weight"),
                 bias=getattr(self, f"{name}_bias"),
+                compute_kernel_config=self.compute_kernel_config,
             )
             if i < NUM_LAYERS - 1:
                 x = ttnn.relu(x)
@@ -128,8 +134,9 @@ def _ttnn_forward(ttnn_model, device, dummy_input):
     return ttnn.to_torch(tt_output).float()
 
 
+@pytest.mark.parametrize("math_fidelity", MATH_FIDELITIES)
 @pytest.mark.parametrize("num_iterations", [1, 5])
-def test_mlp_pcc_improves_after_rounding(device, num_iterations):
+def test_mlp_pcc_improves_after_rounding(device, num_iterations, math_fidelity, record_pcc_result):
     torch.manual_seed(42)
     torch_model = TorchMLP().eval()
     dummy_input = torch.randn(BATCH_SIZE, IN_FEATURES)
@@ -137,7 +144,7 @@ def test_mlp_pcc_improves_after_rounding(device, num_iterations):
     with torch.no_grad():
         ref_output = torch_model(dummy_input)
 
-    ttnn_model = TtnnMLP(torch_model, device)
+    ttnn_model = TtnnMLP(torch_model, device, math_fidelity)
 
     before_output = _ttnn_forward(ttnn_model, device, dummy_input)
     _, pcc_before = comp_pcc(ref_output, before_output)
@@ -155,5 +162,11 @@ def test_mlp_pcc_improves_after_rounding(device, num_iterations):
     after_output = _ttnn_forward(ttnn_model, device, dummy_input)
     _, pcc_after = comp_pcc(ref_output, after_output)
 
-    print(f"PCC before={pcc_before:.6f}, after={pcc_after:.6f}")
+    record_pcc_result(
+        test="MLP",
+        fidelity=math_fidelity,
+        iters=num_iterations,
+        pcc_before=pcc_before,
+        pcc_after=pcc_after,
+    )
     assert pcc_after > pcc_before, f"PCC did not improve: before={pcc_before:.6f}, after={pcc_after:.6f}"
