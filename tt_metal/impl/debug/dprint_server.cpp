@@ -31,6 +31,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "context/metal_env_accessor.hpp"
 #include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
@@ -50,6 +51,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "impl/debug/inspector/inspector.hpp"
@@ -102,18 +104,22 @@ namespace {
 
 string logfile_path = "generated/dprint/";
 
-string GetRiscName(ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool abbreviated = false) {
+string GetRiscName(
+    const tt::Cluster& cluster,
+    const tt_metal::Hal& hal,
+    ChipId device_id,
+    const umd::CoreDescriptor& logical_core,
+    int risc_id,
+    bool abbreviated = false) {
     CoreCoord virtual_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     return hal.get_processor_class_name(programmable_core_type, risc_id, abbreviated);
 }
 
-inline bool RiscEnabled(tt_metal::HalProgrammableCoreType core_type, int risc_index) {
-    const auto& processors =
-        tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
+inline bool RiscEnabled(
+    const llrt::RunTimeOptions& rtoptions, tt_metal::HalProgrammableCoreType core_type, int risc_index) {
+    const auto& processors = rtoptions.get_feature_processors(tt::llrt::RunTimeDebugFeatureDprint);
     return processors.contains(core_type, risc_index);
 }
 
@@ -128,6 +134,7 @@ std::ostream null_stream(&null_buffer);
 // Writes a magic value at wpos ptr address for dprint buffer at the given address.
 // Used for debug print server startup sequence.
 void WriteInitMagic(
+    tt::Cluster& cluster,
     ChipId device_id,
     const CoreCoord& virtual_core,
     uint64_t base_addr,
@@ -137,7 +144,7 @@ void WriteInitMagic(
     // Force wait for first kernel launch by first writing a non-zero and waiting for a zero.
     std::vector<uint32_t> initbuf = std::vector<uint32_t>(buffer_size / sizeof(uint32_t), 0);
     initbuf[0] = uint32_t(enabled ? DEBUG_PRINT_SERVER_STARTING_MAGIC : DEBUG_PRINT_SERVER_DISABLED_MAGIC);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, initbuf, base_addr);
+    cluster.write_core(device_id, virtual_core, initbuf, base_addr);
 
     // Prevent race conditions during runtime by waiting until the init value is actually written
     // DPrint is only used for debug purposes so this delay should not be a big issue.
@@ -147,8 +154,7 @@ void WriteInitMagic(
     // 4. now we will access wpos at the starting magic which is incorrect
     uint32_t num_tries = 100000;
     while (num_tries-- > 0) {
-        auto result =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
+        auto result = cluster.read_core(device_id, virtual_core, base_addr, 4);
         if ((result[0] == DEBUG_PRINT_SERVER_STARTING_MAGIC && enabled) ||
             (result[0] == DEBUG_PRINT_SERVER_DISABLED_MAGIC && !enabled)) {
             return;
@@ -161,8 +167,8 @@ void WriteInitMagic(
 // The assumption is that if our magic number was cleared,
 // it means there is a write in the queue and wpos/rpos are now valid
 // Note that this is not a bulletproof way to bootstrap the print server (TODO(AP))
-bool CheckInitMagicCleared(ChipId device_id, const CoreCoord& virtual_core, uint64_t base_addr) {
-    auto result = tt::tt_metal::MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, 4);
+bool CheckInitMagicCleared(tt::Cluster& cluster, ChipId device_id, const CoreCoord& virtual_core, uint64_t base_addr) {
+    auto result = cluster.read_core(device_id, virtual_core, base_addr, 4);
     return (result[0] != DEBUG_PRINT_SERVER_STARTING_MAGIC && result[0] != DEBUG_PRINT_SERVER_DISABLED_MAGIC);
 }  // CheckInitMagicCleared
 
@@ -174,7 +180,7 @@ namespace tt::tt_metal {
 // Contains all common state and logic; subclasses only override peek_one_risc_non_blocking.
 class DPrintServer::Impl {
 public:
-    Impl(llrt::RunTimeOptions& rtoptions);
+    Impl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config);
     Impl() = delete;
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
@@ -250,6 +256,10 @@ protected:
     std::map<ChipId, bool> device_intermediate_streams_force_flush_;
     std::mutex device_intermediate_streams_force_flush_lock_;
 
+    MetalEnvImpl& env_;
+    uint8_t num_hw_cqs_;
+    DispatchCoreConfig dispatch_core_config_;
+
     // Polls specified cores/riscs on all attached devices and prints any new print data. This
     // function is the main loop for the print server thread.
     void poll_print_data();
@@ -270,7 +280,8 @@ protected:
 // Original DPRINT implementation: reads DPRINT buffers written by device kernels.
 class DPrintImpl : public DPrintServer::Impl {
 public:
-    DPrintImpl(llrt::RunTimeOptions& rtoptions) : DPrintServer::Impl(rtoptions) {}
+    DPrintImpl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
+        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config) {}
 
 protected:
     bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
@@ -293,7 +304,8 @@ static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 
 class DevicePrintImpl : public DPrintServer::Impl {
 public:
-    DevicePrintImpl(llrt::RunTimeOptions& rtoptions) : DPrintServer::Impl(rtoptions) {}
+    DevicePrintImpl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
+        DPrintServer::Impl(env, num_hw_cqs, dispatch_core_config) {}
 
 protected:
     bool poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) override;
@@ -323,36 +335,41 @@ private:
 
 void DPrintImpl::init_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
+    auto& cluster = env_.get_cluster();
+    uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
     for (int risc_index = 0; risc_index < num_processors; risc_index++) {
-        WriteInitMagic(device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), false);
+        WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), false);
     }
 }
 
 void DPrintImpl::enable_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
+    const auto& rtoptions = env_.get_rtoptions();
+    auto& cluster = env_.get_cluster();
+    uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
     for (int risc_index = 0; risc_index < num_processors; risc_index++) {
-        if (RiscEnabled(core_type, risc_index)) {
-            WriteInitMagic(device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), true);
+        if (RiscEnabled(rtoptions, core_type, risc_index)) {
+            WriteInitMagic(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_index), true);
         }
     }
 }
 
 bool DPrintImpl::core_has_outstanding_prints(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
+    const auto& rtoptions = env_.get_rtoptions();
+    auto& cluster = env_.get_cluster();
+    uint32_t num_processors = env_.get_hal().get_num_risc_processors(core_type);
     for (int risc_id = 0; risc_id < num_processors; risc_id++) {
-        if (!RiscEnabled(core_type, risc_id)) {
+        if (!RiscEnabled(rtoptions, core_type, risc_id)) {
             continue;
         }
         uint64_t base_addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
-        if (!CheckInitMagicCleared(device_id, virtual_core, base_addr)) {
+        if (!CheckInitMagicCleared(cluster, device_id, virtual_core, base_addr)) {
             continue;
         }
         constexpr int eightbytes = 8;
         auto from_dev =
-            MetalContext::instance().get_cluster().read_core(device_id, virtual_core, base_addr, eightbytes);
+            cluster.read_core(device_id, virtual_core, base_addr, eightbytes);
         uint32_t wpos = from_dev[0], rpos = from_dev[1];
         if (rpos < wpos) {
             return true;
@@ -366,12 +383,13 @@ bool DPrintImpl::core_has_outstanding_prints(
 void DevicePrintImpl::print_buffer_data(
     ChipId device_id, const umd::CoreDescriptor& logical_core, const std::vector<uint32_t>& data) {
     std::size_t word_index = 0;
-    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
+    auto& cluster = env_.get_cluster();
+    const auto& hal = env_.get_hal();
+    auto virtual_core =
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
-    uint32_t programmable_core_type_idx =
-        MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t risc_count = env_.get_hal().get_num_risc_processors(programmable_core_type);
+    uint32_t programmable_core_type_idx = hal.get_programmable_core_type_index(programmable_core_type);
     DevicePrintParser::FormatMessageBuffer format_message_buffer;
 
     while (word_index < data.size()) {
@@ -413,7 +431,7 @@ void DevicePrintImpl::print_buffer_data(
 
             // Find elf path from inspector using kernel id
             auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
-            auto risc_name = GetRiscName(device_id, logical_core, header->risc_id);
+            auto risc_name = GetRiscName(cluster, hal, device_id, logical_core, header->risc_id);
             std::transform(
                 risc_name.begin(), risc_name.end(), risc_name.begin(), [](auto c) { return std::tolower(c); });
             auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
@@ -454,8 +472,7 @@ void DevicePrintImpl::print_buffer_data(
                 if (risc_data.firmware_elf_parser == nullptr) {
                     // Find firmware elf path from BuildEnvManager.
                     auto [processor_class, processor_type_idx] =
-                        MetalContext::instance().hal().get_processor_class_and_type_from_index(
-                            programmable_core_type, header->risc_id);
+                        hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
                     auto firmware_elf_path = BuildEnvManager::get_instance().get_firmware_binary_path(
                         device_id,
                         programmable_core_type_idx,
@@ -507,12 +524,13 @@ void DevicePrintImpl::print_buffer_data(
                         if (!risc_data.line_prefix.has_value()) {
                             // Compute line prefix based on RTOptions
                             const bool prepend_device_core_risc =
-                                tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
+                                env_.get_rtoptions().get_feature_prepend_device_core_risc(
                                     tt::llrt::RunTimeDebugFeatureDprint);
                             if (prepend_device_core_risc) {
                                 const string& device_id_str = to_string(device_id);
                                 const string& core_coord_str = logical_core.coord.str();
-                                const string& risc_name = GetRiscName(device_id, logical_core, header->risc_id, true);
+                                const string& risc_name =
+                                    GetRiscName(cluster, hal, device_id, logical_core, header->risc_id, true);
                                 line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
                             }
                             risc_data.line_prefix = line_prefix;
@@ -557,10 +575,11 @@ void DevicePrintImpl::print_buffer_data(
 
 bool DevicePrintImpl::poll_one_core(
     ChipId device_id, const umd::CoreDescriptor& logical_core, bool /*new_data_this_iter*/) {
-    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
+    auto& cluster = env_.get_cluster();
+    auto virtual_core =
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+    uint32_t num_processors = env_.get_hal().get_num_risc_processors(programmable_core_type);
 
     // Memory layout:
     // uint32_t wpos;
@@ -573,8 +592,7 @@ bool DevicePrintImpl::poll_one_core(
     uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
     constexpr uint32_t eightbytes = 8;
     uint32_t risc_state_bytes = ((num_processors + 3) / 4) * 4;  // Round up to nearest word
-    auto from_dev =
-        MetalContext::instance().get_cluster().read_core(device_id, virtual_core, buffer_address, eightbytes);
+    auto from_dev = cluster.read_core(device_id, virtual_core, buffer_address, eightbytes);
     uint32_t wpos = from_dev[0], rpos = from_dev[1];
     uint32_t print_buffer_address =
         buffer_address + eightbytes + risc_state_bytes + sizeof(uint32_t);  // Skip wpos, rpos, risc state, and lock
@@ -586,8 +604,7 @@ bool DevicePrintImpl::poll_one_core(
 
     if (rpos > wpos) {
         // Read until end of buffer and then from beginning until wpos
-        auto data = MetalContext::instance().get_cluster().read_core(
-            device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
+        auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, print_buffer_size - rpos);
 
         // Process buffer data
         print_buffer_data(device_id, logical_core, data);
@@ -597,8 +614,7 @@ bool DevicePrintImpl::poll_one_core(
     }
     if (rpos < wpos) {
         // Read until wpos
-        auto data = MetalContext::instance().get_cluster().read_core(
-            device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
+        auto data = cluster.read_core(device_id, virtual_core, print_buffer_address + rpos, wpos - rpos);
 
         // Process buffer data
         print_buffer_data(device_id, logical_core, data);
@@ -606,27 +622,30 @@ bool DevicePrintImpl::poll_one_core(
         // Update rpos, so that device knows it can use rest of the buffer
         rpos = wpos;
     }
-    MetalContext::instance().get_cluster().write_core(
-        device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
+    cluster.write_core(device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     return true;
 }
 
 void DevicePrintImpl::init_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
+    const auto& hal = env_.get_hal();
+    auto& cluster = env_.get_cluster();
+    uint32_t num_processors = hal.get_num_risc_processors(core_type);
     uint32_t buffer_size = DPRINT_BUFFER_SIZE * num_processors;
-    WriteInitMagic(device_id, virtual_core, GetDevicePrintBufAddr(device_id, virtual_core), true, buffer_size);
+    WriteInitMagic(cluster, device_id, virtual_core, GetDevicePrintBufAddr(device_id, virtual_core), true, buffer_size);
 }
 
 void DevicePrintImpl::enable_print_buffers_for_core(
     ChipId device_id, const CoreCoord& virtual_core, HalProgrammableCoreType core_type) {
-    uint32_t num_processors = MetalContext::instance().hal().get_num_risc_processors(core_type);
+    auto& cluster = env_.get_cluster();
+    const auto& hal = env_.get_hal();
+    uint32_t num_processors = hal.get_num_risc_processors(core_type);
     uint64_t device_print_buffer_address = GetDevicePrintBufAddr(device_id, virtual_core);
     uint64_t risc_flags_address = device_print_buffer_address + 8;  // sizeof(wpos) + sizeof(rpos)
     std::vector<uint8_t> risc_flags(
         (num_processors + 3) / 4 * 4, static_cast<uint8_t>(DevicePrintRiscCoreState::KernelNotPrinted));
     for (int risc_index = 0; risc_index < num_processors; risc_index++) {
-        if (!RiscEnabled(core_type, risc_index)) {
+        if (!RiscEnabled(env_.get_rtoptions(), core_type, risc_index)) {
             risc_flags[risc_index] = static_cast<uint8_t>(DevicePrintRiscCoreState::PrintingDisabled);
         }
     }
@@ -635,8 +654,7 @@ void DevicePrintImpl::enable_print_buffers_for_core(
     // address. It is OK to do this write any time to update flags. Flags carry info about if kernel already sent kernel
     // loaded structure and if printing is enabled. If we overwrite flags while kernel is running, all we can do is make
     // kernel print more data (repeat kernel loaded structure). We will handle this on server side.
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        device_id, virtual_core, risc_flags, risc_flags_address);
+    cluster.write_core(device_id, virtual_core, risc_flags, risc_flags_address);
 }
 
 bool DevicePrintImpl::core_has_outstanding_prints(
@@ -645,11 +663,13 @@ bool DevicePrintImpl::core_has_outstanding_prints(
     return false;
 }
 
-DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
+DPrintServer::Impl::Impl(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) :
+    env_(MetalEnvAccessor(env).impl()), num_hw_cqs_(num_hw_cqs), dispatch_core_config_(dispatch_core_config) {
     // Read risc mask + log file from rtoptions
-    string file_name = rtoptions.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
-    bool one_file_per_risc = rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
-    bool prepend_device_core_risc = rtoptions.get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    string file_name = env_.get_rtoptions().get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
+    bool one_file_per_risc = env_.get_rtoptions().get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint);
+    bool prepend_device_core_risc =
+        env_.get_rtoptions().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
 
     // One file per risc auto-generates the output files and ignores the env var for it. Print a warning if both are
     // specified just in case.
@@ -665,11 +685,11 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
             tt::LogMetal,
             "Both TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC and TT_METAL_DPRINT_ONE_FILE_PER_RISC are specified. "
             "TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC will be disabled.");
-        rtoptions.set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
+        env_.get_rtoptions().set_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint, false);
     }
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
-    std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
+    std::filesystem::path output_dir(env_.get_rtoptions().get_logs_dir() + logfile_path);
     std::filesystem::create_directories(output_dir);
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
@@ -729,7 +749,9 @@ void DPrintServer::Impl::await() {
 }  // await
 
 void DPrintServer::Impl::init_device(ChipId device_id) {
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);
+    auto& cluster = env_.get_cluster();
+    auto& control_plane = env_.get_control_plane();
+    CoreDescriptorSet all_cores = GetAllCores(cluster, control_plane, device_id);
     // Initialize all print buffers on all cores on the device to have print disabled magic. We
     // will then write print enabled magic for only the cores the user has specified to monitor.
     // This way in the kernel code (dprint.h) we can detect whether the magic value is present and
@@ -737,14 +759,14 @@ void DPrintServer::Impl::init_device(ChipId device_id) {
     // flushed from the host.
     for (const auto& logical_core : all_cores) {
         CoreCoord virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+            cluster.get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
         init_print_buffers_for_core(device_id, virtual_core, llrt::get_core_type(device_id, virtual_core));
     }
 }
 
 void DPrintServer::Impl::attach_devices() {
-    auto all_devices = MetalContext::instance().get_cluster().all_chip_ids();
+    auto all_devices = env_.get_cluster().all_chip_ids();
 
     // Always init all chips, to disable prints by default.
     for (ChipId device_id : all_devices) {
@@ -752,13 +774,12 @@ void DPrintServer::Impl::attach_devices() {
     }
 
     // If RTOptions enables all chips, then attach all chips. Otherwise only attach specified devices.
-    if (MetalContext::instance().rtoptions().get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
+    if (env_.get_rtoptions().get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         for (ChipId device_id : all_devices) {
             attach_device(device_id);
         }
     } else {
-        for (ChipId device_id :
-             MetalContext::instance().rtoptions().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint)) {
+        for (ChipId device_id : env_.get_rtoptions().get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint)) {
             attach_device(device_id);
         }
     }
@@ -767,12 +788,15 @@ void DPrintServer::Impl::attach_devices() {
 void DPrintServer::Impl::attach_device(ChipId device_id) {
     // A set of all valid printable cores, used for checking the user input. Note that the coords
     // here are virtual.
-    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(device_id);
-    tt::tt_metal::CoreDescriptorSet dispatch_cores = tt::tt_metal::GetDispatchCores(device_id);
+    auto& cluster = env_.get_cluster();
+    auto& control_plane = env_.get_control_plane();
+    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
+    tt::tt_metal::CoreDescriptorSet dispatch_cores =
+        tt::tt_metal::GetDispatchCores(env_, device_id, num_hw_cqs_, dispatch_core_config_);
 
     // If RTOptions doesn't enable DPRINT on this device, return here and don't actually attach it
     // to the server.
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_.get_rtoptions();
     std::vector<ChipId> chip_ids = rtoptions.get_feature_chip_ids(tt::llrt::RunTimeDebugFeatureDprint);
     if (!rtoptions.get_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (std::find(chip_ids.begin(), chip_ids.end(), device_id) == chip_ids.end()) {
@@ -837,10 +861,8 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 CoreCoord virtual_core;
                 bool valid_logical_core = true;
                 try {
-                    virtual_core =
-                        tt::tt_metal::MetalContext::instance()
-                            .get_cluster()
-                            .get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, core_type);
+                    virtual_core = env_.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                        device_id, logical_core, core_type);
                 } catch (std::runtime_error& error) {
                     valid_logical_core = false;
                 }
@@ -870,8 +892,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     // Write print enable magic for the cores the user specified.
     for (auto& logical_core : print_cores_sanitized) {
         CoreCoord virtual_core =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                device_id, logical_core.coord, logical_core.type);
+            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
         auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
         enable_print_buffers_for_core(device_id, virtual_core, programmable_core_type);
         if (dispatch_cores.contains(logical_core)) {
@@ -909,6 +930,8 @@ void DPrintServer::Impl::detach_devices() {
 }
 
 void DPrintServer::Impl::detach_device(ChipId device_id) {
+    auto& cluster = env_.get_cluster();
+    auto& control_plane = env_.get_control_plane();
     // When we detach a device, we should poll to make sure there's no outstanding prints.
     bool outstanding_prints = true;
     while (outstanding_prints && !server_killed_due_to_hang_) {
@@ -918,9 +941,8 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
         // Check all dprint-enabled cores on this device for outstanding prints.
         outstanding_prints = false;
         for (auto& logical_core : device_to_core_range_.at(device_id)) {
-            CoreCoord virtual_core =
-                MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-                    device_id, logical_core.coord, logical_core.type);
+            CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                device_id, logical_core.coord, logical_core.type);
             auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
             if (core_has_outstanding_prints(device_id, virtual_core, programmable_core_type)) {
                 outstanding_prints = true;
@@ -963,10 +985,10 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
     log_info(LogMetal, "DPRINT Server detached device {}", device_id);
 
     // When detaching a device, disable prints on it.
-    CoreDescriptorSet all_cores = GetAllCores(device_id);
+    tt::tt_metal::CoreDescriptorSet all_cores = tt::tt_metal::GetAllCores(cluster, control_plane, device_id);
     for (const auto& logical_core : all_cores) {
-        CoreCoord virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
+        CoreCoord virtual_core =
+            cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
         init_print_buffers_for_core(device_id, virtual_core, llrt::get_core_type(device_id, virtual_core));
     }
     device_to_core_range_lock_.unlock();
@@ -974,25 +996,26 @@ void DPrintServer::Impl::detach_device(ChipId device_id) {
 
 void DPrintServer::Impl::clear_log_file() {
     if (outfile_) {
+        auto& rtoptions = env_.get_rtoptions();
         // Just close the file and re-open it (without append) to clear it.
         outfile_->close();
         delete outfile_;
 
-        string file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_file_name(
-            tt::llrt::RunTimeDebugFeatureDprint);
+        string file_name = rtoptions.get_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint);
         outfile_ = new ofstream(file_name);
         stream_ = outfile_ ? outfile_ : &std::cout;
     }
 }  // clear_log_file
 
 bool DPrintImpl::poll_one_core(ChipId device_id, const umd::CoreDescriptor& logical_core, bool new_data_this_iter) {
-    auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-        device_id, logical_core.coord, logical_core.type);
+    auto& cluster = env_.get_cluster();
+    auto virtual_core =
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
-    uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
+    uint32_t risc_count = env_.get_hal().get_num_risc_processors(programmable_core_type);
     bool new_data = false;
     for (int risc_index = 0; risc_index < risc_count; risc_index++) {
-        if (RiscEnabled(programmable_core_type, risc_index)) {
+        if (RiscEnabled(env_.get_rtoptions(), programmable_core_type, risc_index)) {
             new_data |= peek_one_risc_non_blocking(device_id, logical_core, risc_index, new_data_this_iter || new_data);
         }
     }
@@ -1002,10 +1025,11 @@ bool DPrintImpl::poll_one_core(ChipId device_id, const umd::CoreDescriptor& logi
 bool DPrintImpl::peek_one_risc_non_blocking(
     ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool /*new_data_this_iter*/) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
+    auto& cluster = env_.get_cluster();
+    const auto& hal = env_.get_hal();
     CoreCoord virtual_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core.coord, logical_core.type);
-    if (!CheckInitMagicCleared(device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_id))) {
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core.coord, logical_core.type);
+    if (!CheckInitMagicCleared(cluster, device_id, virtual_core, GetDprintBufAddr(device_id, virtual_core, risc_id))) {
         return false;
     }
 
@@ -1019,12 +1043,11 @@ bool DPrintImpl::peek_one_risc_non_blocking(
         // Compute line prefix based on RTOptions
         std::string line_prefix;
         const bool prepend_device_core_risc =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_feature_prepend_device_core_risc(
-                tt::llrt::RunTimeDebugFeatureDprint);
+            env_.get_rtoptions().get_feature_prepend_device_core_risc(tt::llrt::RunTimeDebugFeatureDprint);
         if (prepend_device_core_risc) {
             const string& device_id_str = to_string(device_id);
             const string& core_coord_str = logical_core.coord.str();
-            const string& risc_name = GetRiscName(device_id, logical_core, risc_id, true);
+            const string& risc_name = GetRiscName(cluster, hal, device_id, logical_core, risc_id, true);
             line_prefix = fmt::format("{}:{}:{}: ", device_id_str, core_coord_str, risc_name);
         }
         risc_to_parser_[risc_key] = std::make_unique<DPrintParser>(line_prefix);
@@ -1034,8 +1057,7 @@ bool DPrintImpl::peek_one_risc_non_blocking(
     // Device is incrementing wpos
     // Host is reading wpos and incrementing local rpos up to wpos
     // Device is filling the buffer and in the end waits on host to write rpos
-    auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-        chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
+    auto from_dev = env_.get_cluster().read_core(chip_id, virtual_core, base_addr, DPRINT_BUFFER_SIZE);
     DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
     uint32_t rpos = l->aux.rpos;
     uint32_t wpos = l->aux.wpos;
@@ -1068,8 +1090,7 @@ bool DPrintImpl::peek_one_risc_non_blocking(
         std::vector<uint32_t> rposbuf;
         rposbuf.push_back(rpos);
         uint32_t offs = DebugPrintMemLayout::rpos_offs();
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            chip_id, virtual_core, rposbuf, base_addr + offs);
+        env_.get_cluster().write_core(chip_id, virtual_core, rposbuf, base_addr + offs);
 
         // Return true to signal that some print data was read
         return true;
@@ -1085,7 +1106,7 @@ void DPrintServer::Impl::poll_print_data() {
 
     // Main print loop, go through all chips/cores/riscs on the device and poll for any print data
     // written.
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    const auto& rtoptions = env_.get_rtoptions();
     while (true) {
         if (stop_print_server_ && !new_data_last_iter_) {
             // If the stop signal was received, exit the print server thread after all new data has been processed.
@@ -1155,7 +1176,9 @@ void DPrintServer::Impl::transfer_all_streams_to_output(ChipId device_id) {
 
 ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
     ostream* output_stream = stream_;
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    auto& cluster = env_.get_cluster();
+    const auto& hal = env_.get_hal();
+    const auto& rtoptions = env_.get_rtoptions();
     if (rtoptions.get_feature_one_file_per_risc(tt::llrt::RunTimeDebugFeatureDprint)) {
         if (!risc_to_file_stream_[risc_key]) {
             const ChipId chip_id = get<0>(risc_key);
@@ -1168,7 +1191,7 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
                 tt::tt_metal::get_core_type_name(logical_core.type),
                 logical_core.coord.x,
                 logical_core.coord.y,
-                GetRiscName(chip_id, logical_core, risc_id));
+                GetRiscName(cluster, hal, chip_id, logical_core, risc_id));
             risc_to_file_stream_[risc_key] = new ofstream(filename);
         }
         output_stream = risc_to_file_stream_[risc_key];
@@ -1182,9 +1205,9 @@ ostream* DPrintServer::Impl::get_output_stream(const RiscKey& risc_key) {
 }  // get_output_stream
 
 // Wrapper class functions
-DPrintServer::DPrintServer(llrt::RunTimeOptions& rtoptions) {
-    if (rtoptions.get_use_device_print()) {
-        impl_ = std::make_unique<DevicePrintImpl>(rtoptions);
+DPrintServer::DPrintServer(MetalEnv& env, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    if (MetalEnvAccessor(env).impl().get_rtoptions().get_use_device_print()) {
+        impl_ = std::make_unique<DevicePrintImpl>(env, num_hw_cqs, dispatch_core_config);
     } else {
         // TODO: Enable this warning once DPRINT is fully deprecated and removed from the codebase.
         // log_warning(
@@ -1192,7 +1215,7 @@ DPrintServer::DPrintServer(llrt::RunTimeOptions& rtoptions) {
         //     "DPRINT is deprecated and will be removed in a future release. "
         //     "Please migrate to DEVICE_PRINT by setting TT_METAL_DEVICE_PRINT=1"
         //     " and using DEVICE_PRINT() macro when writing kernels.");
-        impl_ = std::make_unique<DPrintImpl>(rtoptions);
+        impl_ = std::make_unique<DPrintImpl>(env, num_hw_cqs, dispatch_core_config);
     }
 }
 DPrintServer::~DPrintServer() = default;

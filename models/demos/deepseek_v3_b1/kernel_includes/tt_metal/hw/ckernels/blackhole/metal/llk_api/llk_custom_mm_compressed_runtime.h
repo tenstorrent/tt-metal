@@ -23,7 +23,7 @@ namespace compressed {
  * Zero tiles have abs_addr = ZEROS_ADDR_SHIFTED, precomputed by host.
  * No per-tile arithmetic, no branches.
  */
-template <uint32_t KT_DIM, uint32_t CT_DIM>
+template <uint32_t KT_DIM, uint32_t CT_DIM, bool FINALIZE = true>
 FORCE_INLINE void custom_mm_compressed_block_runtime(
     uint32_t fmt_l1_addr, uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
@@ -34,6 +34,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
     UNPACK(({
         volatile uint* cfg = get_cfg_pointer();
         uint32_t reg0_base = cfg[THCON_SEC0_REG0_TileDescriptor_ADDR32] & ~0x0f;
+        uint32_t reg2_base = cfg[THCON_SEC0_REG2_Out_data_format_ADDR32] & ~0x0f;
 
         // Per-pair tile info: two uint32s loaded together.
         // Each uint32: [abs_addr:24 | fmt:8], precomputed by host.
@@ -61,12 +62,14 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
                 t1.packed = tile_ptr[pair * 2 + 1].packed;
 
                 wait_for_next_context(2);
-                reconfig_custom_mm_srca_input_only(cfg, t0.fmt, reg0_base);
+                // TODO: investigate why we need to also configure the output data format
+                // for DRAM matmul, while SRAM matmul we don't need to.
+                reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg2_base);
                 cfg[THCON_SEC0_REG3_Base_address_ADDR32] = t0.addr;
                 semaphore_post(semaphore::UNPACK_SYNC);
 
                 wait_for_next_context(2);
-                reconfig_custom_mm_srca_input_only(cfg, t1.fmt, reg0_base);
+                reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg2_base);
                 cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = t1.addr;
                 semaphore_post(semaphore::UNPACK_SYNC);
             }
@@ -82,19 +85,25 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
                     tile_idx += 2;
 
                     wait_for_next_context(2);
-                    reconfig_custom_mm_srca_input_only(cfg, t0.fmt, reg0_base);
+                    reconfig_custom_mm_srca_raw(cfg, t0.fmt, reg0_base, reg2_base);
                     cfg[THCON_SEC0_REG3_Base_address_ADDR32] = t0.addr;
                     semaphore_post(semaphore::UNPACK_SYNC);
 
                     wait_for_next_context(2);
-                    reconfig_custom_mm_srca_input_only(cfg, t1.fmt, reg0_base);
+                    reconfig_custom_mm_srca_raw(cfg, t1.fmt, reg0_base, reg2_base);
                     cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = t1.addr;
                     semaphore_post(semaphore::UNPACK_SYNC);
                 }
             }
         }
+
+        // Reset counters so subsequent subblock calls start clean (matches _llk_unpack_AB_custom_mm_run_)
+        wait_for_next_context(1);
+        reset_config_context();
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }));
-    MATH((_llk_math_custom_mm_<true>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

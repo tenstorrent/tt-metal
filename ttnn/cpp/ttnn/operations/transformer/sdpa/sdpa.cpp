@@ -169,6 +169,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const CoreCoord ccl_core_grid_offset,
+    bool is_causal,
+    bool is_balanced,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
@@ -192,6 +194,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         topology,
         ccl_core_grid_offset,
         subdevice_id,
+        is_causal,
+        is_balanced,
         scale,
         compute_kernel_config,
         core_allocation_strategy);

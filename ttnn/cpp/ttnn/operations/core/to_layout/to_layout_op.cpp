@@ -79,7 +79,7 @@ Tensor to_layout_impl(
             tensor_arg.dtype(), tt::tt_metal::PageConfig(Layout::TILE, tile), output_memory_config));
     auto padded_output_shape = tile_spec.padded_shape();
     auto original_rank = tensor_arg.logical_shape().rank();
-    auto original_shape = tensor_arg.logical_shape();
+    const auto& original_shape = tensor_arg.logical_shape();
 
     if (layout == ttnn::TILE_LAYOUT) {
         if (tensor.padded_shape().size() < 2) {
@@ -97,8 +97,7 @@ Tensor to_layout_impl(
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                return ttnn::untilize(
-                    tensor, output_memory_config, use_multicore_untilize, true /*use_pack_untilize*/, sub_core_grids);
+                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
@@ -137,12 +136,7 @@ Tensor to_layout_impl(
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
             tensor = ttnn::untilize_with_unpadding(
-                tensor,
-                output_tensor_end,
-                output_memory_config,
-                use_multicore_untilize,
-                true /*use_pack_untilize*/,
-                sub_core_grids);
+                tensor, output_tensor_end, output_memory_config, use_multicore_untilize, sub_core_grids);
             return ttnn::reshape(
                 tensor,
                 ttnn::Shape{output_shape},

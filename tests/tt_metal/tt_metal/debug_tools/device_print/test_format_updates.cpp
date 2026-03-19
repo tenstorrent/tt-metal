@@ -65,6 +65,15 @@ public:
     }
 };
 
+TEST_F(DevicePrintFormatUpdatesFixture, PrintSimpleString) {
+    std::vector<std::string_view> messages = {
+        "Hello world!\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", ttsl::make_span(messages));
+}
+
 TEST_F(DevicePrintFormatUpdatesFixture, PrintSingleUintArg) {
     std::vector<std::string_view> messages = {
         "Printing uint32_t from arg: {0,I}\n"sv,

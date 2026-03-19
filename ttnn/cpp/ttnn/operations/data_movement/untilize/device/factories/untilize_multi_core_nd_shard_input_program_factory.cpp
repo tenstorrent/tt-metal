@@ -30,7 +30,6 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
 
     const auto& a = tensor_args.input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -80,10 +79,8 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     // Input CB
     uint32_t input_cb_num_tiles;
     if (num_input_blocks_per_full_core == 1) {
-        // No need to double buffer if the core is only processing a single block
         input_cb_num_tiles = num_tiles_per_input_block;
     } else {
-        // Double buffer if the core is processing 2+ blocks
         input_cb_num_tiles = num_tiles_per_input_block * 2;
     }
     auto [src0_cb_index, cb_src0] = create_cb(
@@ -113,7 +110,6 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
 
     // Reader compile-time args and kernel
     KernelHandle unary_reader_kernel_id;
-    // Sharded input
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src0_cb_index,
         (uint32_t)num_tiles_per_input_block,
@@ -185,19 +181,8 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     }
 
     // Compute kernel file
-    std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
-            "pack_untilize_variable_num_blocks.cpp");
-    }
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
