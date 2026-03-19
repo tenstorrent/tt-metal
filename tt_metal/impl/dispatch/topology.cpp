@@ -780,7 +780,9 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                 uint32_t completion_queue_start_addr;
                 if (device->sysmem_manager().is_dram_backed()) {
                     completion_queue_start_addr =
-                        device->sysmem_manager().get_dram_region_start_addr(cq_id) + cq_start + issue_queue_size;
+                        cq_start + issue_queue_size +
+                        get_absolute_cq_offset(
+                            channel, cq_id, cq_size, device->sysmem_manager().get_dram_region_base_addr());
                 } else {
                     completion_queue_start_addr =
                         cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);

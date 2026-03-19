@@ -1582,20 +1582,17 @@ void read_completion_queue(
     uint32_t size_bytes,
     ChipId device_id,
     uint16_t channel,
-    uint32_t cq_id,
     uint32_t completion_q_read_ptr,
     uint32_t completion_q_data_offset,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
-        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().read_dram_vec(
-            dst,
-            size_bytes,
-            device_id,
-            0,
-            sysmem_manager.get_dram_region_start_addr(cq_id) + completion_q_read_ptr + completion_q_data_offset);
+        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+            .get_cluster()
+            .read_dram_vec(dst, size_bytes, device_id, 0, completion_q_read_ptr + completion_q_data_offset);
     } else {
-        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().read_sysmem(
-            dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
+        tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
+            .get_cluster()
+            .read_sysmem(dst, size_bytes, completion_q_read_ptr + completion_q_data_offset, device_id, channel);
     }
 }
 
@@ -1662,7 +1659,6 @@ void copy_completion_queue_data_into_user_space(
                     data_bytes_xfered,
                     mmio_device_id,
                     channel,
-                    cq_id,
                     completion_q_read_ptr,
                     offset_in_completion_q_data,
                     sysmem_manager);
@@ -1714,7 +1710,6 @@ void copy_completion_queue_data_into_user_space(
                         num_bytes_to_copy,
                         mmio_device_id,
                         channel,
-                        cq_id,
                         completion_q_read_ptr,
                         src_offset_bytes,
                         sysmem_manager);
@@ -1790,7 +1785,6 @@ void copy_completion_queue_data_into_user_space(
                     num_bytes_to_copy,
                     mmio_device_id,
                     channel,
-                    cq_id,
                     completion_q_read_ptr,
                     src_offset_bytes,
                     sysmem_manager);
