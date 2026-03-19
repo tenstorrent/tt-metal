@@ -1,5 +1,5 @@
 #!/bin/bash
-# tt-test.sh - Cooperative device-aware test runner
+# run_safe_pytest.sh - Cooperative device-aware test runner
 #
 # Uses flock to serialize device access across multiple agents/terminals.
 # Uses TT_METAL_OPERATION_TIMEOUT_SECONDS for precise hang detection at the
@@ -7,7 +7,7 @@
 # Automatically resets the device after hangs, ensuring the next runner
 # always gets a clean device.
 #
-# Usage: scripts/tt-test.sh [--dev] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -32,7 +32,7 @@ TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
-TRIAGE_LOG="/tmp/tt-test-triage-$$.log"
+TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 
 # --- Parse flags ---
 DEV_MODE=false
@@ -50,8 +50,8 @@ done
 
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
-    echo "TT_TEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/tt-test.sh [--dev] <test_path> [extra_pytest_args...]" >&2
+    echo "SAFE_PYTEST_ERROR: No test path provided" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -61,39 +61,39 @@ shift
 # --- Acquire flock ---
 exec 9>"$LOCK_FILE"
 
-echo "TT_TEST: Waiting for device lock..." >&2
+echo "SAFE_PYTEST: Waiting for device lock..." >&2
 flock 9
-echo "TT_TEST: Device lock acquired" >&2
+echo "SAFE_PYTEST: Device lock acquired" >&2
 
 # --- Check if device needs reset from previous hang ---
 if [[ -f "$DIRTY_FLAG" ]]; then
-    echo "TT_TEST: Device marked dirty from previous hang, resetting..." >&2
+    echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..." >&2
     if ! tt-smi -r; then
-        echo "TT_TEST_ERROR: Device reset (tt-smi -r) failed" >&2
+        echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed" >&2
         exit 3
     fi
     rm -f "$DIRTY_FLAG"
-    echo "TT_TEST: Device reset complete" >&2
+    echo "SAFE_PYTEST: Device reset complete" >&2
 fi
 
 # --- Setup environment ---
 cd "$REPO_DIR"
 if [[ -f python_env/bin/activate ]]; then
     if ! source python_env/bin/activate; then
-        echo "TT_TEST: WARNING: Failed to activate python_env virtual environment" >&2
+        echo "SAFE_PYTEST: WARNING: Failed to activate python_env virtual environment" >&2
     fi
 else
-    echo "TT_TEST: WARNING: python_env not found; using system Python" >&2
+    echo "SAFE_PYTEST: WARNING: python_env not found; using system Python" >&2
 fi
 
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
 
 # Auto-triage: dispatch layer runs tt-triage when timeout fires (both modes).
 # This only executes on actual hang, not on every test — zero overhead for passing tests.
-# Requires tt-exalens: scripts/install_debugger.sh
+# Requires tt-exalens: uv pip install -r tools/triage/requirements.txt
 if ! python3 -c "import ttexalens" 2>/dev/null; then
-    echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
-    echo "TT_TEST: Install with: scripts/install_debugger.sh" >&2
+    echo "SAFE_PYTEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
+    echo "SAFE_PYTEST: Install with: uv pip install -r tools/triage/requirements.txt" >&2
 fi
 rm -f "$TRIAGE_LOG"
 export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
@@ -124,11 +124,11 @@ if [[ "$DEV_MODE" == true ]]; then
     export TT_METAL_WATCHER_DISABLE_ASSERT=1
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
-    echo "TT_TEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+    echo "SAFE_PYTEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
 else
-    echo "TT_TEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
+    echo "SAFE_PYTEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
 fi
-echo "TT_TEST: pytest ${TEST_PATH} $*" >&2
+echo "SAFE_PYTEST: pytest ${TEST_PATH} $*" >&2
 echo "========================================" >&2
 
 # --- Mark device dirty before running tests ---
@@ -148,7 +148,7 @@ echo "========================================" >&2
 if [[ $EXIT_CODE -eq 0 ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
-    echo "TT_TEST_RESULT: PASS" >&2
+    echo "SAFE_PYTEST_RESULT: PASS" >&2
     exit 0
 fi
 
@@ -166,16 +166,16 @@ pkill -9 -P $$ 2>/dev/null || true
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
-    echo "TT_TEST: Resetting device..." >&2
+    echo "SAFE_PYTEST: Resetting device..." >&2
     if tt-smi -r; then
         sleep 2
         rm -f "$DIRTY_FLAG"
-        echo "TT_TEST: Device reset complete" >&2
+        echo "SAFE_PYTEST: Device reset complete" >&2
     else
-        echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
+        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty" >&2
     fi
 
-    echo "TT_TEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
+    echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
     echo "" >&2
 
     # Dump full triage log
@@ -198,5 +198,5 @@ fi
 
 rm -f "$DIRTY_FLAG"
 rm -f "$TRIAGE_LOG"
-echo "TT_TEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
+echo "SAFE_PYTEST_RESULT: FAIL (exit code: $EXIT_CODE)" >&2
 exit 1
