@@ -173,6 +173,7 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -x \
+          pytest models/demos/deepseek_v3/tests -x \
             --ignore=models/demos/deepseek_v3/tests/unit \
             --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
             --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
