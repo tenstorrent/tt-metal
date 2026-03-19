@@ -902,6 +902,67 @@ def run_olmo_demo(
         ),
         # NOTE: 32k+ ISL requires max_batch_size=1 (batch_size_per_device_group=1 → capacity=64×max_num_blocks)
         # to keep KV cache within 12 GB DRAM per chip. Not yet wired in demo.
+        # ── ISL sweep: batch=32, 64 layers, 20 decode tokens (coherence check) ──────────────
+        (  # isl-128-b32: ~128-token prefill + 20 decode, batch=32, 64 layers
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            148,  # ~128 prefill + 20 decode
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
+        (  # isl-1k-b32: ~1k-token prefill + 20 decode, batch=32, 64 layers
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_1k_b32.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            1044,  # ~1024 prefill + 20 decode
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
+        (  # isl-2k-b32: ~2k-token prefill + 20 decode, batch=32, 64 layers
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_2k_b32.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            2068,  # ~2048 prefill + 20 decode
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
+        (  # isl-4k-b32: ~4k-token prefill + 20 decode, batch=32, 64 layers
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k_b32.json",
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            4116,  # ~4096 prefill + 20 decode
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+            False,  # stress_test
+            0,  # start_pos
+        ),
     ],
     ids=[
         "full",  # full demo
@@ -920,6 +981,10 @@ def run_olmo_demo(
         "isl-4k-b1",  # ISL sweep: 4k-token prefill, batch=1
         "isl-8k-b1",  # ISL sweep: 8k-token prefill, batch=1
         "isl-16k-b1",  # ISL sweep: 16k-token prefill, batch=1
+        "isl-128-b32",  # ISL sweep: 128-token prefill, batch=32, 1 layer
+        "isl-1k-b32",  # ISL sweep: 1k-token prefill, batch=32, 1 layer
+        "isl-2k-b32",  # ISL sweep: 2k-token prefill, batch=32, 1 layer
+        "isl-4k-b32",  # ISL sweep: 4k-token prefill, batch=32, 1 layer
     ],
 )
 @pytest.mark.parametrize(

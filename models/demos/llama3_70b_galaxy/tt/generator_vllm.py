@@ -342,6 +342,10 @@ class OLMo3ForCausalLM(Generator):
         return self.model_args.model_cache_path
 
     def prefill_forward(self, *args, **kwargs):
+        # Disable trace for prefill: the CCL is closed/reopened between decode→prefill transitions,
+        # which puts the CCL semaphores in an inconsistent state for any previously captured trace.
+        # Kernels are still compiled and cached after the first call at a given seqlen.
+        kwargs["enable_trace"] = False
         return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, **kwargs):

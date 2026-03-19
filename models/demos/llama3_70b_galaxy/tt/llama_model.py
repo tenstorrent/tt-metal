@@ -170,15 +170,14 @@ class TtTransformer(LightweightModule):
         use_prefetcher = getattr(self.args, "use_prefetcher", True)
         if not use_prefetcher:
             self.prefetcher_setup = None
-            all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
-            all_sub_device = ttnn.SubDevice([all_core_range_set])
             worker_sub_device_id = ttnn.SubDeviceId(0)
-            sub_device_manager = self.mesh_device.create_sub_device_manager([all_sub_device], 0)
-            self.mesh_device.load_sub_device_manager(sub_device_manager)
-            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
-            self.mesh_sub_device_manager_id_decode = sub_device_manager
-            self._worker_sub_device_id = worker_sub_device_id
             if mesh_sub_device_manager_id_decode is None:
+                # First decode setup: create and load a new sub-device manager.
+                all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+                all_sub_device = ttnn.SubDevice([all_core_range_set])
+                sub_device_manager = self.mesh_device.create_sub_device_manager([all_sub_device], 0)
+                self.mesh_device.load_sub_device_manager(sub_device_manager)
+                self.mesh_sub_device_manager_id_decode = sub_device_manager
                 self.tt_ccl = TT_CCL(
                     self.mesh_device,
                     self.args,
@@ -191,7 +190,12 @@ class TtTransformer(LightweightModule):
                     tt_ccl=self.tt_ccl,
                 )
             else:
+                # Subsequent decode setups: reload the existing sub-device manager so that
+                # any captured traces (which reference the original manager ID) remain valid.
+                self.mesh_device.load_sub_device_manager(mesh_sub_device_manager_id_decode)
                 self.tt_ccl = self.tt_ccl_decode
+            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+            self._worker_sub_device_id = worker_sub_device_id
             return
 
         self.prefetcher_setup = TtLlamaPrefetcherSetup(

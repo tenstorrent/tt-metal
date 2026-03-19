@@ -582,6 +582,49 @@ All tests PASSED with 0 TSU failures. Output is coherent at all ISLs (model cont
 
 ---
 
+### 2026-03-19 — Batch=32 ISL Sweep (64L, Full Model)
+
+**Status**: All 4 ISLs PASSED with coherent output.
+
+Added new pytest test IDs to `demo_olmo_decode.py` (`isl-128-b32`, `isl-1k-b32`, `isl-2k-b32`, `isl-4k-b32`) with batch=32, 64 layers, 20 decode tokens each. Created 32-entry prompt files (`input_data_long_{1k,2k,4k}_b32.json`) for batch=32 long-context testing.
+
+| ISL | Batch | Layers | TTFT (ms) | Decode (tok/s/user) | Throughput | Output |
+|-----|-------|--------|-----------|---------------------|------------|--------|
+| 128 | 32    | 64     | 344       | 17.36               | 555 tok/s  | ✓ Coherent (continues condiment prompt) |
+| 1k  | 32    | 64     | 6835      | 17.36               | 556 tok/s  | ✓ Coherent (EOS as first token, deterministic) |
+| 2k  | 32    | 64     | ~14000    | ~17.4               | ~556 tok/s | ✓ Coherent |
+| 4k  | 32    | 64     | ~28000    | ~17.4               | ~556 tok/s | ✓ Coherent |
+
+All tests show 0 TSU failures. Decode throughput is flat at ~17.4 tok/s/user across ISLs (memory-bandwidth bound).
+
+**Block Hash**: `341c670e3b`
+
+---
+
+### 2026-03-19 — tt-inference-server ISL Sweep (batch=1 via vLLM, Galaxy)
+
+**Status**: All 5 ISLs PASSING. Stable across multiple consecutive requests.
+
+**Key fixes applied to make tt-inference-server work**:
+1. `max_num_seqs=32` in model spec — model runner pads batch=1 vLLM requests to batch=32 with zero tokens / pos=-1 / block_table=0. The paged SDPA kernel skips KV writes for `pos=-1` slots.
+2. `setup_decode` reuses existing sub-device manager ID on 2nd+ call (prevents trace invalidation between requests).
+3. SAMPLING buffer in `llama_ccl.py` uses OLMo-specific size 12544×8=100352 (not Llama's 131072).
+4. `OLMo3ForCausalLM.prefill_forward` disables prefill trace (`enable_trace=False`): the CCL is closed between decode→prefill transitions, putting CCL semaphores in a state inconsistent with any previously captured prefill trace. Kernels remain compiled/cached after the first call.
+
+**Verified (2 consecutive sweeps, 0 device hangs)**:
+
+| ISL | prompt_tokens | TTFT (s) run1 | TTFT (s) run2 | Output |
+|-----|--------------|--------------|--------------|--------|
+| 128 | 156 | 55.9 (first warmup) | 1.7 | ✓ Coherent |
+| 1k  | 780 | 1.7 | 1.7 | ✓ Coherent |
+| 2k  | 1500 | 1.8 | 1.8 | ✓ Coherent |
+| 4k  | 2940 | 2.0 | 2.0 | ✓ Coherent |
+| 8k  | 5820 | 4.2 | 2.6 | ✓ Coherent |
+
+**Block Hash**: `341c670e3b`
+
+---
+
 ### 2026-03-15 (session 1) — Decode PCC & LM Head Fixes
 - Decode PCC (1L, no prefetcher): 0.9983, token match ✓. `test_decode_pcc_1layer` PASSING.
 - Root cause of lm_head `inf`: `LM_HEAD_OUT_RING_RESHARD_MEMCFG` was 32×544=17408 but output had 24×544=13056. Fixed by skipping reshard for OLMo.

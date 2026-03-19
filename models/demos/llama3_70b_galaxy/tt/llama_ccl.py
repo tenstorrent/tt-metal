@@ -281,24 +281,20 @@ class TT_CCL:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
-        tt_buffer = (
-            ttnn.from_torch(
-                torch.zeros((1, 1, 32, 128 * 1024)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            if not self.is_qwen
-            else ttnn.from_torch(
-                torch.zeros((1, 1, 32, 155648)),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
+        if self.is_olmo:
+            # OLMo: padded_vocab_size=100352, per_device=12544, total after row all_gather = 12544*8=100352
+            sampling_shape = (1, 1, 32, 12544 * 8)
+        elif self.is_qwen:
+            sampling_shape = (1, 1, 32, 155648)
+        else:
+            sampling_shape = (1, 1, 32, 128 * 1024)
+        tt_buffer = ttnn.from_torch(
+            torch.zeros(sampling_shape),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["SAMPLING"] = tt_buffer
 
