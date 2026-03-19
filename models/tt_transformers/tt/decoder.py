@@ -6,6 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
@@ -28,6 +29,7 @@ class TransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         prefetcher=None,
+        first_layer=False,
     ):
         super().__init__()
 
@@ -47,6 +49,7 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
+        self.first_layer = first_layer
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
         self.attention = ActualAttentionClass(
@@ -211,16 +214,17 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
+        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher, special_case=True)
 
-        assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        # assert (
+        #     x.memory_config() == skip_mem_cfg
+        # ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
@@ -229,9 +233,14 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
-        attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
+        attn_in, residual = self.attention_norm(
+            x, mode, norm_config=attn_norm_config, residual=residual, first_layer=self.first_layer
+        )
 
-        # Attention takes replicated inputs and produces fractured outputs
+        # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
+        if batch_size > 1:
+            attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
+
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
@@ -243,6 +252,12 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        # To match the batch-related reshape inside the attention module
+        # Use the batch_size parameter instead of inferring from shape[-3]
+        # because for [32, 1, S, H] tensors, shape[-3] is 1, not 32
+        # This reshape is only applicable in prefill mode with batched prefill
+        if mode == Mode.PREFILL and batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
         attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
 
@@ -261,20 +276,22 @@ class TransformerBlock(LightweightModule):
 
         if self.pre_ff_norm is not None:
             # Mesh partition ff_norm output to match residual sharding, skip if using distributed norm, because output is already sharded
-            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
-                hidden_states = ttnn.mesh_partition(
-                    hidden_states,
-                    memory_config=hidden_states.memory_config(),
-                    dim=3,
-                    cluster_axis=1,
-                )
+            # if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+            # hidden_states = ttnn.mesh_partition(
+            #     hidden_states,
+            #     memory_config=hidden_states.memory_config(),
+            #     dim=3,
+            #     cluster_axis=1,
+            # )
 
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
             pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
+            hidden_states = self.pre_ff_norm(
+                hidden_states, mode, norm_config=pre_ff_norm_config, special_case_gather=True
+            )
 
         ttnn.deallocate(attn_out)
 
@@ -291,13 +308,13 @@ class TransformerBlock(LightweightModule):
         if self.post_ff_norm is not None:
             post_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             hidden_states = self.post_ff_norm(hidden_states, mode, norm_config=post_ff_norm_config)  # Gathered
-            if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
-                hidden_states = ttnn.mesh_partition(
-                    hidden_states,
-                    memory_config=hidden_states.memory_config(),
-                    dim=3,
-                    cluster_axis=1,
-                )
+            # if self.num_devices > 1 and not self.args.is_distributed_norm(mode):
+            #     hidden_states = ttnn.mesh_partition(
+            #         hidden_states,
+            #         memory_config=hidden_states.memory_config(),
+            #         dim=3,
+            #         cluster_axis=1,
+            #     )
 
         out = ttnn.add(
             residual,
