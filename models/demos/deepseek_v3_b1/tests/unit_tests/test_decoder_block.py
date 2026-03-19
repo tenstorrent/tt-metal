@@ -951,9 +951,6 @@ def test_decoder(
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
 
-    if validate_standalone_moe and not validate_standalone_mla:
-        pytest.skip("validate_standalone_moe requires validate_standalone_mla as it uses the MLA output")
-
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
