@@ -16,6 +16,7 @@ MODEL_PATH = Path(
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
+
 @lru_cache(maxsize=1)
 def get_total_model_layers(model_path: Path) -> int:
     with open(model_path / "config.json", "r", encoding="utf-8") as config_file:
@@ -43,7 +44,6 @@ def _assert_no_garbage_tokens(results: dict) -> None:
 
     if failures:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
-
 
 def _demo_case(
     *,
@@ -78,6 +78,7 @@ def _demo_case(
         id=case_id,
         marks=marks,
     )
+
 
 # Test matrix:
 # +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
