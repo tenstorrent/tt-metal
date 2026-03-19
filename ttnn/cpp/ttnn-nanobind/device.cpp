@@ -503,7 +503,8 @@ void device_module(nb::module_& m_device) {
         synchronize_device_doc.data(),
         nb::arg("device"),
         nb::arg("cq_id") = nb::none(),
-        nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
+        nb::arg("sub_device_ids") = std::vector<SubDeviceId>(),
+        nb::call_guard<nb::gil_scoped_release>());
     m_device.def(
         "ReadDeviceProfiler",
         [](MeshDevice* mesh_device) {

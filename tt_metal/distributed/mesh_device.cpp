@@ -1282,6 +1282,23 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
     };
     std::vector<SyncSample> samples;
 
+    // Drain any pre-existing pages from the socket before entering sync mode.
+    // The kernel may have sent regular profiler data pages during startup that
+    // would be misinterpreted as (invalid) sync responses.
+    constexpr uint32_t kSyncPageWords = 64 / sizeof(uint32_t);
+    uint32_t stale_pages = dev_state.socket->pages_available();
+    if (stale_pages > 0) {
+        std::vector<uint32_t> discard_buf(kSyncPageWords);
+        for (uint32_t p = 0; p < stale_pages; p++) {
+            dev_state.socket->read(discard_buf.data(), 1);
+        }
+        log_info(
+            tt::LogMetal,
+            "[Real-time profiler] Device {} drained {} stale pages before sync",
+            dev_state.chip_id,
+            stale_pages);
+    }
+
     // Enter sync mode - write sync_request = 1
     std::vector<uint32_t> sync_req_data = {1};
     tt::tt_metal::detail::WriteToDeviceL1(
@@ -1290,6 +1307,9 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
         dev_state.sync_request_addr,
         sync_req_data,
         CoreType::WORKER);
+
+    // Brief pause after entering sync mode to let the kernel process the request
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     // Collect samples (+1 for the first one we discard).
     // Use half-round-trip bracketing: capture host time before the PCIe write and
@@ -1310,7 +1330,6 @@ void MeshDeviceImpl::run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev
             CoreType::WORKER);
 
         // Wait for response from D2H socket
-        constexpr uint32_t kSyncPageWords = 64 / sizeof(uint32_t);
         std::vector<uint32_t> sync_data(kSyncPageWords);
         dev_state.socket->read(sync_data.data(), 1);
         int64_t host_after = TracyGetCpuTime() - host_start_time;
@@ -1417,9 +1436,56 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
         return;
     }
 
-    for (auto& dev_state : realtime_profiler_devices_) {
-        dev_state.sync_response_received.store(false);
+    constexpr uint32_t kPageSize = 64;
+    constexpr uint32_t kPageWords = kPageSize / sizeof(uint32_t);
+    constexpr uint32_t kSyncTimeoutMs = 5000;
+    constexpr uint32_t kPauseTimeoutMs = 2000;
 
+    // 1. Pause the receiver thread so we get exclusive access to the sockets.
+    //    This avoids the GIL deadlock: the receiver thread may be blocked trying
+    //    to acquire the GIL for a Python callback while the calling thread (which
+    //    holds the GIL) waits here. If the receiver doesn't pause in time, we
+    //    cannot safely read from the socket, so we skip the sync check.
+    realtime_profiler_pause_requested_.store(true, std::memory_order_release);
+    {
+        auto pause_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPauseTimeoutMs);
+        while (!realtime_profiler_paused_.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() > pause_deadline) {
+                log_warning(
+                    tt::LogMetal, "[Real-time profiler] Could not pause receiver thread for sync check - skipping");
+                realtime_profiler_pause_requested_.store(false, std::memory_order_release);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+    }
+
+    // Receiver thread is now paused - we have exclusive socket access.
+    std::vector<uint32_t> page_buf(kPageWords);
+
+    for (auto& dev_state : realtime_profiler_devices_) {
+        // 2. Drain any pending data pages so the kernel's socket buffer has room
+        //    for the sync response. Process each page the same way the receiver
+        //    thread would (invoke callbacks, push Tracy markers).
+        while (dev_state.socket->pages_available() > 0) {
+            dev_state.socket->read(page_buf.data(), 1);
+            uint32_t* rp = page_buf.data();
+            uint64_t start_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
+            uint32_t start_id = rp[2];
+            uint64_t end_time = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
+            if (start_id != 0) {
+                tt::ProgramRealtimeRecord record;
+                record.program_id = start_id;
+                record.start_timestamp = start_time;
+                record.end_timestamp = end_time;
+                record.frequency = dev_state.sync_frequency;
+                record.chip_id = dev_state.chip_id;
+                record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                tt::InvokeProgramRealtimeProfilerCallbacks(record);
+            }
+        }
+
+        // 3. Enter sync mode on the device kernel.
         std::vector<uint32_t> sync_req = {1};
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
@@ -1427,11 +1493,10 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
             dev_state.sync_request_addr,
             sync_req,
             CoreType::WORKER);
-    }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-    for (auto& dev_state : realtime_profiler_devices_) {
+        // 4. Send host timestamp to trigger device response.
         dev_state.sync_host_time_before = TracyGetCpuTime();
         uint32_t host_time_id = static_cast<uint32_t>(dev_state.sync_host_time_before & 0xFFFFFFFF);
         std::vector<uint32_t> host_time_data = {host_time_id};
@@ -1441,24 +1506,55 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
             dev_state.sync_host_ts_addr,
             host_time_data,
             CoreType::WORKER);
-    }
 
-    TracyMessageL("FINISH_SYNC");
+        TracyMessageL("FINISH_SYNC");
 
-    constexpr uint32_t kSyncTimeoutMs = 5000;
-    for (auto& dev_state : realtime_profiler_devices_) {
+        // 5. Read directly from the socket until we get the sync response
+        //    (or timeout). Any data pages that arrive before the sync response
+        //    are processed inline.
+        bool got_sync = false;
         auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kSyncTimeoutMs);
-        while (!dev_state.sync_response_received.load()) {
+        while (!got_sync) {
             if (std::chrono::steady_clock::now() > deadline) {
                 log_warning(tt::LogMetal, "[Real-time profiler] Sync check timed out for device {}", dev_state.chip_id);
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
-        }
-    }
 
-    for (auto& dev_state : realtime_profiler_devices_) {
-        std::vector<uint32_t> sync_req = {0};
+            if (dev_state.socket->pages_available() == 0) {
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                continue;
+            }
+
+            dev_state.socket->read(page_buf.data(), 1);
+            uint32_t* rp = page_buf.data();
+            uint32_t marker = rp[3];
+
+            if (marker == REALTIME_PROFILER_SYNC_MARKER_ID) {
+                uint64_t device_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
+                realtime_profiler_tracy_handler_->CalibrateDevice(
+                    dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
+                realtime_profiler_tracy_handler_->PushSyncCheckMarker(
+                    dev_state.chip_id, device_time, dev_state.sync_frequency);
+                got_sync = true;
+            } else {
+                uint64_t start_time = (static_cast<uint64_t>(rp[0]) << 32) | rp[1];
+                uint32_t start_id = rp[2];
+                uint64_t end_time = (static_cast<uint64_t>(rp[4]) << 32) | rp[5];
+                if (start_id != 0) {
+                    tt::ProgramRealtimeRecord record;
+                    record.program_id = start_id;
+                    record.start_timestamp = start_time;
+                    record.end_timestamp = end_time;
+                    record.frequency = dev_state.sync_frequency;
+                    record.chip_id = dev_state.chip_id;
+                    record.kernel_sources = tt::GetKernelSourcesVecForRuntimeId(start_id);
+                    tt::InvokeProgramRealtimeProfilerCallbacks(record);
+                }
+            }
+        }
+
+        // 6. Exit sync mode.
+        sync_req[0] = 0;
         tt::tt_metal::detail::WriteToDeviceL1(
             dev_state.device,
             dev_state.realtime_profiler_core,
@@ -1466,6 +1562,9 @@ void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
             sync_req,
             CoreType::WORKER);
     }
+
+    // 7. Resume receiver thread.
+    realtime_profiler_pause_requested_.store(false, std::memory_order_release);
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -1698,7 +1797,26 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
                 dev_state.sync_frequency,
                 dev_state.first_timestamp);
         } else {
-            run_realtime_profiler_sync(dev_state, 100);  // 100 samples, discard first
+            // The device kernel may not be ready immediately after launch.
+            // Retry with increasing delays to give the kernel time to initialize
+            // and start responding to sync requests.
+            constexpr uint32_t kMaxSyncRetries = 3;
+            constexpr uint32_t kRetryDelayMs = 500;
+            for (uint32_t attempt = 0; attempt <= kMaxSyncRetries; attempt++) {
+                if (attempt > 0) {
+                    log_info(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {} sync retry {}/{}",
+                        dev_state.chip_id,
+                        attempt,
+                        kMaxSyncRetries);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+                }
+                run_realtime_profiler_sync(dev_state, 100);
+                if (dev_state.first_timestamp != 0) {
+                    break;
+                }
+            }
         }
     }
 
@@ -1829,6 +1947,16 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
         };
 
         while (!realtime_profiler_stop_.load()) {
+            if (realtime_profiler_pause_requested_.load(std::memory_order_acquire)) {
+                realtime_profiler_paused_.store(true, std::memory_order_release);
+                while (realtime_profiler_pause_requested_.load(std::memory_order_acquire) &&
+                       !realtime_profiler_stop_.load()) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+                realtime_profiler_paused_.store(false, std::memory_order_release);
+                continue;
+            }
+
             ZoneScopedN("PollLoop");
             bool any_data = false;
 

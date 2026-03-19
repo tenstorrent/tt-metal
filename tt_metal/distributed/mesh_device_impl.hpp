@@ -180,6 +180,8 @@ private:
     // Background thread for scrubbing real-time profiler data from all devices
     std::thread realtime_profiler_thread_;
     std::atomic<bool> realtime_profiler_stop_{false};
+    std::atomic<bool> realtime_profiler_pause_requested_{false};
+    std::atomic<bool> realtime_profiler_paused_{false};
     // Tracy handler for real-time profiler (manages per-device contexts and callback)
     std::unique_ptr<RealtimeProfilerTracyHandler> realtime_profiler_tracy_handler_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
