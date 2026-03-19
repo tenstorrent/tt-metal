@@ -95,6 +95,22 @@ class QwenImagePipeline:
             for submesh_device in self._submesh_devices
         ]
 
+        if parallel_config.cfg_parallel.factor != 1:
+            socket_connections = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                )
+                for coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(*submesh_shape))
+            ]
+            socket_config = ttnn.SocketConfig(socket_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096))
+            self._tx_0to1, self._rx_0to1 = ttnn.create_socket_pair(
+                self._submesh_devices[0], self._submesh_devices[1], socket_config
+            )
+            self._tx_1to0, self._rx_1to0 = ttnn.create_socket_pair(
+                self._submesh_devices[1], self._submesh_devices[0], socket_config
+            )
+
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
         self.vae_submesh_idx = len(self._submesh_devices) - self.encoder_submesh_idx - 1  # Use other submesh for VAE. 0
 
@@ -698,8 +714,6 @@ class QwenImagePipeline:
         profiler_iteration: int = 0,
         traced: bool,
     ) -> list[ttnn.Tensor]:
-        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
-
         latents_out = []
         noise_pred_list = []
 
@@ -734,30 +748,19 @@ class QwenImagePipeline:
                 cond = noise_pred_list[0][split_pos:]
                 noise_pred_list[0] = uncond + cfg_scale * (cond - uncond)
             else:
-                # With CFG parallel > 1 and SP > 1, noise predictions are sharded across SP axis.
-                # We need to all-gather to get full sequence, do CFG, then re-shard.
-                # The .cpu(blocking=True) is the sync point where actual compute happens.
-                uncond = tensor.to_torch(
-                    noise_pred_list[0].cpu(blocking=True),
-                    mesh_axes=[None, sp_axis, None],
-                    composer_device=self._submesh_devices[0],
-                ).to(torch.float32)
-                cond = tensor.to_torch(
-                    noise_pred_list[1].cpu(blocking=True),
-                    mesh_axes=[None, sp_axis, None],
-                    composer_device=self._submesh_devices[1],
-                ).to(torch.float32)
+                uncond0 = noise_pred_list[0]
+                cond1 = noise_pred_list[1]
 
-                torch_noise_pred = uncond + cfg_scale * (cond - uncond)
+                uncond1 = ttnn.allocate_tensor_on_device(uncond0.spec, self._submesh_devices[1])
+                cond0 = ttnn.allocate_tensor_on_device(cond1.spec, self._submesh_devices[0])
 
-                # Re-shard the CFG result back to the submeshes with the same sharding as latents
-                noise_pred_list[0] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[0], mesh_axes=[None, sp_axis, None]
-                )
+                ttnn.experimental.send_async(uncond0, self._tx_0to1)
+                ttnn.experimental.recv_async(uncond1, self._rx_0to1)
+                ttnn.experimental.send_async(cond1, self._tx_1to0)
+                ttnn.experimental.recv_async(cond0, self._rx_1to0)
 
-                noise_pred_list[1] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[1], mesh_axes=[None, sp_axis, None]
-                )
+                noise_pred_list[0] = uncond0 + cfg_scale * (cond0 - uncond0)
+                noise_pred_list[1] = uncond1 + cfg_scale * (cond1 - uncond1)
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)

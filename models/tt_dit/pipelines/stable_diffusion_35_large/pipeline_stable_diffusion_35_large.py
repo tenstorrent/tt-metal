@@ -65,6 +65,23 @@ class StableDiffusion3Pipeline:
             CCLManager(submesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
             for submesh_device in self.submesh_devices
         ]
+
+        if parallel_config.cfg_parallel.factor != 1:
+            socket_connections = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                )
+                for coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(*submesh_shape))
+            ]
+            socket_config = ttnn.SocketConfig(socket_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096))
+            self._tx_0to1, self._rx_0to1 = ttnn.create_socket_pair(
+                self.submesh_devices[0], self.submesh_devices[1], socket_config
+            )
+            self._tx_1to0, self._rx_1to0 = ttnn.create_socket_pair(
+                self.submesh_devices[1], self.submesh_devices[0], socket_config
+            )
+
         # Hacky submesh reshapes and assignment to parallelize encoders and VAE
         encoder_device = self.submesh_devices[0]
         self.original_submesh_shape = tuple(encoder_device.shape)
@@ -689,27 +706,19 @@ class StableDiffusion3Pipeline:
                 cond = noise_pred_list[0][split_pos:]
                 noise_pred_list[0] = uncond + guidance_scale * (cond - uncond)
             else:
-                # uncond and cond are replicated, so it is fine to get a single tensor from each
-                uncond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[0])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
-                cond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[1])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
+                uncond0 = noise_pred_list[0]
+                cond1 = noise_pred_list[1]
 
-                torch_noise_pred = uncond + guidance_scale * (cond - uncond)
+                uncond1 = ttnn.allocate_tensor_on_device(uncond0.spec, self.submesh_devices[1])
+                cond0 = ttnn.allocate_tensor_on_device(cond1.spec, self.submesh_devices[0])
 
-                noise_pred_list[0] = tensor.from_torch(
-                    torch_noise_pred,
-                    device=self.submesh_devices[0],
-                    mesh_axes=[None, None, self.dit_parallel_config.sequence_parallel.mesh_axis, None],
-                )
+                ttnn.experimental.send_async(uncond0, self._tx_0to1)
+                ttnn.experimental.recv_async(uncond1, self._rx_0to1)
+                ttnn.experimental.send_async(cond1, self._tx_1to0)
+                ttnn.experimental.recv_async(cond0, self._rx_1to0)
 
-                noise_pred_list[1] = tensor.from_torch(
-                    torch_noise_pred,
-                    device=self.submesh_devices[1],
-                    mesh_axes=[None, None, self.dit_parallel_config.sequence_parallel.mesh_axis, None],
-                )
+                noise_pred_list[0] = uncond0 + guidance_scale * (cond0 - uncond0)
+                noise_pred_list[1] = uncond1 + guidance_scale * (cond1 - uncond1)
 
         for submesh_id in range(len(self.submesh_devices)):
             ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference)

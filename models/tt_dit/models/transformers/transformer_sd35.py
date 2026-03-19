@@ -428,24 +428,6 @@ class SD35Transformer2DModel(Module):
         spatial_time = self.norm_out_linear(ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         scale, shift = chunk_time(spatial_time, 2)
 
-        # Gather spatial such that it is fully replicated for final norm and projection
-        if self.parallel_config.sequence_parallel.factor > 1:
-            spatial = ttnn.experimental.all_gather_async(
-                spatial,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                ),
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
-                    self.parallel_config.sequence_parallel.mesh_axis
-                ),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
-                # chunks_per_sync=16,
-                # num_workers_per_link=3,
-                # num_buffers_per_channel=2,
-            )
         if self.parallel_config.tensor_parallel.factor > 1:
             spatial = ttnn.experimental.all_gather_async(
                 spatial,

@@ -91,6 +91,22 @@ class MotifPipeline:
             for submesh_device in self._submesh_devices
         ]
 
+        if parallel_config.cfg_parallel.factor != 1:
+            socket_connections = [
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                )
+                for coord in ttnn.MeshCoordinateRange(ttnn.MeshShape(*submesh_shape))
+            ]
+            socket_config = ttnn.SocketConfig(socket_connections, ttnn.SocketMemoryConfig(ttnn.BufferType.L1, 4096))
+            self._tx_0to1, self._rx_0to1 = ttnn.create_socket_pair(
+                self._submesh_devices[0], self._submesh_devices[1], socket_config
+            )
+            self._tx_1to0, self._rx_1to0 = ttnn.create_socket_pair(
+                self._submesh_devices[1], self._submesh_devices[0], socket_config
+            )
+
         self.encoder_device = self._submesh_devices[0]
         original_encoder_mesh_shape = list(self.encoder_device.shape)
         original_encoder_mesh_shape[self._encoder_parallel_config.tensor_parallel.mesh_axis] = (
@@ -597,23 +613,19 @@ class MotifPipeline:
                 cond = noise_pred_list[0][split_pos:]
                 noise_pred_list[0] = uncond + cfg_scale * (cond - uncond)
             else:
-                # uncond and cond are replicated, so it is fine to get a single tensor from each
-                uncond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[0])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
-                cond = ttnn.to_torch(ttnn.get_device_tensors(noise_pred_list[1])[0].cpu(blocking=True)).to(
-                    torch.float32
-                )
+                uncond0 = noise_pred_list[0]
+                cond1 = noise_pred_list[1]
 
-                torch_noise_pred = uncond + cfg_scale * (cond - uncond)
+                uncond1 = ttnn.allocate_tensor_on_device(uncond0.spec, self._submesh_devices[1])
+                cond0 = ttnn.allocate_tensor_on_device(cond1.spec, self._submesh_devices[0])
 
-                noise_pred_list[0] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[0], mesh_axes=[None, sp_axis, None]
-                )
+                ttnn.experimental.send_async(uncond0, self._tx_0to1)
+                ttnn.experimental.recv_async(uncond1, self._rx_0to1)
+                ttnn.experimental.send_async(cond1, self._tx_1to0)
+                ttnn.experimental.recv_async(cond0, self._rx_1to0)
 
-                noise_pred_list[1] = tensor.from_torch(
-                    torch_noise_pred, device=self._submesh_devices[1], mesh_axes=[None, sp_axis, None]
-                )
+                noise_pred_list[0] = uncond0 + cfg_scale * (cond0 - uncond0)
+                noise_pred_list[1] = uncond1 + cfg_scale * (cond1 - uncond1)
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
