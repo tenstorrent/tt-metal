@@ -86,13 +86,14 @@ GPT_OSS_DEVICE_PARAMS = {
 }
 
 
-def make_gpt_oss_sampling_args(mesh_device, sampling_dp=1):
+def make_gpt_oss_sampling_args(mesh_device, sampling_dp=1, use_topk_logprobs=False):
     """Create args matching GPT-OSS model on Galaxy [4,8] mesh.
 
     Args:
         mesh_device: TTNN mesh device.
         sampling_dp: Number of independent sampling groups (1 for basic tests,
             mesh_device.shape[0] for row-sharded production config).
+        use_topk_logprobs: If True, use new top-K logprobs path.
     """
 
     class _Args:
@@ -111,6 +112,7 @@ def make_gpt_oss_sampling_args(mesh_device, sampling_dp=1):
     args.sampling_dp = sampling_dp
     args.max_top_k = MAX_TOP_K
     args.sub_core_grids = None
+    args.use_topk_logprobs = use_topk_logprobs
     return args
 
 
@@ -472,7 +474,7 @@ def test_gpt_oss_topk_logprobs(mesh_device, device_params, reset_seeds):
     """
     from models.common.sampling.tt_log_probs import LogProbsResult
 
-    args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1)
+    args = make_gpt_oss_sampling_args(mesh_device, sampling_dp=1, use_topk_logprobs=True)
 
     torch_input = torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size)
     torch_input[:, :, :, VOCAB_SIZE:] = -float("inf")

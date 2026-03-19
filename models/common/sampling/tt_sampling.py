@@ -208,7 +208,11 @@ class TTSampling(LightweightModule):
         # Log-probs tensor to store the log-probs for the batch
         self.tt_log_probs = None
         self.log_probs_calculator = LogProbsCalculator(
-            self.mesh_device, self.sub_core_grids, self.tt_ccl, batch_size=self.max_batch_size
+            self.mesh_device,
+            self.sub_core_grids,
+            self.tt_ccl,
+            batch_size=self.max_batch_size,
+            use_topk_logprobs=getattr(args, "use_topk_logprobs", False),
         )
 
         # Seeds tensor: one RNG slot per user across all rows.
