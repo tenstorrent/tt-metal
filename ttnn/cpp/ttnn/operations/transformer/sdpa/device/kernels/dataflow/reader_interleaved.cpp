@@ -48,7 +48,10 @@ FORCE_INLINE uint32_t read_chunk_for_forwarding(
     return base_write_ptr;
 }
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" << ENDL();
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NQH = get_compile_time_arg_val(1);
     constexpr uint32_t NKH = get_compile_time_arg_val(2);

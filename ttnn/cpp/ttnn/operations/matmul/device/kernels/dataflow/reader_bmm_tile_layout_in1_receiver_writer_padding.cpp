@@ -8,7 +8,10 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA9" << ENDL();
     // READER
     uint32_t rt_args_idx = 0;
     // in1 mcast args

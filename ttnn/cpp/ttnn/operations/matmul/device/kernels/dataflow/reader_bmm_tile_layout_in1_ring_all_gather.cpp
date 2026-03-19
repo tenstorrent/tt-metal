@@ -62,7 +62,10 @@ void do_signaling(uint32_t& rt_args_idx) {
     }
 }
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA10" << ENDL();
     // Compile time args
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
     constexpr const bool in1_is_dram_sharded = get_compile_time_arg_val(1);

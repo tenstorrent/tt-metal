@@ -7,7 +7,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8" << ENDL();
     // RUNTIME ARGS
     uint32_t rt_args_idx = 0;
     // in0 tensor args

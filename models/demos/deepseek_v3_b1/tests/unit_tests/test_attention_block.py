@@ -37,6 +37,47 @@ def create_fabric_router_config(max_payload_size):
 
 
 @pytest.mark.parametrize(
+    "num_heads, seq_len, kv_lora_rank, v_head_dim",
+    [
+        (16, 4096, 512, 128),
+        # (32, 4096, 512, 128),
+    ],
+)
+def test_batched_mla_mm1(
+    device,
+    num_heads,
+    seq_len,
+    kv_lora_rank,
+    v_head_dim,
+):
+    in0_shape = [1, 1, seq_len, kv_lora_rank]
+    in1_shape = [1, num_heads, kv_lora_rank, v_head_dim]
+
+    in0 = torch.randn(in0_shape).float()
+    in1 = torch.randn(in1_shape).float()
+
+    in0_t = ttnn.from_torch(
+        in0,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    in1_t = ttnn.from_torch(
+        in1,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+    )
+    in0_t = ttnn.repeat(in0_t, [1, num_heads, 1, 1])  # get rid of this repeat
+    out_t = ttnn.linear(in0_t, in1_t)
+    out_t = ttnn.to_torch(out_t)
+    out_ref = in0 @ in1
+    out_pass, out_pcc = comp_pcc(out_ref, out_t, 0.99)
+    print(f"Output PCC: {out_pcc}")
+    assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
+
+
+@pytest.mark.parametrize(
     "sender_row, sender_col",
     [
         (1, 0),
@@ -79,7 +120,7 @@ def create_fabric_router_config(max_payload_size):
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
 @pytest.mark.requires_grid_size((13, 10))
-def test_attention_block(
+def test_batched_mla_mm(
     bh_2d_mesh_device,
     mesh_rows,
     mesh_cols,

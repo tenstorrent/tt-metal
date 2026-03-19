@@ -188,12 +188,12 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             "Input tensors must have the same rank, got a_shape rank: {} vs b_shape rank: {}",
             a_shape.rank(),
             b_shape.rank());
-        for (auto i = 0; i < a_shape.rank() - 2; i++) {
-            TT_FATAL(
-                a_shape[i] == b_shape[i],
-                "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or equivalent");
-        }
+        // for (auto i = 0; i < a_shape.rank() - 2; i++) {
+        //     TT_FATAL(
+        //         a_shape[i] == b_shape[i],
+        //         "bmm (non-bcast matmul) expects input tensors of shapes "
+        //         "BCMK*BCKN=BCMN or equivalent"); // HERE JAKSA
+        // }
     }
 
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");

@@ -14,7 +14,12 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 
+#include "api/debug/dprint.h"
+
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4" << ENDL();
     // COMPILE TIME ARGS
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);   // tiles per block (M * in0_block_w)
     constexpr uint32_t in0_block_size_bytes = get_compile_time_arg_val(1);  // bytes per block

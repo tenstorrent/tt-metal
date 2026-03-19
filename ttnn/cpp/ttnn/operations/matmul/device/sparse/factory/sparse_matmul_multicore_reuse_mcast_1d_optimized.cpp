@@ -458,6 +458,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 }});
     }
 
+    fmt::print("hello 5\n");
+
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"

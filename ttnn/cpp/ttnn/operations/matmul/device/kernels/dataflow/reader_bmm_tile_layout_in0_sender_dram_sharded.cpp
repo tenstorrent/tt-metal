@@ -8,7 +8,10 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA5" << ENDL();
     // COMPILE TIME ARGS
     // in0 block args
     constexpr uint32_t in0_block_num_tiles = get_compile_time_arg_val(0);

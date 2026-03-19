@@ -632,6 +632,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                 }});
     }
 
+    fmt::print("hello 2\n");
+
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
@@ -1468,6 +1470,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 {"cb_sparsity", tt::CBIndex::c_6},
                 {"cb_in0_intermediate", tt::CBIndex::c_8},
             }});
+
+    fmt::print("hello 3\n");
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,

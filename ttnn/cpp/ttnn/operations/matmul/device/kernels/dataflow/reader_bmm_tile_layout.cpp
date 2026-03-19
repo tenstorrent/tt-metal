@@ -6,7 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA14" << ENDL();
     bool one_time_profile = true;
 
     // in0 tensor args

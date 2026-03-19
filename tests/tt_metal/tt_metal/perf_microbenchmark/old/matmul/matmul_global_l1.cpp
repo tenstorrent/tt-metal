@@ -361,6 +361,7 @@ tt_metal::Program create_program_mcast_in0_in1(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = in0_sender_compile_time_args});
 
+    fmt::print("hello 1\n");
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"

@@ -6,7 +6,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+#include "api/debug/dprint.h"
+
 void kernel_main() {
+    DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA15" << ENDL();
     // RUNTIME ARGS
     // READER
     uint32_t rt_args_idx = 0;
