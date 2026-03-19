@@ -5,9 +5,16 @@ Take a failing CI signal from a workflow job run URL, a `tenstorrent/tt-metal` i
 
 ## Input
 - **Accepted inputs (at least one required):**
-  - GitHub Actions job URL (example: `https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`)
+  - One or more GitHub Actions job URLs (example: `https://github.com/tenstorrent/tt-metal/actions/runs/<run-id>/job/<job-id>`)
   - GitHub issue URL or issue number in `tenstorrent/tt-metal` (example: `39820`)
-- **Optional:** both issue + job URL together.
+- **Optional:** both issue + one or more job URLs together.
+
+### Multiple job URLs from the user
+When the user pastes **two or more** job links as the primary signal (not just “everything linked in an issue”):
+- Download failed logs for **every** linked job.
+- Identify the failure (test name/path, workflow step, or matrix leaf) that appears in **all** of those runs.
+- Disable **only** that shared failure—the smallest scope that still matches **every** run. Do not disable a failure that shows up in only some of the linked jobs.
+- If the failures differ across runs and nothing clearly matches all of them, **do not** implement a disable from a single run. Summarize per-run failures and ask for clarification or a reduced set of links.
 
 ## GitHub Access
 - Assume `gh` is already authenticated for this repo.
@@ -33,6 +40,7 @@ If no valid input is provided, stop and ask for at least one of the two.
 
 2. **Download and analyze logs**
    - For each selected run/job candidate, download failed logs into `build_ci/disabling` (prefer `gh api`/logs endpoints; `gh run view <run_id> --job <job_id> --log-failed` is acceptable fallback).
+   - If the user supplied multiple job URLs, first extract the failure from each log and **intersect**: the disable target must be the failure present in **all** runs (see **Multiple job URLs from the user**).
    - Analyze logs to determine the narrowest disable action that unblocks CI:
      - exact failing test path/pytest target,
      - failing matrix entry,
@@ -67,6 +75,7 @@ If no valid input is provided, stop and ask for at least one of the two.
      - what was disabled and why,
      - scope minimization rationale,
      - re-enable criteria / follow-up plan.
+   - When multiple job URLs were provided, note that the change targets the failure observed in **all** of those jobs (or explain why no PR was opened if they disagreed).
 
 ## Output
 - Branch name and latest commit hash.
