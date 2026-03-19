@@ -63,7 +63,7 @@ message AsicDescriptor {
     uint32 asic_location = 2;
     uint32 board_type = 3;  // Enum value for BoardType
     uint64 unique_id = 4;
-    int32 umd_unique_id = 6;
+    optional int32 umd_unique_id = 6;
     string host_name = 5;
 }
 
