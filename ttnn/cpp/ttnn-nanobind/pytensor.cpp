@@ -1324,6 +1324,64 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "buffer_page_size",
+            [](const Tensor& self) -> uint32_t {
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return s.mesh_buffer->page_size();
+            },
+            R"doc(
+            Get the page size of the underlying buffer in bytes.
+
+            For tiled tensors, this is the tile size. For row-major tensors,
+            this is the stick size (width * element_size).
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "buffer_num_pages",
+            [](const Tensor& self) -> uint32_t {
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return s.mesh_buffer->num_pages();
+            },
+            R"doc(
+            Get the number of pages in the underlying buffer.
+
+            For tiled tensors, this is the number of tiles.
+            For row-major tensors, this is the number of sticks (rows).
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "buffer_aligned_page_size",
+            [](const Tensor& self) -> uint32_t {
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                auto* ref_buffer = s.mesh_buffer->get_reference_buffer();
+                TT_FATAL(ref_buffer != nullptr, "Could not get reference buffer.");
+                return ref_buffer->aligned_page_size();
+            },
+            R"doc(
+            Get the aligned page size of the underlying buffer in bytes.
+
+            This is the page size rounded up to the buffer's alignment requirement
+            (e.g., DRAM alignment). Used for efficient DMA transfers.
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "element_size",
+            [](const Tensor& self) -> uint32_t {
+                return tt::datum_size(datatype_to_dataformat_converter(self.dtype()));
+            },
+            R"doc(
+            Get the size of a single element in bytes for this tensor's data type.
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 

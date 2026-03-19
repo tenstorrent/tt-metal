@@ -19,6 +19,9 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/base_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+
+#include <nanobind/stl/vector.h>
 
 // NOLINTBEGIN(bugprone-unused-raii)
 
@@ -461,6 +464,47 @@ void py_module(nb::module_& mod) {
         >>> num_cores, all_cores, core_group_1, core_group_2, units_1, units_2 = \\
         ...     ttnn.split_work_to_cores(core_rangeset, 100)
         >>> print(f"Using {num_cores} cores, {units_1} units per core in group 1, {units_2} in group 2")
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<uint32_t, uint32_t, uint32_t, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("num_cores"),
+        nb::arg("grid_size_x"),
+        nb::arg("grid_size_y"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a grid specification to a list of CoreCoord objects.
+
+            Args:
+                num_cores (int): Number of cores to generate coordinates for.
+                grid_size_x (int): Width of the core grid.
+                grid_size_y (int): Height of the core grid.
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
+
+            Example:
+            >>> cores = ttnn.grid_to_cores(4, 8, 8)
+        )doc");
+
+    mod.def(
+        "grid_to_cores",
+        nb::overload_cast<CoreCoord, CoreCoord, bool>(&tt::tt_metal::grid_to_cores),
+        nb::arg("start"),
+        nb::arg("end"),
+        nb::arg("row_wise") = false,
+        R"doc(
+            Convert a core range to a list of CoreCoord objects.
+
+            Args:
+                start (CoreCoord): Start coordinate of the range.
+                end (CoreCoord): End coordinate of the range (inclusive).
+                row_wise (bool, optional): Iterate row-wise. Defaults to False.
+
+            Returns:
+                list[CoreCoord]: List of core coordinates.
         )doc");
 }
 
