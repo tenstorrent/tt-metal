@@ -172,7 +172,7 @@ void kernel_main() {
         tilize_init_short_with_dt(CB_A_RM, CB_B_RM, tiles_per_block, CB_B_TILED);
 
         // for (uint32_t j = 0; j < ntiles_per_row; ++j) {
-        UNPACK(DPRINT << blk << " Waiting for " << tiles_per_block << " tiles from CB_A_RM" << ENDL(););
+        UNPACK(DPRINT << blk << " Waiting for " << tiles_per_block << " tiles from CB_B_RM" << ENDL(););
 
         cb_wait_front(CB_B_RM, tiles_per_block);
         cb_reserve_back(CB_B_TILED, tiles_per_block);

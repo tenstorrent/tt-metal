@@ -99,12 +99,12 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
         CreateCircularBuffer(program, all_cores, cfg);
     };
 
-    make_cb(CB_A_RM, 4 * ntiles_per_row);  // double-buffered
-    make_cb(CB_B_RM, 4 * ntiles_per_row);  // double-buffered
+    make_cb(CB_A_RM, 2 * ntiles_per_row);  // double-buffered
+    make_cb(CB_B_RM, 2 * ntiles_per_row);  // double-buffered
     make_cb(CB_A_TILED, ntiles_per_row);
     make_cb(CB_B_TILED, ntiles_per_row);
     make_cb(CB_OUT_TILED, ntiles_per_row);
-    make_cb(CB_OUT_RM, 4 * ntiles_per_row);
+    make_cb(CB_OUT_RM, 2 * ntiles_per_row);
 
     // ----------------------------------------------------------------------
     // Reader compile-time args
@@ -122,7 +122,8 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     //   [cb_out, stick_size, TensorAccessorArgs_out...,
     //    ntiles_per_row, tile_width_bytes]
     // ----------------------------------------------------------------------
-    std::vector<uint32_t> writer_ct_args = {CB_OUT_RM, row_size_bytes};
+    std::vector<uint32_t> writer_ct_args = {CB_B_RM, CB_OUT_RM, row_size_bytes};
+    TensorAccessorArgs(*src_b_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     writer_ct_args.push_back(ntiles_per_row);
     writer_ct_args.push_back(tile_width_bytes);
@@ -208,7 +209,7 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
                     // Clamp to the actual number of rows for the last (possibly partial) block.
                     const uint32_t num_sticks = rows_for_core;
                     // std::cout << "{" << x << ", " << y << "} start row = " << start_block << ", num sticks = " <<
-                    // rows_for_core << std::endl;
+                    //     rows_for_core << std::endl;
 
                     SetRuntimeArgs(
                         program,
@@ -216,7 +217,11 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
                         core,
                         {src_a_buffer->address(), src_b_buffer->address(), num_sticks, start_row});
 
-                    SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), num_sticks, start_row});
+                    SetRuntimeArgs(
+                        program,
+                        writer_kernel_id,
+                        core,
+                        {src_b_buffer->address(), dst_buffer->address(), num_sticks, start_row});
 
                     SetRuntimeArgs(program, compute_kernel_id, core, {num_sticks, ntiles_per_row});
 
@@ -255,7 +260,8 @@ void DitMinimalRmBinaryProgramFactory::override_runtime_arguments(
         reader_rt[1] = src_b_buffer->address();
 
         auto& writer_rt = GetRuntimeArgs(program, shared.writer_kernel_id)[core.x][core.y];
-        writer_rt[0] = dst_buffer->address();
+        writer_rt[0] = src_b_buffer->address();
+        writer_rt[1] = dst_buffer->address();
     }
 }
 
