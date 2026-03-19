@@ -374,7 +374,7 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<UntilizeDeviceOperation::tensor_return_value_t>
 UntilizeDeviceOperation::create_op_performance_model(
-    const UntilizeDeviceOperation::operation_attributes_t& /*op_attr*/,
+    const UntilizeDeviceOperation::operation_attributes_t& op_attr,
     const UntilizeDeviceOperation::tensor_args_t& inputs,
     tensor_return_value_t& output) {
     const auto& input_tensor = inputs.input;
@@ -385,7 +385,8 @@ UntilizeDeviceOperation::create_op_performance_model(
     uint32_t num_tiles =
         std::ceil(static_cast<float>(input_tensor.physical_volume()) / static_cast<float>(single_tile_size));
     int compute_cycles = 0;
-    const int max_tiles_per_row = 8;
+    // DEST register capacity in half-sync mode: 4 tiles for 32-bit types (UINT32/FLOAT32), 8 for 16-bit
+    const int max_tiles_per_row = op_attr.fp32_dest_acc_en ? 4 : 8;
     const int latency_untilize = 390;      // measured latency for untilize_block
     const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
     if (std::ceil(static_cast<float>(input_tensor.padded_shape()[-1]) / static_cast<float>(tile_width)) <=
