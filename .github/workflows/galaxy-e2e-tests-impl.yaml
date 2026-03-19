@@ -68,7 +68,8 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        # No models tests here yet, so remove MLPerf so we know we can run this
+        # in other DCs besides AUS2
       options: "--device /dev/tenstorrent"
     defaults:
       run:

@@ -23,7 +23,7 @@ PlusOneDeviceOperation::spec_return_value_t PlusOneDeviceOperation::compute_outp
     return input_tensor.tensor_spec();
 }
 
-tt::stl::hash::hash_t PlusOneDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PlusOneDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& input_tensor) {
     const auto& input_shape = input_tensor.padded_shape();
     // Hash operation attributes (both sub_core_grids and skip_negative_entries affect program structure)

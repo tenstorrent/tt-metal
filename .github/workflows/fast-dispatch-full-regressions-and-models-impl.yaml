@@ -35,6 +35,8 @@ jobs:
       unstable_count:  ${{ steps.ctm.outputs.unstable_count }}
       stable_ci_v2_matrix: ${{ steps.ctm.outputs.stable_ci_v2_matrix }}
       stable_ci_v2_count: ${{ steps.ctm.outputs.stable_ci_v2_count }}
+      stable_bh_ci_v2_matrix: ${{ steps.ctm.outputs.stable_bh_ci_v2_matrix }}
+      stable_bh_ci_v2_count: ${{ steps.ctm.outputs.stable_bh_ci_v2_count }}
     steps:
       - id: ctm
         shell: bash
@@ -79,6 +81,11 @@ jobs:
             {"model":"gemma-3-4b-it"}
           ]'
 
+          # Stable set for Blackhole (CIv2)
+          STABLE_BH_CIv2='[
+            {"model":"stable_diffusion_xl_base","timeout":120}
+          ]'
+
           # Unstable set (explicit commands)
           UNSTABLE='[
             {"model":"mamba 1","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 1"},
@@ -114,6 +121,8 @@ jobs:
 
             STABLE_CIv2_OUT="${STABLE_CIv2}"
 
+            STABLE_BH_CIv2_OUT="${STABLE_BH_CIv2}"
+
             # Skipping due to issue 15932 (mamba 1, mamba 2, mamba 3, mamba 4, mamba 6)
             UNSTABLE_OUT='[
               {"model":"mamba 5","cmd":"pytest --timeout 900 tests/nightly/single_card/mamba --splits 6 --group 5"}
@@ -126,20 +135,25 @@ jobs:
 
             STABLE_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select(.model | IN($sel[]))]' <<< "${STABLE_CIv2}")"
 
+            STABLE_BH_CIv2_OUT="$(jq --argjson sel "${SEL_ARR}" '[.[] | select(.model | IN($sel[]))]' <<< "${STABLE_BH_CIv2}")"
+
           fi
 
           STABLE_COUNT="$(jq 'length' <<< "${STABLE_OUT}")"
           STABLE_CIv2_COUNT="$(jq 'length' <<< "${STABLE_CIv2_OUT}")"
+          STABLE_BH_CIv2_COUNT="$(jq 'length' <<< "${STABLE_BH_CIv2_OUT}")"
           UNSTABLE_COUNT="$(jq 'length' <<< "${UNSTABLE_OUT}")"
 
 
           echo "stable_matrix=$(echo $STABLE_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
           echo "unstable_matrix=$(echo $UNSTABLE_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
           echo "stable_ci_v2_matrix=$(echo $STABLE_CIv2_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "stable_bh_ci_v2_matrix=$(echo $STABLE_BH_CIv2_OUT | tr -d '\n')" >> "$GITHUB_OUTPUT"
 
           echo "stable_count=${STABLE_COUNT}"     >> "$GITHUB_OUTPUT"
           echo "unstable_count=${UNSTABLE_COUNT}" >> "$GITHUB_OUTPUT"
           echo "stable_ci_v2_count=${STABLE_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "stable_bh_ci_v2_count=${STABLE_BH_CIv2_COUNT}" >> "$GITHUB_OUTPUT"
 
   nightly-wh-models:
     needs: create-test-matrix
@@ -344,8 +358,75 @@ jobs:
         with:
           prefix: "test_reports_"
 
+  nightly-bh-models:
+    needs: create-test-matrix
+    if: ${{ needs.create-test-matrix.outputs.stable_bh_ci_v2_count != '0' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-config: ${{ fromJSON(needs.create-test-matrix.outputs.stable_bh_ci_v2_matrix) }}
+    name: Nightly BH ${{ matrix.test-config.model }}
+    # Use CIv2 P150b stable runner
+    runs-on: tt-ubuntu-2204-P150b-stable
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: blackhole
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        # CIv2 uses LFC via TT_GH_CI_INFRA, no HF_HUB_CACHE needed
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run frequent reg tests scripts
+        timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
+        env:
+          PYTEST_CMD: ${{ inputs.enable-ops-recording && 'python -m tracy -r -p --dump-device-data-mid-run -m pytest' || 'pytest' }}
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '7,7' || '' }}
+        run: |
+          $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
+      - name: Prepare Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: ./docker-job/.github/actions/prepare-tracy-reports
+        with:
+          profiler-dir: /work/generated/profiler
+          model-name: ${{ matrix.test-config.model }}
+          card: P150b
+      - name: Upload Tracy reports
+        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        with:
+          path: /work/generated/profiler/reports
+          prefix: "tracy_ops_${{ matrix.test-config.model }}_P150b_"
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          path: /work/generated/test_reports/
+          prefix: "test_reports_"
+
   aggregate-ops-recording:
-    needs: [nightly-wh-models, nightly-wh-models-civ2]
+    needs: [nightly-wh-models, nightly-wh-models-civ2, nightly-bh-models]
     if: ${{ !cancelled() && inputs.enable-ops-recording }}
     runs-on: ubuntu-latest
     steps:

@@ -145,7 +145,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
         (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
         "Tensor data pointer must be 8-byte aligned!");
 
-    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, tt::stl::Span<std::byte>(data_region, data_size), memory_pin);
+    Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {
         tensor = tensor.to_device(device, tensor.tensor_spec().memory_config());
     }

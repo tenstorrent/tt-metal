@@ -5,7 +5,8 @@
 """Python modules package for ttml."""
 
 # C++ bindings from _ttml.modules
-from .._ttml.modules import InferenceMode, ModuleBase, RunMode
+# Use _ttml directly (compiled .so has no __path__, so .._ttml fails)
+from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
 from .linear import LinearLayer
@@ -14,16 +15,18 @@ from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
 __all__ = [
+    # C++ bindings
+    "InferenceMode",
+    "ModuleBase",
+    "RunMode",
+    # Python classes
     "AbstractModuleBase",
     "Buffer",
-    "InferenceMode",
     "LinearLayer",
     "LoraConfig",
     "LoraLinear",
     "LoraModel",
-    "ModuleBase",
     "ModuleDict",
     "ModuleList",
     "Parameter",
-    "RunMode",
 ]

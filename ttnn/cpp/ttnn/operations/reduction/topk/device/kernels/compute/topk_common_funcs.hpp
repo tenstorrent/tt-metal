@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-namespace NAMESPACE {
+#pragma once
+
 void process_and_sort_tiles(
     uint32_t input_cb_index,
     uint32_t index_cb_index,
@@ -288,4 +289,3 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
     cb_wait_front(transposed_cb_index, Wt);
     cb_pop_front(transposed_cb_index, Wt);
 }
-}  // namespace NAMESPACE

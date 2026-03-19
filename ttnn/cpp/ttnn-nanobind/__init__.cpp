@@ -18,6 +18,7 @@
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
+#include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
@@ -286,6 +287,9 @@ NB_MODULE(_ttnn, mod) {
     tracy_decorator(m_tensor);
     tracy_decorator(m_depr_operations);
 #endif
+
+    auto m_bfp_utils = mod.def_submodule("bfp_utils", "BFP tile pack/unpack utilities");
+    ttnn::bfp_utils::py_module(m_bfp_utils);
 
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);
