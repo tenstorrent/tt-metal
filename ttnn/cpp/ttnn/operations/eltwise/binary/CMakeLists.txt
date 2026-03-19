@@ -31,7 +31,6 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         binary.cpp
-        binary_composite.cpp
         common/binary_op_utils.cpp
         device/binary_composite_op.cpp
         device/binary_device_operation.cpp

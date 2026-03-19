@@ -21,10 +21,56 @@
 #include "ttnn/device.hpp"
 #include <variant>
 
-namespace ttnn::operations::binary {
+namespace ttnn {
+
+using namespace operations;
+
+namespace {
+template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
+Tensor div_like_op(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
+}
+
+template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
+Tensor div_like_op(
+    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, memory_config);
+}
+template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
+Tensor binary_composite_op_polyval(
+    const Tensor& input_tensor_a,
+    const std::vector<float>& coeffs,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, coeffs, memory_config);
+}
+
+template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
+Tensor binary_composite_op(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return operations::binary::OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
+}
+
+template <operations::binary::BinaryCompositeOpType binary_comp_op_type>
+Tensor binary_composite_op_isclose(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float rtol,
+    float atol,
+    const bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return operations::binary::OpHandler<binary_comp_op_type>::handle(
+        input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+}
+}  // namespace
 
 // nextafter
-Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor operations::binary::_nextafter(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
     Tensor result(input_a);
     {
@@ -44,7 +90,7 @@ Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optio
 }
 
 // ∣input−other∣≤ atol+rtol×∣other∣
-Tensor _isclose(
+Tensor operations::binary::_isclose(
     const Tensor& input_a,
     const Tensor& input_b,
     float rtol,
@@ -76,10 +122,10 @@ Tensor minimum(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::MINIMUM,
+        binary::BinaryOpType::MINIMUM,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -103,8 +149,8 @@ Tensor minimum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MINIMUM>::
-                invoke(input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::unary::ExecuteUnaryTSVariant<ttnn::unary::UnaryOpType::MINIMUM>::invoke(
+                input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
 }
@@ -119,10 +165,10 @@ Tensor maximum(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::MAXIMUM,
+        binary::BinaryOpType::MAXIMUM,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -146,8 +192,8 @@ Tensor maximum(
     std::optional<bool> /*use_legacy*/) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
-                invoke(input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::unary::ExecuteUnaryTSVariant<ttnn::unary::UnaryOpType::MAXIMUM>::invoke(
+                input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
 }
@@ -163,10 +209,10 @@ Tensor bias_gelu(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a_arg,
         input_tensor_b_arg,
-        BinaryOpType::BIAS_GELU,
+        binary::BinaryOpType::BIAS_GELU,
         output_dtype,
         memory_config,
         optional_output_tensor,
@@ -205,10 +251,10 @@ Tensor bias_gelu(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         scalar,
-        BinaryOpType::BIAS_GELU,
+        binary::BinaryOpType::BIAS_GELU,
         output_dtype,
         memory_config,
         output,
@@ -220,7 +266,8 @@ Tensor bias_gelu(
         std::nullopt);  // sub_core_grids
 }
 
-Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor operations::binary::_atan2(
+    const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
     log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
     Tensor result(input_a);
     {
@@ -270,9 +317,9 @@ Tensor div(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     const auto has_legacy_only_args = rounding_mode.has_value();
@@ -287,10 +334,10 @@ Tensor div(
         // fast_and_approximate_mode is not supported for integer division yet.
 
         if (rounding_mode == "floor") {
-            return detail::invoke_binary_ng(
+            return binary::detail::invoke_binary_ng(
                 input,
                 value,
-                BinaryOpType::DIV_FLOOR,
+                binary::BinaryOpType::DIV_FLOOR,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
@@ -302,10 +349,10 @@ Tensor div(
                 sub_core_grids);
         }
         if (rounding_mode == "trunc") {
-            return detail::invoke_binary_ng(
+            return binary::detail::invoke_binary_ng(
                 input,
                 value,
-                BinaryOpType::DIV_TRUNC,
+                binary::BinaryOpType::DIV_TRUNC,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
@@ -321,10 +368,10 @@ Tensor div(
             (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
             "Incorrect output_dtype value for Integer Division(rounding_mode=None) ; valid input values are None or "
             "ttnn.float32");
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input,
             value,
-            BinaryOpType::DIV,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
@@ -342,10 +389,10 @@ Tensor div(
                             input, value, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
         TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input,
             value,
-            BinaryOpType::DIV,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
@@ -404,9 +451,9 @@ Tensor div(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     DataType input_dtype = input_a.dtype();
@@ -424,10 +471,10 @@ Tensor div(
         // fast_and_approximate_mode is not supported for integer division yet.
 
         if (rounding_mode == "floor") {
-            return detail::invoke_binary_ng(
+            return binary::detail::invoke_binary_ng(
                 input_a,
                 input_b,
-                BinaryOpType::DIV_FLOOR,
+                binary::BinaryOpType::DIV_FLOOR,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
@@ -439,10 +486,10 @@ Tensor div(
                 sub_core_grids);
         }
         if (rounding_mode == "trunc") {
-            return detail::invoke_binary_ng(
+            return binary::detail::invoke_binary_ng(
                 input_a,
                 input_b,
-                BinaryOpType::DIV_TRUNC,
+                binary::BinaryOpType::DIV_TRUNC,
                 std::nullopt,
                 output_mem_config,
                 output_tensor,
@@ -458,10 +505,10 @@ Tensor div(
             (!output_dtype.has_value() || output_dtype == DataType::FLOAT32),
             "Incorrect output_dtype value for Integer Division(rounding_mode=None) ; valid input values are None or "
             "ttnn.float32");
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_a,
             input_b,
-            BinaryOpType::DIV,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
@@ -479,10 +526,10 @@ Tensor div(
                             input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations)))) {
         TT_FATAL(!has_legacy_only_args, "rounding_mode is not valid when use_legacy parameter is false");
 
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_a,
             input_b,
-            BinaryOpType::DIV,
+            binary::BinaryOpType::DIV,
             std::nullopt,
             output_mem_config,
             output_tensor,
@@ -543,7 +590,7 @@ Tensor div(
     return typecast(result, input_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
-Tensor _div_no_nan_overload(
+Tensor operations::binary::_div_no_nan_overload(
     const Tensor& input_a, float value, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     if (value == 0) {
         return ttnn::zeros_like(input_a);
@@ -551,7 +598,8 @@ Tensor _div_no_nan_overload(
     return ttnn::multiply(input_a, (1.0f / value));
 }
 
-Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor operations::binary::_div_no_nan(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_a.dtype() == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         // Not using SFPU div op here since inf/nan handling is not required
         Tensor div_result = ttnn::multiply(input_a, ttnn::reciprocal(input_b), std::nullopt, output_mem_config);
@@ -692,7 +740,7 @@ Tensor remainder(
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
     if (is_int32) {
         return ttnn::prim::binary_ng(
-            input_a, input_b, BinaryOpType::REMAINDER, std::nullopt, output_mem_config, std::nullopt);
+            input_a, input_b, binary::BinaryOpType::REMAINDER, std::nullopt, output_mem_config, std::nullopt);
     }
 
     // No typecast for FP32 input
@@ -723,10 +771,10 @@ Tensor fmod(
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_a,
         input_b,
-        BinaryOpType::FMOD,
+        binary::BinaryOpType::FMOD,
         std::nullopt,
         output_mem_config,
         std::nullopt,
@@ -743,11 +791,12 @@ Tensor fmod(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
+    return ttnn::unary::ExecuteUnaryWithFloatParameter<ttnn::unary::UnaryOpType::FMOD>::invoke(
         input, scalar, output_mem_config);
 }
 
-Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor operations::binary::_floor_div_overload(
+    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
     if (value == 0) {
         float t_inf = std::numeric_limits<float>::infinity();
         float t_nan = std::nanf("");
@@ -760,7 +809,8 @@ Tensor _floor_div_overload(const Tensor& input_a, float value, const std::option
     return ttnn::floor(temp);
 }
 
-Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor operations::binary::_floor_div(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor temp = ttnn::div(input_a, input_b, false, std::nullopt, std::nullopt, output_mem_config);
     Tensor result = ttnn::div(input_a, input_b, false, "floor", std::nullopt, output_mem_config);
     // floor(nan, inf, -inf) = nan, inf, -inf
@@ -780,7 +830,8 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
  * - implementation supports any 1D "squeezable tensor" at input operands
  *   by running reshape.
  */
-Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor operations::binary::_outer(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     const ttnn::Shape& s_a = input_a.logical_shape();
     const ttnn::Shape& s_b = input_b.logical_shape();
     auto num_ones = [](const ttnn::Shape& s) -> uint32_t {
@@ -825,7 +876,7 @@ Tensor _outer(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return ttnn::matmul(a_slim, b_slim);
 }
 
-Tensor _polyval(
+Tensor operations::binary::_polyval(
     const Tensor& input_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& output_mem_config) {
     TT_ASSERT(!coeffs.empty() && "coeffs should be 1 or more coefficients");
     if (coeffs.size() == 1) {
@@ -850,10 +901,10 @@ Tensor gcd(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::GCD,
+        binary::BinaryOpType::GCD,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -875,10 +926,10 @@ Tensor lcm(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::LCM,
+        binary::BinaryOpType::LCM,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -929,10 +980,10 @@ Tensor pow(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input,
         exponent,
-        operations::binary::BinaryOpType::POWER,
+        binary::BinaryOpType::POWER,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -981,10 +1032,10 @@ Tensor rsub(
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::RSUB,
+        binary::BinaryOpType::RSUB,
         output_dtype,
         memory_config,
         optional_output_tensor,
@@ -1014,10 +1065,10 @@ Tensor rsub(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_b,
-            operations::binary::BinaryOpType::RSUB,
+            binary::BinaryOpType::RSUB,
             output_dtype,
             memory_config,
             optional_output_tensor,
@@ -1050,10 +1101,10 @@ Tensor bitwise_and(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_tensor_b,
-            operations::binary::BinaryOpType::BITWISE_AND,
+            binary::BinaryOpType::BITWISE_AND,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1065,10 +1116,10 @@ Tensor bitwise_and(
             /*sub_core_grids*/ std::nullopt);
     }
 
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::BITWISE_AND,
+        binary::BinaryOpType::BITWISE_AND,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -1097,10 +1148,10 @@ Tensor bitwise_and(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_b,
-            operations::binary::BinaryOpType::BITWISE_AND,
+            binary::BinaryOpType::BITWISE_AND,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1133,10 +1184,10 @@ Tensor bitwise_or(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_tensor_b,
-            operations::binary::BinaryOpType::BITWISE_OR,
+            binary::BinaryOpType::BITWISE_OR,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1148,10 +1199,10 @@ Tensor bitwise_or(
             /*sub_core_grids*/ std::nullopt);
     }
 
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::BITWISE_OR,
+        binary::BinaryOpType::BITWISE_OR,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -1180,10 +1231,10 @@ Tensor bitwise_or(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_b,
-            operations::binary::BinaryOpType::BITWISE_OR,
+            binary::BinaryOpType::BITWISE_OR,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1216,10 +1267,10 @@ Tensor bitwise_xor(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_tensor_b,
-            operations::binary::BinaryOpType::BITWISE_XOR,
+            binary::BinaryOpType::BITWISE_XOR,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1231,10 +1282,10 @@ Tensor bitwise_xor(
             /*sub_core_grids*/ std::nullopt);
     }
 
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::BITWISE_XOR,
+        binary::BinaryOpType::BITWISE_XOR,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -1263,10 +1314,10 @@ Tensor bitwise_xor(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_b,
-            operations::binary::BinaryOpType::BITWISE_XOR,
+            binary::BinaryOpType::BITWISE_XOR,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1299,10 +1350,10 @@ Tensor bitwise_left_shift(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_tensor_b,
-            operations::binary::BinaryOpType::LEFT_SHIFT,
+            binary::BinaryOpType::LEFT_SHIFT,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1314,10 +1365,10 @@ Tensor bitwise_left_shift(
             /*sub_core_grids*/ std::nullopt);
     }
 
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::LEFT_SHIFT,
+        binary::BinaryOpType::LEFT_SHIFT,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -1346,10 +1397,10 @@ Tensor bitwise_left_shift(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_b,
-            operations::binary::BinaryOpType::LEFT_SHIFT,
+            binary::BinaryOpType::LEFT_SHIFT,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1382,10 +1433,10 @@ Tensor bitwise_right_shift(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_tensor_b,
-            operations::binary::BinaryOpType::RIGHT_SHIFT,
+            binary::BinaryOpType::RIGHT_SHIFT,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1397,10 +1448,10 @@ Tensor bitwise_right_shift(
             /*sub_core_grids*/ std::nullopt);
     }
 
-    return detail::invoke_binary_ng(
+    return binary::detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
-        operations::binary::BinaryOpType::RIGHT_SHIFT,
+        binary::BinaryOpType::RIGHT_SHIFT,
         std::nullopt,
         memory_config,
         optional_output_tensor,
@@ -1429,10 +1480,10 @@ Tensor bitwise_right_shift(
                              optional_output_tensor,
                              lhs_activations,
                              rhs_activations))) {
-        return detail::invoke_binary_ng(
+        return binary::detail::invoke_binary_ng(
             input_tensor_a,
             input_b,
-            operations::binary::BinaryOpType::RIGHT_SHIFT,
+            binary::BinaryOpType::RIGHT_SHIFT,
             std::nullopt,
             memory_config,
             optional_output_tensor,
@@ -1447,4 +1498,116 @@ Tensor bitwise_right_shift(
     return ttnn::bitwise_right_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
-}  // namespace ttnn::operations::binary
+Tensor logical_left_shift(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::bitwise_left_shift(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor logical_left_shift(
+    const Tensor& input_tensor,
+    int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy) {
+    return ttnn::bitwise_left_shift(
+        input_tensor,
+        input_b,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return bias_gelu(
+        input_tensor_a,
+        input_tensor_b,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        std::nullopt,
+        sub_core_grids);
+}
+
+Tensor atan2(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return binary_composite_op<binary::BinaryCompositeOpType::ATAN2>(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor nextafter(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return binary_composite_op<binary::BinaryCompositeOpType::NEXTAFTER>(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor isclose(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float rtol,
+    float atol,
+    const bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config) {
+    return binary_composite_op_isclose<binary::BinaryCompositeOpType::ISCLOSE>(
+        input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+}
+
+Tensor div_no_nan(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return div_like_op<binary::BinaryCompositeOpType::DIV_NO_NAN>(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor div_no_nan(const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
+    return div_like_op<binary::BinaryCompositeOpType::DIV_NO_NAN>(input_tensor_a, value, memory_config);
+}
+
+Tensor floor_div(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return div_like_op<binary::BinaryCompositeOpType::FLOOR_DIV>(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor floor_div(const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
+    return div_like_op<binary::BinaryCompositeOpType::FLOOR_DIV>(input_tensor_a, value, memory_config);
+}
+
+Tensor outer(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return binary_composite_op<binary::BinaryCompositeOpType::OUTER>(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor polyval(
+    const Tensor& input_tensor_a, const std::vector<float>& coeffs, const std::optional<MemoryConfig>& memory_config) {
+    return binary_composite_op_polyval<binary::BinaryCompositeOpType::POLYVAL>(input_tensor_a, coeffs, memory_config);
+}
+
+}  // namespace ttnn
