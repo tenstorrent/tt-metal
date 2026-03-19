@@ -25,6 +25,7 @@
 #include <umd/device/types/arch.hpp>
 
 // Internal access
+#include "dispatch/system_memory_manager.hpp"
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "context/metal_env_accessor.hpp"
@@ -454,6 +455,27 @@ TEST(MetalContextIntegrationTest, ForkWithDisjointDevices) {
 
     wait_for_child(pid1, "Child 1");
     wait_for_child(pid2, "Child 2");
+}
+
+TEST(MetalContextIntegrationTest, MeshDevicePropagatesContextId) {
+    MetalEnvDescriptor desc(experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 8));
+    MetalEnv env(desc);
+    auto mesh_shape = env.get_system_mesh().shape();
+    auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
+    auto mesh_device = env.create_mesh_device(mesh_device_config);
+
+    ContextId context_id = mesh_device->impl().get_context_id();
+
+    EXPECT_NE(mesh_device->impl().get_context_id(), DEFAULT_CONTEXT_ID);
+
+    auto submesh_0 = mesh_device->create_submesh(distributed::MeshShape(1, 1));
+    EXPECT_EQ(submesh_0->impl().get_context_id(), context_id);
+
+    auto submesh_1 = mesh_device->create_submesh(distributed::MeshShape(1, 2));
+    EXPECT_EQ(submesh_1->impl().get_context_id(), context_id);
+
+    SystemMemoryManager& sysmem_manager = mesh_device->impl().get_devices()[0]->sysmem_manager();
+    EXPECT_EQ(sysmem_manager.get_context_id(), context_id);
 }
 
 }  // namespace tt::tt_metal
