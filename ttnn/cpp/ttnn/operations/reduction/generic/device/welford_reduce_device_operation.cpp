@@ -10,7 +10,7 @@
 namespace ttnn::prim {
 
 WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     using namespace tt::tt_metal;
 
     return WelfordReduceProgramFactory{};
@@ -38,8 +38,8 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
 WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
-    // Always reduce the H dimension for Welford reduce.
-    output_shape[-2] = 1;
+    // Always reduce the W dimension for Welford reduce.
+    output_shape[-1] = 1;
 
     TensorSpec tensor_spec(
         output_shape,
@@ -102,8 +102,7 @@ ttnn::Tensor welford_reduce(
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    ) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,

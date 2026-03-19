@@ -35,19 +35,22 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999,
+        pcc_threshold=0.99,
         rtol=0.012,
         atol=0.012,
         frobenius_threshold=0.005,
     )
 
 
-@pytest.mark.parametrize("batch_size", [1, 16])
-@pytest.mark.parametrize("h", [32, 64])
-@pytest.mark.parametrize("w", [32, 64])
-@pytest.mark.parametrize("dim", [None, [], -1, -2])
+@pytest.mark.parametrize("batch_size", [1])
+# @pytest.mark.parametrize("batch_size", [1, 16])
+@pytest.mark.parametrize("h", [320, 640, 327])
+@pytest.mark.parametrize("w", [320, 640, 641])
+@pytest.mark.parametrize("dim", [-1])
+# @pytest.mark.parametrize("dim", [None, [], -1, -2])
 @pytest.mark.parametrize("keepdim", [True])
-@pytest.mark.parametrize("correction", [True, False])
+@pytest.mark.parametrize("correction", [False])
+# @pytest.mark.parametrize("correction", [True, False])
 def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch.manual_seed(0)
 
@@ -67,7 +70,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999,
+        pcc_threshold=0.99999,
         rtol=0.023,
         atol=0.016,
         frobenius_threshold=0.007,

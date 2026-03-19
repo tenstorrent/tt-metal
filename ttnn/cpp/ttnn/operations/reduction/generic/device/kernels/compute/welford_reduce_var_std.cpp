@@ -14,10 +14,12 @@
 namespace generic = norm::kernel_util::generic;
 
 void kernel_main() {
-    // Runtime arg 0: total number of outer-loop iterations (N * C * Ht),
+    // Runtime args:
+    // Total number of outer-loop iterations (N * C * Ht),
     // i.e. how many independent row-reductions this core must perform.
     uint32_t NCHt = get_arg_val<uint32_t>(0);
 
+    // Compile-time args:
     // Number of tiles along the W (reduction) dimension.
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     // The actual number of elements along W (before tiling).
@@ -41,7 +43,7 @@ void kernel_main() {
     // Circular buffer holding a pre-computed 1/n look-up table (one entry
     // per column index 1..W) that Welford's online algorithm uses to avoid
     // runtime division.
-    constexpr auto cb_reciprocals = tt::CBIndex::c_25;
+    //    constexpr auto cb_reciprocals = tt::CBIndex::c_25;
 
     experimental::CircularBuffer cb_in_obj(cb_in);
     experimental::CircularBuffer cb_out_obj(cb_out);
@@ -65,8 +67,9 @@ void kernel_main() {
     pack_reconfig_data_format(cb_out);
 
     // Get pointer to the reciprocal LUT
-    using recip_lut_t = std::array<uint32_t, W>;
-    auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals, 0);
+    //    using recip_lut_t = std::array<uint32_t, W>;
+    //    auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals,
+    //    0);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
@@ -80,7 +83,8 @@ void kernel_main() {
             cb_in_obj.wait_front(onetile);
             // Welford's needs transposed input tile
             transpose_wh_tile(cb_in, 0, input_dst);
-            welford_update<W>(input_dst, start_N, *p_reciprocals);
+            //            welford_update<W>(input_dst, start_N, *p_reciprocals);
+            welford_update<0>(input_dst, start_N, {});
             cb_in_obj.pop_front(1);
             start_N += tile_width;
         }
@@ -91,10 +95,12 @@ void kernel_main() {
         cb_in_obj.wait_front(onetile);
         transpose_wh_tile(cb_in, 0, input_dst);
         cb_in_obj.pop_front(1);
-        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
+        //        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
+        welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
 
         // Store the mean and variance to the destination registers
-        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
+        //        welford_finalize_to_row<W>(mean_dst, W - 1, *p_reciprocals);
+        welford_finalize_to_row<0>(mean_dst, W - 1, {});
         tile_regs_commit();
 
         // Pack variance and transpose back to column format
