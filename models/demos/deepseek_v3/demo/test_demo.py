@@ -15,6 +15,7 @@ MODEL_PATH = Path(
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
+
 def _demo_case(
     *,
     max_prompts: int,
@@ -48,6 +49,7 @@ def _demo_case(
         id=case_id,
         marks=marks,
     )
+
 
 # Test matrix:
 # +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
