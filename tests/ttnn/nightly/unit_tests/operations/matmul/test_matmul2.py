@@ -83,7 +83,9 @@ def test_matmul_1d_in0_batched(
         per_core_M = M // 32
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -187,7 +189,9 @@ def test_linear_fp32_acc_l1(
         per_core_M = M // 32
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -294,7 +298,9 @@ def test_matmul_no_mcast_fp32_acc_l1(
             )
 
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -410,7 +416,9 @@ def test_matmul_1d_fp32_input_output(
         per_core_M = M // 32
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -525,7 +533,9 @@ def test_matmul_no_mcast_fp32_input_output(
             )
 
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -640,7 +650,9 @@ def test_matmul_no_untilize_output_param(
             )
 
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=K // 32,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -738,7 +750,9 @@ def test_sharded_matmul_2d(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=4,
@@ -838,7 +852,9 @@ def test_sharded_matmul_2d_in0_height_sharded_in1_width_sharded(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=K // 32,
         out_subblock_h=1,
         out_subblock_w=2,
@@ -930,7 +946,9 @@ def test_sharded_matmul_2d_transposed(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=4,
@@ -1028,7 +1046,9 @@ def test_resharded_binary_to_matmul(device, function_level_defaults):
         ttnn.ShardOrientation.COL_MAJOR,
     )
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size_matmul,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size_matmul[0] - 1, grid_size_matmul[1] - 1))}
+        ),
         in0_block_w=2,
         out_subblock_h=5,
         out_subblock_w=1,
@@ -1117,7 +1137,9 @@ def test_sharded_matmul_1d_in0(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=2,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -1196,7 +1218,9 @@ def test_sharded_matmul_1d_in1_wormhole(device, function_level_defaults):
     )
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1))}
+        ),
         in0_block_w=K // 32,
         out_subblock_h=1,
         out_subblock_w=1,
@@ -1289,7 +1313,9 @@ def test_sharded_matmul_no_mcast(
         )
 
     program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=grid_size,
+        allowed_worker_cores=ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+        ),
         in0_block_w=K // 32,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,

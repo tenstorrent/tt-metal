@@ -1639,7 +1639,6 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len):
     w1_out = ttnn.linear(
         tt_input,
         tt_w1,
-        core_grid=None,
         dtype=ttnn.bfloat16,
         program_config=pc_1,
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -1650,7 +1649,6 @@ def test_llama_mlp_width_sharded_to_interleaved_pcc_err(device, seq_len):
     w2_out = ttnn.linear(
         w1_out,
         tt_w2,
-        core_grid=None,
         dtype=ttnn.bfloat16,
         program_config=pc_2,
         memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,

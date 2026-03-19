@@ -34,9 +34,9 @@ def test_with_ops(device):
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
 
-    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
+    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG, core_grid=ttnn.CoreGrid(y=8, x=8))
+    output = ttnn.matmul(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 def test_mesh_device(

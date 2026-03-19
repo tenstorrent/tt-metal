@@ -68,7 +68,9 @@ def test_run_8x7_matmul(
 
     if program_config_variant == "MatmulMultiCoreReuseMultiCastProgramConfig":
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=in_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -79,7 +81,9 @@ def test_run_8x7_matmul(
         )
     elif program_config_variant == "MatmulMultiCoreReuseMultiCast1DProgramConfig":
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=in_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
@@ -91,7 +95,9 @@ def test_run_8x7_matmul(
         )
     else:
         program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-            compute_with_storage_grid_size=grid_size,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_size[0] - 1, grid_size[1] - 1))}
+            ),
             in0_block_w=in_block_w,
             out_subblock_h=out_subblock_h,
             out_subblock_w=out_subblock_w,
