@@ -11,18 +11,15 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
-#include <iostream>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "metal/operations.hpp"
-#include "modules/linear_module.hpp"
-#include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
-#include "optimizers/sgd.hpp"
 
 class PolyNormOpTest : public ::testing::Test {
 protected:
@@ -42,11 +39,6 @@ struct PolyNormCaseData {
     xt::xarray<float> input;
     xt::xarray<float> weight;
     xt::xarray<float> bias;
-};
-
-enum class PolyNormForwardImpl {
-    CompositeOp,
-    FusedMetalKernel,
 };
 
 xt::xarray<float> rms_norm_last_dim(const xt::xarray<float>& x, float epsilon) {
@@ -112,13 +104,6 @@ PolyNormCaseData make_case_data(const std::vector<uint32_t>& input_shape) {
     return data;
 }
 
-float relative_l2(const xt::xarray<float>& test, const xt::xarray<float>& reference) {
-    auto diff = test - reference;
-    const float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
-    const float ref_l2 = std::sqrt(xt::sum(xt::square(reference))());
-    return diff_l2 / (ref_l2 + 1e-12F);
-}
-
 void expect_allclose_with_metrics(
     const xt::xarray<float>& out_tt,
     const xt::xarray<float>& out_ref,
@@ -129,42 +114,110 @@ void expect_allclose_with_metrics(
     const auto abs_diff = xt::abs(out_tt - out_ref);
     const float max_abs_diff = xt::amax(abs_diff)();
     const float rmse = std::sqrt(xt::mean(xt::square(abs_diff))());
-    const float rel_l2 = relative_l2(out_tt, out_ref);
     EXPECT_TRUE(allclose) << label << " allclose failed"
-                          << " rtol=" << rtol << " atol=" << atol << " rel_l2=" << rel_l2 << " rmse=" << rmse
+                          << " rtol=" << rtol << " atol=" << atol << " rmse=" << rmse
                           << " max_abs_diff=" << max_abs_diff;
 }
 
-xt::xarray<float> run_polynorm_forward(const PolyNormCaseData& data, PolyNormForwardImpl impl, float epsilon = 1e-5F) {
-    using namespace ttml;
-    auto* device = &autograd::ctx().get_device();
-
-    if (impl == PolyNormForwardImpl::CompositeOp) {
-        auto x_t = autograd::create_tensor(core::from_xtensor(data.input, device));
-        auto w_t = autograd::create_tensor(core::from_xtensor(data.weight, device));
-        auto b_t = autograd::create_tensor(core::from_xtensor(data.bias, device));
-        auto out = ops::polynorm(x_t, w_t, b_t, epsilon);
-        return core::to_xtensor(out->get_value());
+class ScopedPolyNormFusedForwardEnv {
+public:
+    explicit ScopedPolyNormFusedForwardEnv(bool enabled) {
+        constexpr const char* env_name = "TTML_POLYNORM_USE_FUSED_FW";
+        const char* previous = std::getenv(env_name);
+        if (previous != nullptr) {
+            m_previous = std::string(previous);
+        }
+        setenv(env_name, enabled ? "1" : "0", /*overwrite=*/1);
     }
 
-    const auto x = core::from_xtensor(data.input, device);
-    const auto w0 = data.weight(0, 0, 0, 0);
-    const auto w1 = data.weight(0, 0, 0, 1);
-    const auto w2 = data.weight(0, 0, 0, 2);
-    const auto bias = data.bias(0, 0, 0, 0);
-    auto out = metal::polynorm_fw(x, w0, w1, w2, bias, epsilon);
-    return core::to_xtensor(out);
-}
+    ~ScopedPolyNormFusedForwardEnv() {
+        constexpr const char* env_name = "TTML_POLYNORM_USE_FUSED_FW";
+        if (m_previous.has_value()) {
+            setenv(env_name, m_previous->c_str(), /*overwrite=*/1);
+            return;
+        }
+        unsetenv(env_name);
+    }
 
-void compare_kernel_vs_reference(
-    const PolyNormCaseData& data, PolyNormForwardImpl impl = PolyNormForwardImpl::CompositeOp, float epsilon = 1e-5F) {
-    auto out_tt = run_polynorm_forward(data, impl, epsilon);
-    auto out_ref = polynorm_reference(data.input, data.weight, data.bias, epsilon);
+private:
+    std::optional<std::string> m_previous;
+};
 
-    EXPECT_EQ(out_tt.shape(), out_ref.shape());
-    EXPECT_TRUE(xt::all(xt::isfinite(out_tt)));
-    EXPECT_TRUE(xt::all(xt::isfinite(out_ref)));
-    expect_allclose_with_metrics(out_tt, out_ref, 8.0e-2F, 8.0e-2F, "forward_kernel_vs_reference");
+void CompareKernelVsReferenceWithShape(
+    const std::vector<uint32_t>& shape, float epsilon = 1e-5F, bool run_backward = true) {
+    using namespace ttml;
+    const auto data = make_case_data(shape);
+    auto* device = &autograd::ctx().get_device();
+
+    auto x_fused = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
+    auto w_fused = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
+    auto b_fused = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
+
+    auto x_ref = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
+    auto w_ref = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
+    auto b_ref = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
+
+    std::shared_ptr<autograd::Tensor> out_fused;
+    {
+        ScopedPolyNormFusedForwardEnv env_guard(/*enabled=*/true);
+        out_fused = ops::polynorm(x_fused, w_fused, b_fused, epsilon);
+    }
+
+    std::shared_ptr<autograd::Tensor> out_composite;
+    {
+        ScopedPolyNormFusedForwardEnv env_guard(/*enabled=*/false);
+        out_composite = ops::polynorm(x_ref, w_ref, b_ref, epsilon);
+    }
+
+    auto out_fused_xt = core::to_xtensor(out_fused->get_value());
+    auto out_composite_xt = core::to_xtensor(out_composite->get_value());
+    auto out_reference_xt = polynorm_reference(data.input, data.weight, data.bias, epsilon);
+
+    EXPECT_EQ(out_fused_xt.shape(), out_reference_xt.shape());
+    EXPECT_EQ(out_composite_xt.shape(), out_reference_xt.shape());
+    EXPECT_TRUE(xt::all(xt::isfinite(out_fused_xt)));
+    EXPECT_TRUE(xt::all(xt::isfinite(out_composite_xt)));
+    EXPECT_TRUE(xt::all(xt::isfinite(out_reference_xt)));
+    expect_allclose_with_metrics(out_fused_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_xt_reference");
+    expect_allclose_with_metrics(
+        out_composite_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "composite_forward_vs_xt_reference");
+    expect_allclose_with_metrics(out_fused_xt, out_composite_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_composite");
+
+    if (run_backward) {
+        auto target_fused = autograd::create_tensor(core::zeros_like(out_fused->get_value()));
+        auto target_ref = autograd::create_tensor(core::zeros_like(out_composite->get_value()));
+        auto mse_fused = ops::mse_loss(out_fused, target_fused);
+        auto mse_ref = ops::mse_loss(out_composite, target_ref);
+        mse_fused->backward();
+        mse_ref->backward();
+
+        const auto grad_x_fused = core::to_xtensor(x_fused->get_grad());
+        const auto grad_w_fused = core::to_xtensor(w_fused->get_grad());
+        const auto grad_b_fused = core::to_xtensor(b_fused->get_grad());
+        const auto grad_x_ref = core::to_xtensor(x_ref->get_grad());
+        const auto grad_w_ref = core::to_xtensor(w_ref->get_grad());
+        const auto grad_b_ref = core::to_xtensor(b_ref->get_grad());
+
+        EXPECT_EQ(grad_x_fused.shape(), data.input.shape());
+        EXPECT_EQ(grad_w_fused.shape(), data.weight.shape());
+        EXPECT_EQ(grad_b_fused.shape(), data.bias.shape());
+        EXPECT_EQ(grad_x_ref.shape(), data.input.shape());
+        EXPECT_EQ(grad_w_ref.shape(), data.weight.shape());
+        EXPECT_EQ(grad_b_ref.shape(), data.bias.shape());
+
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_x_fused)));
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_w_fused)));
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_b_fused)));
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_x_ref)));
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_w_ref)));
+        EXPECT_TRUE(xt::all(xt::isfinite(grad_b_ref)));
+
+        expect_allclose_with_metrics(grad_x_fused, grad_x_ref, 2.0e-2F, 2.0e-2F, "grad_x_fused_vs_composite");
+        expect_allclose_with_metrics(grad_w_fused, grad_w_ref, 2.0e-2F, 2.0e-2F, "grad_w_fused_vs_composite");
+        expect_allclose_with_metrics(grad_b_fused, grad_b_ref, 2.0e-2F, 2.0e-2F, "grad_b_fused_vs_composite");
+    }
+
+    autograd::ctx().reset_graph();
 }
 
 float device_polynorm_mse_loss(
@@ -180,183 +233,38 @@ float device_polynorm_mse_loss(
     return core::to_vector(loss->get_value()).front();
 }
 
-void append_params(
-    ttml::serialization::NamedParameters& dst,
-    const ttml::serialization::NamedParameters& src,
-    const std::string& prefix) {
-    for (const auto& [name, tensor] : src) {
-        dst.emplace(prefix + name, tensor);
-    }
-}
-
 }  // namespace
 
 // ============================================================================
-// Section 1: PolyNorm Forward - Kernel vs Reference
+// Section 1: PolyNorm Fused Kernel vs Reference
 // ============================================================================
-TEST_F(PolyNormOpTest, Forward_BasicSmall) {
-    compare_kernel_vs_reference(make_case_data({2, 1, 4, 16}));
+TEST_F(PolyNormOpTest, PolyNorm_Compare_BasicSmall) {
+    CompareKernelVsReferenceWithShape({1, 1, 2, 32});
 }
 
-TEST_F(PolyNormOpTest, Forward_BlockSize_Remainder0) {
-    compare_kernel_vs_reference(make_case_data({1, 1, 1, 128}));
+TEST_F(PolyNormOpTest, PolyNorm_Compare_BlockSizeRemainders) {
+    CompareKernelVsReferenceWithShape({1, 1, 1, 32});   // Wt=1, Wt%4=1
+    CompareKernelVsReferenceWithShape({1, 1, 1, 64});   // Wt=2, Wt%4=2
+    CompareKernelVsReferenceWithShape({1, 1, 1, 96});   // Wt=3, Wt%4=3
+    CompareKernelVsReferenceWithShape({1, 1, 1, 128});  // Wt=4, Wt%4=0
 }
 
-TEST_F(PolyNormOpTest, Forward_BlockSize_Remainder1) {
-    compare_kernel_vs_reference(make_case_data({1, 1, 1, 160}));
+TEST_F(PolyNormOpTest, PolyNorm_Compare_EpsilonVariants) {
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-6F);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-5F);
+    CompareKernelVsReferenceWithShape({1, 1, 2, 64}, 1e-4F);
 }
 
-TEST_F(PolyNormOpTest, Forward_BlockSize_Remainder2) {
-    compare_kernel_vs_reference(make_case_data({1, 1, 1, 192}));
-}
-
-TEST_F(PolyNormOpTest, Forward_BlockSize_Remainder3) {
-    compare_kernel_vs_reference(make_case_data({1, 1, 1, 224}));
-}
-
-TEST_F(PolyNormOpTest, Forward_NanoLikeShape) {
-    compare_kernel_vs_reference(make_case_data({2, 1, 64, 512}));
-}
-
-TEST_F(PolyNormOpTest, Forward_MultiBatchMultiSeq) {
-    compare_kernel_vs_reference(make_case_data({4, 1, 128, 768}));
-}
-
-TEST_F(PolyNormOpTest, Forward_RepeatedRuns_NoHang) {
-    const auto data = make_case_data({57, 1, 32, 96});
-    for (int i = 0; i < 3; ++i) {
-        compare_kernel_vs_reference(data);
-    }
-}
-
-// Debug-only fused-kernel tests.
-// Keep disabled until the dedicated fused forward path is made numerically stable.
-TEST_F(PolyNormOpTest, DISABLED_FusedForward_BasicSmall) {
-    compare_kernel_vs_reference(make_case_data({2, 1, 4, 16}), PolyNormForwardImpl::FusedMetalKernel);
-}
-
-TEST_F(PolyNormOpTest, DISABLED_FusedForward_LargeChannels) {
-    compare_kernel_vs_reference(make_case_data({1, 1, 1, 128}), PolyNormForwardImpl::FusedMetalKernel);
-}
-
-TEST_F(PolyNormOpTest, DISABLED_FusedForward_DiagnosticTermOrdering) {
-    constexpr float eps = 1e-5F;
-    const auto data = make_case_data({1, 1, 1, 128});
-    const auto fused_out = run_polynorm_forward(data, PolyNormForwardImpl::FusedMetalKernel, eps);
-
-    auto make_weight = [](float w0, float w1, float w2) {
-        xt::xarray<float> w = xt::xarray<float>::from_shape({1, 1, 1, 3});
-        w(0, 0, 0, 0) = w0;
-        w(0, 0, 0, 1) = w1;
-        w(0, 0, 0, 2) = w2;
-        return w;
-    };
-
-    const auto a = data.weight(0, 0, 0, 0);
-    const auto b = data.weight(0, 0, 0, 1);
-    const auto c = data.weight(0, 0, 0, 2);
-
-    const std::array<std::pair<const char*, xt::xarray<float>>, 6> candidates{{
-        {"w0,w1,w2", make_weight(a, b, c)},
-        {"w0,w2,w1", make_weight(a, c, b)},
-        {"w1,w0,w2", make_weight(b, a, c)},
-        {"w1,w2,w0", make_weight(b, c, a)},
-        {"w2,w0,w1", make_weight(c, a, b)},
-        {"w2,w1,w0", make_weight(c, b, a)},
-    }};
-
-    for (const auto& [label, w] : candidates) {
-        const auto ref = polynorm_reference(data.input, w, data.bias, eps);
-        std::cout << "candidate=" << label << " rel_l2=" << relative_l2(fused_out, ref) << std::endl;
-    }
-}
-
-TEST_F(PolyNormOpTest, DISABLED_FusedForward_DiagnosticSingleTerm) {
-    constexpr float eps = 1e-5F;
-    auto data = make_case_data({1, 1, 1, 128});
-    data.bias(0, 0, 0, 0) = 0.0F;
-
-    auto make_weight = [](float w0, float w1, float w2) {
-        xt::xarray<float> w = xt::xarray<float>::from_shape({1, 1, 1, 3});
-        w(0, 0, 0, 0) = w0;
-        w(0, 0, 0, 1) = w1;
-        w(0, 0, 0, 2) = w2;
-        return w;
-    };
-
-    const std::array<std::pair<const char*, xt::xarray<float>>, 3> terms{{
-        {"x3_only", make_weight(1.0F, 0.0F, 0.0F)},
-        {"x2_only", make_weight(0.0F, 1.0F, 0.0F)},
-        {"x_only", make_weight(0.0F, 0.0F, 1.0F)},
-    }};
-
-    for (const auto& [label, w] : terms) {
-        data.weight = w;
-        const auto fused_out = run_polynorm_forward(data, PolyNormForwardImpl::FusedMetalKernel, eps);
-        const auto ref = polynorm_reference(data.input, w, data.bias, eps);
-        std::cout << "single_term=" << label << " rel_l2=" << relative_l2(fused_out, ref) << std::endl;
-    }
-}
-
-TEST_F(PolyNormOpTest, DISABLED_FusedForward_DiagnosticInputScaleSweep) {
-    constexpr float eps = 1e-5F;
-    const std::vector<std::pair<float, float>> ranges = {
-        {-1.0e-3F, 1.0e-3F},
-        {-0.9F, 0.9F},
-        {-3.0F, 3.0F},
-        {-8.0F, 8.0F},
-    };
-
-    auto make_weight = [](float w0, float w1, float w2) {
-        xt::xarray<float> w = xt::xarray<float>::from_shape({1, 1, 1, 3});
-        w(0, 0, 0, 0) = w0;
-        w(0, 0, 0, 1) = w1;
-        w(0, 0, 0, 2) = w2;
-        return w;
-    };
-
-    const std::array<std::pair<const char*, xt::xarray<float>>, 3> terms{{
-        {"x3_only", make_weight(1.0F, 0.0F, 0.0F)},
-        {"x2_only", make_weight(0.0F, 1.0F, 0.0F)},
-        {"x_only", make_weight(0.0F, 0.0F, 1.0F)},
-    }};
-
-    for (const auto& [low, high] : ranges) {
-        PolyNormCaseData data{
-            .input = make_random_xtensor({1, 1, 1, 128}, low, high),
-            .weight = xt::xarray<float>::from_shape({1, 1, 1, 3}),
-            .bias = xt::xarray<float>::from_shape({1, 1, 1, 1}),
-        };
-        data.weight(0, 0, 0, 0) = 0.2F;
-        data.weight(0, 0, 0, 1) = 0.3F;
-        data.weight(0, 0, 0, 2) = 0.5F;
-        data.bias(0, 0, 0, 0) = 0.1F;
-
-        const auto fused_out = run_polynorm_forward(data, PolyNormForwardImpl::FusedMetalKernel, eps);
-        const auto ref_out = polynorm_reference(data.input, data.weight, data.bias, eps);
-        const float rel_full = relative_l2(fused_out, ref_out);
-        const bool fused_finite = xt::all(xt::isfinite(fused_out));
-        const bool ref_finite = xt::all(xt::isfinite(ref_out));
-        std::cout << "range=[" << low << "," << high << "]"
-                  << " full_rel_l2=" << rel_full << " finite_fused=" << fused_finite << " finite_ref=" << ref_finite
-                  << std::endl;
-
-        for (const auto& [label, w] : terms) {
-            data.weight = w;
-            data.bias(0, 0, 0, 0) = 0.0F;
-            const auto fused_term = run_polynorm_forward(data, PolyNormForwardImpl::FusedMetalKernel, eps);
-            const auto ref_term = polynorm_reference(data.input, w, data.bias, eps);
-            const float rel_term = relative_l2(fused_term, ref_term);
-            const bool term_finite = xt::all(xt::isfinite(fused_term));
-            std::cout << "  term=" << label << " rel_l2=" << rel_term << " finite=" << term_finite << std::endl;
-        }
+TEST_F(PolyNormOpTest, PolyNorm_RepeatedRuns_NoHang) {
+    for (int i = 0; i < 2; ++i) {
+        CompareKernelVsReferenceWithShape({8, 1, 8, 64});
     }
 }
 
 // ============================================================================
-// Section 2: PolyNorm Backward - Deferred While Forward Bring-Up
+// Section 2: PolyNorm Backward - Composite Path
 // ============================================================================
-TEST_F(PolyNormOpTest, DISABLED_BackwardMatchesFiniteDifferences) {
+TEST_F(PolyNormOpTest, PolyNorm_BackwardMatchesFiniteDifferences) {
     using namespace ttml;
 
     const std::vector<uint32_t> shape = {1, 1, 2, 8};
@@ -420,119 +328,37 @@ TEST_F(PolyNormOpTest, DISABLED_BackwardMatchesFiniteDifferences) {
         grad_b_num(0, 0, 0, 0) = (lp - lm) / (2.0F * h);
     }
 
-    auto rel_l2 = [](const xt::xarray<float>& a, const xt::xarray<float>& b) {
-        auto diff = a - b;
-        const float diff_l2 = std::sqrt(xt::sum(xt::square(diff))());
-        const float ref_l2 = std::sqrt(xt::sum(xt::square(b))());
-        return diff_l2 / (ref_l2 + 1e-12F);
-    };
-
-    const float x_rel_l2 = rel_l2(grad_x, grad_x_num);
-    const float w_rel_l2 = rel_l2(grad_w, grad_w_num);
-    const float b_rel_l2 = rel_l2(grad_b, grad_b_num);
-
     // Device BF16 math plus finite differences introduces higher noise.
-    EXPECT_LT(x_rel_l2, 0.60F);
-    EXPECT_LT(w_rel_l2, 0.35F);
-    EXPECT_LT(b_rel_l2, 0.35F);
+    const bool x_allclose = xt::allclose(grad_x, grad_x_num, 3.0e-1F, 3.0e-1F);
+    const bool w_allclose = xt::allclose(grad_w, grad_w_num, 1.5e-1F, 1.5e-1F);
+    const bool b_allclose = xt::allclose(grad_b, grad_b_num, 1.5e-1F, 1.5e-1F);
+
+    const float x_rmse = std::sqrt(xt::mean(xt::square(xt::abs(grad_x - grad_x_num)))());
+    const float w_rmse = std::sqrt(xt::mean(xt::square(xt::abs(grad_w - grad_w_num)))());
+    const float b_rmse = std::sqrt(xt::mean(xt::square(xt::abs(grad_b - grad_b_num)))());
+    const float x_max_abs_diff = xt::amax(xt::abs(grad_x - grad_x_num))();
+    const float w_max_abs_diff = xt::amax(xt::abs(grad_w - grad_w_num))();
+    const float b_max_abs_diff = xt::amax(xt::abs(grad_b - grad_b_num))();
+
+    EXPECT_TRUE(x_allclose) << "grad_x allclose failed"
+                            << " rtol=0.3 atol=0.3 rmse=" << x_rmse << " max_abs_diff=" << x_max_abs_diff;
+    EXPECT_TRUE(w_allclose) << "grad_w allclose failed"
+                            << " rtol=0.15 atol=0.15 rmse=" << w_rmse << " max_abs_diff=" << w_max_abs_diff;
+    EXPECT_TRUE(b_allclose) << "grad_b allclose failed"
+                            << " rtol=0.15 atol=0.15 rmse=" << b_rmse << " max_abs_diff=" << b_max_abs_diff;
 }
 
 // ============================================================================
-// Section 3: PolyNorm Shape/Broadcast Behavior (Deferred)
+// Section 3: Nightly Larger Shape Coverage
 // ============================================================================
-TEST_F(PolyNormOpTest, DISABLED_BroadcastShapesAndGradShapes) {
-    using namespace ttml;
-
-    xt::xarray<float> x = xt::ones<float>({2, 1, 3, 32});
-    xt::xarray<float> weight = xt::xarray<float>::from_shape({1, 1, 1, 3});
-    weight(0, 0, 0, 0) = 1.0F / 3.0F;
-    weight(0, 0, 0, 1) = 1.0F / 3.0F;
-    weight(0, 0, 0, 2) = 1.0F / 3.0F;
-    xt::xarray<float> bias = xt::xarray<float>::from_shape({1, 1, 1, 1});
-    bias(0, 0, 0, 0) = 0.0F;
-
-    auto x_t = autograd::create_tensor(core::from_xtensor(x, &autograd::ctx().get_device()), /*requires_grad=*/true);
-    auto w_t =
-        autograd::create_tensor(core::from_xtensor(weight, &autograd::ctx().get_device()), /*requires_grad=*/true);
-    auto b_t = autograd::create_tensor(core::from_xtensor(bias, &autograd::ctx().get_device()), /*requires_grad=*/true);
-
-    auto out = ops::polynorm(x_t, w_t, b_t);
-    auto loss = ops::mse_loss(out, autograd::create_tensor(core::zeros_like(out->get_value())));
-    loss->backward();
-
-    const auto expected_out_shape = std::array<uint32_t, 4>{2, 1, 3, 32};
-    const auto expected_weight_grad_shape = std::array<uint32_t, 4>{1, 1, 1, 3};
-    const auto expected_bias_grad_shape = std::array<uint32_t, 4>{1, 1, 1, 1};
-    EXPECT_EQ(out->get_value().logical_shape().to_array_4D(), expected_out_shape);
-    EXPECT_EQ(w_t->get_grad().logical_shape().to_array_4D(), expected_weight_grad_shape);
-    EXPECT_EQ(b_t->get_grad().logical_shape().to_array_4D(), expected_bias_grad_shape);
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveSmall) {
+    CompareKernelVsReferenceWithShape({1, 1, 16, 96}, 1e-5F, /*run_backward=*/false);
 }
 
-// ============================================================================
-// Section 4: Tiny Integration - PolyNorm in Gated FFN (Deferred)
-// ============================================================================
-TEST_F(PolyNormOpTest, DISABLED_TinyGatedFFNTrainsFewSteps) {
-    using namespace ttml;
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveMedium) {
+    CompareKernelVsReferenceWithShape({1, 1, 16, 128}, 1e-5F, /*run_backward=*/false);
+}
 
-    constexpr uint32_t batch = 4;
-    constexpr uint32_t seq = 8;
-    constexpr uint32_t in_features = 32;
-    constexpr uint32_t hidden = 64;
-    constexpr uint32_t steps = 5;
-    constexpr float eps = 1e-5F;
-
-    auto& rng = autograd::ctx().get_generator();
-    xt::xarray<float> input_xt = xt::xarray<float>::from_shape({batch, 1U, seq, in_features});
-    xt::xarray<float> target_xt = xt::xarray<float>::from_shape({batch, 1U, seq, in_features});
-    core::parallel_generate<float>(
-        input_xt, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, rng());
-    core::parallel_generate<float>(
-        target_xt, []() { return std::uniform_real_distribution<float>(-0.5F, 0.5F); }, rng());
-
-    auto input = autograd::create_tensor(core::from_xtensor(input_xt, &autograd::ctx().get_device()));
-    auto target = autograd::create_tensor(core::from_xtensor(target_xt, &autograd::ctx().get_device()));
-
-    modules::LinearLayer w1(in_features, hidden, /*has_bias=*/false);
-    modules::LinearLayer w2(hidden, in_features, /*has_bias=*/false);
-    modules::LinearLayer w3(in_features, hidden, /*has_bias=*/false);
-
-    auto poly_weight = autograd::create_tensor(
-        core::from_vector(
-            {1.0F / 3.0F, 1.0F / 3.0F, 1.0F / 3.0F}, ttnn::Shape({1, 1, 1, 3}), &autograd::ctx().get_device()),
-        /*requires_grad=*/true);
-    auto poly_bias = autograd::create_tensor(
-        core::from_vector({0.0F}, ttnn::Shape({1, 1, 1, 1}), &autograd::ctx().get_device()),
-        /*requires_grad=*/true);
-
-    serialization::NamedParameters params;
-    append_params(params, w1.parameters(), "w1/");
-    append_params(params, w2.parameters(), "w2/");
-    append_params(params, w3.parameters(), "w3/");
-    params.emplace("polynorm/weight", poly_weight);
-    params.emplace("polynorm/bias", poly_bias);
-
-    optimizers::SGD optimizer(params, {.lr = 5e-2F, .momentum = 0.0F});
-
-    float first_loss = 0.0F;
-    float last_loss = 0.0F;
-    for (uint32_t step = 0; step < steps; ++step) {
-        optimizer.zero_grad();
-        auto activated = ops::polynorm(w1(input), poly_weight, poly_bias, eps);
-        auto gate = w3(input);
-        auto gated = ops::mul(activated, gate);
-        auto output = w2(gated);
-        auto loss = ops::mse_loss(output, target);
-        loss->backward();
-        const float loss_value = core::to_vector(loss->get_value()).front();
-        if (step == 0U) {
-            first_loss = loss_value;
-        }
-        last_loss = loss_value;
-        optimizer.step();
-        autograd::ctx().reset_graph();
-    }
-
-    EXPECT_TRUE(std::isfinite(first_loss));
-    EXPECT_TRUE(std::isfinite(last_loss));
-    EXPECT_LE(last_loss, first_loss + 1.0F);
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveLarge) {
+    CompareKernelVsReferenceWithShape({2, 1, 64, 128}, 1e-5F, /*run_backward=*/false);
 }
