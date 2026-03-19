@@ -1292,12 +1292,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     const auto& ag_output_shape = gathered_input_tensor_k.padded_shape();
     TT_ASSERT(!(ag_input_shape[3] % tt::constants::TILE_WIDTH));
     TT_ASSERT(!(ag_output_shape[3] % tt::constants::TILE_WIDTH));
-    const uint32_t ag_input_Wt = ag_input_shape[3] / tt::constants::TILE_WIDTH;
-    const uint32_t ag_input_Ht = ag_input_shape[2] / tt::constants::TILE_HEIGHT;
     const uint32_t ag_output_Wt = ag_output_shape[3] / tt::constants::TILE_WIDTH;
     const uint32_t ag_output_Ht = ag_output_shape[2] / tt::constants::TILE_HEIGHT;
-    const uint32_t ag_batch_head_count = ag_input_shape[0] * ag_input_shape[1];
-    const uint32_t ag_single_bh_num_tiles = input_tensor_k.buffer()->num_pages() / ag_batch_head_count;
 
     // Track the RT arg offset for all-gather args on fabric writer master cores
     uint32_t writer_fabric_ag_rt_offset = 0;
@@ -1502,31 +1498,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 writer_args.push_back(static_cast<uint32_t>(injector_physical.y));
                 writer_args.push_back(args.num_links);   // num_muxes_in_direction
                 writer_args.push_back(link);              // my_mux_index
-
-                // Direction: top half of rows = backward (0), bottom half = forward (1).
-                const uint32_t ag_direction = is_backward ? 0 : 1;
-
-                // Tile range for this link
-                const uint32_t base_tiles = ag_single_bh_num_tiles / args.num_links;
-                const uint32_t remainder = ag_single_bh_num_tiles % args.num_links;
-                const uint32_t ag_tile_id_start = link * base_tiles + std::min(link, remainder);
-                const uint32_t ag_tile_id_end = (link + 1) * base_tiles + std::min(link + 1, remainder);
-
-                writer_args.push_back(ag_direction);
-                writer_args.push_back(ag_input_Wt);
-                writer_args.push_back(ag_input_Ht);
                 writer_args.push_back(ag_output_Wt);
                 writer_args.push_back(ag_output_Ht);
-                writer_args.push_back(static_cast<uint32_t>(args.dim));  // gather_dim
-                writer_args.push_back(ag_batch_head_count);
-                writer_args.push_back(ag_tile_id_start);
-                writer_args.push_back(ag_tile_id_end);
-                writer_args.push_back(static_cast<uint32_t>(args.ring_size));
-                writer_args.push_back(k_addr);
-                writer_args.push_back(v_addr);
                 writer_args.push_back(gathered_k_addr);
                 writer_args.push_back(gathered_v_addr);
 
+                const uint32_t ag_direction = is_backward ? 0 : 1;
                 if (ag_direction == 1) {
                     fused_op_signaler_forward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 1);
                 } else {
@@ -1686,10 +1663,8 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
                     writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
                     const uint32_t link = (core.x == shared_vars.grid_size.x - 1) ? 1 : 0;
                     writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = args.semaphore[link].address();
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 15] = k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 16] = v_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 17] = gathered_k_addr;
-                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 18] = gathered_v_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 7] = gathered_k_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 8] = gathered_v_addr;
                 }
             } else {
                 auto& writer_args = writer_args_by_core[core.x][core.y];
