@@ -76,7 +76,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
                           operation_attributes.kernel_size[2] * C_in_block;
-    uint32_t padded_patch_size = tt::round_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
