@@ -120,7 +120,7 @@ Tensor invoke_impl(
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
 
-    if (is_invalid_bcast(broadcast_type)) {
+    if (operations::ternary::is_invalid_bcast(broadcast_type)) {
         return operations::ternary::ternary_utils::where_impl(
             condition,
             t_true,
@@ -220,7 +220,8 @@ Tensor where(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
-            return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
+            return ttnn::operations::ternary::invoke_impl(
+                predicate, true_val, false_val, memory_config, output, sub_core_grids);
         },
         value_true,
         value_false);
@@ -283,7 +284,7 @@ Tensor addcmul(
                             (broadcast_type == operations::ternary::TernaryBroadcastType::COL_BCAST) ||
                             (broadcast_type == operations::ternary::TernaryBroadcastType::SCALAR_BCAST);
 
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+    if (operations::ternary::is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
@@ -325,7 +326,7 @@ Tensor addcdiv(
 
     TT_FATAL(!is_input_int32, "Addcdiv TTT does not support INT32 inputs.");
 
-    if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
+    if (operations::ternary::is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
         log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         return operations::ternary::_addcdiv(input_a, input_b, input_c, value, memory_config);
@@ -359,14 +360,15 @@ Tensor lerp(
                             (broadcast_type == operations::ternary::TernaryBroadcastType::SCALAR_BCAST);
     bool is_input_int32 = (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32);
 
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
+    if (operations::ternary::is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) ||
+        is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
         return operations::ternary::_lerp_overload(input, end, weight, memory_config, output);
     }
 
     log_debug(tt::LogOp, "Lerp LLK - TTS (scalar weight)");
     return ttnn::prim::ternary(
-        TernaryOpType::LERP,
+        operations::ternary::TernaryOpType::LERP,
         input,
         end,
         weight,
@@ -393,7 +395,8 @@ Tensor lerp(
     bool is_input_int32 =
         (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32) && (weight.dtype() == DataType::INT32);
 
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
+    if (operations::ternary::is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) ||
+        is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
         return operations::ternary::_lerp(input, end, weight, memory_config, output);
     }
