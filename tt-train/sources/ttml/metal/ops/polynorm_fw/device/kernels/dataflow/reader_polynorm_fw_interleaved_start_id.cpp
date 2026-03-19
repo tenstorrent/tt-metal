@@ -50,12 +50,21 @@ void kernel_main() {
     const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
 
     for (uint32_t row = 0; row < num_rows_to_process; ++row) {
-        const uint32_t idx = (start_row + row) * Wt;
-        read_full_row_tiles(cb_input_pass_1, input_address_generator, Wt, block_size, tile_bytes, idx);
-        read_full_row_tiles(cb_input_pass_2, input_address_generator, Wt, block_size, tile_bytes, idx);
-#if POLYNORM_STAGE == 0 || POLYNORM_STAGE == 6 || POLYNORM_STAGE == 7 || POLYNORM_STAGE == 8 || POLYNORM_STAGE == 9 || \
-    POLYNORM_STAGE == 10
-        read_full_row_tiles(cb_input_pass_3, input_address_generator, Wt, block_size, tile_bytes, idx);
-#endif
+        const uint32_t row_start_idx = (start_row + row) * Wt;
+        for (uint32_t col = 0; col < Wt; col += block_size) {
+            const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
+            const uint32_t block_start_idx = row_start_idx + col;
+
+            read_tiles_by_row<false>(
+                cb_input_pass_1, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+            read_tiles_by_row<false>(
+                cb_input_pass_2, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+            read_tiles_by_row(
+                cb_input_pass_3, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
+
+            // Barrier is issued in the final read call above.
+            cb_push_back(cb_input_pass_1, block_size);
+            cb_push_back(cb_input_pass_2, block_size);
+        }
     }
 }

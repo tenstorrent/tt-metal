@@ -77,34 +77,6 @@ xt::xarray<float> rms_norm_last_dim(const xt::xarray<float>& x, float epsilon) {
     return out;
 }
 
-xt::xarray<float> inv_rms_broadcast_last_dim(const xt::xarray<float>& x, float epsilon) {
-    auto shape = x.shape();
-    auto out = xt::xarray<float>::from_shape(shape);
-    std::fill(out.begin(), out.end(), 0.0F);
-    const auto b_dim = shape[0];
-    const auto n_dim = shape[1];
-    const auto s_dim = shape[2];
-    const auto c_dim = shape[3];
-
-    for (std::size_t b = 0; b < b_dim; ++b) {
-        for (std::size_t n = 0; n < n_dim; ++n) {
-            for (std::size_t s = 0; s < s_dim; ++s) {
-                float mean_sq = 0.0F;
-                for (std::size_t c = 0; c < c_dim; ++c) {
-                    const float v = x(b, n, s, c);
-                    mean_sq += v * v;
-                }
-                mean_sq /= static_cast<float>(c_dim);
-                const float inv_rms = 1.0F / std::sqrt(mean_sq + epsilon);
-                for (std::size_t c = 0; c < c_dim; ++c) {
-                    out(b, n, s, c) = inv_rms;
-                }
-            }
-        }
-    }
-    return out;
-}
-
 xt::xarray<float> polynorm_reference(
     const xt::xarray<float>& x, const xt::xarray<float>& weight, const xt::xarray<float>& bias, float epsilon) {
     const float w0 = weight(0, 0, 0, 0);
@@ -378,59 +350,6 @@ TEST_F(PolyNormOpTest, DISABLED_FusedForward_DiagnosticInputScaleSweep) {
             const bool term_finite = xt::all(xt::isfinite(fused_term));
             std::cout << "  term=" << label << " rel_l2=" << rel_term << " finite=" << term_finite << std::endl;
         }
-    }
-}
-
-TEST_F(PolyNormOpTest, DISABLED_FusedForward_StageByEnv_LargeChannels) {
-    constexpr float eps = 1e-5F;
-    const char* stage_env = std::getenv("TTML_POLYNORM_FW_STAGE");
-    ASSERT_NE(stage_env, nullptr)
-        << "Set TTML_POLYNORM_FW_STAGE=1 (pass-through), 2 (square-only), 3 (cube-only), 4 (norm(x)-only), 5 "
-           "(inv_rms broadcast only), 6 (w2*norm(x)+bias with full pass1), 7 (w1*norm(x^2)+bias with full pass1), 8 "
-           "(w0*norm(x^3)+bias with full pass1), 9 (inv_rms(x^2) broadcast with full pass1), or 10 "
-           "(inv_rms(x^3) broadcast with full pass1).";
-    const int stage = std::atoi(stage_env);
-    const auto data = make_case_data({1, 1, 1, 128});
-    const auto out_tt = run_polynorm_forward(data, PolyNormForwardImpl::FusedMetalKernel, eps);
-    if (stage == 1) {
-        expect_allclose_with_metrics(out_tt, data.input, 1.0e-2F, 1.0e-2F, "stage1_passthrough");
-    } else if (stage == 2) {
-        const auto ref = xt::square(data.input);
-        expect_allclose_with_metrics(out_tt, ref, 1.5e-2F, 1.5e-2F, "stage2_square");
-    } else if (stage == 3) {
-        const auto ref = data.input * xt::square(data.input);
-        expect_allclose_with_metrics(out_tt, ref, 1.5e-2F, 1.5e-2F, "stage3_cube");
-    } else if (stage == 4) {
-        const auto ref = rms_norm_last_dim(data.input, eps);
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage4_norm_x");
-    } else if (stage == 5) {
-        const auto ref = inv_rms_broadcast_last_dim(data.input, eps);
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage5_inv_rms_x_broadcast");
-    } else if (stage == 6) {
-        const float w2 = data.weight(0, 0, 0, 2);
-        const float bias = data.bias(0, 0, 0, 0);
-        const auto ref = w2 * rms_norm_last_dim(data.input, eps) + bias;
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage6_weighted_norm_x");
-    } else if (stage == 7) {
-        const float w1 = data.weight(0, 0, 0, 1);
-        const float bias = data.bias(0, 0, 0, 0);
-        const auto ref = w1 * rms_norm_last_dim(xt::square(data.input), eps) + bias;
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage7_weighted_norm_x2");
-    } else if (stage == 8) {
-        const float w0 = data.weight(0, 0, 0, 0);
-        const float bias = data.bias(0, 0, 0, 0);
-        const auto x3 = data.input * xt::square(data.input);
-        const auto ref = w0 * rms_norm_last_dim(x3, eps) + bias;
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage8_weighted_norm_x3");
-    } else if (stage == 9) {
-        const auto ref = inv_rms_broadcast_last_dim(xt::square(data.input), eps);
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage9_inv_rms_x2_broadcast");
-    } else if (stage == 10) {
-        const auto x3 = data.input * xt::square(data.input);
-        const auto ref = inv_rms_broadcast_last_dim(x3, eps);
-        expect_allclose_with_metrics(out_tt, ref, 8.0e-2F, 8.0e-2F, "stage10_inv_rms_x3_broadcast");
-    } else {
-        FAIL() << "Unsupported TTML_POLYNORM_FW_STAGE for this test: " << stage;
     }
 }
 
