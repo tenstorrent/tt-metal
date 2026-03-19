@@ -85,7 +85,7 @@ def run(
 
     # Extract dims from kwargs (from traced config) or use default
     dims = kwargs.get("dims", [0, 1])
-    op_kwargs = build_op_kwargs(kwargs, exclude={"dims"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):

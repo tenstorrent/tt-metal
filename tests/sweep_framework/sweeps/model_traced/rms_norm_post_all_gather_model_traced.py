@@ -96,7 +96,7 @@ def run(
         stats_shape_from_trace = None
 
     eps = kwargs.get("epsilon", 1e-5)
-    op_kwargs = build_op_kwargs(kwargs, exclude={"epsilon"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
     hidden_dim = shape[-1]
 
     # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes

@@ -114,7 +114,15 @@ def _is_named_tensor_kwarg(key: str, all_keys: Set[str]) -> bool:
 
 def _is_memory_config_dict(value: Any) -> bool:
     """Check if a value looks like a memory config dict."""
-    return isinstance(value, dict) and ("memory_layout" in value or "buffer_type" in value)
+    if not isinstance(value, dict):
+        return False
+    # Direct format: {"memory_layout": ..., "buffer_type": ...}
+    if "memory_layout" in value or "buffer_type" in value:
+        return True
+    # Serialized format: {"type": "ttnn._ttnn.tensor.MemoryConfig", "data": {...}}
+    if value.get("type", "") == "ttnn._ttnn.tensor.MemoryConfig" and "data" in value:
+        return True
+    return False
 
 
 def _is_compute_kernel_config_dict(value: Any) -> bool:

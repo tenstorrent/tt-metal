@@ -172,7 +172,7 @@ def run(
     chunk_start_idx = kwargs.get("chunk_start_idx", 0)
     if chunk_start_idx is None:
         chunk_start_idx = 0
-    op_kwargs = build_op_kwargs(kwargs, exclude={"chunk_start_idx"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Extract shapes for Q and K/V paged from separate inputs or dict fallback
     if isinstance(input_a_shape, dict):

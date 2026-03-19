@@ -88,7 +88,7 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"head_size"})
+    op_kwargs = build_op_kwargs(kwargs)
 
     # Parse input_a_shape - can be tuple/list or dict (from binary operation extraction)
     if isinstance(input_a_shape, dict):

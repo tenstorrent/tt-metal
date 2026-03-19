@@ -79,7 +79,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"dtype", "arg1"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1"}, output_memory_config=output_memory_config)
 
     output_dtype = output_dtype or kwargs.get("dtype", kwargs.get("arg1", ttnn.float32))
     if isinstance(output_dtype, dict):

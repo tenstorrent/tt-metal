@@ -154,7 +154,6 @@ def run(
     # Exclude params we handle explicitly as named parameters
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"inplace", "num_out_blocks", "use_welford", "num_groups", "epsilon", "negative_mask"},
         output_memory_config=output_memory_config,
     )
 
@@ -284,7 +283,6 @@ def run(
     # The core_grid.y value determines the num_cores_across_channel parameter
     _op_kwargs_copy = build_op_kwargs(
         kwargs,
-        exclude={"inplace", "num_out_blocks", "use_welford", "num_groups", "epsilon", "negative_mask"},
         output_memory_config=output_memory_config,
     )
     if "core_grid" in _op_kwargs_copy:
