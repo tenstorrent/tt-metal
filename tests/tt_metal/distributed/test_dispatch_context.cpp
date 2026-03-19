@@ -30,7 +30,12 @@
 
 namespace tt::tt_metal::distributed::test {
 
-TEST(DispatchContext, TestWritesAndWorkloads) {
+class DispatchContextFixture : public ::testing::Test {
+protected:
+    void TearDown() override { experimental::DispatchContext::get().reset(); }
+};
+
+TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     // Test using DispatchContext to turn FD on and off during runtime.
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (rt_options.get_fast_dispatch()) {
@@ -97,7 +102,7 @@ TEST(DispatchContext, TestWritesAndWorkloads) {
 }
 
 // After SD -> enable FD -> disable FD, verify NOC/L1 bank tables by using an L1 buffer across the mesh.
-TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
+TEST_F(DispatchContextFixture, SdEnableFdDisableFdThenL1Buffer) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
@@ -152,8 +157,7 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         std::vector<uint32_t> fd_buf_readback_in_sd = {};
         ReadShard(mesh_device_->mesh_command_queue(), fd_buf_readback_in_sd, fd_buf, coord);
-        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec)
-            << "Sharded buffer data mismatch after FD->SD transition";
+        EXPECT_EQ(fd_buf_readback_in_sd, fd_src_vec) << "Sharded buffer data mismatch after FD->SD transition";
     }
 
     // Write and verify interleaved L1 buffer in SD mode
@@ -167,9 +171,11 @@ TEST(DispatchContext, SdEnableFdDisableFdThenL1Buffer) {
     EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
     Finish(mesh_device_->mesh_command_queue());
 
-    std::vector<uint32_t> sd_dst_vec = {};
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, true);
-    EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint32_t> sd_dst_vec = {};
+        ReadShard(mesh_device_->mesh_command_queue(), sd_dst_vec, sd_buf, coord);
+        EXPECT_EQ(sd_dst_vec, sd_src_vec) << "SD interleaved buffer verification failed";
+    }
 }
 
 }  // namespace tt::tt_metal::distributed::test

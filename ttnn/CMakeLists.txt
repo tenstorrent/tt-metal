@@ -123,6 +123,13 @@ target_sources(
             cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_start_id.cpp
             cpp/ttnn/kernel/kernel_common_utils.hpp
             cpp/ttnn/kernel/kernel_utils.hpp
+            cpp/ttnn/kernel_lib/cb_helpers.hpp
+            cpp/ttnn/kernel_lib/cb_helpers.inl
+            cpp/ttnn/kernel_lib/dest_helpers.hpp
+            cpp/ttnn/kernel_lib/tilize_helpers.hpp
+            cpp/ttnn/kernel_lib/tilize_helpers.inl
+            cpp/ttnn/kernel_lib/untilize_helpers.hpp
+            cpp/ttnn/kernel_lib/untilize_helpers.inl
     PRIVATE
         ${TENSOR_FLATBUFFER_GENERATED_HEADERS}
         core/async_runtime.cpp
@@ -272,6 +279,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/conv3d/conv3d_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
@@ -681,6 +689,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
+        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
@@ -920,6 +929,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/isin)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)

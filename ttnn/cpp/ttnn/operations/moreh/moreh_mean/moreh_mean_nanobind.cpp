@@ -11,16 +11,16 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/small_vector_caster.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 
 namespace ttnn::operations::moreh::moreh_mean {
 void bind_moreh_mean_operation(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"moreh_mean">(
         mod,
-        ttnn::moreh_mean,
         "Moreh Mean Operation",
-        ttnn::nanobind_arguments_t{
+        ttnn::overload_t(
+            &ttnn::moreh_mean,
             nb::arg("input"),
             nb::kw_only(),
             nb::arg("dim") = nb::none(),
@@ -28,6 +28,6 @@ void bind_moreh_mean_operation(nb::module_& mod) {
             nb::arg("divisor") = nb::none(),
             nb::arg("output") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+            nb::arg("compute_kernel_config") = nb::none()));
 }
 }  // namespace ttnn::operations::moreh::moreh_mean

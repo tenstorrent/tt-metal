@@ -30,12 +30,21 @@ ttnn::Tensor embedding(
     if (mutable_weight.layout() == ttnn::TILE_LAYOUT) {
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
-
+    auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
+    auto original_input_rank = input_tensor.logical_shape().rank();
     auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
+
+    // If indices tensor is 1 dimensional, batch size is 1
+    auto batch_size = (input_tensor.logical_shape().rank() == 1) ? 1 : input_tensor.logical_shape()[0];
+    auto sentence_size = input_tensor.logical_shape()[-1];
+    auto embedding_input_tensor = input_tensor;
+    if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        embedding_input_tensor = ttnn::reshape(input_tensor, ttnn::Shape({batch_size, 1, 1, sentence_size}));
+    }
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
-    if (input_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0 &&
+    if (embedding_input_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0 &&
         weight.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
         if (layout.has_value()) {
             if (layout.value() == ttnn::TILE_LAYOUT) {
@@ -50,24 +59,18 @@ ttnn::Tensor embedding(
     }
 
     auto embeddings = ttnn::prim::embedding(
-        input_tensor, weight, fused_tilized, embeddings_type, memory_config, pad_token, optional_output_tensor);
-
-    if (input_tensor.logical_shape().size() == 4 && input_tensor.logical_shape()[1] == 1 &&
-        input_tensor.logical_shape()[2] == 1) {
-        // Although the output shape is expected to match the input shape
-        // with an additional (last_dim,) appended from the weight tensor,
-        // the current implementation returns 3D shape when given a 4D input.
-        //
-        // To maintain compatibility with the existing behavior, the following reshape
-        // logic is preserved.
-        //
-        // Example:
-        // Input shape:      (batch_size, 1, 1, sequence_length)
-        // Output shape:     (batch_size, sequence_length, embedding_dim)
-        embeddings = ttnn::reshape(
-            embeddings,
-            ttnn::Shape(
-                {embeddings.logical_shape()[0], embeddings.logical_shape()[-2], embeddings.logical_shape()[-1]}));
+        embedding_input_tensor,
+        weight,
+        fused_tilized,
+        embeddings_type,
+        memory_config,
+        pad_token,
+        optional_output_tensor);
+    // Don't include batch_size if there was none
+    if (original_input_rank == 1) {
+        embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
+    } else {
+        embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
