@@ -12,6 +12,12 @@ from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
 import ttnn
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
+
+
+def create_fabric_router_config(max_payload_size=8192):
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
@@ -330,7 +336,7 @@ def run_ring_joint_sdpa(
     use_column_major_ccl=False,
     ccl_worker_cores=None,
     num_workers_per_link=5,
-    num_buffers_per_channel=48,
+    num_buffers_per_channel=32,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (
@@ -725,7 +731,7 @@ all_parallel_config_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
             ttnn.Topology.Linear,
         ),
     ],
@@ -871,7 +877,7 @@ model_input_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
             ttnn.Topology.Linear,
         ),
     ],
@@ -982,7 +988,7 @@ wh_t3k_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
             ttnn.Topology.Linear,
         ),
     ],
@@ -1060,7 +1066,7 @@ bh_qb_ge_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
             ttnn.Topology.Linear,
         ),
     ],
@@ -1139,7 +1145,7 @@ wh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
             ttnn.Topology.Linear,
         ),
     ],
@@ -1217,7 +1223,7 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D, "fabric_router_config": create_fabric_router_config(8192)},
             ttnn.Topology.Linear,
         ),
     ],
@@ -1270,6 +1276,7 @@ def test_ring_joint_sdpa_dit_bh_glx(
                 "worker_l1_size": 1344544,
                 "trace_region_size": 1000000,
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(8192),
             },
             ttnn.Topology.Ring,
         ),
