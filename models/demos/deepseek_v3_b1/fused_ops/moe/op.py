@@ -3244,8 +3244,8 @@ class MoeOp:
         topk_scores = None
         topk_indices = None
         if routing_mode is False:
-            selected_experts = [0]
-            selected_scales = [torch.tensor(1.0, dtype=torch.bfloat16)]
+            selected_experts = sorted(gate_proj_weights_dict.keys())
+            selected_scales = [torch.tensor(1.0, dtype=torch.bfloat16)] * len(selected_experts)
         else:
             logits = norm_x @ routing_weights_tensor.to(norm_x.dtype)
             scores = torch.sigmoid(logits)
