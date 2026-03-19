@@ -14,6 +14,7 @@ Tests for prepare_weights: per-layer prepare/save/load on 4x2 mesh.
 """
 
 import time
+from dataclasses import fields as dataclass_fields
 
 import pytest
 import torch
@@ -94,6 +95,9 @@ def _core_range_set_to_tuples(crs):
     return sorted(((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in crs.ranges())
 
 
+_OVERLAPPED_TENSOR_SKIPPED_FIELDS = {"fused_tensor"}
+
+
 def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -> None:
     """Assert two OverlappedTensors have matching metadata (not fused_tensor identity)."""
     assert a.tensor_shape == b.tensor_shape
@@ -101,7 +105,12 @@ def _assert_overlapped_tensors_match(a: OverlappedTensor, b: OverlappedTensor) -
     assert a.dtype == b.dtype
     assert a.tile_shape == b.tile_shape
     assert a.byte_offset == b.byte_offset
+    assert a.total_size == b.total_size
     assert _core_range_set_to_tuples(a.core_range_set) == _core_range_set_to_tuples(b.core_range_set)
+    checked = {"tensor_shape", "shard_shape", "dtype", "tile_shape", "byte_offset", "total_size", "core_range_set"}
+    all_fields = {f.name for f in dataclass_fields(OverlappedTensor)}
+    unchecked = all_fields - checked - _OVERLAPPED_TENSOR_SKIPPED_FIELDS
+    assert not unchecked, f"OverlappedTensor has new fields not covered by assertion: {unchecked}"
 
 
 def _assert_on_device(tensor: ttnn.Tensor) -> None:
