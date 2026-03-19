@@ -91,6 +91,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         capnp
         capnp-rpc
+        Taskflow::Taskflow
 )
 
 target_include_directories(

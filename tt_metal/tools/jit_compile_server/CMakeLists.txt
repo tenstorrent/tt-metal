@@ -7,6 +7,7 @@ target_link_libraries(
         tt_metal
         capnp
         capnp-rpc
+        Taskflow::Taskflow
 )
 
 target_include_directories(

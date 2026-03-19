@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <taskflow/taskflow.hpp>
 #include <future>
 #include <initializer_list>
 #include <limits>
@@ -271,6 +272,12 @@ void SendGenfilesToServer(
         response.success, "Remote prepareGenfiles failed for kernel {}: {}", kernel->name(), response.error_message);
 }
 
+struct RemoteCompileResult {
+    int index;
+    std::string elf_path;
+    jit_server::CompileResponse response;
+};
+
 void RemoteJitCompileKernel(
     const std::string& endpoint,
     IDevice* device,
@@ -291,46 +298,61 @@ void RemoteJitCompileKernel(
             jit_build_genfiles_kernel_include(build_env.build_env, *kernel, kernel->kernel_source());
         }
 
-        jit_server::JitCompileRpcClient rpc_client(endpoint);
-
         std::string genfiles_dir = build_env.build_env.get_out_kernel_root_path() + kernel_path_suffix;
-        SendGenfilesToServer(rpc_client, build_env.build_key(), kernel_path_suffix, genfiles_dir, kernel);
-        std::vector<std::string> elf_paths;
+        {
+            jit_server::JitCompileRpcClient rpc_client(endpoint);
+            SendGenfilesToServer(rpc_client, build_env.build_key(), kernel_path_suffix, genfiles_dir, kernel);
+        }
 
-        for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
+        const int num_binaries = kernel->expected_num_binaries();
+        std::vector<std::future<RemoteCompileResult>> futures;
+        futures.reserve(num_binaries);
+
+        for (int i = 0; i < num_binaries; ++i) {
             const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
                 device->build_id(), core_type_idx, proc_class_idx, kernel->get_kernel_processor_type(i));
 
             auto request = BuildCompileRequest(build_state, kernel, kernel_path_suffix);
-            auto response = rpc_client.compile(request);
+            std::string elf_path = build_state.get_target_out_path(kernel_path_suffix);
 
+            futures.push_back(std::async(
+                std::launch::async, [endpoint, request = std::move(request), elf_path = std::move(elf_path), i]() {
+                    jit_server::JitCompileRpcClient rpc_client(endpoint);
+                    RemoteCompileResult result;
+                    result.index = i;
+                    result.elf_path = elf_path;
+                    result.response = rpc_client.compile(request);
+                    return result;
+                }));
+        }
+
+        std::vector<std::string> elf_paths(num_binaries);
+        for (auto& future : futures) {
+            auto result = future.get();
             TT_FATAL(
-                response.success,
-                "Remote JIT compile failed for kernel {} target {}: {}",
+                result.response.success,
+                "Remote JIT compile failed for kernel {}: {}",
                 kernel->name(),
-                build_state.get_target_name(),
-                response.error_message);
+                result.response.error_message);
             TT_FATAL(
-                response.elf_blobs.size() == 1,
-                "Expected 1 ELF blob but got {} for kernel {} target {}",
-                response.elf_blobs.size(),
-                kernel->name(),
-                build_state.get_target_name());
+                result.response.elf_blobs.size() == 1,
+                "Expected 1 ELF blob but got {} for kernel {}",
+                result.response.elf_blobs.size(),
+                kernel->name());
 
             // TODO(jit-server-refactor): load ELF blob directly into ll_api::memory
             // via a from-bytes constructor + set_binaries, avoiding the file round-trip.
             // Blocked on ll_api::memory only supporting file-path construction (mmap).
-            std::string elf_path = build_state.get_target_out_path(kernel_path_suffix);
-            fs::create_directories(fs::path(elf_path).parent_path());
+            fs::create_directories(fs::path(result.elf_path).parent_path());
             {
-                tt::jit_build::utils::FileRenamer tmp(elf_path);
+                tt::jit_build::utils::FileRenamer tmp(result.elf_path);
                 std::ofstream elf_file(tmp.path(), std::ios::binary);
                 TT_FATAL(elf_file.is_open(), "Cannot write ELF to {}", tmp.path());
                 elf_file.write(
-                    reinterpret_cast<const char*>(response.elf_blobs[0].data.data()),
-                    static_cast<std::streamsize>(response.elf_blobs[0].data.size()));
+                    reinterpret_cast<const char*>(result.response.elf_blobs[0].data.data()),
+                    static_cast<std::streamsize>(result.response.elf_blobs[0].data.size()));
             }
-            elf_paths.push_back(std::move(elf_path));
+            elf_paths[result.index] = std::move(result.elf_path);
         }
 
         kernel->set_elf_paths(build_env.build_key(), std::move(elf_paths));
@@ -1727,7 +1749,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (KernelHandle id : order) {
             auto& kernel = kernels.at(id);
             validate_kernel_placement(force_slow_dispatch, kernel);
-            launch_build_step(
+            auto build_fn =
                 [kernel, device, this, &build_env, remote_jit_compile_enabled, remote_jit_compile_endpoint] {
                     JitBuildOptions build_options(build_env.build_env);
                     kernel->set_build_options(build_options);
@@ -1768,8 +1790,16 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                },
-                events);
+                };
+            if (remote_jit_compile_enabled) {
+                static tf::Executor remote_compile_executor(std::thread::hardware_concurrency());
+                auto task = std::make_shared<std::packaged_task<void()>>(build_fn);
+                std::shared_future<void> fut(task->get_future());
+                remote_compile_executor.silent_async([task]() { (*task)(); });
+                events.emplace_back(std::move(fut));
+            } else {
+                launch_build_step(build_fn, events);
+            }
         }
     }
     sync_build_steps(events);
