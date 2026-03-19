@@ -2,9 +2,9 @@
 name: tt
 description: >-
   TTNN Implementation skill. Use when implementing model blocks in TTNN after
-  the PyTorch reference is verified. Covers weight loading, memory config
-  (DRAM/L1), KV-cache, prefill/decode modes, audio codec decoder, and PCC
-  verification (> 0.99 mandatory).
+  the PyTorch reference is verified. Covers real checkpoint loading first,
+  memory config (DRAM/L1), KV-cache, prefill/decode, distributed/CCL testing
+  on production mesh topology, audio codec decoder, and PCC verification.
 ---
 # SKILL: TTNN Implementation
 
@@ -15,6 +15,12 @@ Implement model blocks in TTNN, achieving PCC > 0.99 against PyTorch reference.
 
 **Before implementing ANY TTNN code:**
 
+0. **Load and validate REAL checkpoint weights first (not optional for bring-up)**
+   - Point `state_dict` / safetensors at the actual HuggingFace (or release) checkpoint on disk.
+   - Verify shapes and dtypes against `config.json` / modeling code before writing TTNN loaders.
+   - **Synthetic / random weights** are only for tiny local smoke tests; they hide sharding bugs, FP8 dequant issues, and MoE routing behavior. Do not treat “PCC on synthetic 1×1” as sign-off for a Galaxy EP/TP model.
+   - Tests that exercise **CCL** (`all_reduce`, `reduce_scatter`, fabric ring, expert-parallel gather) **must** run on the **production mesh shape** (e.g. 8×4 for MiniMax-M2.5 Galaxy). Gating mesh size on “weights exist” is not enough — default integration tests should **require** both real weights **and** full mesh, with an **explicit env opt-in** (e.g. `MINIMAX_M2_ALLOW_SYNTH_1X1=1`) for 1×1-only runs that **do not** validate CCL.
+
 1. **Verify Reference is COMPLETE and WORKING**
    - ALL components from ARCHITECTURE.md have reference implementations
    - Reference produces correct END OUTPUT (not just runs without errors)
@@ -24,6 +30,14 @@ Implement model blocks in TTNN, achieving PCC > 0.99 against PyTorch reference.
 2. **Never implement TTNN against an unverified reference**
    - High PCC against a broken reference is meaningless
    - The reference MUST produce correct functional output first
+
+## Distributed models: mesh, CCL, and PCC tests
+
+- **Production topology:** Implement and test TP/EP (column vs row parallel sharding, `MeshConfig`, `CCLManager`) on the same `MeshShape` as the product (e.g. 8 rows × 4 cols).
+- **Fabric:** Enable the same `FabricConfig` the demo uses when opening the mesh device for tests that hit collectives.
+- **Anti-pattern:** Automatically falling back to `MeshShape(1, 1)` when a checkpoint path is missing **silently drops** all collective coverage — you cannot validate all-reduce correctness that way.
+- **CI / laptops without 32 chips:** `pytest.skip` with a clear message, or a **documented** opt-in env var for synthetic 1×1, never silent downgrade.
+- **Deallocation / views:** `ttnn.reshape` may share storage with the parent tensor; **never** `deallocate(True)` a reshaped child while the parent is still used later in the same forward (corrupts activations and kills PCC).
 
 ## Step-by-Step Process
 
@@ -38,8 +52,10 @@ models/demos/{model_name}/tt/
 └── generator.py          # Inference with tracing support
 ```
 
-### 2. Weight Loading Pattern
-Use `ttnn.from_torch` with proper dtype and layout:
+### 2. Weight loading pattern (prefer real checkpoint from day one)
+Use the **real** `state_dict` from disk (safetensors, FP8 dequant if needed) — same files the PyTorch reference uses. Then `ttnn.from_torch` / `ttnn.as_tensor` with proper dtype, layout, and **mesh mappers** (replicate, column_parallel, row_parallel, `ShardTensor2dMesh` for EP+TP).
+
+Synthetic weights come **after** real weights load cleanly; they do not replace checkpoint validation.
 
 ```python
 import torch

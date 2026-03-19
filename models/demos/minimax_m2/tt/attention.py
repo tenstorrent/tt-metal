@@ -39,7 +39,12 @@ class TtMiniMaxAttention:
     """
     MiniMax-M2.5 attention with device-resident KV cache.
 
-    KV cache: [B, NK, max_seq_len, D] bfloat16 on DRAM, allocated at init.
+    TP parallelism (gpt_oss pattern):
+      - Q/K/V projections: column-parallel (shard output heads across TP)
+      - O projection:      row-parallel (shard input, all-reduce partial products)
+      - QK-norm weights:   sharded to match local head count per device
+
+    KV cache: [B, NK_local, max_seq_len, D] bfloat16 on DRAM per device.
     Prefill fills via ttnn.fill_cache; decode updates via ttnn.update_cache.
     Trace-safe decode via forward_decode_trace with tensor positions.
     """
@@ -68,12 +73,16 @@ class TtMiniMaxAttention:
         eps = config.rms_norm_eps
         tp = mesh_config.tp if mesh_config else 1
 
+        NQ_local = NQ // tp
+        NK_local = NK // tp
+
         prefix = f"model.layers.{layer_idx}.self_attn."
 
         rep_mapper = ttnn.ReplicateTensorToMesh(device) if self._is_mesh else None
         col_mapper = mesh_config.column_parallel(device) if (self._is_mesh and mesh_config) else None
+        row_mapper = mesh_config.row_parallel(device) if (self._is_mesh and mesh_config) else None
 
-        def _load_rep(key):
+        def _load_col(key):
             w = state_dict[prefix + key].T.to(torch.bfloat16)
             return ttnn.from_torch(
                 w,
@@ -81,12 +90,12 @@ class TtMiniMaxAttention:
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rep_mapper,
+                mesh_mapper=col_mapper,
             )
 
-        self.wq = _load_rep("q_proj.weight")
-        self.wk = _load_rep("k_proj.weight")
-        self.wv = _load_rep("v_proj.weight")
+        self.wq = _load_col("q_proj.weight")
+        self.wk = _load_col("k_proj.weight")
+        self.wv = _load_col("v_proj.weight")
 
         wo_pt = state_dict[prefix + "o_proj.weight"].T.to(torch.bfloat16)
         self.wo = ttnn.from_torch(
@@ -95,21 +104,25 @@ class TtMiniMaxAttention:
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=col_mapper,
+            mesh_mapper=row_mapper,
         )
 
-        self.q_norm = TtRMSNorm(device, state_dict[prefix + "q_norm.weight"], eps, mesh_mapper=rep_mapper)
-        self.k_norm = TtRMSNorm(device, state_dict[prefix + "k_norm.weight"], eps, mesh_mapper=rep_mapper)
+        # QK-norm: row_parallel shards dim=-2 of the [1,1,N/TILE,TILE] weight,
+        # giving each TP device a weight matching its local head count.
+        self.q_norm = TtRMSNorm(device, state_dict[prefix + "q_norm.weight"], eps, mesh_mapper=row_mapper)
+        self.k_norm = TtRMSNorm(device, state_dict[prefix + "k_norm.weight"], eps, mesh_mapper=row_mapper)
 
         self._NQ = NQ
         self._NK = NK
+        self._NQ_local = NQ_local
+        self._NK_local = NK_local
         self._D = D
         self._tp = tp
         self._max_seq_len = max_seq_len
         self._max_batch_size = max_batch_size
 
-        # Device-resident KV cache [B, NK, max_seq_len, D]
-        cache_shape = [max_batch_size, NK, max_seq_len, D]
+        # Device-resident KV cache [B, NK_local, max_seq_len, D] per TP device
+        cache_shape = [max_batch_size, NK_local, max_seq_len, D]
         self.k_cache = ttnn.from_torch(
             torch.zeros(cache_shape, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -127,11 +140,9 @@ class TtMiniMaxAttention:
             mesh_mapper=rep_mapper,
         )
 
-        # Pre-compute HEIGHT_SHARDED mem config for decode KV
-        NK_padded = max(32, ((NK + 31) // 32) * 32)
-        grid_end_y = max_batch_size - 1
+        NK_local_padded = max(32, ((NK_local + 31) // 32) * 32)
         self._decode_kv_shard_mem = ttnn.create_sharded_memory_config(
-            shape=(NK_padded, D),
+            shape=(NK_local_padded, D),
             core_grid=ttnn.CoreGrid(y=max_batch_size, x=1),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -139,7 +150,7 @@ class TtMiniMaxAttention:
 
     def _qkv_rope(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor):
         cfg = self.config
-        NQ, NK, D, H = self._NQ, self._NK, self._D, cfg.hidden_size
+        NQ_l, NK_l, D, H = self._NQ_local, self._NK_local, self._D, cfg.hidden_size
 
         B, S, x = _extract_bsh(x, H)
 
@@ -150,9 +161,9 @@ class TtMiniMaxAttention:
         q = self.q_norm(q)
         k = self.k_norm(k)
 
-        q = ttnn.permute(ttnn.reshape(q, (B, S, NQ, D)), (0, 2, 1, 3))
-        k = ttnn.permute(ttnn.reshape(k, (B, S, NK, D)), (0, 2, 1, 3))
-        v = ttnn.permute(ttnn.reshape(v, (B, S, NK, D)), (0, 2, 1, 3))
+        q = ttnn.permute(ttnn.reshape(q, (B, S, NQ_l, D)), (0, 2, 1, 3))
+        k = ttnn.permute(ttnn.reshape(k, (B, S, NK_l, D)), (0, 2, 1, 3))
+        v = ttnn.permute(ttnn.reshape(v, (B, S, NK_l, D)), (0, 2, 1, 3))
 
         q, k = apply_partial_rope(q, k, cos, sin, cfg.rotary_dim, D)
         return q, k, v, B, S
@@ -160,9 +171,9 @@ class TtMiniMaxAttention:
     def _o_proj_allreduce(self, attn_out, B, S):
         cfg = self.config
         tp = self._tp
-        NQ, D, H = self._NQ, self._D, cfg.hidden_size
+        NQ_l, D, H = self._NQ_local, self._D, cfg.hidden_size
 
-        attn_out = ttnn.reshape(ttnn.permute(attn_out, (0, 2, 1, 3)), (B, S, NQ * D))
+        attn_out = ttnn.reshape(ttnn.permute(attn_out, (0, 2, 1, 3)), (B, S, NQ_l * D))
         out = ttnn.linear(attn_out, self.wo, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn_out.deallocate(True)
 
@@ -241,7 +252,7 @@ class TtMiniMaxAttention:
         NOT trace-safe — uses Python int slice bounds.
         """
         scale = self._D**-0.5
-        NK, D = self._NK, self._D
+        NK_l, D = self._NK_local, self._D
         q, k, v, B, _ = self._qkv_rope(x, cos, sin)
 
         ttnn.update_cache(self.k_cache, k, cur_pos)
@@ -249,8 +260,8 @@ class TtMiniMaxAttention:
         k.deallocate(True)
         v.deallocate(True)
 
-        k_filled = ttnn.slice(self.k_cache, (0, 0, 0, 0), (B, NK, cur_pos + 1, D))
-        v_filled = ttnn.slice(self.v_cache, (0, 0, 0, 0), (B, NK, cur_pos + 1, D))
+        k_filled = ttnn.slice(self.k_cache, (0, 0, 0, 0), (B, NK_l, cur_pos + 1, D))
+        v_filled = ttnn.slice(self.v_cache, (0, 0, 0, 0), (B, NK_l, cur_pos + 1, D))
 
         attn_out = ttnn.transformer.scaled_dot_product_attention(
             q,

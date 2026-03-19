@@ -1,12 +1,20 @@
 ---
-description: TTNN Implementation skill. Use when implementing model blocks in TTNN after the PyTorch reference is verified. Covers weight loading, memory config, KV-cache, prefill/decode, and PCC verification.
+description: TTNN Implementation skill. Use when implementing model blocks in TTNN after the PyTorch reference is verified. Covers real checkpoint loading first, memory config, KV-cache, distributed/CCL tests on production mesh, prefill/decode, and PCC verification.
 alwaysApply: false
 ---
 
 # SKILL: TTNN Implementation
 
+Full detail: `.cursor/skills/tt/SKILL.md`
+
 ## Purpose
 Implement model blocks in TTNN, achieving PCC > 0.99 against PyTorch reference.
+
+## Real weights + production mesh (first steps)
+
+- **Real checkpoint on disk** before TT blocks: load safetensors / dequant, match shapes to `config.json`. Synthetic weights are smoke-only, not bring-up sign-off.
+- **PCC tests that use collectives** (`all_reduce`, fabric, EP/TP) must run on the **target mesh** (e.g. Galaxy 8×4). Do **not** silently fall back to 1×1 when weights are missing — use `pytest.skip` or an **explicit** env opt-in (e.g. `MINIMAX_M2_ALLOW_SYNTH_1X1=1`) documented as “no CCL coverage.”
+- **Reshape + deallocate:** reshapes may share buffers; never `deallocate(True)` a view while the parent tensor is still used in the same forward.
 
 ## CRITICAL Prerequisites
 

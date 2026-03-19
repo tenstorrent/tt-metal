@@ -169,7 +169,6 @@ class TtMiniMaxMoE:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._gate_compute_config,
         )
-        x_2d.deallocate(True)
 
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
         logits.deallocate(True)
