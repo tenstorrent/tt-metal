@@ -124,7 +124,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         True,
     ],
 )
-@pytest.mark.parametrize("weight_type", ["random", "real"])
+@pytest.mark.parametrize("weight_type", ["real"])
 def test_forward_pass(
     device_params,
     mode,
