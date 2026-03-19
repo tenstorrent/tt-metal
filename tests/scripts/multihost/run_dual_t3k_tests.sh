@@ -18,7 +18,8 @@ run_dual_t3k_unit_tests() {
   local mpirun_args="--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo"
   local hosts
   # Extract hostnames: skip comment lines (#), empty lines; take first column (hostname) from "host slots=N" format
-  hosts=$(grep -v '^#' /etc/mpirun/hostfile 2>/dev/null | grep -v '^[[:space:]]*$' | awk '{print $1}' | paste -sd, 2>/dev/null || true)
+  # Strip trailing 'e' from hostnames (e.g. f10cs04e -> f10cs04) for canonical hostname
+  hosts=$(grep -v '^#' /etc/mpirun/hostfile 2>/dev/null | grep -v '^[[:space:]]*$' | awk '{print $1}' | sed 's/e$//' | paste -sd, 2>/dev/null || true)
   if [[ -z "$hosts" ]]; then
     echo "Error: No valid hosts found in /etc/mpirun/hostfile" >&2
     exit 1

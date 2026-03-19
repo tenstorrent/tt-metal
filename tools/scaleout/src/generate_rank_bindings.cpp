@@ -153,6 +153,8 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
         arch_cluster_filename = "wh_galaxy_physical_grouping_descriptor.textproto";
     } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
         arch_cluster_filename = "bh_galaxy_physical_grouping_descriptor.textproto";
+    } else if (cluster_type == tt::tt_metal::ClusterType::T3K && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_t3k_physical_grouping_descriptor.textproto";
     } else {
         arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
     }
