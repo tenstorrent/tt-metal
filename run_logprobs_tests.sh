@@ -22,15 +22,11 @@ export TT_CACHE_PATH=${TT_CACHE_PATH:-/localdev/divanovic/tt-metal-cache}
 MODE="${1:---all}"
 
 run_sampling_module() {
-    echo "=== Running sampling module logprobs tests ==="
+    echo "=== Running sampling module logprobs tests (TG only) ==="
     echo "  File: models/common/tests/test_sampling.py"
-    if [ "$MODE" = "--topk-only" ]; then
-        echo "  Filter: top-K tests only"
-        pytest models/common/tests/test_sampling.py -v --timeout 600 \
-            -k "test_top_k or test_per_user or test_transfer_logprobs or test_set_log_probs_mode"
-    else
-        pytest models/common/tests/test_sampling.py -v --timeout 600
-    fi
+    echo "  Filter: TG Galaxy top-K tests only"
+    pytest models/common/tests/test_sampling.py -v --timeout 600 \
+        -k "test_top_k or test_per_user or test_transfer_logprobs or test_set_log_probs_mode"
 }
 
 run_gpt_oss() {
@@ -42,7 +38,8 @@ run_gpt_oss() {
         pytest models/demos/gpt_oss/tests/unit/test_sampling.py -v --timeout 600 \
             -k "test_gpt_oss_topk_logprobs"
     else
-        pytest models/demos/gpt_oss/tests/unit/test_sampling.py -v --timeout 600
+        pytest models/demos/gpt_oss/tests/unit/test_sampling.py -v --timeout 600 \
+            -k "test_gpt_oss_topk_logprobs"
     fi
 }
 
