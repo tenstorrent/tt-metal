@@ -394,6 +394,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             mock_cluster_desc = get_mock_cluster_desc(rtoptions_);
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
+                .num_host_mem_ch_per_mmio_device = 4,
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
@@ -401,6 +402,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
+                .num_host_mem_ch_per_mmio_device = 4,
                 .target_devices = {0},
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
