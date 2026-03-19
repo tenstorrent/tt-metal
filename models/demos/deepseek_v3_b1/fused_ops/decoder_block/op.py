@@ -11,7 +11,13 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     build_cb_reconfig_tensor,
     record_cb_metadata,
 )
-from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock, extend_fabric_args
+from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import (
+    H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
+    AttentionBlock,
+    DecoderIngressMode,
+    extend_fabric_args,
+    validate_decoder_input_ingress_mode,
+)
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp, MoeSem
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
@@ -189,7 +195,11 @@ class DecoderBlock:
         use_hardcoded_expert_index=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
+        input_ingress_mode=DecoderIngressMode.LEGACY_LOCAL_TENSOR,
         upstream_socket=None,
+        h2d_socket=None,
+        embedding_tensor=None,
+        h2d_token_page_size=H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
         downstream_socket=None,
         persistent_next_iter_semaphore=None,
         persistent_mode=False,
@@ -198,6 +208,14 @@ class DecoderBlock:
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
+        validate_decoder_input_ingress_mode(
+            input_ingress_mode=input_ingress_mode,
+            input_tensor_mesh=input_tensor_mesh,
+            upstream_socket=upstream_socket,
+            h2d_socket=h2d_socket,
+            embedding_tensor=embedding_tensor,
+            h2d_token_page_size=h2d_token_page_size,
+        )
         full_device_grid, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,

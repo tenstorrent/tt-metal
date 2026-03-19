@@ -123,3 +123,37 @@ Implement embedding-decoder kernel fusion by extending decoder fused op to conta
 - Later decoder stages continue to run `D2D_SOCKET -> RMSNorm` unchanged.
 - No requirement to support `H2D + embedding` on MoE stages.
 - Kernel-level fusion is validated before broader stage/pipeline cleanup.
+
+### Reminder
+- Step-1 implementation keeps a temporary legacy no-socket fallback in the Python ingress resolver so
+  existing local tensor-fed decoder tests do not break during the refactor.
+- Before closing this task, explicitly check whether that fallback is still needed.
+- If all decoder bring-up, regression, and pipeline tests have been migrated to the two real ingress modes,
+  remove the fallback and keep only:
+  `D2D_SOCKET -> RMSNorm`
+  `H2D -> embedding -> RMSNorm`
+
+### Implementation Update: Step 1
+- Added explicit decoder ingress API plumbing in the Python fused-op builders.
+- `AttentionBlock.op(...)` and `DecoderBlock.op(...)` now take an explicit ingress mode instead of
+  inferring behavior from `None` or mixed socket arguments.
+- Current enum values are:
+  `D2D_SOCKET`
+  `H2D_EMBED`
+  `LEGACY_LOCAL_TENSOR`
+- `LEGACY_LOCAL_TENSOR` is temporary and exists only to preserve current local tensor-fed decoder tests
+  during the refactor.
+- Added Python-side validation for all three modes:
+  `D2D_SOCKET` requires `upstream_socket`
+  `H2D_EMBED` requires `h2d_socket` and `embedding_tensor`
+  `LEGACY_LOCAL_TENSOR` rejects socket and embedding resources
+- Added `H2D_EMBED` validation for:
+  64-byte token page size,
+  row-major layout,
+  interleaved memory layout,
+  DRAM residency,
+  embedding row size matching decoder input activation size,
+  embedding dtype matching decoder input dtype.
+- No kernel-side changes are included in step 1.
+- No compile-time/runtime arg threading for `H2D_EMBED` has been added yet.
+- Existing behavior should remain unchanged because the default temporary mode is `LEGACY_LOCAL_TENSOR`.

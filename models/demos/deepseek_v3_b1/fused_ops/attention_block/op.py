@@ -4,6 +4,7 @@
 
 
 import math
+from enum import Enum
 
 import torch
 
@@ -25,6 +26,7 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
 )
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
@@ -37,6 +39,101 @@ from models.demos.deepseek_v3_b1.utils import float_to_uint32
 def extend_fabric_args(existing_rt_args, fabric_args):
     """Use this to append fabric args that pass in arg_idx to the open_connection api"""
     existing_rt_args.extend([len(fabric_args), *fabric_args])
+
+
+H2D_EMBED_TOKEN_PAGE_SIZE_BYTES = 64
+
+
+class DecoderIngressMode(str, Enum):
+    D2D_SOCKET = "d2d_socket"
+    H2D_EMBED = "h2d_embed"
+    # Temporary compatibility mode while local tensor-fed decoder tests are still in place.
+    LEGACY_LOCAL_TENSOR = "legacy_local_tensor"
+
+
+def _validate_h2d_embedding_decoder_ingress(input_tensor_mesh, embedding_tensor, h2d_token_page_size):
+    if h2d_token_page_size != H2D_EMBED_TOKEN_PAGE_SIZE_BYTES:
+        raise ValueError(
+            f"H2D_EMBED currently requires {H2D_EMBED_TOKEN_PAGE_SIZE_BYTES}-byte token pages, got {h2d_token_page_size}"
+        )
+
+    embedding_mem_config = embedding_tensor.memory_config()
+    if embedding_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        raise ValueError("H2D_EMBED requires the embedding tensor to be row-major")
+    if embedding_mem_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise ValueError("H2D_EMBED requires the embedding tensor to use interleaved memory layout")
+    if embedding_mem_config.buffer_type != ttnn.BufferType.DRAM:
+        raise ValueError("H2D_EMBED requires the embedding tensor to live in DRAM")
+
+    input_tensor_sample = ttnn.get_device_tensors(input_tensor_mesh)[0]
+    expected_activation_bytes = (
+        input_tensor_sample.shape[0] * input_tensor_sample.shape[1] * dtype_size(input_tensor_sample.dtype)
+    )
+    embedding_row_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
+    if embedding_row_bytes != expected_activation_bytes:
+        raise ValueError(
+            "H2D_EMBED embedding row width does not match decoder input activation size: "
+            f"expected {expected_activation_bytes} bytes, got {embedding_row_bytes}"
+        )
+    if embedding_tensor.dtype != input_tensor_sample.dtype:
+        raise ValueError(
+            "H2D_EMBED requires embedding tensor dtype to match decoder input dtype: "
+            f"expected {input_tensor_sample.dtype}, got {embedding_tensor.dtype}"
+        )
+
+
+def validate_decoder_input_ingress_mode(
+    *,
+    input_ingress_mode,
+    input_tensor_mesh,
+    upstream_socket=None,
+    h2d_socket=None,
+    embedding_tensor=None,
+    h2d_token_page_size=H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
+):
+    """
+    Validate decoder ingress configuration.
+
+    Real ingress modes:
+    - D2D socket -> RMSNorm
+    - H2D -> embedding -> RMSNorm
+
+    Temporary compatibility mode:
+    - LEGACY_LOCAL_TENSOR
+    """
+
+    assert isinstance(input_ingress_mode, DecoderIngressMode), (
+        "decoder input ingress mode must be a DecoderIngressMode value. "
+        f"Allowed values: {', '.join(mode.value for mode in DecoderIngressMode)}"
+    )
+    mode = input_ingress_mode
+
+    if mode == DecoderIngressMode.D2D_SOCKET:
+        if upstream_socket is None:
+            raise ValueError("D2D_SOCKET ingress requires upstream_socket")
+        if h2d_socket is not None or embedding_tensor is not None:
+            raise ValueError("D2D_SOCKET ingress is incompatible with h2d_socket and embedding_tensor")
+        return mode
+
+    if mode == DecoderIngressMode.H2D_EMBED:
+        if upstream_socket is not None:
+            raise ValueError("H2D_EMBED ingress is incompatible with upstream_socket")
+        if h2d_socket is None:
+            raise ValueError("H2D_EMBED ingress requires h2d_socket")
+        if embedding_tensor is None:
+            raise ValueError("H2D_EMBED ingress requires embedding_tensor")
+        _validate_h2d_embedding_decoder_ingress(input_tensor_mesh, embedding_tensor, h2d_token_page_size)
+        return mode
+
+    if mode == DecoderIngressMode.LEGACY_LOCAL_TENSOR:
+        if upstream_socket is not None or h2d_socket is not None or embedding_tensor is not None:
+            raise ValueError(
+                "LEGACY_LOCAL_TENSOR ingress is only for the temporary no-socket local tensor path and "
+                "cannot be combined with socket or embedding resources"
+            )
+        return mode
+
+    raise AssertionError(f"Unhandled decoder ingress mode: {mode}")
 
 
 class AttentionBlock:
@@ -3880,10 +3977,22 @@ class AttentionBlock:
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
+        input_ingress_mode=DecoderIngressMode.LEGACY_LOCAL_TENSOR,
         upstream_socket=None,
+        h2d_socket=None,
+        embedding_tensor=None,
+        h2d_token_page_size=H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
+        validate_decoder_input_ingress_mode(
+            input_ingress_mode=input_ingress_mode,
+            input_tensor_mesh=input_tensor_mesh,
+            upstream_socket=upstream_socket,
+            h2d_socket=h2d_socket,
+            embedding_tensor=embedding_tensor,
+            h2d_token_page_size=h2d_token_page_size,
+        )
         full_device_grid, attention_block_cbs, attention_block_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
