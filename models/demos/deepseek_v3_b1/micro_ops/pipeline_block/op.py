@@ -149,6 +149,9 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.stage_idx].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord),
                 upstream_socket=self.host_io.get_downstream_socket(),
+                downstream_core_coord=ttnn.MeshCoreCoord(
+                    pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord
+                ),
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=downstream_mesh_wrapper,
             )
@@ -165,6 +168,9 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx - 1].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx].entry_node_coord, pipeline_core_coord),
                 downstream_socket=self.host_io.get_upstream_socket(),
+                upstream_core_coord=ttnn.MeshCoreCoord(
+                    pipeline_config[self.last_stage_idx - 1].exit_node_coord, pipeline_core_coord
+                ),
                 sender_mesh=loopback_sender_mesh_wrapper,
                 receiver_mesh=MeshWrapper(mesh_device),
             )
@@ -179,6 +185,9 @@ class PipelineBlock:
                 downstream_core_coord=entry_node_downstream
                 if entry_node_downstream
                 else ttnn.MeshCoreCoord(pipeline_config[self.stage_idx].exit_node_coord, pipeline_core_coord),
+                upstream_core_coord=ttnn.MeshCoreCoord(
+                    pipeline_config[self.stage_idx - 1].exit_node_coord, pipeline_core_coord
+                ),
                 sender_mesh=upstream_mesh_wrapper,
                 receiver_mesh=MeshWrapper(mesh_device),
             )
@@ -190,6 +199,9 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord),
                 upstream_core_coord=exit_node_upstream,
                 upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
+                downstream_core_coord=ttnn.MeshCoreCoord(
+                    pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord
+                ),
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=downstream_mesh_wrapper,
             )

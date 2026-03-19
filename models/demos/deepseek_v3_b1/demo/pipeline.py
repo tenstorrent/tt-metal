@@ -388,6 +388,7 @@ class PipelineBuilder:
             submesh_idx = pipeline_configs[stage_idx].submesh_idx
             my_local_submeshes[stage_idx] = submeshes[submesh_idx]
 
+        print("pipline configs: ", pipeline_configs)
         for stage_idx, stage_factory in self._stage_factories.items():
             submesh_idx = pipeline_configs[stage_idx].submesh_idx
             stage_kind = stage_factory(submeshes[submesh_idx])
