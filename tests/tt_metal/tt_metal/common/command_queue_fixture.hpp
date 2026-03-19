@@ -163,6 +163,15 @@ protected:
                 }
                 break;
             }
+            // In multi-rank Galaxy the MMIO chip's tunnel peers are on remote hosts,
+            // so the loop above produces no local devices. Fall back to the always-local
+            // MMIO device so tests continue to run on this rank.
+            if (devices_.empty() && reserved_devices_.contains(mmio_device_id)) {
+                auto& mmio_device = reserved_devices_.at(mmio_device_id);
+                if (!mmio_device->is_remote_only()) {
+                    devices_.push_back(mmio_device);
+                }
+            }
         } else {
             devices_.push_back(reserved_devices_.at(mmio_device_id));
         }
