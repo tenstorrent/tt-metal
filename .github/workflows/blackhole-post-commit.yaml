@@ -387,7 +387,8 @@ jobs:
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
-    if: ${{ always() && !cancelled() && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule' || inputs.run-blackhole-multi-card-fast-unit-tests == true) }}
+    # Don't run on daily P100-only schedule
+    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && github.event.schedule != '0 7 * * *')) }}
     needs: [resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
