@@ -182,14 +182,15 @@ jobs:
 
             echo "::group::${name}"
             if GTEST_OUTPUT="xml:/work/generated/test_reports/${xml_name}" "$@"; then
-              echo "PASS: ${name}"
+              echo "::endgroup::"
+              echo "::notice title=PASS::${name}"
             else
               local status=$?
               failed=1
               failed_names+=("${name} (exit ${status})")
-              echo "::error title=${name}::Command failed with exit code ${status}"
+              echo "::endgroup::"
+              echo "::error title=FAIL::${name} (exit ${status})"
             fi
-            echo "::endgroup::"
           }
 
           run_gtest \
@@ -342,6 +343,8 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+        with:
+          test-report-path: generated/test_reports/
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
