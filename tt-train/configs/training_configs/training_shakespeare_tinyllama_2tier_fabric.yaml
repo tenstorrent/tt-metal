@@ -3,21 +3,16 @@ training_config:
   seed: 5489
   model_save_interval: 500
   batch_size: 8
-  gradient_accumulation_steps: 1
   num_epochs: 1
-  max_steps: 5000
+  max_steps: 1000
+  learning_rate: 0.0003
+  weight_decay: 0.01
+  use_moreh_adamw: true
+  use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/tinyllama.yaml"
-  optimizer:
-    type: AdamW
-    lr: 0.0003
-    beta1: 0.9
-    beta2: 0.999
-    epsilon: 1.0e-8
-    weight_decay: 0.01
-    amsgrad: false
-    stochastic_rounding: false
+  model_config: "model_configs/tinyllama.yaml"
+  multihost_config: "multihost_configs/1worker_fabric.yaml"
 
 device_config:
   enable_ddp: true
