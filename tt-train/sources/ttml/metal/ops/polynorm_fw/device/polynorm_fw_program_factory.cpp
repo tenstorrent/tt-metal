@@ -38,10 +38,6 @@ constexpr auto kInvRmsXCbIndex = tt::CBIndex::c_11;
 constexpr auto kInvRmsX2CbIndex = tt::CBIndex::c_12;
 constexpr auto kInvRmsX3CbIndex = tt::CBIndex::c_13;
 constexpr auto kOutputCbIndex = tt::CBIndex::c_14;
-constexpr auto kOnesCbIndex = tt::CBIndex::c_15;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_16;
-constexpr auto kZeroCbIndex = tt::CBIndex::c_17;
-constexpr auto kDebugCbIndex = tt::CBIndex::c_18;
 
 constexpr uint32_t kNumOneTile = 1U;
 
@@ -164,15 +160,6 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
         create_circular_buffer(program, all_cores, kInvRmsX3CbIndex, data_format, tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, tile_size, block_size);
-    [[maybe_unused]] auto cb_ones =
-        create_circular_buffer(program, all_cores, kOnesCbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_matmul_reduce =
-        create_circular_buffer(program, all_cores, kMatMulReduceCbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_zero =
-        create_circular_buffer(program, all_cores, kZeroCbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_debug =
-        create_circular_buffer(program, all_cores, kDebugCbIndex, data_format, tile_size, 6U);
-
     auto* input_buffer = input.buffer();
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
@@ -199,7 +186,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // Bump this when compute kernel ABI/logic changes to avoid stale binaries.
-    constexpr uint32_t kPolyNormKernelRevision = 15U;
+    constexpr uint32_t kPolyNormKernelRevision = 16U;
     std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size, Wt, kPolyNormKernelRevision};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, true);

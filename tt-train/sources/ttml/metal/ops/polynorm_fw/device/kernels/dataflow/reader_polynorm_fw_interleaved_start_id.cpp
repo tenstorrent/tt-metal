@@ -28,9 +28,6 @@ void kernel_main() {
     constexpr auto cb_w1 = tt::CBIndex::c_5;
     constexpr auto cb_w2 = tt::CBIndex::c_6;
     constexpr auto cb_bias = tt::CBIndex::c_7;
-    constexpr auto cb_ones = tt::CBIndex::c_15;
-    constexpr auto cb_matmul_reduce = tt::CBIndex::c_16;
-    constexpr auto cb_zero = tt::CBIndex::c_17;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -41,9 +38,6 @@ void kernel_main() {
     generate_tile_with_packed_bfloat16_value(cb_w1, packed_w1);
     generate_tile_with_packed_bfloat16_value(cb_w2, packed_w2);
     generate_tile_with_packed_bfloat16_value(cb_bias, packed_bias);
-    generate_tile_with_packed_bfloat16_value(cb_ones, BF16_ONE_PACKED);
-    generate_matmul_row_reduce_tile(cb_matmul_reduce);
-    generate_tile_with_packed_bfloat16_value(cb_zero, BF16_ZERO_BITS);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_pass_1);
     constexpr auto input_args = TensorAccessorArgs<2>();
