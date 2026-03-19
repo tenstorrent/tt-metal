@@ -22,11 +22,7 @@ using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 namespace {
 
 uint32_t get_num_stick_per_barrier(uint32_t stick_size_padded_aligned) {
-    uint32_t num_stick_per_barrier = 0;
-    for (uint32_t cur_bytes = 0; cur_bytes < max_read_size; cur_bytes += stick_size_padded_aligned) {
-        num_stick_per_barrier++;
-    }
-    return std::max(num_stick_per_barrier, uint32_t{1});
+    return std::max(tt::div_up(max_read_size, stick_size_padded_aligned), 1u);
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm(
