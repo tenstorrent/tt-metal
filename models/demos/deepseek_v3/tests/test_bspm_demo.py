@@ -151,8 +151,12 @@ def _preprocess_experts_with_bspm(
     except ImportError as e:
         pytest.skip(f"Required module not importable for BSPM preprocessing: {e}")
 
-    # Lazy import to avoid hard dependency at module level
-    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "bit_sculpt"))
+    # Lazy import — derive the bit_sculpt root from BSPM_RESULTS_DIR (most reliable)
+    # or fall back to a sibling-of-tt-metal guess.
+    bspm_root = Path(os.environ.get("BSPM_RESULTS_DIR", "")).parent
+    if not bspm_root.exists():
+        bspm_root = Path(__file__).resolve().parents[4].parent / "bit_sculpt"
+    sys.path.insert(0, str(bspm_root))
     try:
         from integration.ttnn.bspm_loader import load_bspm_for_layer
     except ImportError as e:
