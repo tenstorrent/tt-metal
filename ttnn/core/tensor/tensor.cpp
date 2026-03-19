@@ -101,7 +101,7 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(HostStorage(std::move(buffer)), std::move(tensor_spec), TensorTopology{}) {}
+    Tensor(HostTensor(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
 
 Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
