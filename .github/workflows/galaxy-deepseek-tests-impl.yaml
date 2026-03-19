@@ -172,7 +172,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests \
+          pytest models/demos/deepseek_v3/tests -x \
             --ignore=models/demos/deepseek_v3/tests/unit \
             --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
             --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
@@ -180,6 +180,7 @@ jobs:
             --ignore=models/demos/deepseek_v3/tests/test_get_weight_config.py \
             --ignore=models/demos/deepseek_v3/tests/test_lazy_state_dict.py \
             --ignore=models/demos/deepseek_v3/tests/test_cache_specs_harness.py \
+            --ignore=models/demos/deepseek_v3/tests/test_hf_model_utils.py \
             --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
@@ -220,11 +221,6 @@ jobs:
           # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_decode" --timeout 1250 --durations=0
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_prefill" --timeout 1250 --durations=0
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       # - name: Save environment data
       #   id: save-environment-data
       #   if: ${{ !cancelled() }}

@@ -15,7 +15,7 @@ def test_base_case(device):
     embedding_matrix = ttnn.to_device(ttnn.from_torch(torch.rand(10, 2), dtype=ttnn.bfloat16), device)
     indices_torch = ttnn.to_torch(ttnn.from_device(indices))
     embedding_matrix_torch = ttnn.to_torch(ttnn.from_device(embedding_matrix))
-    expected_embeddings = torch.nn.functional.embedding(indices_torch.long(), embedding_matrix_torch)
+    expected_embeddings = torch.nn.functional.embedding(indices_torch, embedding_matrix_torch)
     embeddings = ttnn.embedding(indices, embedding_matrix)
     assert tuple(expected_embeddings.shape) == tuple(embeddings.shape)
     embeddings = ttnn.to_torch(ttnn.from_device(embeddings))

@@ -39,6 +39,7 @@
 
 namespace tt::tt_metal {
 class Allocator;
+class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -73,9 +74,13 @@ using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
+    friend class tt::tt_metal::MetalEnv;
 
 private:
     MeshDevice() = default;
+    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
+    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
+    explicit MeshDevice(MetalEnv& metal_env);
 
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
@@ -162,14 +167,6 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void init_command_queue_host() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void init_command_queue_device() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    bool compile_fabric() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void configure_fabric() override;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
