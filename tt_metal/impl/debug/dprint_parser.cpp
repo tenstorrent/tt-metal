@@ -12,6 +12,7 @@
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
+#include "device/device_impl.hpp"
 #include "impl/data_format/blockfloat_common.hpp"
 #include <tt_stl/assert.hpp>
 
@@ -30,7 +31,7 @@ DPrintParser::DPrintParser(std::string line_prefix) : line_prefix_(std::move(lin
 
 // Helper function implementations (from dprint_server.cpp anonymous namespace)
 
-inline float DPrintParser::bfloat16_to_float(uint16_t bfloat_val) {
+inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
     float f;
     std::memcpy(&f, &uint32_data, sizeof(f));
@@ -455,5 +456,366 @@ DPrintParser::ParseResult DPrintParser::parse(const uint8_t* data, size_t len) {
 }
 
 std::string DPrintParser::flush() { return get_completed_line(); }
+
+std::map<std::string, std::weak_ptr<DevicePrintParser>> DevicePrintParser::parser_cache;
+
+DevicePrintParser::DevicePrintParser(const std::string& elf_path) : elf_path(elf_path) {
+    try {
+        elf_file.ReadImage(elf_path);
+        format_strings_info_bytes =
+            elf_file.GetSectionContents(".device_print_strings_info", format_strings_info_address);
+        format_strings_bytes = elf_file.GetSectionContents(".device_print_strings", format_strings_address);
+        string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
+        string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
+        parsed_string_info.resize(string_info_size);
+    } catch (...) {
+        // Failed to load ELF file
+        log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path);
+    }
+}
+
+struct DevicePrintParserDeleter {
+    void operator()(DevicePrintParser* parser) const {
+        DevicePrintParser::parser_cache.erase(parser->elf_path);
+        delete parser;
+    }
+};
+
+std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const std::string& elf_path) {
+    auto cached_parser_it = parser_cache.find(elf_path);
+    if (cached_parser_it != parser_cache.end()) {
+        if (auto cached_parser = cached_parser_it->second.lock()) {
+            return cached_parser;
+        }
+    }
+    std::shared_ptr<DevicePrintParser> new_parser(new DevicePrintParser(elf_path), DevicePrintParserDeleter());
+    parser_cache[elf_path] = new_parser;
+    return new_parser;
+}
+
+std::string_view DevicePrintParser::format_message(
+    uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) {
+    auto* string_info = get_string_info(info_id);
+    if (string_info == nullptr) {
+        return {};
+    }
+    return format_message(*string_info, payload_bytes, buffer);
+}
+
+DevicePrintParser::ParsedStringInfo* DevicePrintParser::get_string_info(uint32_t info_id) {
+    if (info_id >= string_info_size) {
+        return nullptr;
+    }
+    auto& parsed_info = parsed_string_info[info_id];
+    if (parsed_info.format_string.empty()) {
+        // This entry has not been parsed yet, so parse it now and cache the result.
+        const DevicePrintStringInfo& info = string_info_ptr[info_id];
+        if (info.format_string_ptr >= format_strings_address &&
+            info.format_string_ptr < format_strings_address + format_strings_bytes.size()) {
+            const char* format_string = reinterpret_cast<const char*>(
+                format_strings_bytes.data() + (info.format_string_ptr - format_strings_address));
+            parsed_info.format_string = format_string;
+            std::tie(parsed_info.plain_text_parts, parsed_info.placeholders) = parse_format_string(format_string);
+            if (!parsed_info.placeholders.empty()) {
+                uint32_t max_arg_id = 0;
+                for (const auto& placeholder : parsed_info.placeholders) {
+                    max_arg_id = std::max(max_arg_id, placeholder.arg_id);
+                }
+                parsed_info.argument_types.resize(max_arg_id + 1);
+                for (const auto& placeholder : parsed_info.placeholders) {
+                    parsed_info.argument_types[placeholder.arg_id] = placeholder.type_id;
+                    parsed_info.arguments_size += get_argument_size_from_type_id(placeholder.type_id);
+                }
+            }
+        }
+        if (info.file >= format_strings_address && info.file < format_strings_address + format_strings_bytes.size()) {
+            const char* file =
+                reinterpret_cast<const char*>(format_strings_bytes.data() + (info.file - format_strings_address));
+            parsed_info.file = file;
+        }
+        parsed_info.line = info.line;
+    }
+    return &parsed_info;
+}
+
+template <typename T>
+T read_value_from_payload(std::span<const std::byte> payload_bytes, std::size_t& offset) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if (offset + sizeof(T) > payload_bytes.size()) {
+        TT_THROW("Payload does not contain enough bytes to read type");
+    }
+    T value;
+    std::memcpy(&value, payload_bytes.data() + offset, sizeof(T));
+    offset += sizeof(T);
+    return value;
+}
+
+std::size_t DevicePrintParser::get_argument_size_from_type_id(char type_id) {
+    static std::byte empty_bytes[32];
+    std::size_t offset = 0;
+    read_argument_from_payload(type_id, std::span<const std::byte>(empty_bytes), offset);
+    return offset;
+}
+
+void DevicePrintParser::read_arguments_from_payload(
+    std::span<char> argument_types, std::span<const std::byte> payload_bytes, std::vector<ArgumentValue>& arguments) {
+    std::size_t payload_offset = 0;
+
+    arguments.clear();
+    arguments.reserve(argument_types.size());
+    for (char argument_type : argument_types) {
+        arguments.push_back(read_argument_from_payload(argument_type, payload_bytes, payload_offset));
+    }
+}
+
+std::pair<std::vector<std::string>, std::vector<DevicePrintParser::FormatPlaceholderInfo>>
+DevicePrintParser::parse_format_string(std::string_view format_str) {
+    std::vector<std::string> plain_text_parts;
+    std::vector<FormatPlaceholderInfo> placeholders;
+    fmt::memory_buffer current_text;
+    for (size_t i = 0; i < format_str.size(); i++) {
+        if (format_str[i] == '{' && i + 1 < format_str.size() && format_str[i + 1] == '{') {
+            // Escaped '{', add a single '{' to the result and skip the next character.
+            current_text.push_back('{');
+            i++;
+            continue;
+        }
+        if (format_str[i] == '}' && i + 1 < format_str.size() && format_str[i + 1] == '}') {
+            // Escaped '}', add a single '}' to the result and skip the next character.
+            current_text.push_back('}');
+            i++;
+            continue;
+        }
+        if (format_str[i] == '{') {
+            auto placeholder = parse_placeholder(format_str, i);
+            if (!placeholder) {
+                TT_THROW("Invalid format string: failed to parse placeholder at position {}", i);
+            }
+            placeholder->fmt_format = "{0" + std::string(placeholder->format_spec) + "}";
+            placeholders.push_back(*placeholder);
+            plain_text_parts.push_back(std::string(current_text.data(), current_text.size()));
+            current_text.clear();
+            i--;  // Step back so that the main loop can correctly identify the end of the placeholder
+        } else {
+            // Regular character, add it to the result.
+            current_text.push_back(format_str[i]);
+            continue;
+        }
+    }
+    plain_text_parts.push_back(std::string(current_text.data(), current_text.size()));
+    return {std::move(plain_text_parts), std::move(placeholders)};
+}
+
+std::optional<DevicePrintParser::FormatPlaceholderInfo> DevicePrintParser::parse_placeholder(
+    std::string_view format_str, std::size_t& pos) {
+    if (pos >= format_str.size() || format_str[pos] != '{') {
+        return std::nullopt;
+    }
+
+    // Start of a placeholder. Read until the closing '}' to extract the placeholder content.
+    pos++;  // Skip '{'
+
+    // We are trying to mimic fmtlib format specifiers here, but device already changed it a bit:
+    // replacement_field ::= "{" arg_id "," type_id [":" (format_spec | chrono_format_spec)] "}"
+    // type_id           ::= "a"..."z" | "A"..."Z"
+    // arg_id            ::= integer
+    // integer           ::= digit+
+    // digit             ::= "0"..."9"
+    // But we don't support using identifiers to reduce kernel size, only integers for arg_id.
+
+    // Regarding format_spec:
+    // format_spec ::= [[fill]align][sign]["#"]["0"][width]["." precision]["L"][type]
+    // fill        ::= <a character other than '{' or '}'>
+    // align       ::= "<" | ">" | "^"
+    // sign        ::= "+" | "-" | " "
+    // width       ::= integer | "{" [arg_id] "}"
+    // precision   ::= integer | "{" [arg_id] "}"
+    // type        ::= "a" | "A" | "b" | "B" | "c" | "d" | "e" | "E" | "f" | "F" |
+    //                 "g" | "G" | "o" | "p" | "s" | "x" | "X" | "?"
+    // We don't support using arg_id for width/precision.
+
+    // As everything is verified during kernel compile time, we can parse format_spec just by reading until the closing
+    // '}' without needing to fully understand it on the host side.
+    uint32_t arg_id = 0;
+
+    // arg_id parsing
+    if (!std::isdigit(format_str[pos])) {
+        return std::nullopt;
+    }
+    while (pos < format_str.size() && std::isdigit(format_str[pos])) {
+        arg_id = arg_id * 10 + (format_str[pos] - '0');
+        pos++;
+    }
+
+    // Read type_id (the character after arg_id and ',')
+    if (pos >= format_str.size() || format_str[pos] != ',') {
+        return std::nullopt;
+    }
+    pos++;  // Skip ','
+    char type_id = format_str[pos++];
+
+    uint32_t format_spec_start = pos;
+    while (pos < format_str.size() && format_str[pos] != '}') {
+        pos++;
+    }
+    pos++;  // Skip '}'
+    return {{arg_id, type_id, format_str.substr(format_spec_start, pos - format_spec_start - 1)}};
+}
+
+std::string_view DevicePrintParser::format_message(
+    ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) {
+    // Iterate over format_str and replace {} with format of payload values.
+    buffer.buffer.clear();
+    auto format_str = string_info.format_string;
+    if (string_info.arguments_size > payload_bytes.size()) {
+        log_warning(
+            tt::LogMetal,
+            "Payload size {} is smaller than expected arguments size {} for format string '{}'",
+            payload_bytes.size(),
+            string_info.arguments_size,
+            format_str);
+        return {};
+    }
+    read_arguments_from_payload(string_info.argument_types, payload_bytes, buffer.argument_values);
+
+    for (size_t i = 0; i < string_info.placeholders.size(); i++) {
+        // Append prefix plain text part before the placeholder
+        auto& plain_text_part = string_info.plain_text_parts[i];
+        buffer.buffer.append(plain_text_part.data(), plain_text_part.data() + plain_text_part.size());
+
+        // Append the formatted argument for the placeholder
+        auto& placeholder = string_info.placeholders[i];
+
+        // Do the actual formatting of the argument
+        auto format = fmt::runtime(placeholder.fmt_format);
+
+        switch (placeholder.type_id) {
+            case 'b':  // int8_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int8_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'B':  // uint8_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint8_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'h':  // int16_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int16_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'H':  // uint16_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint16_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'i':  // int32_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int32_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'I':  // uint32_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint32_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'q':  // int64_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<int64_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'Q':  // uint64_t
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<uint64_t>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'f':  // float
+            case 'e':  // bf4_t, but stored as float
+            case 'E':  // bf8_t, but stored as float
+            case 'w':  // bf16_t, but stored as float
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<float>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case 'd':  // double
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<double>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            case '?':  // bool
+                fmt::format_to(
+                    std::back_inserter(buffer.buffer),
+                    format,
+                    std::get<bool>(buffer.argument_values[placeholder.arg_id]));
+                break;
+            default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
+        }
+    }
+    auto& plain_text_part = string_info.plain_text_parts[string_info.placeholders.size()];
+    buffer.buffer.append(plain_text_part.data(), plain_text_part.data() + plain_text_part.size());
+    return std::string_view(buffer.buffer.data(), buffer.buffer.size());
+}
+
+DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
+    char type_id, std::span<const std::byte> payload_bytes, std::size_t& offset) {
+    switch (type_id) {
+        case 'b':  // int8_t
+            return read_value_from_payload<int8_t>(payload_bytes, offset);
+        case 'B':  // uint8_t
+            return read_value_from_payload<uint8_t>(payload_bytes, offset);
+        case 'h':  // int16_t
+            return read_value_from_payload<int16_t>(payload_bytes, offset);
+        case 'H':  // uint16_t
+            return read_value_from_payload<uint16_t>(payload_bytes, offset);
+        case 'i':  // int32_t
+            return read_value_from_payload<int32_t>(payload_bytes, offset);
+        case 'I':  // uint32_t
+            return read_value_from_payload<uint32_t>(payload_bytes, offset);
+        case 'q':  // int64_t
+            return read_value_from_payload<int64_t>(payload_bytes, offset);
+        case 'Q':  // uint64_t
+            return read_value_from_payload<uint64_t>(payload_bytes, offset);
+        case 'f':  // float
+            return read_value_from_payload<float>(payload_bytes, offset);
+        case 'd':  // double
+            return read_value_from_payload<double>(payload_bytes, offset);
+        case '?':  // bool
+            return read_value_from_payload<bool>(payload_bytes, offset);
+        case 'e':  // bf4_t, but stored as float
+        {
+            uint16_t data = read_value_from_payload<uint16_t>(payload_bytes, offset);
+            uint8_t val = (data >> 8) & 0xFF;
+            uint8_t exponent = data & 0xFF;
+            uint32_t bit_val = convert_bfp_to_u32(tt::DataFormat::Bfp4_b, val, exponent, false);
+            return *reinterpret_cast<float*>(&bit_val);
+        }
+        case 'E':  // bf8`_t, but stored as float
+        {
+            uint16_t data = read_value_from_payload<uint16_t>(payload_bytes, offset);
+            uint8_t val = (data >> 8) & 0xFF;
+            uint8_t exponent = data & 0xFF;
+            uint32_t bit_val = convert_bfp_to_u32(tt::DataFormat::Bfp8_b, val, exponent, false);
+            return *reinterpret_cast<float*>(&bit_val);
+        }
+        case 'w':  // bf16_t, but stored as float
+        {
+            auto value = bfloat16_to_float(read_value_from_payload<uint16_t>(payload_bytes, offset));
+            std::cout << "Read bf16 value converted to float=" << value << std::endl;
+            return value;
+        }
+        default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
+    }
+}
 
 }  // namespace tt::tt_metal

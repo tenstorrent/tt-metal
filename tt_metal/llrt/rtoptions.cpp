@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rtoptions.hpp"
+#include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
 #include <cctype>
@@ -177,6 +178,7 @@ enum class EnvVarID {
     TT_METAL_DPRINT_FILE,                      // Debug print output file
     TT_METAL_DPRINT_ONE_FILE_PER_RISC,         // Separate file per RISC-V processor
     TT_METAL_DPRINT_PREPEND_DEVICE_CORE_RISC,  // Prepend device/core/RISC info
+    TT_METAL_DEVICE_PRINT,                     // Use new DEVICE_PRINT instead of legacy DPRINT
 
     // ========================================
     // LIGHTWEIGHT KERNEL DEBUGGING
@@ -1351,6 +1353,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
+
+        // TT_METAL_DEVICE_PRINT
+        // Use new DEVICE_PRINT system instead of legacy DPRINT.
+        // Default: false (legacy DPRINT is used)
+        // Usage: export TT_METAL_DEVICE_PRINT=1
+        case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
     }
 }
 
@@ -1535,6 +1543,12 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
     }
 
     fabric_telemetry_settings = parsed_settings;
+}
+
+void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
@@ -1743,7 +1757,12 @@ bool RunTimeOptions::ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const 
         auto coord = std::make_pair(row, col);
         auto& coords = feature_targets[feature].mesh_coords;
         if (std::find(coords.begin(), coords.end(), coord) != coords.end()) {
-            log_warning(tt::LogMetal, "{}: coordinate ({},{}) specified more than once, ignoring duplicate.", env_var, row, col);
+            log_warning(
+                tt::LogMetal,
+                "{}: coordinate ({},{}) specified more than once, ignoring duplicate.",
+                env_var,
+                row,
+                col);
         } else {
             coords.emplace_back(coord);
         }

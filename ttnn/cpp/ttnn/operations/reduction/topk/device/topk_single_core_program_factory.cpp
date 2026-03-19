@@ -35,10 +35,19 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
     const tt::DataFormat output_ind_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
 
+    // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
+    // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
+    // elements in that block encode to 0, corrupting the sort result).
+    const tt::DataFormat compute_cb_data_format =
+        (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
+            ? tt::DataFormat::Float16_b
+            : input_cb_data_format;
+
     // Calculate tile sizes for memory allocation
     const uint32_t input_tile_size = tile_size(input_cb_data_format);
     const uint32_t value_tile_size = tile_size(output_val_cb_data_format);
     const uint32_t index_tile_size = tile_size(output_ind_cb_data_format);
+    const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // Device memory buffer pointers for kernel runtime arguments
     const auto* input_buffer = input_tensor.buffer();
@@ -92,11 +101,13 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, index_input_intermed0_config);
 
+    // Uses bf16 when input is bfp8/bfp4 so that the insertion sort operates at higher
+    // precision and avoids shared-exponent corruption of tiles adjacent to inf values.
     constexpr uint32_t transposed_val_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig transposed_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            transposed_cb_tile_count * input_tile_size, {{transposed_val_cb_index, input_cb_data_format}})
-            .set_page_size(transposed_val_cb_index, input_tile_size);
+            transposed_cb_tile_count * compute_tile_size, {{transposed_val_cb_index, compute_cb_data_format}})
+            .set_page_size(transposed_val_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_val_cb_config);
 
     constexpr uint32_t transposed_ind_cb_index = tt::CBIndex::c_3;
@@ -106,11 +117,12 @@ TopKSingleCoreProgramFactory::cached_program_t TopKSingleCoreProgramFactory::cre
             .set_page_size(transposed_ind_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, transposed_ind_cb_config);
 
+    // Uses bf16 when input is bfp8/bfp4 (same rationale as transposed_val_cb_index).
     constexpr uint32_t result_prep_val_cb_index = tt::CBIndex::c_4;
     const tt::tt_metal::CircularBufferConfig result_prep_val_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            result_prep_cb_tile_count * input_tile_size, {{result_prep_val_cb_index, input_cb_data_format}})
-            .set_page_size(result_prep_val_cb_index, input_tile_size);
+            result_prep_cb_tile_count * compute_tile_size, {{result_prep_val_cb_index, compute_cb_data_format}})
+            .set_page_size(result_prep_val_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, result_prep_val_cb_config);
 
     constexpr uint32_t result_prep_ind_cb_index = tt::CBIndex::c_5;

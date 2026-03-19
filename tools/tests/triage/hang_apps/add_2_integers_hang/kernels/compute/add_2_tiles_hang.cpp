@@ -35,6 +35,7 @@ void kernel_main() {
     // signal the packer
     tile_regs_commit();  // Math
 
+    // Padding to maintain line number for triage test
     // Cause intentional hang for triage testing
     asm volatile("ebreak");
 

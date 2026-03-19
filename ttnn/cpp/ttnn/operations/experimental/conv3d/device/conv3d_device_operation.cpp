@@ -234,12 +234,20 @@ Tensor Conv3dDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t Conv3dDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& weight_tensor = tensor_args.weight_tensor;
+    const auto& bias_tensor = tensor_args.bias_tensor;
     operation::Hash hash = operation::hash_operation<Conv3dDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape.volume());
+        args,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_tensor.logical_shape(),
+        weight_tensor.dtype(),
+        weight_tensor.memory_config(),
+        weight_tensor.logical_shape(),
+        bias_tensor.has_value());
 
     return hash;
 }

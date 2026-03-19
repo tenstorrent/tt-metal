@@ -15,12 +15,15 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/dataflow_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
+#include "api/kernel_thread_globals.h"
+
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -34,6 +37,7 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
@@ -147,6 +151,10 @@ extern "C" uint32_t _start1() {
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset);
         crta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].crta_offset);
+        sem_l1_base[ProgrammableCoreType::TENSIX] =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.sem_offset[ProgrammableCoreType::TENSIX]);
+
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
@@ -158,6 +166,7 @@ extern "C" uint32_t _start1() {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
         DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
