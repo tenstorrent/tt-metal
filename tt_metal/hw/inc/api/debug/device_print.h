@@ -1109,7 +1109,12 @@ begin_message_write(device_print_detail::structures::DevicePrintHeader header, s
     string_info_address -= string_info_start_address;
     std::uintptr_t string_info_index =
         string_info_address / sizeof(device_print_detail::structures::DevicePrintStringInfo);
-    header.info_id = static_cast<uint32_t>(string_info_index);
+    using DevicePrintHeaderType = device_print_detail::structures::DevicePrintHeader;
+    if (string_info_index > DevicePrintHeaderType::max_info_id_value) {
+        header.info_id = DevicePrintHeaderType::max_info_id_value;
+    } else {
+        header.info_id = static_cast<uint32_t>(string_info_index);
+    }
 
     // Serialize header
     auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;
