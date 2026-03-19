@@ -757,6 +757,21 @@ This section describes the **rule-based layout and dispatch layer** used for Pyt
 
 See `tt-train/sources/examples/llama_tp/train_llama_tp.py` for a full example.
 
+### Column vs row linears, broadcast / all_reduce / all_gather, and gradients
+
+**Megatron pairing (expected pattern)**
+In a TP MLP (or FFN), you almost always alternate:
+
+- **`ColwiseParallel`**: weights sharded on **output** features; forward wrapper **`broadcast`**s activations on `tp_axis` so each rank sees the full input; linear output is **sharded** on the last dim.
+- **`RowwiseParallel`**: weights sharded on **input** features; expects that **sharded** activation; forward wrapper **`all_reduce`**s the partial sums so the block output is **replicated** again.
+
+
+**LM head / full replicated output**
+For the last linear (e.g. logits over vocab), use `ColwiseParallel(gather_output=True)`. The style wraps forward with **`all_gather`** on the output dim and uses **`GradOutputType.REPLICATED`** on that gather’s backward so that **replicated loss gradients** (same on each TP rank) are handled correctly—analogous to C++ column-parallel with `gather_output=true`. See `style.py` (`ColwiseParallel._wrapped_forward`) and `rules/matmul.py` / custom rules using `AllGather(..., gather_grad_replicated=True)`.
+
+**Where this appears in dispatch**
+Op rules return `ShardingPlan`s with optional **`Broadcast`** (pre), **`AllReduce`**, **`AllGather`** (post). `parallelize_module` + `ColwiseParallel`/`RowwiseParallel` attach the collectives by wrapping modules; dispatch still stamps layouts for `linear`/`matmul`.
+
 ### Layout
 
 - **Construction**: `Layout(ndim=N)` (all Replicate) or `Layout(ndim=N, axis_placements={mesh_axis: Shard(dim), ...})`. Unspecified axes are Replicate.
@@ -797,8 +812,9 @@ Rules are **per op name** (e.g. `"linear"`, `"matmul"`). The op name in `@regist
    ```
 
 2. **CCL types** (from `ttml.distributed.rules.registry`):
-   - **Pre-collectives**: `Broadcast(mesh_axis)` — broadcast tensor on that axis.
-   - **Post-collectives**: `AllReduce(mesh_axis, noop_backward=False)`, `AllGather(dim, mesh_axis, gather_grad_replicated=False)`.
+   - **Pre-collectives**: `Broadcast(mesh_axis)` — broadcast tensor on that axis (e.g. align replicated activations with column-sharded weights).
+   - **Post-collectives**: `AllReduce(mesh_axis, noop_backward=False)` — sum partial results (typical row-parallel forward); backward behavior depends on `noop_backward` when the input was already sharded.
+   - **Post-collectives**: `AllGather(dim, mesh_axis, gather_grad_replicated=False)` — gather shards along `dim`; set **`gather_grad_replicated=True`** when upstream loss provides **replicated** gradients w.r.t. the gathered tensor (same as `GradOutputType.REPLICATED` on the C++ `all_gather` path—required for correct LM-head-style training).
 
 3. **Register your op under the same name**: Wrap your raw callable with `register_op(op_name, raw_callable)`. Use the returned wrapper as your op entry point (no patching of ttml.ops).
 
@@ -815,9 +831,8 @@ Rules are **per op name** (e.g. `"linear"`, `"matmul"`). The op name in `@regist
 
 A **module rule** applies to a **composite module type** (e.g. `GroupedQueryAttention`). When `parallelize_module` walks the tree and finds a module whose type has a registered module rule, it:
 
-1. Builds a **policy** (dict `param_name -> Layout`) from the parallelize plan only to detect that this is a composite to handle (e.g. GQA); the policy is **not** passed to the rule.
-2. Calls the **module rule** with `(module, mesh_device, tp_axis, cp_axis)` — axes are passed through from `parallelize_module`, no policy or prefix.
-3. **Recurses into children** so that submodules (e.g. `q_linear`, `kv_linear`, `out_linear`) are visited with their full path and get the matching **ParallelStyle** from the plan. Those children then get weight sharding and forward collectives (broadcast, all_reduce) from `style._apply()`.
+1. Calls the **module rule** with `(module, mesh_device, tp_axis, cp_axis)` — axes are passed through from `parallelize_module`, no policy or prefix.
+2. **Recurses into children** so that submodules (e.g. `q_linear`, `kv_linear`, `out_linear`) are visited with their full path and get the matching **ParallelStyle** from the plan. Those children then get weight sharding and forward collectives (broadcast, all_reduce) from `style._apply()`.
 
 So the rule should **not** call `distribute_linear` on sub-linears that are matched by the plan; recursion will apply the style to them (weight + collectives). The rule only handles composite-specific logic (e.g. GQA: `num_heads`/`num_groups` for TP using `tp_axis`, and when `cp_axis` is set: rope_params and ring_sdpa swap).
 
@@ -846,14 +861,14 @@ So the rule should **not** call `distribute_linear` on sub-linears that are matc
 
 3. **Ensure the rule is loaded**: `ttml.distributed` imports `module_rules`, so any `@register_module_rule` in that package runs at import time. For a new rule in a new file, add an import in `ttml/distributed/__init__.py` or in `module_rules.py`.
 
-4. **Use the plan**: In the parallelize plan, use name patterns that match the **submodule** paths (e.g. `r".*\.q_linear"`, `r".*\.out_linear"`). `parallelize_module` builds a policy from those styles to detect the composite, then calls your rule with `tp_axis` and `cp_axis` and recurses into children.
+4. **Use the plan**: In the parallelize plan, use name patterns that match the **submodule** paths (e.g. `r".*\.q_linear"`, `r".*\.out_linear"`). `parallelize_module` calls your rule then recurses so those children receive the matching styles.
 
 ### Custom ParallelStyle
 
 To define a new style (e.g. a variant of column/row parallel):
 
 1. Subclass `ParallelStyle` and implement `_apply(module, mesh_device, tp_axis)` (mutate the module’s parameters with `distribute_tensor` and the layout you want).
-2. If the style is used inside a composite that has a **module rule**, also implement `get_layout(mesh_device, tp_axis) -> Layout` so the composite can be detected (policy is built from the plan for that purpose; the rule itself receives only `tp_axis` and `cp_axis`).
+2. Implement `get_layout(mesh_device, tp_axis) -> Layout` when callers need the style’s weight layout without applying it to a module (e.g. tests, tooling). `parallelize_module` does **not** use this to detect composites; detection is **`get_module_rule(type(module))`** only.
 3. Add your style to the parallelize plan by name or regex, e.g. `{"my_layer": MyCustomStyle()}`.
 
 ### Summary
@@ -863,7 +878,7 @@ To define a new style (e.g. a variant of column/row parallel):
 | **Layout** | Describes sharding/replication per mesh axis; used for redistribution and plan output. |
 | **Op rule** | Maps op name + input layouts → ShardingPlan (layouts + optional pre/post collectives). |
 | **Module rule** | For composite modules: called with `(module, mesh_device, tp_axis, cp_axis)`; handles TP/CP logic (e.g. head counts, rope, ring_sdpa); children get styles on recursion. |
-| **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer) or supplies `get_layout` for composite rules. |
+| **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer). Optional `get_layout` for introspection / tests. |
 | **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; no layout code in user model. |
 
 ## Additional Resources

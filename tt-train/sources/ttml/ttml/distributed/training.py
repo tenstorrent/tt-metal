@@ -115,31 +115,6 @@ def _match_plan(name: str, plan: Dict[str, ParallelStyle]) -> Optional[ParallelS
     return None
 
 
-def _build_policy_for_composite(
-    module: AbstractModuleBase,
-    prefix: str,
-    plan: Dict[str, ParallelStyle],
-    mesh_device,
-    tp_axis: int,
-) -> Optional[Dict[str, Layout]]:
-    """Build a Layout policy from parallelize_plan for a composite module (e.g. GQA)."""
-    try:
-        from ttml.models.llama.gqattn import GroupedQueryAttention
-    except ImportError:
-        return None
-    if not isinstance(module, GroupedQueryAttention):
-        return None
-    policy: Dict[str, Layout] = {}
-    for name in ("q_linear", "kv_linear", "out_linear"):
-        module_path = f"{prefix}.{name}" if prefix else name
-        style = _match_plan(module_path, plan)
-        if style is not None and hasattr(style, "get_layout"):
-            key = f"{prefix}.{name}.weight" if prefix else f"{name}.weight"
-            policy[key] = style.get_layout(mesh_device, tp_axis)
-    # Return policy (possibly empty) so rule is always invoked (e.g. for CP-only)
-    return policy
-
-
 def _apply_parallelize_plan(
     module: AbstractModuleBase,
     mesh_device,
@@ -154,29 +129,23 @@ def _apply_parallelize_plan(
     # get weight sharding + forward collectives from the plan when we recurse (Colwise/Rowwise).
     rule = get_module_rule(type(module))
     if rule is not None:
-        composite_policy = _build_policy_for_composite(
-            module, prefix, plan, mesh_device, tp_axis
-        )
-        if composite_policy is not None:
-            from . import module_rules as _  # noqa: F401
+        rule(module, mesh_device, tp_axis, cp_axis)
+        # Recurse into children only (do not also apply a ParallelStyle to this
+        # composite if the plan matches this prefix—rules own the parent node).
+        for name, child in module.named_children():
+            if isinstance(child, AbstractModuleBase):
+                child_prefix = f"{prefix}.{name}" if prefix else name
+                _apply_parallelize_plan(
+                    child, mesh_device, plan, tp_axis, cp_axis, child_prefix
+                )
+        return
 
-            rule(module, mesh_device, tp_axis, cp_axis)
-            # Recurse so q_linear, kv_linear, out_linear get ColwiseParallel/RowwiseParallel
-            for name, child in module.named_children():
-                if isinstance(child, AbstractModuleBase):
-                    child_prefix = f"{prefix}.{name}" if prefix else name
-                    _apply_parallelize_plan(
-                        child, mesh_device, plan, tp_axis, cp_axis, child_prefix
-                    )
-            return
-
-    # Check if this module matches a style
-    style = _match_plan(prefix, plan) if prefix else None
+    # Leaf / non-composite: match a style, or recurse to find children.
+    style = _match_plan(prefix, plan)
     if style is not None:
         style._apply(module, mesh_device, tp_axis)
         return
 
-    # Recurse into children
     for name, child in module.named_children():
         if isinstance(child, AbstractModuleBase):
             child_prefix = f"{prefix}.{name}" if prefix else name
@@ -217,23 +186,6 @@ def parallelize_module(
     )
 
     return module
-
-
-def _match_policy(param_key: str, policy: Dict[str, Layout]) -> Optional[Layout]:
-    """Look up *param_key* in *policy*, supporting both exact and regex keys.
-
-    Exact keys are tried first.  If no exact match, each key is compiled as a
-    regex and tested with ``re.fullmatch``.  The first matching regex wins.
-    """
-    if param_key in policy:
-        return policy[param_key]
-    for pattern, layout in policy.items():
-        try:
-            if re.fullmatch(pattern, param_key):
-                return layout
-        except re.error:
-            continue
-    return None
 
 
 # ---------------------------------------------------------------------------
