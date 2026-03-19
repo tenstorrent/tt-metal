@@ -54,12 +54,25 @@ Result conv2d_L1(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
+    log_trace(
+        tt::LogOp,
+        "conv2d [flow]: conv2d_L1 ENTER batch={} in_ch={} out_ch={} h={} w={} k={}x{} stride={}x{}",
+        batch_size,
+        in_channels,
+        out_channels,
+        input_height,
+        input_width,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1]);
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_L1 mm_conv={}", mm_conv);
     // Store the original stride size for weight folding
     auto orig_stride = stride;
 
@@ -148,6 +161,11 @@ Result conv2d_L1(
         out_channels,
         mm_conv,
         auto_shard);
+    log_trace(
+        tt::LogOp,
+        "conv2d [flow]: conv2d_L1 after shard/reshard input_sharded={} auto_shard={}",
+        input_tensor_post_tm.is_sharded(),
+        auto_shard);
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
@@ -200,15 +218,30 @@ Result conv2d_L1(
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
+        log_info(
+            tt::LogOp, "conv2d [weight]: preparing from host, input weight shape={}", weight_tensor.logical_shape());
         log_trace(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
+        log_info(
+            tt::LogOp,
+            "conv2d [weight]: prepared weight shape={} (logical), {} (padded)",
+            weight_tensor_on_device.logical_shape(),
+            weight_tensor_on_device.padded_shape());
     } else {
         // Check if device weights are properly prepared
         if (is_valid_device_conv_weights(
                 weight_tensor_on_device, in_channels, out_channels, conv_config.weights_dtype)) {
+            log_info(
+                tt::LogOp,
+                "conv2d [weight]: using preprocessed weights from device, shape={}",
+                weight_tensor_on_device.logical_shape());
             log_debug(tt::LogOp, "conv2d: Using preprocessed weights from device.");
         } else {
+            log_info(
+                tt::LogOp,
+                "conv2d [weight]: device weights invalid, pulling to host (shape={}) and reprocessing",
+                weight_tensor_on_device.logical_shape());
             log_warning(
                 tt::LogOp,
                 "conv2d: Device weights not properly prepared, pulling back to host and trying to reprocess.");
@@ -216,6 +249,10 @@ Result conv2d_L1(
             ttnn::Tensor host_weight_tensor = ttnn::operations::core::from_device(weight_tensor_on_device);
             std::tie(weight_tensor_on_device, bias_tensor_on_device) =
                 prepare_conv_weights_biases_and_move_to_device(host_weight_tensor, bias_tensor, params, device);
+            log_info(
+                tt::LogOp,
+                "conv2d [weight]: after reprocess, prepared weight shape={}",
+                weight_tensor_on_device.logical_shape());
         }
     }
 
@@ -248,8 +285,10 @@ Result conv2d_L1(
     // call conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_L1 branch: {} (false=halo+conv micro-op, true=matmul)", mm_conv);
 
     if (!mm_conv) {
+        log_trace(tt::LogOp, "conv2d [flow]: conv2d_L1 taking halo + conv micro-op path");
         // call halo op
         sliding_window::SlidingWindowConfig sliding_window_config = sliding_window::SlidingWindowConfig{
             .batch_size = batch_size,
@@ -322,8 +361,10 @@ Result conv2d_L1(
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
         }
+        log_trace(tt::LogOp, "conv2d [flow]: conv2d_L1 returning (halo+conv path)");
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     }  // Matmul expects inputs to be in Tile Layout
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_L1 taking matmul path");
     tilize_with_optional_deallocation(input_tensor_post_tm, should_deallocate_act);
 
     // run conv as matmul
@@ -362,11 +403,17 @@ Result conv2d_L1(
         matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
     }
 
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_L1 returning (matmul path)");
     return {matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
 ResultWithOptions result_to_result_with_options(
     const Result& result, const bool return_output_dim, const bool return_weights_and_bias) {
+    log_trace(
+        tt::LogOp,
+        "conv2d [flow]: result_to_result_with_options ENTER return_output_dim={} return_weights_and_bias={}",
+        return_output_dim,
+        return_weights_and_bias);
     if (return_output_dim && return_weights_and_bias) {
         return std::make_tuple(
             std::get<0>(result),
@@ -443,6 +490,14 @@ public:
 
     std::tuple<std::tuple<IOShape, IOShape>, std::array<uint32_t, 4>> get_input_slice_and_padding(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const {
+        log_trace(
+            tt::LogOp,
+            "conv2d [flow]: Conv2dSliceAttr::get_input_slice_and_padding ENTER out_slice_start=({},{}) "
+            "out_slice_end=({},{})",
+            std::get<0>(output_slice_start),
+            std::get<1>(output_slice_start),
+            std::get<0>(output_slice_end),
+            std::get<1>(output_slice_end));
         auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
         auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
         auto [input_height, input_width] = input_shape;
@@ -517,6 +572,7 @@ public:
 
     std::tuple<IOShape, IOShape> get_input_slice(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const override {
+        log_trace(tt::LogOp, "conv2d [flow]: Conv2dSliceAttr::get_input_slice");
         return std::get<0>(get_input_slice_and_padding(output_slice_start, output_slice_end));
     }
 
@@ -524,6 +580,7 @@ public:
         const IOShape& output_slice_start,
         const IOShape& output_slice_end,
         const op_slicing::Op2DSliceConfig& slice_config) const override {
+        log_trace(tt::LogOp, "conv2d [flow]: Conv2dSliceAttr::get_L1_usage num_slices={}", slice_config.num_slices);
         // Remove this->conv_config from scope so that for each slice, conv_config can be calculated independently.
         auto conv_config = this->conv_config;
         bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
@@ -586,6 +643,7 @@ public:
 
     tt::tt_metal::MemoryConfig get_input_memory_config(
         const IOShape& output_slice_start, const IOShape& output_slice_end) const override {
+        log_trace(tt::LogOp, "conv2d [flow]: Conv2dSliceAttr::get_input_memory_config");
         auto compute_grid_size = device->compute_with_storage_grid_size();
         auto conv_config = this->conv_config;
 
@@ -649,6 +707,10 @@ public:
         const ttnn::Tensor& sliced_input_tensor,
         const IOShape& output_slice_start,
         const IOShape& output_slice_end) override {
+        log_trace(
+            tt::LogOp,
+            "conv2d [flow]: Conv2dSliceAttr::run_L1_op ENTER slice_in_rank={}",
+            sliced_input_tensor.logical_shape().rank());
         // Use helper function to calculate slice bounds and padding
         auto [input_slicing, this_op_padding] = get_input_slice_and_padding(output_slice_start, output_slice_end);
         auto [input_slice_start, input_slice_end] = input_slicing;
@@ -692,6 +754,7 @@ public:
         if (bias_tensor.has_value()) {
             bias_tensor->get() = std::get<4>(conv2d_result).value();
         }
+        log_trace(tt::LogOp, "conv2d [flow]: Conv2dSliceAttr::run_L1_op returning 1 tensor");
         return {std::get<0>(conv2d_result)};
     }
 };
@@ -725,6 +788,16 @@ Result conv2d_DRAM(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    log_trace(
+        tt::LogOp,
+        "conv2d [flow]: conv2d_DRAM ENTER batch={} in_ch={} out_ch={} h={} w={} k={}x{}",
+        batch_size,
+        in_channels,
+        out_channels,
+        input_height,
+        input_width,
+        kernel_size[0],
+        kernel_size[1]);
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -759,6 +832,7 @@ Result conv2d_DRAM(
     // After folding, check if this can be implemented as matmul and delegate to conv2d_L1
     // Note: mm_conv may have been updated by fold_input_tensor_if_required
     if (mm_conv) {
+        log_trace(tt::LogOp, "conv2d [flow]: conv2d_DRAM delegating to conv2d_L1 (mm_conv=true)");
         return conv2d_L1(
             input_tensor_on_device,
             weight_tensor,
@@ -781,6 +855,7 @@ Result conv2d_DRAM(
     }
 
     // DRAM slicing path - only executed when mm_conv is false
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_DRAM taking DRAM slicing path (mm_conv=false)");
     const bool should_deallocate_act = conv_config.deallocate_activation && !input_tensor.memory_config().is_dram();
     ttnn::Tensor weight_tensor_on_device;
     std::optional<ttnn::Tensor> bias_tensor_on_device;
@@ -842,6 +917,7 @@ Result conv2d_DRAM(
         device);
 
     std::vector<std::reference_wrapper<Tensor>> output_tensors = {std::ref(dram_output_tensor)};
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_DRAM calling run_sliced_op");
     ttnn::operations::op_slicing::run_sliced_op(
         input_tensor_on_device, output_tensors, &slice_attr, dram_slice_config_);
 
@@ -853,6 +929,7 @@ Result conv2d_DRAM(
 
     dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
+    log_trace(tt::LogOp, "conv2d [flow]: conv2d_DRAM returning");
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
@@ -885,8 +962,19 @@ Conv2dResultWithOptions conv2d(
     using namespace operations::conv::conv2d;
     using operations::conv::Conv2dExecutionPath;
     using operations::conv::determine_conv2d_execution_path;
+    log_trace(
+        tt::LogOp,
+        "conv2d [flow]: ttnn::conv2d ENTER batch={} in_ch={} out_ch={} h={} w={} input_on_device={} input_sharded={}",
+        batch_size,
+        in_channels,
+        out_channels,
+        input_height,
+        input_width,
+        tt::tt_metal::is_device_tensor(input_tensor),
+        input_tensor.is_sharded());
     // Determine execution path based on configuration and input properties
     Conv2dExecutionPath path = determine_conv2d_execution_path(input_tensor, slice_config_);
+    log_trace(tt::LogOp, "conv2d [flow]: ttnn::conv2d path={} (0=L1, 1=DRAM)", static_cast<int>(path));
 
     // Execute L1 path
     if (path == Conv2dExecutionPath::L1) {
@@ -965,6 +1053,16 @@ std::unique_ptr<op_slicing::OpSliceAttr> get_conv2d_slice_attr(
     const Conv2dConfig& conv_config_,
     const DeviceComputeKernelConfig& compute_config,
     MeshDevice* device) {
+    log_trace(
+        tt::LogOp,
+        "conv2d [flow]: get_conv2d_slice_attr ENTER batch={} h={} w={} in_ch={} out_ch={} k={}x{}",
+        batch_size,
+        input_height,
+        input_width,
+        in_channels,
+        out_channels,
+        kernel_size[0],
+        kernel_size[1]);
     return std::unique_ptr<op_slicing::OpSliceAttr>(new Conv2dSliceAttr(
         batch_size,
         {input_height, input_width},

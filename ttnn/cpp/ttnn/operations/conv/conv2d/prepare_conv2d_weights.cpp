@@ -1507,6 +1507,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
     const ttnn::Tensor& weight_tensor, Conv2dWeightsBiasPrepConfig& params, MeshDevice* device) {
     ttnn::Tensor weight_tensor_ = weight_tensor;  // tensor to return
     Shape weight_shape = weight_tensor.logical_shape();
+    log_trace(tt::LogOp, "prepare_conv_weights_internal weight_shape={}", weight_shape);
     // In case of 1D convolution and 3D weight tensor, reinterpret it as 4D tensor
     if (weight_shape.rank() == 3 && params.input_height == 1) {
         weight_tensor_ = ttnn::reshape(weight_tensor_, Shape({weight_shape[0], weight_shape[1], 1, weight_shape[2]}));
@@ -1609,6 +1610,11 @@ static ttnn::Tensor prepare_conv_weights_internal(
     ttnn::Shape target_shape({1, 1, weight_matrix_height, out_channels});
     ttnn::Shape padded_target_shape({1, 1, weight_tensor_.logical_shape()[2], out_channels + out_channel_padding});
     weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
+    log_info(
+        tt::LogOp,
+        "prepare_conv_weights_internal: prepared weight shape (before to_device) logical={}, padded={}",
+        weight_tensor_.logical_shape(),
+        weight_tensor_.padded_shape());
     if (params.weights_bias_dtype.has_value()) {
         weight_tensor_ = ttnn::to_dtype(weight_tensor_, params.weights_bias_dtype.value());
     }
@@ -1616,6 +1622,10 @@ static ttnn::Tensor prepare_conv_weights_internal(
     // Always move parameters to device
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
+    log_info(
+        tt::LogOp,
+        "prepare_conv_weights_internal: returning weight on device, shape={}",
+        weight_tensor_.logical_shape());
     return weight_tensor_;
 }
 
@@ -1691,6 +1701,7 @@ ttnn::Tensor prepare_conv_weights(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
+    log_trace(tt::LogOp, "prepare_conv_weights ENTER weights_format={}", weights_format);
     if (weights_format != "OIHW") {
         log_warning(
             tt::LogOp,
