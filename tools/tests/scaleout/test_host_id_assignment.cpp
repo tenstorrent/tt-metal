@@ -40,8 +40,9 @@ static void write(const std::string& path, const std::string& content) {
 static void write_deploy(const std::string& path, const std::vector<std::string>& hosts,
                          const std::string& node_type = "WH_GALAXY_Y_TORUS") {
     std::string s;
-    for (const auto& h : hosts)
+    for (const auto& h : hosts) {
         s += "hosts { host: \"" + h + "\" node_type: \"" + node_type + "\" }\n";
+    }
     write(path, s);
 }
 
@@ -52,7 +53,7 @@ static std::string read_file(const std::string& path) {
 
 static void replace_first(std::string& s, const std::string& from, const std::string& to) {
     auto pos = s.find(from);
-    if (pos != std::string::npos) s.replace(pos, from.size(), to);
+    if (pos != std::string::npos) { s.replace(pos, from.size(), to); }
 }
 
 // ---- Single-file tests ----
@@ -229,10 +230,10 @@ root_instance { template_name: "root"
     CablingGenerator gen(cdir, dir + "dep.textproto");
     bool stale = false, n2_n3 = false;
     for (const auto& [ep_a, ep_b] : gen.get_chip_connections()) {
-        if (*ep_a.host_id == *ep_b.host_id) continue;
+        if (*ep_a.host_id == *ep_b.host_id) { continue; }
         auto a = *ep_a.host_id, b = *ep_b.host_id;
-        if (a == 0u || b == 0u) stale = true;
-        if ((a == 1u && b == 2u) || (a == 2u && b == 1u)) n2_n3 = true;
+        if (a == 0u || b == 0u) { stale = true; }
+        if ((a == 1u && b == 2u) || (a == 2u && b == 1u)) { n2_n3 = true; }
     }
     EXPECT_FALSE(stale) << "n1 (id=0) must not appear in inter-node connections";
     EXPECT_TRUE(n2_n3) << "n2 (id=1) and n3 (id=2) must be connected after remap";
