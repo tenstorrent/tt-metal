@@ -252,7 +252,7 @@ class SocketInterface:
         ]
 
         exchange_kernel = ttnn.KernelDescriptor(
-            kernel_source="models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_single_upstream.cpp",
+            kernel_source="models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)]),
             compile_time_args=kernel_ct_args,
@@ -300,7 +300,6 @@ class SocketInterface:
         my_downstream_socket,
         packet_header_cb_index,
     ):
-        print("Creating multi-upstream program with", len(my_upstream_sockets), "upstream sockets")
         for s in my_upstream_sockets:
             assert s.get_active_cores()[0] == my_core_coord
         assert my_downstream_socket.get_active_cores()[0] == my_core_coord
@@ -533,5 +532,4 @@ class SocketInterface:
 
     def get_upstream_sockets(self):
         """Return sender sides of all upstream socket pairs (for multi-upstream mode)."""
-        print("Getting upstream sockets for multi-upstream mode")
         return [pair[0] for pair in self.upstream_socket_pairs]

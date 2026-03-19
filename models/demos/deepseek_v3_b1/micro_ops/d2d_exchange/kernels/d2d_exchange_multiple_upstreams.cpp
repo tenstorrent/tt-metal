@@ -54,7 +54,6 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint64_t dst_addr,
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t packet_size) {
-    DPRINT << "writing packet with size: " << (uint32_t)packet_size << " TO REMOTE CORE\n";
     packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
         packet_size);
@@ -67,7 +66,6 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
         fabric_connection.send_payload_flush_non_blocking_from_address(
             (uint32_t)packet_header_addr, sizeof(PACKET_HEADER_TYPE));
     }
-    DPRINT << "finished writing packet with size: " << (uint32_t)packet_size << " TO REMOTE CORE\n";
 }
 
 FORCE_INLINE void send_worker_data_over_fabric(
@@ -78,13 +76,8 @@ FORCE_INLINE void send_worker_data_over_fabric(
     uint64_t downstream_bytes_sent_noc_addr) {
     uint32_t src = l1_read_addr;
     uint64_t dst = dst_addr;
-    DPRINT << "num whole fabric packets per link: " << (uint32_t)num_whole_fabric_packets_per_link << "\n";
     if constexpr (partial_packet_size > 0) {
-        DPRINT << "partial packet size: " << (uint32_t)(partial_packet_size) << "\n";
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link; ++i) {
-            DPRINT << "num whole packets sent: " << (uint32_t)(num_whole_fabric_packets_per_link) << "\n";
-            DPRINT << "whole packet size: " << (uint32_t)(whole_packet_size) << "\n";
-
             write_data_to_remote_core_with_ack<false>(
                 fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
             src += whole_packet_size;
@@ -93,9 +86,6 @@ FORCE_INLINE void send_worker_data_over_fabric(
         write_data_to_remote_core_with_ack(
             fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, partial_packet_size);
     } else if constexpr (num_whole_fabric_packets_per_link > 0) {
-        DPRINT << "in else num whole fabric packet per link: " << (uint32_t)(num_whole_fabric_packets_per_link) << "\n";
-        DPRINT << "whole packet size: " << (uint32_t)(whole_packet_size) << "\n";
-
         for (uint32_t i = 0; i < num_whole_fabric_packets_per_link - 1; ++i) {
             write_data_to_remote_core_with_ack<false>(
                 fabric_connection, packet_header_addr, src, dst, downstream_bytes_sent_noc_addr, whole_packet_size);
@@ -108,7 +98,6 @@ FORCE_INLINE void send_worker_data_over_fabric(
 }
 
 void kernel_main() {
-    DPRINT << "start of reduce to one kernel with multiple upstreams\n";
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection_2;
@@ -127,16 +116,12 @@ void kernel_main() {
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
-    DPRINT << "set sender socket page size to :" << (uint32_t)page_size << "\n";
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     SocketReceiverInterface receiver_sockets[num_upstream_sockets];
-    DPRINT << "num upstream sockets: " << (uint32_t)num_upstream_sockets << "\n";
     for (uint32_t i = 0; i < num_upstream_sockets; i++) {
-        DPRINT << "receiver socket " << i << " config addr: " << (uint32_t)receiver_socket_config_addrs[i] << "\n";
         receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
         set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
-        DPRINT << "set receiver socket " << i << " page size to :" << (uint32_t)upstream_page_size << "\n";
     }
 
     uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
@@ -202,7 +187,6 @@ void kernel_main() {
         uint32_t remaining = num_upstream_sockets;
         uint32_t worker_idx = 0;
         uint32_t processed_mask = 0;
-        DPRINT << "remaining: " << (uint32_t)remaining << "\n";
         while (remaining > 0) {
             invalidate_l1_cache();
             if (termination_semaphore[0] == 1) {
@@ -211,12 +195,10 @@ void kernel_main() {
             }
 
             if (!(processed_mask & (1 << worker_idx)) && socket_wait_for_pages(receiver_sockets[worker_idx], 1, 1000)) {
-                DPRINT << "Processing worker idx: " << worker_idx << "\n";
                 uint32_t l1_read_addr = receiver_sockets[worker_idx].read_ptr;
                 uint64_t dst_addr = dst_addr_base + worker_idx * upstream_page_size;
 
                 if constexpr (use_fabric_on_sender) {
-                    DPRINT << "Sending data of worker idx " << worker_idx << " over fabric\n";
                     send_worker_data_over_fabric(
                         *fabric_links[current_link],
                         packet_headers[current_link],
@@ -224,15 +206,12 @@ void kernel_main() {
                         dst_addr,
                         downstream_bytes_sent_noc_addr);
                 } else {
-                    DPRINT << "Sending data of worker idx " << worker_idx << " over socket\n";
                     write_data_to_local_core_with_ack(l1_read_addr, dst_addr, upstream_page_size);
                 }
 
                 socket_pop_pages(receiver_sockets[worker_idx], 1);
-                DPRINT << "Popped pages for worker idx " << worker_idx << "\n";
 
                 if constexpr (use_fabric_on_receiver) {
-                    DPRINT << "Notifying sender for worker idx " << worker_idx << " over fabric\n";
                     fabric_set_unicast_route(upstream_socket_packet_header_addr, receiver_sockets[worker_idx]);
                     fabric_socket_notify_sender_stateful(
                         receiver_sockets[worker_idx],
@@ -240,7 +219,6 @@ void kernel_main() {
                         upstream_socket_packet_header_addr,
                         upstream_bytes_acked_noc_addrs[worker_idx]);
                 } else {
-                    DPRINT << "Notifying sender for worker idx " << worker_idx << " over socket\n";
                     socket_notify_sender(receiver_sockets[worker_idx]);
                 }
 
@@ -250,7 +228,6 @@ void kernel_main() {
             }
 
             worker_idx = (worker_idx + 1) % num_upstream_sockets;
-            // DPRINT << "Next worker idx: " << worker_idx << "\n";
         }
 
         if (!terminated) {
@@ -260,7 +237,6 @@ void kernel_main() {
                 socket_push_pages(sender_socket, 1);
                 socket_notify_receiver(sender_socket);
             }
-            DPRINT << "Pushed pages to sender socket\n";
         }
     }
 
@@ -277,5 +253,4 @@ void kernel_main() {
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
     }
-    DPRINT << "end of d2d kernel with multiple upstreams\n";
 }
