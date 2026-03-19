@@ -137,7 +137,7 @@ struct Matmul {
             if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
-                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<true>()));
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<false>()));
                 } else {
                     PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<true>()));
                 }
@@ -159,7 +159,7 @@ struct Matmul {
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid<true, false, 2>(0, (int)VectorMode::R)));
+                        PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid<false, false, 2>(0, (int)VectorMode::R)));
                     } else {
                         PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<true, false, 2>(0, (int)VectorMode::R)));
                     }
