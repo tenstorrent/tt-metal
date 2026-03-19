@@ -6,86 +6,61 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_log.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
-#include "sfpi.h"
+#include "ckernel_sfpu_piecewise_rational.h"
+
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_lgamma_stirling() {
-    constexpr float LOG_SQRT_2PI = 0.9189385332046727f;
+// ======================================================================
+// LUT-based lgamma via piecewise rational P(x)/Q(x)
+//
+// BF16: n9/d9, 1 segment(s), range [0.001, 100.0]
+// FP32: n9/d9, 1 segment(s), range [0.001, 100.0]
+// ======================================================================
 
-    // Minimal coefficients for 0-3 ULP
-    constexpr float r0 = 0.0833333333f;   // 1/12
-    constexpr float r1 = -0.0027777777f;  // -1/360
+#ifdef INP_FLOAT32
+constexpr uint32_t LGAMMA_NUM_DEGREE = 9;
+constexpr uint32_t LGAMMA_DEN_DEGREE = 9;
+constexpr uint32_t LGAMMA_NUM_SEGMENTS = 1;
+constexpr uint32_t LGAMMA_LUT_SIZE = 22;
+constexpr std::array<float, 22> LGAMMA_LUT = {{
+    1.0000000000e-03f, 1.0000000000e+02f, -1.9806508332e-01f, -4.6424515243e+01f, -8.0140756701e+02f,
+    -1.3223679165e+03f, 2.3922525054e+03f, 6.8231552410e+02f, -9.9722845441e+02f, 5.0856851399e+01f,
+    4.1120346978e+01f, 1.0812873344e+00f, -2.4906110974e-02f, -1.0309750142e+01f, -3.2291669484e+02f,
+    -1.7247930100e+03f, -1.7459626192e+03f, 1.0000000000e+00f, 1.8876048732e+02f, 1.8191631958e+01f,
+    2.3192116199e-01f, -1.6444029461e-04f
+}};
 
+#else
+
+constexpr uint32_t LGAMMA_NUM_DEGREE = 9;
+constexpr uint32_t LGAMMA_DEN_DEGREE = 9;
+constexpr uint32_t LGAMMA_NUM_SEGMENTS = 1;
+constexpr uint32_t LGAMMA_LUT_SIZE = 22;
+constexpr std::array<float, 22> LGAMMA_LUT = {{
+    1.0000000000e-03f, 1.0000000000e+02f, -1.9806508332e-01f, -4.6424515243e+01f, -8.0140756701e+02f,
+    -1.3223679165e+03f, 2.3922525054e+03f, 6.8231552410e+02f, -9.9722845441e+02f, 5.0856851399e+01f,
+    4.1120346978e+01f, 1.0812873344e+00f, -2.4906110974e-02f, -1.0309750142e+01f, -3.2291669484e+02f,
+    -1.7247930100e+03f, -1.7459626192e+03f, 1.0000000000e+00f, 1.8876048732e+02f, 1.8191631958e+01f,
+    2.3192116199e-01f, -1.6444029461e-04f
+}};
+
+#endif
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void lgamma() {
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat z = in;
-
-        // 1. Reflection for x < 0.5
-        v_if(in < 0.5f) { z = 1.0f - in; }
-        v_endif;
-
-        // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
-        sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
-
-        // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
-        sfpi::vFloat inv_z = _sfpu_reciprocal_<2>(z);
-        sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * r1);
-        res = res + correction;
-
-        // TODO: use a polynomial bridge here instead
-        v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
-        v_endif;
-
-        // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(res, 0));
-        }
-        sfpi::dst_reg[0] = res;
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = piecewise_rational_eval<LGAMMA_NUM_DEGREE, LGAMMA_DEN_DEGREE, LGAMMA_NUM_SEGMENTS, LGAMMA_LUT_SIZE>(LGAMMA_LUT, x);
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void calculate_lgamma_adjusted(
-    const uint dst_index_in0,  // lgamma_stirling result
-    const uint dst_index_in1,  // log|sin(pi * frac(x))| with integer adjustments
-    const uint dst_index_in2,  // input x
-    const uint dst_index_out) {
-    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
-    constexpr float ln_pi = 1.1447298858f;
-
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat res_stirling = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat log_sin_pi_x = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat in = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
-
-        // ln(pi) - log|sin(pi * frac(x))|
-        sfpi::vFloat reflection_adj = ln_pi - log_sin_pi_x;
-
-        sfpi::vFloat result = res_stirling;
-
-        // For x < 0.5: lgamma(x) = reflection_adj - lgamma(1-x); otherwise use res_stirling.
-        v_if(in < 0.5f) { result = reflection_adj - res_stirling; }
-        v_endif;
-
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
-        }
-
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
-    }
-}
-
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-void lgamma_stirling_init() {
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+template <bool APPROXIMATION_MODE>
+void lgamma_init() {
+    sfpu_reciprocal_init();
 }
 
 }  // namespace ckernel::sfpu
