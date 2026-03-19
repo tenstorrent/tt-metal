@@ -14,7 +14,7 @@
 #include <ttnn/tensor/tensor_spec.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/tensor/tensor_spec.hpp"
+
 
 namespace tt::tt_metal {
 
