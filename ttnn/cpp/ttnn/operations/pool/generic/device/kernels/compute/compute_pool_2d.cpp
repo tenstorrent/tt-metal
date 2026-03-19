@@ -193,7 +193,7 @@ void kernel_main() {
                     cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
                     if constexpr (is_output_block_format) {
-                        pack_reconfig_data_format(pre_tilize_cb_id);
+                        pack_reconfig_data_format(pre_tilize_cb_id, 1, num_faces_in_output_tile);
                     }
 
                     tilize_stick_counter = 0;
