@@ -8,7 +8,6 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.reference.reference_utils import topk_bitonic
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
@@ -22,20 +21,16 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     TopKConfig,
     TopKFallbackConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_HIFI2,
-    TOPK_MIN_WIDTH,
-    even_int_div,
-    get_dequantized_tensor,
-    shard_and_save,
-)
+from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_HIFI2, even_int_div, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
 class MoEGate(AbstractModule):
@@ -54,15 +49,12 @@ class MoEGate(AbstractModule):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None
-        gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight")
-        score_correction_bias = get_dequantized_tensor(
-            state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
-        )
+
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    gate_weight.T.unsqueeze(0).unsqueeze(0),
+                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -73,7 +65,7 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
@@ -115,6 +107,57 @@ class MoEGate(AbstractModule):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 ),
             },
+        }
+
+    @classmethod
+    def create_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+    ) -> ModelState:
+        """Create input_indices, output_indices and output_tensor for each MoE layer
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL instance for communication configuration
+        Returns:
+            ModelState containing input_indices, output_indices and output_tensor for each MoE layer
+        """
+        ttnn_output_tensor = ttnn.zeros(
+            shape=(1, 32, 32),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_output_indices = ttnn.zeros(
+            shape=(1, 32, 32),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_input_indices = ttnn.arange(
+            start=0,
+            end=16 * 16,
+            step=1,
+            dtype=ttnn.int32,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
+        ttnn_input_indices = ttnn.reshape(ttnn_input_indices, (1, 16, 16))
+        ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
+        ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
+        return {
+            "gate_routing": {
+                "ttnn_output_tensor": ttnn_output_tensor,
+                "ttnn_input_indices": ttnn_input_indices,
+                "ttnn_output_indices": ttnn_output_indices,
+            },
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -200,13 +243,9 @@ class MoEGate(AbstractModule):
                     dtype=ttnn.bfloat16,
                 ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
-                # "input_memory_config": ttnn.create_sharded_memory_config(  # Bad PCC
-                #         shape=(USERS_PER_ROW, HIDDEN_SIZE),
-                #         core_grid=ttnn.CoreGrid(y=7, x=8),
-                #         strategy=ttnn.ShardStrategy.WIDTH,
-                #     ),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "routed_scaling_factor": hf_config.routed_scaling_factor,
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -271,6 +310,7 @@ class MoEGate(AbstractModule):
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "routed_scaling_factor": hf_config.routed_scaling_factor,
             }
 
     @classmethod
@@ -302,129 +342,133 @@ class MoEGate(AbstractModule):
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
-        # Sigmoid activation
-        scores = ttnn.sigmoid(logits)
-        ttnn.deallocate(logits)
-        # Add score correction bias
-        # Expand bias to match scores shape(dynamic shape)
-        scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
-        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
-        scores_with_bias = ttnn.add(
-            scores,
-            scores_correction_bias,
-            memory_config=cfg["add_score_correction_bias"]["memory_config"],
-            dtype=cfg["add_score_correction_bias"]["dtype"],
-        )
-        # Reshape scores to expert groups
-        expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
-        num_experts_per_group = expert_scores_grouped.shape[3]
 
-        # calculate top-2 scores with expert groups
-        if cfg["topk_fallback"]:
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = cls.topk_fallback_op(
-                expert_scores_grouped, **cfg["topk_fallback_config"], **cfg["topk_within_expert_groups"]
+        mesh_device = cfg["mesh_device"]
+        num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
+        assert num_experts == 256, "num_experts should be 256"
+        total_batch_size_per_device = logits.shape[2]
+
+        # create the shard spec and memory config for the input, logits and output
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_device_cores = grid.x * grid.y
+        start_index = 0
+        # we can only have one token per core at a time
+        end_index = min(num_device_cores, total_batch_size_per_device)
+        # this while loop is designed to handle the huge batch size (4096)
+        topk_experts_scores_list = []
+        topk_experts_indices_list = []
+        while True:
+            batch_size_per_device = end_index - start_index
+            # get the ceil of batch size per core
+            core_grid = ttnn.num_cores_to_corerangeset(
+                batch_size_per_device,
+                ttnn.CoreCoord(grid.x, grid.y),
+                row_wise=True,
             )
-        else:
-            if expert_scores_grouped.shape[3] < TOPK_MIN_WIDTH:
-                # Pad to 64 for topk op
-                expert_scores_grouped = ttnn.pad(
-                    expert_scores_grouped,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_scores_grouped.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_scores_within_expert_groups, topk_indices_within_expert_groups = ttnn.topk(
-                expert_scores_grouped, **cfg["topk_within_expert_groups"]
+
+            input_output_shard_shape = (32, 32)
+            reshaped_input_shape = (batch_size_per_device, 16, 16)
+
+            # currently we cannot convert the tile size of logits and input indices to 16*16,
+            # but the memory layout is the same since the length is 256
+            input_output_shard_spec = ttnn.ShardSpec(
+                core_grid,
+                input_output_shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
             )
-        ttnn.deallocate(expert_scores_grouped)
-        ttnn.deallocate(topk_indices_within_expert_groups)
-        # sum top-2 scores within expert groups
-        expert_group_scores = ttnn.sum(topk_scores_within_expert_groups, dim=3)
-        ttnn.deallocate(topk_scores_within_expert_groups)
-        # reshape to 4D tensor
-        expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
-
-        # calculate top-k expert groups
-        if cfg["topk_fallback"]:
-            topk_expert_groups_scores, topk_expert_groups_indices = cls.topk_fallback_op(
-                expert_group_scores, **cfg["topk_fallback_config"], **cfg["topk_expert_groups"]
+            input_output_mem_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
             )
-        else:
-            if expert_group_scores.shape[3] < TOPK_MIN_WIDTH:
-                expert_group_scores = ttnn.pad(
-                    expert_group_scores,
-                    [(0, 0), (0, 0), (0, 0), (0, TOPK_MIN_WIDTH - expert_group_scores.shape[3])],
-                    value=-float("inf"),
-                )
-            topk_expert_groups_scores, topk_expert_groups_indices = ttnn.topk(
-                expert_group_scores, **cfg["topk_expert_groups"]
+
+            cur_logits = logits[:, :, start_index:end_index, :]
+            cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)
+
+            # change the memory config of the logits
+            cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
+
+            # create the bias tensor (don't put it before line 398)
+            scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
+            scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
+            scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
+            scores_correction_bias = ttnn.transpose(scores_correction_bias, dim1=-2, dim2=-1)
+            scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
+            scores_correction_bias = ttnn.to_memory_config(
+                scores_correction_bias, memory_config=input_output_mem_config
             )
-        ttnn.deallocate(expert_group_scores)
-        ttnn.deallocate(topk_expert_groups_scores)
 
-        # create full expert_groups_mask(dynamic shape)
-        input_mask = cfg["scatter_top_expert_groups"]["input"]
-        input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, scores.shape[2], 1)))
+            # create the output tensor, input indices and output indices
+            ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
+            ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device, 1, 1))
+            ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
 
-        # create full src tensor of ones
-        src_tensor = cfg["scatter_top_expert_groups"]["src"]
-        src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, scores.shape[2], 1)))
+            ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
+            ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_device, 1, 1))
+            ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
 
-        # scatter top-k expert groups indices to full expert_groups_mask
-        active_groups_mask = ttnn.scatter(
-            input=input_mask,
-            index=topk_expert_groups_indices,
-            src=src_tensor,
-            dim=cfg["scatter_top_expert_groups"]["dim"],
-        )
-        ttnn.deallocate(topk_expert_groups_indices)
-        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
-        active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
+            ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
+            ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device, 1, 1))
+            ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
-        # expand active_groups_mask to all the experts
-        active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
-        ttnn.deallocate(active_groups_mask)
-        active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
-        active_experts_scores = ttnn.mul(scores_with_bias, active_experts_mask, **cfg["mul_scores_with_mask"])
-        ttnn.deallocate(scores_with_bias)
-        ttnn.deallocate(active_experts_mask)
-
-        # calculate top-k experts
-        if cfg["topk_fallback"]:
-            topk_experts_scores_with_bias, topk_experts_indices = cls.topk_fallback_op(
-                active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
+            eps = 1e-20
+            scaling_factor = cfg["routed_scaling_factor"]
+            enable_sigmoid = True
+            topk_experts_scores, topk_experts_indices = DeepseekMoeGateSingleCore.op(
+                cur_logits,
+                scores_correction_bias,
+                ttnn_output_tensor,
+                ttnn_input_indices,
+                ttnn_output_indices,
+                eps,
+                scaling_factor,
+                enable_sigmoid,
             )
-        else:
-            topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
-                active_experts_scores, **cfg["topk_experts"]
+
+            topk_experts_scores = ttnn.reshape(
+                topk_experts_scores, (-1, topk_experts_scores.shape[-2], topk_experts_scores.shape[-1])
             )
-        ttnn.deallocate(active_experts_scores)
-        ttnn.deallocate(topk_experts_scores_with_bias)
+            topk_experts_scores = ttnn.to_memory_config(topk_experts_scores, memory_config=ttnn.L1_MEMORY_CONFIG)
+            topk_experts_indices = ttnn.reshape(
+                topk_experts_indices, (-1, topk_experts_indices.shape[-2], topk_experts_indices.shape[-1])
+            )
+            topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
+            topk_experts_scores_list.append(topk_experts_scores[:batch_size_per_device, :, :])
+            topk_experts_indices_list.append(topk_experts_indices[:batch_size_per_device, :, :])
+            ttnn.deallocate(cur_logits)
+            ttnn.deallocate(scores_correction_bias)
+            ttnn.deallocate(ttnn_output_tensor)
+            ttnn.deallocate(ttnn_input_indices)
+            ttnn.deallocate(ttnn_output_indices)
 
-        # gather original scores without bias
-        topk_experts_scores = ttnn.gather(scores, dim=3, index=topk_experts_indices)
-        ttnn.deallocate(scores)
+            if end_index >= total_batch_size_per_device:
+                break
+            start_index = end_index
+            end_index = min(start_index + num_device_cores, total_batch_size_per_device)
 
-        # normalize scores
-        topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
-        topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
-        ttnn.deallocate(topk_expert_scores_sum)
-        ttnn.deallocate(topk_experts_scores)
+        topk_experts_weights = ttnn.concat(topk_experts_scores_list, dim=0)
+        topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
+        # here we only take the 1x8  out of 32x32
+        topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_weights = topk_experts_weights[:, 0, :8]
+        topk_experts_indices = topk_experts_indices[:, 0, :]
+        topk_experts_weights = ttnn.unsqueeze(topk_experts_weights, dim=0)
+        topk_experts_weights = ttnn.unsqueeze(topk_experts_weights, dim=0)
+        topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
+        topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
+        topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=cfg["output_memory_config"])
+        topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=cfg["output_memory_config"])
+        # if we do typecast on a row_major tensor, then we may see a hang
+        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
+        topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
+        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+        topk_experts_indices = ttnn.slice(topk_experts_indices, [0, 0, 0, 0], [1, 1, topk_experts_indices.shape[2], 8])
+        for tensor in topk_experts_scores_list:
+            ttnn.deallocate(tensor)
+        for tensor in topk_experts_indices_list:
+            ttnn.deallocate(tensor)
 
-        # multiply by expert scale
-        expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]
-        # expand expert_scale to match topk_experts_scores_normalized shape(dynamic shape)
-        expert_scale = ttnn.repeat(expert_scale, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
-        expert_scale = ttnn.to_layout(expert_scale, ttnn.TILE_LAYOUT)
-        topk_experts_scores_normalized = ttnn.mul(
-            topk_experts_scores_normalized,
-            expert_scale,
-            memory_config=cfg["multiply_expert_scale"]["memory_config"],
-            dtype=cfg["multiply_expert_scale"]["dtype"],
-        )
-        ttnn.deallocate(expert_scale)
-
-        return topk_experts_scores_normalized, topk_experts_indices
+        return topk_experts_weights, topk_experts_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -433,53 +477,6 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return cls.forward(x, cfg)
-
-    @classmethod
-    def topk_fallback_op(
-        cls,
-        input: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        k: int,
-        dim: int,
-        largest: bool,
-        sorted: bool,
-        use_bitonic_sort: bool,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        # convert ttnn mesh tensor to torch tensor
-        logger.info(f"topk_fallback_op: input shape: {input.shape}")
-        torch_input = ttnn.to_torch(
-            input,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        if use_bitonic_sort:
-            topk_fn = topk_bitonic
-        else:
-            topk_fn = torch.topk
-
-        torch_topk_scores, torch_topk_indices = topk_fn(torch_input, k=k, dim=dim, largest=largest, sorted=sorted)
-
-        ttnn_topk_scores = ttnn.from_torch(
-            torch_topk_scores,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        ttnn_topk_indices = ttnn.from_torch(
-            torch_topk_indices,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=ttnn.uint16,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_topk_scores, ttnn_topk_indices
 
     @classmethod
     def linear_fallback_op(
