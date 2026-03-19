@@ -91,6 +91,24 @@ def mesh_device_fixture():
         del device
 
 
+def _rebuild_sharded_mem_config(mem_config, device_shard_grid):
+    """Replace a sharded memory config's shard grid with the device-correct one.
+
+    Keeps the original shard shape and orientation; only the core grid is swapped
+    to match the current device's optimal DRAM bank-to-worker assignment.
+    Returns non-sharded or None configs unchanged.
+    """
+    if mem_config is None or not isinstance(mem_config, ttnn.MemoryConfig):
+        return mem_config
+    if not mem_config.is_sharded():
+        return mem_config
+    shard_spec = mem_config.shard_spec
+    if shard_spec is None:
+        return mem_config
+    new_shard_spec = ttnn.ShardSpec(device_shard_grid, shard_spec.shape, shard_spec.orientation)
+    return ttnn.MemoryConfig(mem_config.memory_layout, mem_config.buffer_type, new_shard_spec)
+
+
 def run(
     input_a_shape,  # Input shape (m, k)
     input_a_dtype,
@@ -190,6 +208,38 @@ def run(
             input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
         if "memory_config" in parsed_op_kwargs and "SHARDED" in str(parsed_op_kwargs["memory_config"]):
             del parsed_op_kwargs["memory_config"]
+
+    # DRAM-sharded matmul shard grid portability:
+    #
+    # BatchedDRAMShardedProgramConfig (HEIGHT_SHARDED input_a): the input_a
+    # shard grid must match the device's optimal DRAM bank-to-worker assignment
+    # (count AND ordering). Replace all shard grids with the device grid.
+    #
+    # DRAMShardedProgramConfig (WIDTH_SHARDED input_a): the input_a shard grid
+    # is an independent compute core grid chosen by the model to partition K
+    # (e.g. 7, 8, 16, 56 cores — see deepseek_v3/tt/mla/mla1d.py).  The C++
+    # factory reads this grid directly from the tensor shard spec, so it must
+    # keep the original core count.  Only output/memory_config grids (which map
+    # to DRAM bank workers) are replaced.
+    _is_batched_dram_sharded = isinstance(
+        program_config,
+        ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    )
+    _is_dram_sharded = isinstance(
+        program_config,
+        ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
+    )
+    if _is_batched_dram_sharded or _is_dram_sharded:
+        optimal_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+        device_shard_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in optimal_cores]
+        )
+        if _is_batched_dram_sharded:
+            input_a_memory_config = _rebuild_sharded_mem_config(input_a_memory_config, device_shard_grid)
+        if memory_config is not None:
+            memory_config = _rebuild_sharded_mem_config(memory_config, device_shard_grid)
+        if output_memory_config is not None:
+            output_memory_config = _rebuild_sharded_mem_config(output_memory_config, device_shard_grid)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")  # MeshDevice has this method
