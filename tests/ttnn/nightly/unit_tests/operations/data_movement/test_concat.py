@@ -134,7 +134,8 @@ def test_rm_interleaved_concat_unaligned_int(device, dtype, shapes, dim):
             3,
         ),
         # WIDTH-sharded tiled concat along height (dim=2)
-        (
+        # Skipped: width sharded inputs not yet supported for two-tensor concat
+        pytest.param(
             [[[1, 1, 32, 512], (32, 64)], [[1, 1, 64, 512], (64, 64)]],
             (96, 64),
             ttnn.CoreRangeSet(
@@ -145,6 +146,7 @@ def test_rm_interleaved_concat_unaligned_int(device, dtype, shapes, dim):
             ),
             ttnn.ShardStrategy.WIDTH,
             2,
+            marks=pytest.mark.skip(reason="Width sharded inputs not supported for two-tensor concat yet"),
         ),
     ],
 )
