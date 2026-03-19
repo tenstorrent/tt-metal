@@ -441,6 +441,7 @@ def setup_sram_matmul(
     output_tensor,
     k_num_tiles,
     fused_activation=0,
+    fused_activation_approx_mode=False,
 ):
     """
     Set up parameters for an SRAM matmul operation.
@@ -456,7 +457,7 @@ def setup_sram_matmul(
         output_tensor: Output tensor (WIDTH_SHARDED in L1)
         k_num_tiles: K dimension in tiles
         fused_activation: Activation to fuse (0=none, 1=sigmoid, 2=silu)
-
+        fused_activation_approx_mode: Whether to use approximate activation (default False)
     Returns:
         Dictionary with matmul parameters and CB descriptors
     """
@@ -477,6 +478,7 @@ def setup_sram_matmul(
         "k_num_tiles": k_num_tiles,
         "out_w": out_w,
         "fused_activation": fused_activation,
+        "fused_activation_approx_mode": fused_activation_approx_mode,
         # Core grid
         "core_grid": core_grid,
         "num_cores": core_grid.num_cores(),
@@ -969,7 +971,6 @@ class MoeRoutedExpert:
         reduce_output_cb = 27  # Final reduced output
         reduce_scratch_cb = 28  # Scratch for compute
         reduce_packet_cb = 29  # Scratch for sending packets
-        reduce_packet_header_cb = 30  # Packet header (persistent)
 
         # Determine if reduce_to_one is enabled (4x2 mesh mode)
         enable_reduce_to_one = (
@@ -1006,6 +1007,7 @@ class MoeRoutedExpert:
             output_tensor=gate_mm_output_tensor,
             k_num_tiles=num_tiles_k,
             fused_activation=MoeRoutedExpert.ACTIVATION_SIGMOID,
+            fused_activation_approx_mode=False,
         )
 
         # CB descriptors
@@ -1512,6 +1514,7 @@ class MoeRoutedExpert:
             ("gate_mm_k_num_tiles", gate_mm_params["k_num_tiles"]),
             ("gate_mm_out_w", gate_mm_params["out_w"]),
             ("gate_mm_fused_activation", gate_mm_params["fused_activation"]),
+            ("gate_mm_fused_activation_approx_mode", gate_mm_params["fused_activation_approx_mode"]),
             # Gate compute args (sender core)
             ("gate_input_cb", gate_params["input_cb"]),
             ("gate_bias_cb", gate_params["bias_cb"]),
@@ -1925,21 +1928,6 @@ class MoeRoutedExpert:
                     )
                     device_cb_descriptors.append(reduce_cb_packet_desc)
 
-                    # reduce_packet_header_cb (32): persistent packet header storage
-                    reduce_packet_header_size = 96  # Standard packet header size
-                    reduce_cb_packet_header_desc = ttnn.CBDescriptor(
-                        total_size=reduce_packet_header_size,
-                        core_ranges=reduce_all_cores_set,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=reduce_packet_header_cb,
-                                data_format=ttnn.bfloat16,
-                                page_size=reduce_packet_header_size,
-                            )
-                        ],
-                    )
-                    device_cb_descriptors.append(reduce_cb_packet_header_desc)
-
                     # Destination L1 address: offset within the single intermediate tensor
                     intermediate_base = intermediate_tensor_dev.buffer_address()
                     if device_role == MESH_LEAF:
@@ -1977,7 +1965,6 @@ class MoeRoutedExpert:
                         ("reduce_num_workers", reduce_params["num_workers_per_column"]),
                         ("reduce_slot_size_bytes", reduce_params["slot_size_bytes"]),
                         ("reduce_packet_cb", reduce_packet_cb),
-                        ("reduce_packet_header_cb", reduce_packet_header_cb),
                     ]
                     brisc_ct_args.extend(reduce_brisc_ct_args)
 

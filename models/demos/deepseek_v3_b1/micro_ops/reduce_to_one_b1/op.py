@@ -200,7 +200,6 @@ class ReduceToOneB1:
         received_cb = 1  # 3-page CB for all reduction rounds (backed by intermediate tensor)
         output_cb = 2  # Final output
         packet_cb = 3  # Packet staging
-        packet_header_cb = 4  # Packet header (persistent)
         scratch_cb = 5  # Scratch for compute
 
         # Create mesh program descriptor
@@ -377,7 +376,6 @@ class ReduceToOneB1:
                     ("local_cb", local_cb),
                     ("scratch_cb", scratch_cb),
                     ("packet_cb", packet_cb),
-                    ("packet_header_cb", packet_header_cb),
                     ("num_hops", 1),
                     ("dst_fabric_node_chip_id", dest_fabric_node_id.chip_id),
                     ("dst_fabric_node_mesh_id", int(dest_fabric_node_id.mesh_id)),
@@ -505,19 +503,6 @@ class ReduceToOneB1:
                     ],
                 )
 
-                # packet_header_cb: persistent packet header storage
-                cb4_desc = ttnn.CBDescriptor(
-                    total_size=packet_header_size_bytes,
-                    core_ranges=all_cores_set,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=packet_header_cb,
-                            data_format=dtype,
-                            page_size=packet_header_size_bytes,
-                        )
-                    ],
-                )
-
                 # scratch_cb: compute scratch (not tensor-backed)
                 cb_size_bytes = num_compute_tiles * compute_tile_size_bytes
                 cb5_desc = ttnn.CBDescriptor(
@@ -533,7 +518,7 @@ class ReduceToOneB1:
                     ],
                 )
 
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc]
 
                 # Build unified compile-time core descriptors
                 unified_ct_core_descriptors = [

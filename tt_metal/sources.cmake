@@ -23,7 +23,6 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/distributed_context.hpp
     api/tt-metalium/distributed_host_buffer.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
-    api/tt-metalium/event.hpp
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/profiler.hpp
     api/tt-metalium/experimental/fabric/fabric.hpp
@@ -109,6 +108,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/udm/mesh_semaphore.hpp
     api/tt-metalium/experimental/udm/mesh_tensor_builder.hpp
     api/tt-metalium/experimental/udm/mesh_utils.hpp
+    api/tt-metalium/experimental/context/metal_env.hpp
 )
 
 set(TT_METAL_SOURCES
