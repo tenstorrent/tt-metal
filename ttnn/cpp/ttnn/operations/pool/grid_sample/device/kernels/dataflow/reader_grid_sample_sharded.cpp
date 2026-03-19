@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
+#include "ttnn/operations/pool/device/kernels/pool_kernels_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
 #define PRINT_AND_PROFILE 0
@@ -132,7 +133,8 @@ void kernel_main() {
             cb_push_back(input_cb_index, 1);
 
             cb_reserve_back(scalar_cb_index, 1);
-            fill_four_val(get_write_ptr(scalar_cb_index), 0, 0, 0, 0);
+            zero_out_page<scalar_cb_index>(get_write_ptr(scalar_cb_index));
+            noc_async_read_barrier();
             cb_push_back(scalar_cb_index, 1);
         }
 
