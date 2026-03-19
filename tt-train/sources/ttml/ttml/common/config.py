@@ -209,12 +209,14 @@ def load_config(path: str, configs_root: str = None) -> dict:
     if configs_root is None:
         configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/"
 
-    # if the path is relative, make it absolute
-    if not (os.path.isabs(path)):
+    # if the path is relative, make it absolute using configs_root,
+    # but only if the path doesn't already point to an existing file
+    if not os.path.isabs(path) and not os.path.exists(path):
         path = os.path.join(configs_root, path)
 
     with open(path, "r") as f:
-        config = yaml.safe_load(f)
+        raw = os.path.expandvars(f.read())
+    config = yaml.safe_load(raw)
     return config
 
 

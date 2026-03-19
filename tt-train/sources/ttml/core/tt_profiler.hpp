@@ -30,6 +30,8 @@ public:
     void enable();
     void disable();
 
+    [[nodiscard]] bool get_naive_profiling() const;
+
 private:
     bool m_enabled = false;
 };
