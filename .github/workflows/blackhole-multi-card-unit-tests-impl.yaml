@@ -274,12 +274,6 @@ jobs:
         if: ${{ failure() }}
         run: |
           tt-smi -s
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          # Falls back to William Ly (U0883RN6CRE) when test-group.owner_id not set
-          owner: ${{ matrix.test-group.owner_id || 'U0883RN6CRE' }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
