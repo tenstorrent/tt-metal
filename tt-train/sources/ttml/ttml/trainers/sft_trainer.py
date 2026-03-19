@@ -243,19 +243,12 @@ class SFTTrainer:
             for micro_step in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
 
-                # Forward pass
-                logits = self.model(batch.input_ids, self._causal_mask)
+                logits = self.model(batch.input_ids, self._causal_mask)  # [B, 1, T, V]
+
                 if micro_step == 0:
                     memory_snapshot("FORWARD_PASS")
 
-                # Loss computation
-                if self._compute_loss_override is not None:
-                    loss = self._compute_loss_override(logits, batch)
-                else:
-                    loss = self._loss_fn(logits, batch.labels, ttml.ops.ReduceType.NONE)
-                    if batch.loss_mask is not None:
-                        loss = loss * batch.loss_mask
-                    loss = ttml.ops.unary.mean(loss)
+                loss = self._compute_loss(batch, micro_step, logits)
 
                 if micro_step == 0:
                     memory_snapshot("LOSS_COMPUTATION")
@@ -340,13 +333,12 @@ class SFTTrainer:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _compute_loss(self, batch: Batch):
+    def _compute_loss(self, batch: Batch, logits: Any):
         """Forward pass + loss computation.
 
         If *compute_loss_func* was provided it is called instead of the
         default masked cross-entropy.
         """
-        logits = self.model(batch.input_ids, self._causal_mask)  # [B, 1, T, V]
         if self._compute_loss_override is not None:
             return self._compute_loss_override(logits, batch)
 
