@@ -37,6 +37,7 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    num_logprobs: int | list[int] = 0
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -142,7 +143,7 @@ class SamplingGenerator:
 
         Resets params, seeds, prompt tokens, and output state in the correct order.
         """
-        self.reset_sampling_params(sampling_params)
+        self.reset_sampling_params(sampling_params, empty_slots=empty_slots)
         seed = getattr(sampling_params, "seed", None)
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
@@ -201,13 +202,16 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, sampling_params):
+    def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
+            num_logprobs=num_logprobs,
+            empty_slots=empty_slots,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
@@ -387,6 +391,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
         "seed": None,
+        "num_logprobs": 0,
     }
 
     def _pad(lst, name):
@@ -415,6 +420,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     frequency_penalty = _normalise_and_pad("frequency_penalty")
     repetition_penalty = _normalise_and_pad("repetition_penalty")
     seed = _normalise_and_pad("seed")
+    num_logprobs = _normalise_and_pad("num_logprobs")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
@@ -448,6 +454,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         frequency_penalty=frequency_penalty,
         repetition_penalty=repetition_penalty,
         seed=seed,
+        num_logprobs=num_logprobs,
     )
 
 
