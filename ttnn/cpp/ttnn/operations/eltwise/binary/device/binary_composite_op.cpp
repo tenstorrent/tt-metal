@@ -677,8 +677,7 @@ Tensor fmod(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::unary::ExecuteUnaryWithFloatParameter<ttnn::unary::UnaryOpType::FMOD>::invoke(
-        input, scalar, output_mem_config);
+    return ttnn::unary_fmod(input, scalar, output_mem_config);
 }
 
 Tensor floor_div(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
