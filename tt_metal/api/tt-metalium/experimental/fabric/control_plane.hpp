@@ -276,6 +276,7 @@ public:
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
 
     // Getters
     FabricConfig get_fabric_config() const { return fabric_config_; }

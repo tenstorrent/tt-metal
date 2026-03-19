@@ -2271,6 +2271,10 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
 
 const MeshGraph& ControlPlane::get_mesh_graph() const { return *mesh_graph_; }
 
+const tt::tt_metal::PhysicalSystemDescriptor& ControlPlane::get_physical_system_descriptor() const {
+    return *physical_system_descriptor_;
+}
+
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
