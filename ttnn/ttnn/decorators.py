@@ -668,7 +668,15 @@ class Operation:
                 if ttnn.CONFIG.enable_logging:
                     devices = get_devices((function_args, function_kwargs))
                     for device in devices:
-                        ttnn.synchronize_device(device)
+                        try:
+                            ttnn.synchronize_device(device)
+                        except (RuntimeError, Exception) as e:
+                            error_msg = str(e)
+                            if "Event Synchronization is not supported during trace capture" in error_msg:
+                                error_message = "TTNN reporting is not compatible with tracing. Please disable tracing to use reporting."
+                                logger.critical(error_message)
+                                raise RuntimeError(error_message) from e
+                            raise
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
@@ -743,7 +751,15 @@ class Operation:
 
                     if ttnn.CONFIG.enable_logging:
                         for device in devices:
-                            ttnn.synchronize_device(device)
+                            try:
+                                ttnn.synchronize_device(device)
+                            except (RuntimeError, Exception) as e:
+                                error_msg = str(e)
+                                if "Event Synchronization is not supported during trace capture" in error_msg:
+                                    error_message = "TTNN reporting is not compatible with tracing. Please disable tracing to use reporting."
+                                    logger.critical(error_message)
+                                    raise RuntimeError(error_message) from e
+                                raise
 
                         output, duration = output.output, output.duration
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
