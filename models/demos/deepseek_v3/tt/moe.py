@@ -337,7 +337,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             # TODO: this is a temporary measure until we either a) uplift the optimized ops to support prefill shapes, or b) uplift prefill MMs to read from decode formatted weights
-            config["moe_chunk_size"] = USERS_PER_ROW
+            DECODE_USERS_PER_ROW_PER_DEVICE = 32
+            config["moe_chunk_size"] = DECODE_USERS_PER_ROW_PER_DEVICE
 
         return config
 
@@ -572,7 +573,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 x_rm_chunk = ttnn.pad(
                     x_rm_chunk,
-                    padding=((0, batch_chunk), (0, 0), (0, 0), (0, 0)),
+                    padding=((0, cfg["moe_chunk_size"]), (0, 0), (0, 0), (0, 0)),
                     value=0.0,
                 )
 
@@ -583,7 +584,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 topk_experts_indices_rm_chunk = ttnn.pad(
                     topk_experts_indices_rm_chunk,
-                    padding=((0, batch_chunk), (0, 0), (0, 0), (0, 0)),
+                    padding=((0, cfg["moe_chunk_size"]), (0, 0), (0, 0), (0, 0)),
                     value=0.0,
                 )
 
@@ -594,7 +595,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 topk_experts_weights_rm_chunk = ttnn.pad(
                     topk_experts_weights_rm_chunk,
-                    padding=((0, batch_chunk), (0, 0), (0, 0), (0, 0)),
+                    padding=((0, cfg["moe_chunk_size"]), (0, 0), (0, 0), (0, 0)),
                     value=0.0,
                 )
 
