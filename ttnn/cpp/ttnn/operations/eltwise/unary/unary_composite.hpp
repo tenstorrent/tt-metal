@@ -9,40 +9,6 @@
 
 namespace ttnn {
 
-namespace operations::unary {
-
-struct ExecuteUnaryCompositeClamp {
-    static Tensor invoke(
-        const Tensor& input_a,
-        std::optional<std::variant<float, int32_t>> min = std::nullopt,
-        std::optional<std::variant<float, int32_t>> max = std::nullopt,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& a,
-        std::optional<Tensor> min = std::nullopt,
-        std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& output_tensor = std::nullopt);
-};
-
-struct ExecuteUnaryCompositeClip {
-    static Tensor invoke(
-        const Tensor& a,
-        std::optional<float> min = std::nullopt,
-        std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& a,
-        std::optional<Tensor> min = std::nullopt,
-        std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-};
-
-}  // namespace operations::unary
-
 // auto prelu = ttnn::leaky_relu;  // Alias for leaky_relu. TODO(#8544): implement PReLU properly
 
 // Other unaries
@@ -108,14 +74,14 @@ inline Tensor clip(
     std::optional<float> min = std::nullopt,
     std::optional<float> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClip::invoke(a, min, max, output_mem_config);
+    return operations::unary::clip(a, min, max, output_mem_config);
 }
 inline Tensor clip(
     const Tensor& a,
     std::optional<Tensor> min = std::nullopt,
     std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClip::invoke(a, std::move(min), std::move(max), output_mem_config);
+    return operations::unary::clip(a, std::move(min), std::move(max), output_mem_config);
 }
 inline Tensor clamp(
     const Tensor& input_a,
@@ -123,7 +89,7 @@ inline Tensor clamp(
     std::optional<std::variant<float, int32_t>> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClamp::invoke(input_a, min, max, output_mem_config, output_tensor);
+    return operations::unary::clamp(input_a, min, max, output_mem_config, output_tensor);
 }
 inline Tensor clamp(
     const Tensor& a,
@@ -131,8 +97,7 @@ inline Tensor clamp(
     std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClamp::invoke(
-        a, std::move(min), std::move(max), output_mem_config, output_tensor);
+    return operations::unary::clamp(a, std::move(min), std::move(max), output_mem_config, output_tensor);
 }
 inline Tensor glu(const Tensor& t, int32_t dim = -1, const std::optional<MemoryConfig>& m = std::nullopt) {
     return operations::unary::glu(t, dim, m);

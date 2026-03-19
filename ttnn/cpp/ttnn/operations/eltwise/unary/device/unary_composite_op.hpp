@@ -4,6 +4,7 @@
 #pragma once
 #include <functional>
 #include <optional>
+#include <variant>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -50,5 +51,29 @@ Tensor polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor frac(const Tensor&, const std::optional<MemoryConfig>&);
+
+Tensor clip(
+    const Tensor& a,
+    std::optional<float> min = std::nullopt,
+    std::optional<float> max = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor clip(
+    const Tensor& a,
+    std::optional<Tensor> min = std::nullopt,
+    std::optional<Tensor> max = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+Tensor clamp(
+    const Tensor& input_a,
+    std::optional<std::variant<float, int32_t>> min = std::nullopt,
+    std::optional<std::variant<float, int32_t>> max = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
+Tensor clamp(
+    const Tensor& a,
+    std::optional<Tensor> min = std::nullopt,
+    std::optional<Tensor> max = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn::operations::unary

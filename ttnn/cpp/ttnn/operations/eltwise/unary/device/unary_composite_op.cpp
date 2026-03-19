@@ -269,7 +269,7 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
 // Function Clip
 // use clip y = min( max( x, min_value), max_value) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
-Tensor ExecuteUnaryCompositeClip::invoke(
+Tensor clip(
     const Tensor& a,
     std::optional<float> min,
     std::optional<float> max,
@@ -280,19 +280,19 @@ Tensor ExecuteUnaryCompositeClip::invoke(
     std::optional<std::variant<float, int32_t>> max_variant =
         max ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
 
-    return ExecuteUnaryCompositeClamp::invoke(a, min_variant, max_variant, output_mem_config);
+    return clamp(a, min_variant, max_variant, output_mem_config);
 }
 
-Tensor ExecuteUnaryCompositeClip::invoke(
+Tensor clip(
     const Tensor& a,
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteUnaryCompositeClamp::invoke(a, std::move(min), std::move(max), output_mem_config);
+    return clamp(a, std::move(min), std::move(max), output_mem_config);
 }
 
 // clamp
-Tensor ExecuteUnaryCompositeClamp::invoke(
+Tensor clamp(
     const Tensor& input_a,
     std::optional<std::variant<float, int32_t>> min,
     std::optional<std::variant<float, int32_t>> max,
@@ -325,7 +325,7 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     return ttnn::clamp_tss(a, min_val, max_val, output_mem_config, output_tensor);
 }
 
-Tensor ExecuteUnaryCompositeClamp::invoke(
+Tensor clamp(
     const Tensor& a,
     std::optional<Tensor> min,
     std::optional<Tensor> max,
