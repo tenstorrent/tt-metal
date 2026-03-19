@@ -125,7 +125,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 708_023_460,  # Used to be 369_666_097, group_norm welford disabled caused regression
+        "blackhole": None,  # None since not optimized and not working on full BH grid. 64 cores - Welford off: 708_023_460 Welford on: 369_666_097
     },
     "vae_decode_512x512": {
         "wormhole": 171_560_642,
@@ -133,7 +133,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 324_271_938,
-        "blackhole": 372_879_420,  # Used to be 170_093_216, group_norm welford disabled caused regression
+        "blackhole": None,  # None since not optimized and not working on full BH grid. 64 cores - Welford off: 372_879_420 Welford on: 170_093_216
     },
     "vae_encode_512x512": {
         "wormhole": 83_537_085,
