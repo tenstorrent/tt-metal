@@ -329,8 +329,10 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc =
+        {};  // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc =
+        {};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
