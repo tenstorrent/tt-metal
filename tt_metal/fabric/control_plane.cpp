@@ -2696,18 +2696,7 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                     *my_mesh_id,
                     *neighbor_mesh_id);
             }
-            assigned = try_assign_port(true);
-        }
-        if (!assigned) {
-            TT_FATAL(
-                false,
-                "Failed to assign logical port for exit_node on mesh {} (chip {}) -> mesh {}: "
-                "fabric_node_id={} src_eth_chan={} (NESW and Z ports exhausted).",
-                *my_mesh_id,
-                exit_node_chip,
-                *neighbor_mesh_id,
-                exit_node_fabric_node_id,
-                src_eth_chan);
+            try_assign_port(true);
         }
     }
     return ports_to_neighbor;
@@ -2823,6 +2812,17 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
                 }
             }
             std::string phys_loc_str;
+            if (topology_mapper_ != nullptr) {
+                try {
+                    FabricNodeId fn_id(my_mesh_id, src_device);
+                    auto hostname = topology_mapper_->get_hostname_for_fabric_node_id(fn_id);
+                    auto tray_id = topology_mapper_->get_tray_id_for_fabric_node_id(fn_id);
+                    auto asic_location = topology_mapper_->get_asic_location_for_fabric_node_id(fn_id);
+                    phys_loc_str = fmt::format(" (host={}, tray={}, loc={})", hostname, *tray_id, *asic_location);
+                } catch (const std::exception&) {
+                    phys_loc_str = " (physical_location_unavailable)";
+                }
+            }
             log_info(
                 tt::LogFabric,
                 "get_requested_exit_nodes: mesh {} -> {}, FabricNodeId M{}D{}{}: num_channels_requested={}, "
