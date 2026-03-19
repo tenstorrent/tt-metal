@@ -173,7 +173,10 @@ protected:
                 }
             }
         } else {
-            devices_.push_back(reserved_devices_.at(mmio_device_id));
+            auto& mmio_device = reserved_devices_.at(mmio_device_id);
+            if (!mmio_device->is_remote_only()) {
+                devices_.push_back(mmio_device);
+            }
         }
     }
 
@@ -296,7 +299,10 @@ private:
                 }
             }
         } else {
-            shared_devices_.push_back(shared_reserved_devices_.at(mmio_device_id));
+            auto& mmio_device = shared_reserved_devices_.at(mmio_device_id);
+            if (!mmio_device->is_remote_only()) {
+                shared_devices_.push_back(mmio_device);
+            }
         }
 
         shared_max_cbs_ = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
