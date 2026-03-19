@@ -12,8 +12,8 @@ void kernel_main() {
     const uint32_t input_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t packed_scaler = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t packed_eps = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t scaler_fp32_bits = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t eps_fp32_bits = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packed_w0 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packed_w1 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packed_w2 = get_arg_val<uint32_t>(arg_idx++);
@@ -32,8 +32,8 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-    generate_tile_with_packed_bfloat16_value(cb_scaler, packed_scaler);
-    generate_tile_with_packed_bfloat16_value(cb_eps, packed_eps);
+    generate_tile_with_uint32_value(cb_scaler, scaler_fp32_bits);
+    generate_tile_with_uint32_value(cb_eps, eps_fp32_bits);
     generate_tile_with_packed_bfloat16_value(cb_w0, packed_w0);
     generate_tile_with_packed_bfloat16_value(cb_w1, packed_w1);
     generate_tile_with_packed_bfloat16_value(cb_w2, packed_w2);

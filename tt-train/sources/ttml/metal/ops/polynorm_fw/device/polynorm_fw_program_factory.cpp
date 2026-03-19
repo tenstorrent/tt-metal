@@ -4,6 +4,7 @@
 
 #include "polynorm_fw_program_factory.hpp"
 
+#include <bit>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -54,8 +55,8 @@ void assign_per_core_runtime_args(
     const PolyNormForwardKernels& kernels,
     const tt::tt_metal::Buffer* input_buffer,
     const tt::tt_metal::Buffer* output_buffer,
-    uint32_t packed_scaler,
-    uint32_t packed_eps,
+    uint32_t scaler_fp32_bits,
+    uint32_t eps_fp32_bits,
     uint32_t packed_w0,
     uint32_t packed_w1,
     uint32_t packed_w2,
@@ -86,8 +87,8 @@ void assign_per_core_runtime_args(
                 input_buffer->address(),
                 num_rows_per_core,
                 num_rows_written,
-                packed_scaler,
-                packed_eps,
+                scaler_fp32_bits,
+                eps_fp32_bits,
                 packed_w0,
                 packed_w1,
                 packed_w2,
@@ -112,7 +113,8 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     tt::tt_metal::Program program{};
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(data_format == tt::DataFormat::Float16_b, "PolyNormForward currently supports BF16 input only");
-    const uint32_t tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const uint32_t float32_tile_size = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
@@ -129,37 +131,37 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
     [[maybe_unused]] auto cb_input_pass_1 =
-        create_circular_buffer(program, all_cores, kInputPass1CbIndex, data_format, tile_size, block_size);
+        create_circular_buffer(program, all_cores, kInputPass1CbIndex, data_format, bfloat16_tile_size, block_size);
     [[maybe_unused]] auto cb_input_pass_2 =
-        create_circular_buffer(program, all_cores, kInputPass2CbIndex, data_format, tile_size, block_size);
+        create_circular_buffer(program, all_cores, kInputPass2CbIndex, data_format, bfloat16_tile_size, block_size);
     [[maybe_unused]] auto cb_input_pass_3 =
-        create_circular_buffer(program, all_cores, kInputPass3CbIndex, data_format, tile_size, block_size);
-    [[maybe_unused]] auto cb_scaler =
-        create_circular_buffer(program, all_cores, kScalerCbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_eps =
-        create_circular_buffer(program, all_cores, kEpsCbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kInputPass3CbIndex, data_format, bfloat16_tile_size, block_size);
+    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
+        program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_eps = create_circular_buffer(
+        program, all_cores, kEpsCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w0 =
-        create_circular_buffer(program, all_cores, kW0CbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kW0CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w1 =
-        create_circular_buffer(program, all_cores, kW1CbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kW1CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_w2 =
-        create_circular_buffer(program, all_cores, kW2CbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kW2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_bias =
-        create_circular_buffer(program, all_cores, kBiasCbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x2 =
-        create_circular_buffer(program, all_cores, kSumX2CbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x4 =
-        create_circular_buffer(program, all_cores, kSumX4CbIndex, data_format, tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x6 =
-        create_circular_buffer(program, all_cores, kSumX6CbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kBiasCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_sum_x2 = create_circular_buffer(
+        program, all_cores, kSumX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_sum_x4 = create_circular_buffer(
+        program, all_cores, kSumX4CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_sum_x6 = create_circular_buffer(
+        program, all_cores, kSumX6CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_inv_rms_x =
-        create_circular_buffer(program, all_cores, kInvRmsXCbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kInvRmsXCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_inv_rms_x2 =
-        create_circular_buffer(program, all_cores, kInvRmsX2CbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kInvRmsX2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_inv_rms_x3 =
-        create_circular_buffer(program, all_cores, kInvRmsX3CbIndex, data_format, tile_size, kNumOneTile);
+        create_circular_buffer(program, all_cores, kInvRmsX3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, tile_size, block_size);
+        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
     auto* input_buffer = input.buffer();
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
@@ -186,7 +188,7 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // Bump this when compute kernel ABI/logic changes to avoid stale binaries.
-    constexpr uint32_t kPolyNormKernelRevision = 16U;
+    constexpr uint32_t kPolyNormKernelRevision = 17U;
     std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size, Wt, kPolyNormKernelRevision};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, true);
@@ -197,8 +199,8 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
             create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, true);
     }
 
-    const uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.0F / static_cast<float>(input.logical_shape()[-1]));
-    const uint32_t packed_eps = pack_two_bfloat16_to_uint32(args.epsilon);
+    const uint32_t scaler_fp32_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(input.logical_shape()[-1]));
+    const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(args.epsilon);
     const uint32_t packed_w0 = pack_two_bfloat16_to_uint32(args.w0);
     const uint32_t packed_w1 = pack_two_bfloat16_to_uint32(args.w1);
     const uint32_t packed_w2 = pack_two_bfloat16_to_uint32(args.w2);
@@ -209,8 +211,8 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
         kernels,
         input_buffer,
         output_buffer,
-        packed_scaler,
-        packed_eps,
+        scaler_fp32_bits,
+        eps_fp32_bits,
         packed_w0,
         packed_w1,
         packed_w2,
@@ -248,9 +250,9 @@ void PolyNormForwardProgramFactory::override_runtime_arguments(
     auto* input_buffer = tensor_args.input.buffer();
     auto* output_buffer = tensor_return_value.buffer();
 
-    const uint32_t packed_scaler =
-        pack_two_bfloat16_to_uint32(1.0F / static_cast<float>(tensor_args.input.logical_shape()[-1]));
-    const uint32_t packed_eps = pack_two_bfloat16_to_uint32(operation_attributes.epsilon);
+    const uint32_t scaler_fp32_bits =
+        std::bit_cast<uint32_t>(1.0F / static_cast<float>(tensor_args.input.logical_shape()[-1]));
+    const uint32_t eps_fp32_bits = std::bit_cast<uint32_t>(operation_attributes.epsilon);
     const uint32_t packed_w0 = pack_two_bfloat16_to_uint32(operation_attributes.w0);
     const uint32_t packed_w1 = pack_two_bfloat16_to_uint32(operation_attributes.w1);
     const uint32_t packed_w2 = pack_two_bfloat16_to_uint32(operation_attributes.w2);
@@ -264,8 +266,8 @@ void PolyNormForwardProgramFactory::override_runtime_arguments(
 
         auto& rr = reader_runtime_args[core.x][core.y];
         rr[0] = input_buffer->address();
-        rr[3] = packed_scaler;
-        rr[4] = packed_eps;
+        rr[3] = scaler_fp32_bits;
+        rr[4] = eps_fp32_bits;
         rr[5] = packed_w0;
         rr[6] = packed_w1;
         rr[7] = packed_w2;
