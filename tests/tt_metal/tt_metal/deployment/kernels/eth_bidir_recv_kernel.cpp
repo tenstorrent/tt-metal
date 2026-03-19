@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "args.hpp"
 #include "sync.hpp"
 
 static inline void delay(uint64_t loops) {
@@ -10,10 +11,13 @@ static inline void delay(uint64_t loops) {
     }
 }
 
+#define ARGS(X)       \
+    X(transfer_size)  \
+    X(transfer_count) \
+    X(barrier_address)
+
 void kernel_main() {
-    constexpr uint32_t transfer_size = get_compile_time_arg_val(0);
-    constexpr uint32_t transfer_count = get_compile_time_arg_val(1);
-    constexpr uint32_t barrier_address = get_compile_time_arg_val(2);
+    ARG_INIT(ARGS);
 
     struct barrier* b = (struct barrier*)barrier_address;
 
