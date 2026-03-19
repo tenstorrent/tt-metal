@@ -180,10 +180,11 @@ public:
 
     MeshDevice* get_mesh_device() const;
 
-private:
-    D2HSocket() = default;
     D2HSocket(const D2HSocket&) = delete;
     D2HSocket& operator=(const D2HSocket&) = delete;
+
+private:
+    D2HSocket() = default;
 
     struct PinnedBufferInfo {
         uint32_t pcie_xy_enc = 0;
