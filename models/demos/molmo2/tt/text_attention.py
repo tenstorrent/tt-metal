@@ -286,31 +286,27 @@ class TextAttention(LightweightModule):
         """
         seq_len = x.shape[-2]
 
-        # Q, K, V projections (column parallel - output is sharded across devices)
-        # Use DRAM-sharded matmul with L1 output only on single device (requires sharded input).
-        if self.is_mesh_device:
-            print("############ is mesh device \n")
+        # Q projection: DRAM-sharded path for T3K (multi-device mesh), plain linear for single device.
+        if self.is_mesh_device and self.num_devices > 1:
+            # T3K: shard input and use MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.
             device = self.mesh_device
             tile_size = self.tile_size
             hidden_dim = x.shape[-1]
-            # Program config: in0_block_w (tiles per core along K), per_core_M, per_core_N (tiles)
             in0_block_w = 8
             per_core_M = 16
             per_core_N = 16
-            K_tiles = hidden_dim // tile_size  # 4096 // 32 = 128
-            num_cores_in = K_tiles // in0_block_w  # 16 cores for input sharding
-            shard_height = ((seq_len + tile_size - 1) // tile_size) * tile_size
-            # Shard x (input A) for DRAM-sharded matmul: WIDTH_SHARDED, shard shape [seq_len, hidden_dim/num_cores_in]
-            in0_shard_width = hidden_dim // num_cores_in  # 256
+            K_tiles = hidden_dim // tile_size
+            num_cores_in = K_tiles // in0_block_w
+            shard_height = ((int(seq_len) + tile_size - 1) // tile_size) * tile_size
+            in0_shard_width = hidden_dim // num_cores_in
             grid_size = (1, num_cores_in)
             x_sharded = ttnn.interleaved_to_sharded(
                 x,
                 grid_size,
-                [int(shard_height), in0_shard_width],
+                [int(shard_height), int(in0_shard_width)],
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                 ttnn.ShardOrientation.ROW_MAJOR,
             )
-            # Output L1 memory config with explicit ShardSpec (required by DRAM-sharded factory)
             M_tiles = (seq_len + tile_size - 1) // tile_size
             N_tiles = (self.num_heads_per_device * self.head_dim + tile_size - 1) // tile_size
             num_blocks_y = (M_tiles + per_core_M - 1) // per_core_M
@@ -338,6 +334,7 @@ class TextAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config_hifi2,
             )
         else:
+            # Single device: plain linear with DRAM_MEMORY_CONFIG.
             q = ttnn.linear(
                 x,
                 self.wq,
@@ -349,7 +346,6 @@ class TextAttention(LightweightModule):
         x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
         # Program config with out_subblock_h * out_subblock_w >= 2 (avoids "Output subblock 1x1 is small" warning)
         if self.is_mesh_device:
-            print("############ 2 attension is mesh device \n")
             core_grid = self.mesh_device.compute_with_storage_grid_size()
             grid_size = (core_grid.x, core_grid.y)
             tile_size = self.tile_size
@@ -389,7 +385,6 @@ class TextAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            print("############ 2 not attension is mesh device \n")
             k = ttnn.linear(
                 x_l1,
                 self.wk,

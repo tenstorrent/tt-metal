@@ -7,8 +7,13 @@ Full PCC comparison test for all text model layers.
 
 Compares TTNN implementation against PyTorch reference layer by layer,
 using FP32/bfloat16 for maximum precision.
+
+Supports single device (default) and T3K mesh via MESH_DEVICE:
+  - MESH_DEVICE=T3K: use 1x8 mesh device (ttnn.open_mesh_device)
+  - Otherwise: use single device (ttnn.open_device(device_id=0))
 """
 
+import os
 
 import torch
 import torch.nn as nn
@@ -163,9 +168,43 @@ def ref_block_forward(
     return block_out
 
 
+def _open_device():
+    """Open single device or T3K mesh based on MESH_DEVICE env."""
+    mesh_env = os.environ.get("MESH_DEVICE", "").strip().upper()
+    if mesh_env == "T3K":
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+        device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+        is_mesh = True
+        logger.info(f"Opened T3K mesh device ({device.get_num_devices()} devices)")
+    else:
+        device = ttnn.open_device(device_id=0)
+        is_mesh = False
+        logger.info("Opened single device (device_id=0)")
+    return device, is_mesh
+
+
+def _close_device(device, is_mesh):
+    """Close device or mesh device."""
+    if is_mesh:
+        ttnn.close_mesh_device(device)
+    else:
+        ttnn.close_device(device)
+
+
 def test_all_layers_pcc():
     """Test PCC for all 36 text model layers using high precision."""
+    import pytest
+
     from models.demos.molmo2.tt.load_weights import load_state_dict_from_safetensors
+
+    # Skip T3K run when fewer than 8 devices are available
+    if os.environ.get("MESH_DEVICE", "").strip().upper() == "T3K":
+        num_available = len(ttnn.get_device_ids())
+        if num_available < 8:
+            pytest.skip(
+                f"T3K requires 8 devices, only {num_available} available. "
+                "Run without MESH_DEVICE=T3K for single-device test."
+            )
 
     # Config
     hidden_dim = 4096
@@ -191,8 +230,8 @@ def test_all_layers_pcc():
     wte = state_dict["model.transformer.wte.embedding"]
     ref_hidden = wte[input_ids[0]].unsqueeze(0).float()  # Use float32
 
-    # Open device
-    device = ttnn.open_device(device_id=0)
+    # Open device (single or T3K mesh per MESH_DEVICE)
+    device, is_mesh = _open_device()
 
     try:
         from models.demos.molmo2.tt.text_block import TextBlock
@@ -214,7 +253,10 @@ def test_all_layers_pcc():
         ttnn_hidden = ref_hidden.clone()
 
         logger.info("=" * 80)
-        logger.info("Layer-by-layer PCC comparison (using bfloat16 for TTNN)")
+        logger.info(
+            "Layer-by-layer PCC comparison (using bfloat16 for TTNN)"
+            + (" [T3K mesh]" if is_mesh else " [single device]")
+        )
         logger.info("=" * 80)
 
         for layer_num in range(num_layers):
@@ -249,13 +291,23 @@ def test_all_layers_pcc():
                 dtype=ttnn.bfloat16,  # Use bfloat16 for weights
             )
 
-            hidden_ttnn = ttnn.from_torch(
-                ttnn_hidden.unsqueeze(0),
-                device=device,
-                dtype=ttnn.bfloat16,  # Use bfloat16 for activations
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if is_mesh:
+                hidden_ttnn = ttnn.from_torch(
+                    ttnn_hidden.unsqueeze(0),
+                    device=device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+            else:
+                hidden_ttnn = ttnn.from_torch(
+                    ttnn_hidden.unsqueeze(0),
+                    device=device,
+                    dtype=ttnn.bfloat16,  # Use bfloat16 for activations
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
             ttnn_out, _ = ttnn_block(
                 hidden_ttnn,
@@ -266,7 +318,12 @@ def test_all_layers_pcc():
                 kv_cache=None,
             )
 
-            ttnn_out_torch = ttnn.to_torch(ttnn_out).squeeze(0).float()
+            if is_mesh:
+                ttnn_out_torch = (
+                    ttnn.to_torch(ttnn_out, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0].squeeze(0).float()
+                )
+            else:
+                ttnn_out_torch = ttnn.to_torch(ttnn_out).squeeze(0).float()
 
             # Calculate PCC
             pcc, status = calculate_pcc(ref_out, ttnn_out_torch)
@@ -316,36 +373,66 @@ def test_all_layers_pcc():
             state_dict_prefix="model.transformer.ln_f",
         )
 
-        hidden_ttnn_final = ttnn.from_torch(
-            ttnn_hidden.unsqueeze(0),
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh:
+            hidden_ttnn_final = ttnn.from_torch(
+                ttnn_hidden.unsqueeze(0),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        else:
+            hidden_ttnn_final = ttnn.from_torch(
+                ttnn_hidden.unsqueeze(0),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         ttnn_normed = ttnn_ln_f(hidden_ttnn_final)
-        ttnn_normed_torch = ttnn.to_torch(ttnn_normed).squeeze(0).float()
+        if is_mesh:
+            ttnn_normed_torch = (
+                ttnn.to_torch(ttnn_normed, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0].squeeze(0).float()
+            )
+        else:
+            ttnn_normed_torch = ttnn.to_torch(ttnn_normed).squeeze(0).float()
 
         pcc, _ = calculate_pcc(ref_normed, ttnn_normed_torch)
         logger.info(f"ln_f PCC: {pcc:.6f}")
 
         # TTNN lm_head
         lm_head_t = torch.transpose(lm_head, -2, -1).unsqueeze(0).unsqueeze(0)
-        lm_head_ttnn = ttnn.from_torch(
-            lm_head_t,
-            device=device,
-            dtype=ttnn.bfloat16,  # Use bfloat16
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if is_mesh:
+            lm_head_ttnn = ttnn.from_torch(
+                lm_head_t,
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        else:
+            lm_head_ttnn = ttnn.from_torch(
+                lm_head_t,
+                device=device,
+                dtype=ttnn.bfloat16,  # Use bfloat16
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         ttnn_logits = ttnn.linear(
             ttnn_normed,
             lm_head_ttnn,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        ttnn_logits_torch = ttnn.to_torch(ttnn_logits).squeeze().float()
+        if is_mesh:
+            ttnn_logits_torch = (
+                ttnn.to_torch(ttnn_logits, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0].squeeze().float()
+            )
+        else:
+            ttnn_logits_torch = ttnn.to_torch(ttnn_logits).squeeze().float()
 
         pcc, _ = calculate_pcc(ref_logits.squeeze(), ttnn_logits_torch)
         logger.info(f"Logits PCC: {pcc:.6f}")
@@ -372,7 +459,7 @@ def test_all_layers_pcc():
             logger.info(f'  {i+1}. "{token_text}" (id={idx.item()}, score={score.item():.2f})')
 
     finally:
-        ttnn.close_device(device)
+        _close_device(device, is_mesh)
 
 
 if __name__ == "__main__":
