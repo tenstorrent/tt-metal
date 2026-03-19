@@ -115,8 +115,8 @@ def test_rm_interleaved_concat_unaligned_int(device, dtype, shapes, dim):
     [
         # HEIGHT-sharded tiled concat along width (dim=3)
         (
-            [[[1, 1, 160, 32], (80, 32)], [[1, 1, 160, 32], (80, 32)]],
-            (80, 64),
+            [[[1, 1, 192, 32], (96, 32)], [[1, 1, 192, 32], (96, 32)]],
+            (96, 64),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             ttnn.ShardStrategy.HEIGHT,
             3,
