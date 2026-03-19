@@ -493,6 +493,21 @@ def test_gpt_oss_demo(
         raise ValueError(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
+    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 1:
+        if max([len(p) for p in real_prompts]) > 32 * 1024:
+            pytest.skip(
+                "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
+            )
+    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 4:
+        if max([len(p) for p in real_prompts]) >= 32 * 1024:
+            pytest.skip(
+                "120b model with mesh_shape (4, 8) and prefill >= 32k is not supported. OOM error gh issue #38728"
+            )
+    if model_args[0].model_name.split("-")[-1] == "20b" and mesh_device.shape[0] == 4:
+        if max([len(p) for p in real_prompts]) > 32 * 1024:
+            pytest.skip(
+                "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
+            )
 
     if long_context_mode:
         # Expand to full batch: 1 real user + (users_per_row - 1) padding users per row
