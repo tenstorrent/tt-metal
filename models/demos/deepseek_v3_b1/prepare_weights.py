@@ -610,14 +610,15 @@ def prepare_moe_layer_weights(
     layer_idx: int,
     *,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
+    move_to_device: bool = False,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True)
-    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True)
+    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
+    shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
     routed = prepare_routed_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts
+        bdw, state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts, move_to_device=move_to_device
     )
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None

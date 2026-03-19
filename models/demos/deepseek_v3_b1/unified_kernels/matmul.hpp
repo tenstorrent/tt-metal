@@ -57,13 +57,18 @@ struct Matmul {
     struct WriterCTArgs {};
 
     // Compute CTArgs (TRISC): out_w (output width in tiles), transpose, fused_activation
-    template <uint32_t out_w_, bool transpose_ = false, uint32_t fused_activation_ = 0>
+    template <
+        uint32_t out_w_,
+        bool transpose_ = false,
+        uint32_t fused_activation_ = 0,
+        bool fused_activation_approx_mode_ = false>
     struct ComputeCTArgs {
         static constexpr uint32_t out_w = out_w_;
         static constexpr bool transpose = transpose_;
         static constexpr FusedActivation fused_activation = static_cast<FusedActivation>(fused_activation_);
         static constexpr bool fuse_sigmoid = fused_activation == FusedActivation::SIGMOID;
         static constexpr bool fuse_silu = fused_activation == FusedActivation::SILU;
+        static constexpr bool fused_activation_approx_mode = fused_activation_approx_mode_;
     };
 
     // ========================================================================
@@ -137,9 +142,9 @@ struct Matmul {
             if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
-                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<true>()));
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid_init<CTArgs::fused_activation_approx_mode>()));
                 } else {
-                    PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<true>()));
+                    PACK((ckernel::llk_math_eltwise_unary_sfpu_silu_init<CTArgs::fused_activation_approx_mode>()));
                 }
 
                 // Per-tile: matmul -> activation on PACK -> pack
@@ -159,9 +164,12 @@ struct Matmul {
 
                     // Use 2 iterations for 1x32 tiny tiles
                     if constexpr (CTArgs::fuse_sigmoid) {
-                        PACK((ckernel::llk_math_eltwise_unary_sfpu_sigmoid<true, false, 2>(0, (int)VectorMode::R)));
+                        PACK((ckernel::
+                                  llk_math_eltwise_unary_sfpu_sigmoid<CTArgs::fused_activation_approx_mode, false, 2>(
+                                      0, (int)VectorMode::R)));
                     } else {
-                        PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<true, false, 2>(0, (int)VectorMode::R)));
+                        PACK((ckernel::llk_math_eltwise_unary_sfpu_silu<CTArgs::fused_activation_approx_mode, false, 2>(
+                            0, (int)VectorMode::R)));
                     }
 
                     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

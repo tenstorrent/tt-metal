@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     create_routed_expert_tensors,
     create_shared_expert_tensors,
 )
+from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
 def create_fabric_router_config(max_payload_size):
@@ -119,7 +120,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     # ── Core setup for reduce aggregation ──
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     # Aggregator is the first worker core (shard_idx == 0)
@@ -495,7 +496,7 @@ def test_persistent_moe_15_stages(
 
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     aggregator_core = shard_cores_list[0]
@@ -875,7 +876,7 @@ def test_persistent_moe_multi_token(
 
     stage_entry_device = None
     gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+    gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     aggregator_core = shard_cores_list[0]
