@@ -33,7 +33,7 @@ FORCE_INLINE void add_tiles_init_in1_compressed(uint32_t cb_in0) {
     }));
     MATH(({
         const ckernel::TensorShape ts = get_operand_tensor_shape(get_operand_id(cb_in0));
-        _llk_math_eltwise_binary_init_<ELWADD, NONE, MATH_FIDELITY>(ts, 0 /*acc_to_dest*/);
+        _llk_math_eltwise_binary_init_<ELWADD, NONE, MathFidelity::LoFi>(ts, 0 /*acc_to_dest*/);
     }));
 }
 
@@ -60,7 +60,7 @@ FORCE_INLINE void add_tiles_in1_compressed(uint32_t cb_in0, uint32_t addr_a, uin
             NONE,
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            MATH_FIDELITY,
+            MathFidelity::LoFi,
             EltwiseBinaryReuseDestType::NONE>(ts, dst_index, true);
     }));
 }

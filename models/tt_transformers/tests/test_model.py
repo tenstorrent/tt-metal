@@ -8,13 +8,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_with_llk_assert
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39475")
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
