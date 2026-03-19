@@ -175,6 +175,9 @@ def _deepseek_kvdbg_enabled() -> bool:
 
 
 def _launch_merged_descriptors(op_descriptors):
+    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
+    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
+    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
     if not op_descriptors:
         raise ValueError("op_descriptors cannot be empty")
 
@@ -1076,8 +1079,8 @@ class MLA1D(AbstractModule):
         )  # 1,4,128,576, height sharded 8x8 [32,576]
 
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        # Q and KV nope use non-overlapping core grids so they can run parallel norms
-        # via merged descriptor dispatch on non-overlapping core ranges.
+        # Q and KV nope use non-overlapping core grids, but keep this decode path
+        # on the pre-40275 merged-descriptor dispatch as a temporary workaround.
         num_q_cores = 16
         num_kv_nope_cores = 16
         shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
@@ -1883,6 +1886,9 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
+        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
+        # avoid the fusion cache/rebind path here until
+        # Parallel(...).build().launch() is fixed for this decode flow.
         results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
         tt_q = results[0][0]
         tt_kv_nope = results[1][0]
