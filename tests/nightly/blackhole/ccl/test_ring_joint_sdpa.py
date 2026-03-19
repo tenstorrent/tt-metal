@@ -286,9 +286,14 @@ def run_ring_joint_sdpa(
     num_devices = detect_devices_without_opening()
     sp_size, tp_size, arch_type = calculate_mesh_config(num_devices)
 
+    # Ring topology requires >2 devices; fall back to linear for <=2
+    use_ring = sp_size > 2
+    fabric_config = ttnn.FabricConfig.FABRIC_1D_RING if use_ring else ttnn.FabricConfig.FABRIC_1D
+    topology = Topology.Ring if use_ring else Topology.Linear
+
     # Configure fabric for ring joint attention
     ttnn.set_fabric_config(
-        ttnn.FabricConfig.FABRIC_1D_RING,
+        fabric_config,
         ttnn.FabricReliabilityMode.STRICT_INIT,
         None,
         ttnn.FabricTensixConfig.DISABLED,
@@ -487,7 +492,7 @@ def run_ring_joint_sdpa(
                 num_links=num_links,
                 cluster_axis=sp_axis,
                 mesh_device=mesh_device,
-                topology=Topology.Ring,
+                topology=topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
                 use_column_major_ccl=True,
