@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -167,9 +166,6 @@ def test_eltwise_binary(
     tile_dimensions,
     workers_tensix_coordinates,
 ):
-
-    if formats.output_format == DataFormat.Bfp4_b:
-        pytest.skip("Bfp4_b is not supported as output format for eltwise binary")
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
@@ -341,7 +337,19 @@ def test_eltwise_binary(
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    formats=lambda dest_acc: _get_valid_formats_include_bfp4_b(dest_acc),
+    formats=[
+        fmt
+        for fmt in input_output_formats(
+            [
+                DataFormat.Bfp4_b,
+                DataFormat.Float16_b,
+                DataFormat.Bfp8_b,
+                DataFormat.Float32,
+            ]
+        )
+        if fmt.input_format == DataFormat.Bfp4_b
+        # or fmt.output_format == DataFormat.Bfp4_b
+    ],
     broadcast_type=[
         BroadcastType.None_,
         BroadcastType.Row,
@@ -368,15 +376,6 @@ def test_eltwise_binary_bfp4_b(
     tile_dimensions,
     workers_tensix_coordinates,
 ):
-
-    if (
-        formats.input_format != DataFormat.Bfp4_b
-        and formats.input_format_B != DataFormat.Bfp4_b
-    ):
-        pytest.skip("Not a Bfp4_b test")
-
-    if formats.output_format == DataFormat.Bfp4_b:
-        pytest.skip("Bfp4_b is not supported as output format for eltwise binary")
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim

@@ -183,14 +183,19 @@ def test_unary_datacopy(
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-            DataFormat.Bfp4_b,
-        ]
-    ),
+    formats=[
+        fmt
+        for fmt in input_output_formats(
+            [
+                DataFormat.Bfp4_b,
+                DataFormat.Float16_b,
+                DataFormat.Bfp8_b,
+                DataFormat.Float32,
+            ]
+        )
+        if fmt.input_format == DataFormat.Bfp4_b
+        or fmt.output_format == DataFormat.Bfp4_b
+    ],
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
     tilize=Tilize.No,
@@ -199,12 +204,6 @@ def test_unary_datacopy(
 def test_unary_datacopy_bfp4_b(
     formats, dest_acc, num_faces, tilize, input_dimensions, workers_tensix_coordinates
 ):
-
-    if (
-        formats.input_format != DataFormat.Bfp4_b
-        and formats.output_format != DataFormat.Bfp4_b
-    ):
-        pytest.skip("Not a Bfp4_b test")
 
     # skip if Fp8_e4m3 for wormhole
     if get_chip_architecture() == ChipArchitecture.WORMHOLE and (

@@ -267,8 +267,6 @@ FLOAT_TEST_PARAMS_BFP4_B = list(
 )
 
 
-# No BH testing done for now
-# @skip_for_blackhole
 # Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
 @skip_for_coverage
 @pytest.mark.nightly
