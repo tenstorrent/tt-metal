@@ -77,36 +77,6 @@ Tensor invoke_binary_ng(
 
 }  // namespace detail
 
-// Binary public API uses the same two-layer pattern as ternary: free function -> implementation
-// (detail::invoke_binary_ng). Related structs remain for internal
-// call-sites (composite ops, inplace, nanobind, etc.) and may be migrated away in a follow-up.
-
-template <operations::binary::BinaryOpType Op>
-Tensor binary_op(
-    const Tensor& lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& output_dtype = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt,
-    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
-    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-template <operations::binary::BinaryOpType Op>
-Tensor binary_op(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& output_dtype = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt,
-    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
-    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
 Tensor add(
     const Tensor& lhs,
     const Tensor& rhs,

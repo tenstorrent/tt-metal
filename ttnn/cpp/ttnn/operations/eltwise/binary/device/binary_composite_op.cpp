@@ -1413,7 +1413,7 @@ Tensor bias_gelu(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy,
+    const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::detail::invoke_binary_ng(
         input_tensor_a_arg,
@@ -1439,7 +1439,7 @@ Tensor bias_gelu(
     tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
-    std::optional<bool> /*use_legacy*/,
+    const std::optional<bool>& /*use_legacy*/,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
     return ttnn::gelu(
         ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),

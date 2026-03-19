@@ -50,7 +50,7 @@ constexpr auto BINARY_BROADCAST_DOC = R"doc(
         L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.
 )doc";
 
-// Function pointer types for binary_op overload disambiguation
+// Function pointer types for binary operation overload disambiguation
 using BinaryOpTensorScalarFn = Tensor (*)(
     const Tensor&,
     float,
@@ -1667,8 +1667,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::ADD>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::ADD>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::add),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::add),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
@@ -1684,8 +1684,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::SUB>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::SUB>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::subtract),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::subtract),
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
@@ -1701,8 +1701,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::EQ>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::EQ>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::eq),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::eq),
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
@@ -1710,8 +1710,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::NE>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::NE>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ne),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ne),
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
@@ -1719,8 +1719,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LT>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LT>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::lt),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::lt),
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
@@ -1729,8 +1729,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LE>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LE>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::le),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::le),
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
@@ -1739,8 +1739,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::GT>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::GT>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::gt),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::gt),
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
@@ -1749,8 +1749,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::GE>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::GE>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ge),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ge),
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
@@ -1759,8 +1759,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_AND>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_AND>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_and),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_and),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16)doc",
         "INT32 for tensor-scalar is supported only when use_legacy= False.");
@@ -1769,8 +1769,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_OR>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_OR>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_or),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_or),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
@@ -1778,8 +1778,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LDEXP>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LDEXP>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ldexp),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ldexp),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
@@ -1787,8 +1787,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LOGADDEXP>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LOGADDEXP>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logaddexp),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logaddexp),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
@@ -1796,8 +1796,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LOGADDEXP2>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LOGADDEXP2>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logaddexp2),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logaddexp2),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
@@ -1805,8 +1805,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::SQUARED_DIFFERENCE>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::SQUARED_DIFFERENCE>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::squared_difference),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::squared_difference),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
@@ -1814,8 +1814,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::BIAS_GELU>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::BIAS_GELU>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::bias_gelu),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::bias_gelu),
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
@@ -1848,8 +1848,8 @@ void py_module(nb::module_& mod) {
         R"doc(Computes xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
         )doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::XLOGY>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::XLOGY>));
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::xlogy),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::xlogy));
 
     detail::bind_binary_unary_operation<"rsub">(
         mod,
@@ -1918,8 +1918,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_RIGHT_SHIFT>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_RIGHT_SHIFT>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_right_shift),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_right_shift),
         ". ",
         R"doc(INT32, UINT32)doc");
 
@@ -1957,8 +1957,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
-        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_XOR>),
-        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::binary_op<BinaryOpType::LOGICAL_XOR>),
+        static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::logical_xor),
+        static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::logical_xor),
         ".",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 

@@ -99,20 +99,20 @@ Tensor bias_gelu(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-    std::optional<bool> use_legacy = std::nullopt,
+    const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor bias_gelu(
     const ttnn::Tensor& input_tensor_a,
     float bias,
-    const std::optional<const DataType>& /*dtype*/ = std::nullopt,
+    const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> /*post_activations*/ = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> /*lhs_activations*/ = {},
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> /*rhs_activations*/ = {},
-    std::optional<bool> /*use_legacy*/ = std::nullopt,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/ = std::nullopt);
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& use_legacy = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor bias_gelu(
     const Tensor& input_tensor_a,
