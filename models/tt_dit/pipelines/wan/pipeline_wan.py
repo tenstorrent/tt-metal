@@ -302,6 +302,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology=None,
         is_fsdp=None,
         pipeline_class=None,
+        vae_use_cache=None,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -386,7 +387,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
-            vae_use_cache=config.get("vae_use_cache", True),
+            vae_use_cache=vae_use_cache if vae_use_cache is not None else config.get("vae_use_cache", True),
         )
 
     def _prepare_text_encoder(self):
