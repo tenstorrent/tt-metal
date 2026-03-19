@@ -25,8 +25,8 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
-    create_single_galaxy_pipeline_builder,
     create_single_galaxy_pipeline_configuration,
+    create_single_galaxy_submesh_pipeline_builder,
 )
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_PAGE_SIZE_BYTES,
@@ -1949,7 +1949,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 8)],
+    [(8, 4)],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -1977,15 +1977,14 @@ def test_pipline_block_4stage_galaxy_1_iteration_with_submeshes(mesh_device, use
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
     torch_expected_idx = torch_expected_indices[0]
 
-    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 4))
-    builder = create_single_galaxy_pipeline_builder(
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(4, 2))
+    builder = create_single_galaxy_submesh_pipeline_builder(
         _SyntheticWeightProvider(),
         lm_head_fp32_dest_acc_en=use_fp32,
         lm_head_persistent_mode=False,
     )
     pipelines = builder.create_pipeline_stages(submeshes)
     print(f"Pipeline built")
-    """
     try:
         for pipeline in pipelines:
             print(f"Pipeline my_stage_idx: {pipeline.my_stage_idx}")
@@ -2017,7 +2016,6 @@ def test_pipline_block_4stage_galaxy_1_iteration_with_submeshes(mesh_device, use
     finally:
         for pipeline in pipelines:
             pipeline.terminate()
-    """
 
 
 @pytest.mark.skipif(

@@ -44,6 +44,7 @@ class PipelineBlock:
         embedding_tensor=None,
         pipeline_config=None,
         stage_idx=None,
+        my_local_submeshes={},
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -52,14 +53,16 @@ class PipelineBlock:
             downstream_d2d_socket_fifo_size >= downstream_d2d_socket_page_size
         ), "Downstream D2D Socket FIFO Size must be greater than or equal to downstream D2D Socket Page Size"
 
+        # Some tests do not pass in pipeline_config, so we generate it here
+        # stage.py stages should pass in pipeline_config
         if pipeline_config is None:
             pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
 
         self.my_mesh_id = mesh_device.get_system_mesh_id()
         num_procs = int(ttnn.distributed_context_get_size())
 
-        # Using num_procs > 1 as a proxy for multi-process pipeline, aka one 4x2 MeshDevice pipeline per process
-        if num_procs > 1:
+        # If my_local_submeshes is empty, we are in a multi-process pipeline, aka one 4x2 MeshDevice pipeline per process
+        if not my_local_submeshes:
             assert len(pipeline_config) == num_procs + 1
             self.stage_idx = self.my_mesh_id
             self.last_stage_idx = num_procs
@@ -68,6 +71,20 @@ class PipelineBlock:
             self.last_stage_idx = len(pipeline_config) - 1  # last stage is the loopback if it's enabled
 
         self.is_pipeline_start = self.stage_idx == 0
+
+        if (self.stage_idx - 1) in my_local_submeshes:
+            print("Using upstream mesh device: ", my_local_submeshes[self.stage_idx - 1])
+            upstream_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[self.stage_idx - 1])
+        else:
+            print("Creating upstream mesh wrapper for mesh id: ", pipeline_config[self.stage_idx - 1].mesh_id)
+            upstream_mesh_wrapper = MeshWrapper(mesh_id=pipeline_config[self.stage_idx - 1].mesh_id)
+
+        if (self.stage_idx + 1) in my_local_submeshes:
+            print("Using downstream mesh device: ", my_local_submeshes[self.stage_idx + 1])
+            downstream_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[self.stage_idx + 1])
+        else:
+            print("Creating downstream mesh wrapper for mesh id: ", pipeline_config[self.stage_idx + 1].mesh_id)
+            downstream_mesh_wrapper = MeshWrapper(mesh_id=pipeline_config[self.stage_idx + 1].mesh_id)
 
         if self.is_pipeline_start:
             assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
@@ -133,8 +150,13 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord),
                 upstream_socket=self.host_io.get_downstream_socket(),
                 sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(mesh_id=pipeline_config[self.stage_idx + 1].mesh_id),
+                receiver_mesh=downstream_mesh_wrapper,
             )
+
+            if (self.last_stage_idx - 1) in my_local_submeshes:
+                loopback_sender_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[self.last_stage_idx - 1])
+            else:
+                loopback_sender_mesh_wrapper = MeshWrapper(mesh_id=pipeline_config[self.last_stage_idx - 1].mesh_id)
 
             self.entry_socket_interface = SocketInterface(
                 upstream_d2d_socket_page_size,  # Entry node page size needs to be configurable
@@ -143,7 +165,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx - 1].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx].entry_node_coord, pipeline_core_coord),
                 downstream_socket=self.host_io.get_upstream_socket(),
-                sender_mesh=MeshWrapper(mesh_id=pipeline_config[self.last_stage_idx - 1].mesh_id),
+                sender_mesh=loopback_sender_mesh_wrapper,
                 receiver_mesh=MeshWrapper(mesh_device),
             )
 
@@ -157,7 +179,7 @@ class PipelineBlock:
                 downstream_core_coord=entry_node_downstream
                 if entry_node_downstream
                 else ttnn.MeshCoreCoord(pipeline_config[self.stage_idx].exit_node_coord, pipeline_core_coord),
-                sender_mesh=MeshWrapper(mesh_id=pipeline_config[self.stage_idx - 1].mesh_id),
+                sender_mesh=upstream_mesh_wrapper,
                 receiver_mesh=MeshWrapper(mesh_device),
             )
             self.exit_socket_interface = SocketInterface(
@@ -169,7 +191,7 @@ class PipelineBlock:
                 upstream_core_coord=exit_node_upstream,
                 upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
                 sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(mesh_id=pipeline_config[self.stage_idx + 1].mesh_id),
+                receiver_mesh=downstream_mesh_wrapper,
             )
 
     def run(self):

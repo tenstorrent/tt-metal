@@ -204,7 +204,7 @@ class PipelineConfiguration:
         """Create a Pipeline for this process's stage (determined by mesh_id)."""
         my_stage_idx = mesh_device.get_system_mesh_id()
         stage = self._stage_factories[my_stage_idx](mesh_device)
-        return Pipeline(mesh_device, stage)
+        return Pipeline(mesh_device, stage, stage_idx=my_stage_idx)
 
 
 class Pipeline:
@@ -216,6 +216,7 @@ class Pipeline:
         stage_kind: StageKind,
         pipeline_config: list | None = None,
         stage_idx: int | None = None,
+        my_local_submeshes: dict[int, ttnn.MeshDevice] = {},
     ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
@@ -230,6 +231,7 @@ class Pipeline:
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
             my_stage_idx=self._my_stage_idx,
+            my_local_submeshes=my_local_submeshes,
         )
         self._pipeline_block: PipelineBlock | None = None
 
@@ -261,10 +263,15 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+        print(f"Setting up and running pipeline stage {self._my_stage_idx}")
         self.configure_block()
+        print(f"Configured block for pipeline stage {self._my_stage_idx}")
         self.setup()
+        print(f"Setup for pipeline stage {self._my_stage_idx}")
         self.start_pipeline()
+        print(f"Started pipeline for pipeline stage {self._my_stage_idx}")
         self.start_compute()
+        print(f"Started compute for pipeline stage {self._my_stage_idx}")
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         if self._pipeline_block is None:
@@ -285,7 +292,7 @@ class Pipeline:
             self._pipeline_block.terminate()
 
 
-def create_single_galaxy_pipeline_builder(
+def create_single_galaxy_submesh_pipeline_builder(
     weight_provider: WeightProvider,
     *,
     lm_head_fp32_dest_acc_en: bool = True,
@@ -301,7 +308,6 @@ def create_single_galaxy_pipeline_builder(
             weights=weight_provider.load_lm_head(submesh),
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
-            submesh=submesh,
         )
 
     # opening a 2x4 submesh on 4x8 big mesh, layout is
@@ -310,11 +316,25 @@ def create_single_galaxy_pipeline_builder(
     return PipelineBuilder(
         {
             0: stage_0,
-            2: stage_1,
+            1: stage_1,
+            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
             3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
-            1: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
         }
     )
+
+
+class PipelineSocketConfig:
+    def __init__(
+        self,
+        mesh_id: int,
+        submesh_idx: int,
+        entry_node_coord: ttnn.MeshCoordinate,
+        exit_node_coord: ttnn.MeshCoordinate,
+    ) -> None:
+        self.mesh_id = mesh_id
+        self.entry_node_coord = entry_node_coord
+        self.exit_node_coord = exit_node_coord
+        self.submesh_idx = submesh_idx
 
 
 class PipelineBuilder:
@@ -330,13 +350,54 @@ class PipelineBuilder:
     def num_stages(self) -> int:
         return len(self._stage_factories)
 
-    # Build a semi hard coded pipeline for testing now
+    def generate_pipeline_socket_configs(self, submeshes: list[ttnn.MeshDevice]) -> list[PipelineSocketConfig]:
+        if len(submeshes) == 4:
+            # 4 stages + 1 wrap-around entry (stage 0 receives from last stage)
+            # Submesh layout on 4x8 parent mesh (4x2 submeshes):
+            #   submesh 0 (mesh_id=0)  |  submesh 1 (mesh_id=0)
+            #   submesh 2 (mesh_id=0)  |  submesh 3 (mesh_id=0)
+            return [
+                PipelineSocketConfig(0, 0, ttnn.MeshCoordinate(1, 0), ttnn.MeshCoordinate(1, 1)),  # stage 0
+                PipelineSocketConfig(0, 1, ttnn.MeshCoordinate(1, 0), ttnn.MeshCoordinate(3, 1)),  # stage 1
+                PipelineSocketConfig(0, 3, ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(1, 0)),  # stage 2
+                PipelineSocketConfig(0, 2, ttnn.MeshCoordinate(1, 1), ttnn.MeshCoordinate(0, 0)),  # stage 3
+                PipelineSocketConfig(0, 0, ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(3, 0)),  # wrap-around
+            ]
+
+    def validate_pipeline_socket_configs(
+        self, submeshes: list[ttnn.MeshDevice], pipeline_socket_configs: list[PipelineSocketConfig]
+    ) -> None:
+        for stage_idx, pipeline_socket_config in enumerate(pipeline_socket_configs):
+            next_stage_idx = (stage_idx + 1) % len(pipeline_socket_configs)
+            next_pipeline_socket_config = pipeline_socket_configs[next_stage_idx]
+            submesh = submeshes[pipeline_socket_config.submesh_idx]
+            next_submesh = submeshes[next_pipeline_socket_config.submesh_idx]
+            exit_node_fabric_node_id = submesh.get_fabric_node_id(pipeline_socket_config.exit_node_coord)
+            entry_node_fabric_node_id = next_submesh.get_fabric_node_id(next_pipeline_socket_config.entry_node_coord)
+            assert ttnn.are_fabric_neighbours(
+                exit_node_fabric_node_id, entry_node_fabric_node_id
+            ), f"Exit node {pipeline_socket_config.exit_node_coord} and entry node {next_pipeline_socket_config.entry_node_coord} are not neighbours in submesh {pipeline_socket_config.submesh_idx} and {next_pipeline_socket_config.submesh_idx}"
+
     def create_pipeline_stages(self, submeshes: list[ttnn.MeshDevice]) -> list[Pipeline]:
-        """Create a Pipeline for this process's stage ()."""
+        """Create a Pipeline for each stage, calling each factory with its submesh."""
         assert len(submeshes) == self.num_stages, "Number of submeshes must match number of stages"
+        pipeline_configs = self.generate_pipeline_socket_configs(submeshes)
         pipeline_stages = []
-        pipeline_config = []
-        for submesh_idx, stage in self._stage_factories.items():
-            pipeline_stage = Pipeline(submeshes[submesh_idx], stage, pipeline_configs[submesh_idx])
+        my_local_submeshes = {}
+        for stage_idx, stage_factory in self._stage_factories.items():
+            submesh_idx = pipeline_configs[stage_idx].submesh_idx
+            my_local_submeshes[stage_idx] = submeshes[submesh_idx]
+
+        for stage_idx, stage_factory in self._stage_factories.items():
+            submesh_idx = pipeline_configs[stage_idx].submesh_idx
+            stage_kind = stage_factory(submeshes[submesh_idx])
+            pipeline_stage = Pipeline(
+                submeshes[submesh_idx],
+                stage_kind,
+                pipeline_config=pipeline_configs,
+                stage_idx=stage_idx,
+                my_local_submeshes=my_local_submeshes,
+            )
             pipeline_stages.append(pipeline_stage)
+
         return pipeline_stages

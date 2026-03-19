@@ -41,6 +41,7 @@ class StageContext:
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
     my_stage_idx: int
+    my_local_submeshes: dict[int, ttnn.MeshDevice]
 
 
 class StageKind(ABC):
@@ -65,6 +66,7 @@ class EmbeddingStage(StageKind):
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
+        print(f"EmbeddingStage creating pipeline block for mesh device: {mesh_device}")
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -77,6 +79,8 @@ class EmbeddingStage(StageKind):
             d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
             pipeline_config=ctx.pipeline_config,
+            stage_idx=ctx.my_stage_idx,
+            my_local_submeshes=ctx.my_local_submeshes,
         )
 
 
@@ -208,6 +212,8 @@ class LMHeadStage(StageKind):
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
             pipeline_config=ctx.pipeline_config,
+            stage_idx=ctx.my_stage_idx,
+            my_local_submeshes=ctx.my_local_submeshes,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
