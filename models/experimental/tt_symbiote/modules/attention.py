@@ -2985,6 +2985,23 @@ def _gated_attention_apply_rotary_ttnn(q, k, cos, sin):
     return q_embed, k_embed
 
 
+def _gated_attention_apply_rotary_q_only_ttnn(q, cos, sin):
+    """Apply RoPE to query only (when key comes from cache with RoPE already applied)."""
+    cos = ttnn.unsqueeze(cos, 1)
+    sin = ttnn.unsqueeze(sin, 1)
+    rotary_dim = cos.shape[-1]
+    full_dim = q.shape[-1]
+    q_rot = q[..., :rotary_dim]
+    q_embed = ttnn.add(
+        ttnn.multiply(q_rot, cos),
+        ttnn.multiply(_gated_attention_rotate_half_ttnn(q_rot), sin),
+    )
+    if rotary_dim < full_dim:
+        q_pass = q[..., rotary_dim:]
+        q_embed = ttnn.concat([q_embed, q_pass], dim=-1)
+    return q_embed
+
+
 def _gated_attention_rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
     x_sq = ttnn.multiply(x, x)
     variance = ttnn.mean(x_sq, dim=-1, keepdim=True)
@@ -3005,6 +3022,24 @@ def _gated_attention_sdpa_config(device, seq_len):
     )
 
 
+def _gated_attention_sdpa_decode_config(device, kv_seq_len, key_states=None):
+    """SDPA program config for decode: k_chunk_size must divide K seq len and be multiple of 32."""
+    grid_size = device.compute_with_storage_grid_size()
+    # K may be padded to multiple of 32; decode op requires k_shape[2] % k_chunk_size == 0 and k_chunk_size % 32 == 0
+    if key_states is not None:
+        k_seq = key_states.shape[2]
+    else:
+        k_seq = ((kv_seq_len + 31) // 32) * 32
+    # Use 64 when K seq is divisible by 64, else 32 (e.g. k_seq=96 -> 32, k_seq=64 -> 64)
+    k_chunk = 64 if k_seq % 64 == 0 else 32
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=64,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+
+
 def gated_attention_forward_ttnn(
     hidden_states,
     q_proj_weight,
@@ -3020,7 +3055,11 @@ def gated_attention_forward_ttnn(
     head_dim,
     device,
     norm_eps=1e-6,
+    key_states=None,
+    value_states=None,
 ):
+    """Forward with optional cached key/value. When key_states, value_states are provided,
+    use them (full sequence from cache); otherwise compute from hidden_states."""
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
     scaling = head_dim**-0.5
@@ -3030,28 +3069,57 @@ def gated_attention_forward_ttnn(
     gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
     query_states = _gated_attention_rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
     query_states = ttnn.transpose(query_states, 1, 2)
-    key_states = ttnn.linear(hidden_states, k_proj_weight)
-    key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
-    key_states = _gated_attention_rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
-    key_states = ttnn.transpose(key_states, 1, 2)
-    value_states = ttnn.linear(hidden_states, v_proj_weight)
-    value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
-    value_states = ttnn.transpose(value_states, 1, 2)
-    query_states, key_states = _gated_attention_apply_rotary_ttnn(query_states, key_states, cos, sin)
-    attn_output = ttnn.transformer.scaled_dot_product_attention(
-        query_states,
-        key_states,
-        value_states,
-        is_causal=True,
-        scale=scaling,
-        program_config=_gated_attention_sdpa_config(device, T),
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        ),
-    )
+    use_cached_kv = key_states is not None and value_states is not None
+    if not use_cached_kv:
+        key_states = ttnn.linear(hidden_states, k_proj_weight)
+        key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
+        key_states = _gated_attention_rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+        key_states = ttnn.transpose(key_states, 1, 2)
+        value_states = ttnn.linear(hidden_states, v_proj_weight)
+        value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
+        value_states = ttnn.transpose(value_states, 1, 2)
+    kv_seq_len = key_states.shape[2]
+    if use_cached_kv:
+        query_states = _gated_attention_apply_rotary_q_only_ttnn(query_states, cos, sin)
+    else:
+        query_states, key_states = _gated_attention_apply_rotary_ttnn(query_states, key_states, cos, sin)
+
+    # Decode (T==1 with cached KV): use SDPA decode op; prefill uses standard SDPA (requires Sq == Sk).
+    if use_cached_kv and T == 1:
+        # Decode API expects Q [1, b, nh, dh]; we have [B, nh, 1, dh] -> permute to [1, B, nh, dh]
+        query_decode = ttnn.permute(query_states, (2, 0, 1, 3))
+        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+            query_decode,
+            key_states,
+            value_states,
+            is_causal=True,
+            scale=scaling,
+            cur_pos=[kv_seq_len - 1],
+            program_config=_gated_attention_sdpa_decode_config(device, kv_seq_len, key_states),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+        # Decode returns [1, b, nh, dh]; transpose to [B, nh, T, head_dim]
+        attn_output = ttnn.permute(attn_output, (1, 2, 0, 3))
+    else:
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            is_causal=True,
+            scale=scaling,
+            program_config=_gated_attention_sdpa_config(device, kv_seq_len),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
     attn_output = ttnn.transpose(attn_output, 1, 2)
     attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
     gate = ttnn.sigmoid(gate)
@@ -3073,6 +3141,7 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         new_attn.head_dim = torch_attn.head_dim
         new_attn.hidden_size = torch_attn.config.hidden_size
         new_attn.norm_eps = torch_attn.config.rms_norm_eps
+        new_attn.layer_idx = getattr(torch_attn, "layer_idx", None)
         return new_attn
 
     def preprocess_weights_impl(self):
@@ -3150,6 +3219,58 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
                 num_links=1,
                 topology=ttnn.Topology.Linear,
             )
+        key_states_cached = None
+        value_states_cached = None
+        is_mesh = self.device_state is not None and self.device.get_num_devices() > 1
+        if past_key_values is not None and self.layer_idx is not None:
+            B, T, _ = hidden_states.shape
+            key_states_new = ttnn.linear(hidden_states, self.tt_k_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+            key_states_new = ttnn.reshape(key_states_new, [B, T, self.num_key_value_heads, self.head_dim])
+            key_states_new = _gated_attention_rms_norm_zero_centered_ttnn(
+                key_states_new, self.tt_k_norm, eps=self.norm_eps
+            )
+            key_states_new = ttnn.transpose(key_states_new, 1, 2)
+            value_states_new = ttnn.linear(hidden_states, self.tt_v_proj, memory_config=ttnn.L1_MEMORY_CONFIG)
+            value_states_new = ttnn.reshape(value_states_new, [B, T, self.num_key_value_heads, self.head_dim])
+            value_states_new = ttnn.transpose(value_states_new, 1, 2)
+            key_states_new, _ = _gated_attention_apply_rotary_ttnn(key_states_new, key_states_new, cos, sin)
+
+            # KV are replicated (from all-gathered hidden); use single device copy to avoid
+            # ConcatMesh2dToTensor wrongly concatenating 8 copies -> head_dim 2048 instead of 256
+            def _to_torch_safe(t):
+                if is_mesh:
+                    return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+                return ttnn.to_torch(t)
+
+            k_torch = _to_torch_safe(key_states_new).to(torch.bfloat16)
+            v_torch = _to_torch_safe(value_states_new).to(torch.bfloat16)
+            cache_kwargs = {"cache_position": cache_position}
+            if isinstance(sin, ttnn.Tensor):
+                cache_kwargs["sin"] = _to_torch_safe(sin).to(torch.bfloat16)
+                cache_kwargs["cos"] = _to_torch_safe(cos).to(torch.bfloat16)
+            else:
+                cache_kwargs["sin"] = sin
+                cache_kwargs["cos"] = cos
+            key_states_cached, value_states_cached = past_key_values.update(
+                k_torch, v_torch, self.layer_idx, cache_kwargs
+            )
+            from_torch_kw = {}
+            if is_mesh:
+                from_torch_kw["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.device)
+            key_states_cached = ttnn.from_torch(
+                key_states_cached.to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                **from_torch_kw,
+            )
+            value_states_cached = ttnn.from_torch(
+                value_states_cached.to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                **from_torch_kw,
+            )
         out = gated_attention_forward_ttnn(
             hidden_states,
             self.tt_q_proj,
@@ -3165,6 +3286,8 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
             self.head_dim,
             self.device,
             norm_eps=self.norm_eps,
+            key_states=key_states_cached,
+            value_states=value_states_cached,
         )
         if need_reduce_scatter:
             # Reduce-scatter output to match sharded residual for residual add
