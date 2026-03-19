@@ -51,8 +51,7 @@ void read_tile_col(
     uint32_t block_start_stick,
     uint32_t col_byte_offset,
     uint32_t tile_width_bytes,
-    uint32_t num_rows,
-    uint32_t dbg_j) {
+    uint32_t num_rows) {
     cb_reserve_back(cb, 1);
     uint32_t l1 = get_write_ptr(cb);
 
@@ -66,25 +65,73 @@ void read_tile_col(
     }
     noc_async_read_barrier();
 
-    if (dbg_j == 15) {
-        uint16_t* l1_start = reinterpret_cast<uint16_t*>(get_write_ptr(cb));
-        print_data(l1_start, tile_width_bytes);  //
-    }
+    // if (dbg_j == 15) {
+    //     uint16_t* l1_start = reinterpret_cast<uint16_t*>(get_write_ptr(cb));
+    //     print_data(l1_start, tile_width_bytes);  //
+    // }
 
     cb_push_back(cb, 1);
+}
+
+template <typename Accessor>
+void read_blocks(
+    const Accessor& acc_a,
+    const Accessor& acc_b,
+    tt::CBIndex cb_a,
+    tt::CBIndex cb_b,
+    uint32_t block_start_stick,
+    uint32_t tile_width_bytes,
+    uint32_t num_rows,
+    uint32_t tiles_per_block) {
+    cb_reserve_back(cb_a, tiles_per_block);
+    cb_reserve_back(cb_b, tiles_per_block);
+    uint32_t l1_a = get_write_ptr(cb_a);
+    uint32_t l1_b = get_write_ptr(cb_b);
+
+    // DEBUG: Print address of NoC for k=0
+    DPRINT << "block start stick = " << block_start_stick << ENDL();
+    DPRINT << "num rows = " << num_rows << ENDL();
+
+    for (uint32_t k = 0; k < num_rows; ++k) {
+        // DPRINT << " reading stick " << block_start_stick + k << ENDL();
+        // noc_async_read(acc_a.get_noc_addr(block_start_stick + k), l1_a, tile_width_bytes);
+        // noc_async_read(acc_b.get_noc_addr(block_start_stick + k), l1_b, tile_width_bytes);
+
+        noc_async_read_page(block_start_stick + k, acc_a, l1_a);
+        noc_async_read_page(block_start_stick + k, acc_b, l1_b);
+
+        // if (block_start_stick + k == 33) {
+
+        //     print_data(reinterpret_cast<uint16_t*>(l1_a), 23);
+        //     print_data(reinterpret_cast<uint16_t*>(l1_b), 23);
+        // }
+
+        l1_a += tile_width_bytes;
+        l1_b += tile_width_bytes;
+    }
+    noc_async_read_barrier();
+
+    // if (dbg_j == 15) {
+    //     uint16_t* l1_start = reinterpret_cast<uint16_t*>(get_write_ptr(cb));
+    //     print_data(l1_start, tile_width_bytes);  //
+    // }
+
+    cb_push_back(cb_a, tiles_per_block);
+    cb_push_back(cb_b, tiles_per_block);
 }
 
 void kernel_main() {
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto a_args = TensorAccessorArgs<1>();
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+
     constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(b_args.next_compile_time_args_offset());
     constexpr uint32_t tile_width_bytes = get_compile_time_arg_val(b_args.next_compile_time_args_offset() + 1);
 
     const uint32_t src_a_addr = get_arg_val<uint32_t>(0);
     const uint32_t src_b_addr = get_arg_val<uint32_t>(1);
-    const uint32_t num_sticks = get_arg_val<uint32_t>(2);
-    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);
+    const uint32_t num_sticks = get_arg_val<uint32_t>(2);      // number of sticks ~ number of rows
+    const uint32_t start_stick_id = get_arg_val<uint32_t>(3);  // first row for this core
 
     const auto a = TensorAccessor(a_args, src_a_addr, stick_size);
     const auto b = TensorAccessor(b_args, src_b_addr, stick_size);
@@ -95,30 +142,25 @@ void kernel_main() {
     const uint32_t num_full_blocks = num_sticks / TILE_HEIGHT;
     const uint32_t tail_rows = num_sticks % TILE_HEIGHT;
 
-    uint32_t stick_id = start_stick_id;
+    uint32_t end_stick = start_stick_id + num_sticks;
 
     DPRINT << "tile width bytes = " << tile_width_bytes << ENDL();
     DPRINT << "ntiles/row = " << ntiles_per_row << ENDL();
     DPRINT << "num full blocks = " << num_full_blocks << ENDL();
     DPRINT << "tail rows = " << tail_rows << ENDL();
+    DPRINT << "start stick id = " << start_stick_id << ENDL();
+    DPRINT << "end stick = " << end_stick << ENDL();
 
-    for (uint32_t i = 0; i < num_full_blocks; ++i) {
-        for (uint32_t j = 0; j < ntiles_per_row; ++j) {
-            DPRINT << "j = " << j << ENDL();
-            read_tile_col(a, cb_a, stick_id, j * tile_width_bytes, tile_width_bytes, TILE_HEIGHT, j);
-            read_tile_col(b, cb_b, stick_id, j * tile_width_bytes, tile_width_bytes, TILE_HEIGHT, j);
-        }
-        stick_id += TILE_HEIGHT;
-    }
+    uint32_t stick_id = start_stick_id;
+    for (stick_id = start_stick_id; stick_id < end_stick; stick_id += TILE_HEIGHT) {
+        DPRINT << "[main] Pushing " << ntiles_per_row << " tiles to CB_A and " << ntiles_per_row << " tiles to CB_B"
+               << ENDL();
 
-    // Partial last block: push full tile-sized pages but only read tail_rows
-    // real rows.  The remainder of each page is uninitialized L1.
-    if (tail_rows > 0) {
-        for (uint32_t j = 0; j < ntiles_per_row; ++j) {
-            DPRINT << "j = " << j << ", cb_a" << ENDL();
-            read_tile_col(a, cb_a, stick_id, j * tile_width_bytes, tile_width_bytes, tail_rows, j);
-            DPRINT << "j = " << j << ", cb_b" << ENDL();
-            read_tile_col(b, cb_b, stick_id, j * tile_width_bytes, tile_width_bytes, tail_rows, j);
-        }
+        uint32_t nrows = std::min(TILE_HEIGHT, end_stick - stick_id);
+        DPRINT << "stick id = " << stick_id << ", nrows = " << nrows << ENDL();
+
+        read_blocks(a, b, cb_a, cb_b, stick_id, ntiles_per_row * tile_width_bytes, nrows, ntiles_per_row);
+        DPRINT << "Push done" << ENDL();
     }
+    DPRINT << "Reader completed" << ENDL();
 }

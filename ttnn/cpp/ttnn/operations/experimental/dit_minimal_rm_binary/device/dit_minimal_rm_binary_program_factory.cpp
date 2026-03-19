@@ -66,12 +66,12 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     const uint64_t num_elements_total = input_a.physical_volume();
     const uint32_t total_rows = static_cast<uint32_t>(num_elements_total / last_dim);
     // Ceiling division: a partial last block of < TILE_HEIGHT rows is still one block.
-    const uint32_t total_nblocks = (total_rows + TILE_HEIGHT - 1) / TILE_HEIGHT;
+    // const uint32_t total_nblocks = (total_rows + TILE_HEIGHT - 1) / TILE_HEIGHT;
 
     // Work split on row-blocks ---------------------------------------------
     auto grid = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, blocks_per_cg1, blocks_per_cg2] =
-        split_work_to_cores(grid, total_nblocks);
+    auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_cg1, rows_per_cg2] =
+        split_work_to_cores(grid, total_rows);
 
     Program program{};
 
@@ -99,12 +99,12 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
         CreateCircularBuffer(program, all_cores, cfg);
     };
 
-    make_cb(CB_A_RM, 2 * ntiles_per_row);  // double-buffered
-    make_cb(CB_B_RM, 2 * ntiles_per_row);  // double-buffered
+    make_cb(CB_A_RM, 4 * ntiles_per_row);  // double-buffered
+    make_cb(CB_B_RM, 4 * ntiles_per_row);  // double-buffered
     make_cb(CB_A_TILED, ntiles_per_row);
     make_cb(CB_B_TILED, ntiles_per_row);
     make_cb(CB_OUT_TILED, ntiles_per_row);
-    make_cb(CB_OUT_RM, ntiles_per_row);
+    make_cb(CB_OUT_RM, 4 * ntiles_per_row);
 
     // ----------------------------------------------------------------------
     // Reader compile-time args
@@ -195,19 +195,20 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     // ----------------------------------------------------------------------
     uint32_t start_block = 0;
 
-    auto assign_rt_args = [&](const CoreRangeSet& group, uint32_t nblocks_for_core) {
-        if (nblocks_for_core == 0) {
+    auto assign_rt_args = [&](const CoreRangeSet& group, uint32_t rows_for_core) {
+        if (rows_for_core == 0) {
             return;
         }
         for (const auto& range : group.ranges()) {
             for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
                 for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
                     CoreCoord core{x, y};
-                    const uint32_t start_row = start_block * TILE_HEIGHT;
+
+                    const uint32_t start_row = start_block;
                     // Clamp to the actual number of rows for the last (possibly partial) block.
-                    const uint32_t num_sticks = start_row + nblocks_for_core * TILE_HEIGHT <= total_rows
-                                                    ? nblocks_for_core * TILE_HEIGHT
-                                                    : total_rows - start_row;
+                    const uint32_t num_sticks = rows_for_core;
+                    // std::cout << "{" << x << ", " << y << "} start row = " << start_block << ", num sticks = " <<
+                    // rows_for_core << std::endl;
 
                     SetRuntimeArgs(
                         program,
@@ -217,16 +218,19 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
 
                     SetRuntimeArgs(program, writer_kernel_id, core, {dst_buffer->address(), num_sticks, start_row});
 
-                    SetRuntimeArgs(program, compute_kernel_id, core, {nblocks_for_core, ntiles_per_row});
+                    SetRuntimeArgs(program, compute_kernel_id, core, {num_sticks, ntiles_per_row});
 
-                    start_block += nblocks_for_core;
+                    start_block += rows_for_core;
                 }
             }
         }
     };
 
-    assign_rt_args(core_group_1, blocks_per_cg1);
-    assign_rt_args(core_group_2, blocks_per_cg2);
+    std::cout << "Assigning to core group 1" << std::endl;
+    assign_rt_args(core_group_1, rows_per_cg1);
+
+    std::cout << "Assigning to core group 2" << std::endl;
+    assign_rt_args(core_group_2, rows_per_cg2);
 
     return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, all_cores}};
 }
