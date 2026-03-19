@@ -1,0 +1,2 @@
+{"event":"enrichment_started","details":"Collecting source code snippets for all created and modified files","ts":"2026-03-19T12:55:15+00:00"}
+{"event":"enrichment_completed","details":"Successfully enriched notes with source code snippets for all 3 new files and 11 modified files","ts":"2026-03-19T12:56:09+00:00"}

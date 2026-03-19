@@ -1,0 +1,68 @@
+# golden: layer_norm_rm
+/create-op
+Create a TTNN operation called layer_norm_rm that performs layer normalization on
+row-major interleaved tensors.
+
+The operation normalizes each row of the input tensor through the following steps:
+1. Compute the row-wise mean
+2. Subtract the mean from each element to get centered values
+3. Square the centered values and compute their mean to obtain the variance
+4. Add epsilon (a configurable operation parameter) to the variance for numerical stability
+5. Compute the reciprocal square root of (variance + epsilon)
+6. Multiply centered values by this reciprocal square root to produce standardized output
+
+Optionally, apply learnable affine parameters gamma (scale) and beta (shift).
+Both gamma and beta are optional input tensor in ROW MAJOR memory layout with shape (1, 1, 1, W) where
+W matches the input width. When gamma and/or beta are not provided (None), the
+operation returns purely normalized output.
+
+Import path and function signature must be exactly:
+
+    from ttnn.operations.layer_norm_rm import layer_norm_rm
+
+    layer_norm_rm(
+        input_tensor: ttnn.Tensor,
+        gamma: ttnn.Tensor = None,   # Optional scale, shape (1, 1, 1, W)
+        beta: ttnn.Tensor = None,    # Optional shift, shape (1, 1, 1, W)
+        *,
+        epsilon: float = 1e-5,       # Keyword-only, default 1e-5
+    ) -> ttnn.Tensor
+
+This supports these call patterns:
+  - layer_norm_rm(input)                           # pure normalization
+  - layer_norm_rm(input, gamma)                    # scale only
+  - layer_norm_rm(input, gamma, beta)              # full affine
+  - layer_norm_rm(input, gamma, beta, epsilon=X)   # custom epsilon
+
+The operation must validate inputs on the Python side and raise ValueError or
+RuntimeError for: non-bfloat16 input dtype, tile-layout input, gamma/beta shape
+width mismatch with input width.
+
+The input tensor must be at least 2D, and the output retains identical dimensions.
+Input dtype is bfloat16 with the last two dimensions aligned to tile size (32),
+but the implementation should be dtype-agnostic where possible.
+
+## Layout handling
+
+All tensors (input, gamma, beta) are in ROW_MAJOR_LAYOUT. The kernels must
+handle row-major data natively — do NOT convert to TILE_LAYOUT in the Python
+entry point or use ttnn.to_layout/ttnn.tilize as a workaround before calling
+the kernel. Any necessary tilize/untilize must happen in-kernel. The output
+must also be ROW_MAJOR_LAYOUT.
+
+Execute in FULLY AUTOMATED mode. Make reasonable assumptions autonomously and
+DO NOT prompt for user confirmation or clarification at any point.
+
+Enable FULL BREADCRUMBS LOGGING throughout execution.
+
+## Reporting
+
+When complete, generate a comprehensive markdown report covering:
+- Per-agent summary (analyzer, planner, builder, designer, writer)
+- Links to all log and breadcrumb files
+- TDD pipeline outcomes: stage pass/fail status, retry counts per stage,
+  failure classifications encountered
+- Key decisions, any deviations from the spec, and pain points
+- Infrastructure issues: any device access errors, device hangs, build
+  failures or delays, venv problems, or other environment issues encountered
+- Recommendations for improving the agent pipeline
