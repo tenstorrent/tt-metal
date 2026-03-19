@@ -15,12 +15,16 @@ on:
       enabled-skus:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_e2e_tests.yaml
     steps:
@@ -48,6 +52,16 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+      - name: Filter test matrix by model
+        id: filter-matrix
+        if: inputs.model != 'all'
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$filtered" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
   t3000-e2e-tests:
     needs: load-test-matrix

@@ -9,6 +9,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 
 #include "llama_reduce_scatter_create_heads.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -36,7 +37,7 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
            Returns:
-               ttnn.Tensor: the output tensor.
+               Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: Q, K, and V output tensors.
 
             Example:
 
