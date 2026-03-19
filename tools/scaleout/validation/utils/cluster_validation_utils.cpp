@@ -1629,7 +1629,7 @@ void perform_link_reset(
 
     reset_ethernet_links(physical_system_descriptor, reset_topology);
 
-    log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
+    log_output_rank0("Link reset completed.");
 }
 
 fsd::proto::FactorySystemDescriptor get_factory_system_descriptor(

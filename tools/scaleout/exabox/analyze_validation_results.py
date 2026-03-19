@@ -107,7 +107,7 @@ CATEGORIES = {
     ),
     "recovered_connections": (
         r"Ethernet Links were Retrained",
-        "BLUE",
+        "GREEN",
         "Recovered connections",
     ),
     "missing_global_connection": (
