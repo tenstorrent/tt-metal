@@ -18,6 +18,10 @@ Use this rule when asked to solve a CI issue ticket in `tenstorrent/tt-metal` an
 - This input is optional and must not block command usage.
 - If provided, review the run summary findings and use them as hypotheses, not ground truth.
 
+- One **failing GitHub Actions job or workflow run** URL (for example `.../actions/runs/<run_id>/job/<job_id>` or `.../actions/runs/<run_id>`).
+- Optional; must not block command usage.
+- If provided, **fetch and read that job’s (or run’s) logs before deep implementation work**. Use `gh run view`, `gh api` for job logs, or the Actions UI as needed. Treat log output as **primary evidence** for the real failure (failed steps, stderr, pytest names, paths, exit codes); reconcile with the issue body and auto-triage when they differ.
+
 ## Goal
 
 Produce either:
@@ -71,29 +75,34 @@ Broad/full workflows (for example `(T3K) T3000 e2e tests`) are exceptions and sh
 ## Required End-to-End Flow
 
 1. Resolve and inspect the issue with `gh issue view`.
-2. If an auto-triage run URL is provided:
+2. If a failing job or workflow run URL is provided:
+   - parse run id and job id (if any) from the URL,
+   - pull logs early (`gh run view <run_id> --log-failed`, `gh run view <run_id> --job <job_id> --log`, or equivalent),
+   - extract concrete failure signals to drive the root-cause hypothesis and validation plan.
+3. If an auto-triage run URL is provided:
    - review the triage summary content,
    - extract likely culprit commit(s), suspected files/owners, and failure classification,
-   - cross-check those claims against actual issue/job logs before relying on them.
-3. Create a fix branch from updated `main`.
-4. Reproduce/analyze from issue evidence (logs, failing test path, related files).
-5. Implement smallest credible fix plus targeted regression coverage when possible.
-6. Run local checks that do not require unavailable hardware.
-7. Commit and push branch.
-8. Open a **draft PR** that:
+   - cross-check those claims against the failing-job logs (if provided), issue text, and code before relying on them.
+4. Create a fix branch from updated `main`.
+5. Reproduce/analyze from issue evidence plus any fetched job logs (failing test path, related files).
+6. Implement smallest credible fix plus targeted regression coverage when possible.
+7. Run local checks that do not require unavailable hardware.
+8. Commit and push branch.
+9. Open a **draft PR** that:
    - links the issue (`Closes #<issue>` or `Refs #<issue>` as appropriate),
    - summarizes root cause hypothesis and change,
+   - includes the failing job/run link when one was supplied,
    - notes whether auto-triage was used and whether its hypotheses were confirmed or rejected,
    - states local validation done and hardware limitations (if any),
    - includes a concrete CI test plan.
-9. If required hardware is locally available, ask the explicit local hardware-test permission question from the safety gate and run only targeted local tests if approved.
-10. Ask the explicit workflow permission question from the safety gate.
-11. If approved, trigger workflows using the run selection policy above:
+10. If required hardware is locally available, ask the explicit local hardware-test permission question from the safety gate and run only targeted local tests if approved.
+11. Ask the explicit workflow permission question from the safety gate.
+12. If approved, trigger workflows using the run selection policy above:
    - create/push the `[TO REVERT]` workflow-pruning commit,
    - trigger the official workflow,
    - revert/push immediately after dispatch,
    - patch PR body with run URL plus both temporary/revert commit hashes.
-12. Report status and next expected checkpoint.
+13. Report status and next expected checkpoint.
 
 ## Hardware-Constrained Behavior
 
