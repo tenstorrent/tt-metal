@@ -41,7 +41,7 @@ TOKEN_ID_BYTES: int = 4
 
 ACTIVATION_DIM = 7168
 
-ACIVATION_SIZE_BYTES = ACTIVATION_DIM * 2
+ACTIVATION_SIZE_BYTES = ACTIVATION_DIM * 2
 
 # Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
@@ -107,19 +107,16 @@ class DeepSeekV3:
         self.batch_size = batch_size
         self._prev_rank = ttnn.Rank(prev_rank) if prev_rank is not None else None
         self._next_rank = ttnn.Rank(next_rank) if next_rank is not None else None
-        payload_bytes: int = batch_size * ACTIVATION_SIZE_BYTES
-        logger.debug(f"Payload bytes: {payload_bytes} bytes")
-        self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
 
         self._activation_size_datums: int = ACTIVATION_SIZE_BYTES // TOKEN_ID_BYTES
-        self._token_size_datums: int = TOKEN_ID_BYTES // TOKEN_ID_BYTES
+        self._token_size_datums: int = PCIE_PAGE_ALIGNMENT_BYTES // TOKEN_ID_BYTES
 
         self._position: int = 0
-        self._input_buffer = ttnn.Tensor = create_output_buffer(self._activation_size_datums)
+        self._input_buffer = create_output_buffer(self._activation_size_datums)
         if not next_rank:
-            self._output_buffer = ttnn.Tensor = create_output_buffer(self._token_size_datums)
+            self._output_buffer: ttnn.Tensor = create_output_buffer(self._token_size_datums)
         else:
-            self._output_buffer = ttnn.Tensor = create_output_buffer(self._activation_size_datums)
+            self._output_buffer: ttnn.Tensor = create_output_buffer(self._activation_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor] | None, num_iterations: int | None = None) -> ttnn.Tensor:

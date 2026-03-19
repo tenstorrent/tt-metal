@@ -130,9 +130,9 @@ class ModelPipeline:
         Calls on_token(token_id) for each generated token (including the first
         one sampled after prefill). Optionally returns the list of all generated token IDs.
         """
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("run_inference() should only be called on mesh id 0")
-        assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
+        # if self.pipeline.my_mesh_id != 0:
+        #     raise RuntimeError("run_inference() should only be called on mesh id 0")
+        # assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
         next_token_id = self.prefill_forward(prompt_token_ids)

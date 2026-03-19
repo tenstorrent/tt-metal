@@ -24,7 +24,7 @@ DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
 def _fabric_config_for_num_procs(num_procs: int):
     """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
     if num_procs == 4:
-        return ttnn.FabricConfig.FABRIC_2D
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
     if num_procs == 16:
         return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
     if num_procs == 64:

@@ -45,7 +45,7 @@ def create_single_galaxy_pipeline_configuration(
         print("Creating Embedding Stage")
         return EmbeddingStage(weight_provider.load_embedding(device))
 
-    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
         print("Creating LMHead Stage")
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
@@ -53,12 +53,18 @@ def create_single_galaxy_pipeline_configuration(
             lm_head_persistent_mode=lm_head_persistent_mode,
         )
 
+    def _decoder_stage(layer_id: int):
+        return lambda d: DecoderBlockStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id + 3, device=d),
+            layer_idx=layer_id,
+        )
+
     return PipelineConfiguration(
         {
             0: stage_0,
-            1: stage_1,
-            2: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
-            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            1: _decoder_stage(0),
+            2: _decoder_stage(1),
+            3: stage_3,
         }
     )
 

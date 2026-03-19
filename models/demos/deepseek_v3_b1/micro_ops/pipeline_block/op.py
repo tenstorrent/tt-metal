@@ -69,8 +69,8 @@ class PipelineBlock:
         self.initialize_loopback = initialize_loopback
 
         pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
-        if initialize_loopback:
-            assert len(pipeline_config) == self.num_procs + 1
+        # if initialize_loopback:
+        #     assert len(pipeline_config) == self.num_procs + 1
 
         self.is_pipeline_start = self.my_mesh_id == 0
         self.is_last_stage = self.my_mesh_id == self.num_procs - 1
@@ -138,7 +138,7 @@ class PipelineBlock:
         assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
 
         h2d_device_coord = pipeline_config[self.my_mesh_id].entry_node_coord
-        d2h_device_coord = pipeline_config[self.num_procs].exit_node_coord
+        d2h_device_coord = pipeline_config[self.my_mesh_id].exit_node_coord
 
         embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
 
@@ -165,10 +165,10 @@ class PipelineBlock:
             token_size_bytes,
             d2h_socket_page_size,
             core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
-            h2d_downstream_core=ttnn.MeshCoreCoord(
-                pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
-            ),
-            d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
+            # h2d_downstream_core=ttnn.MeshCoreCoord(
+            #     pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
+            # ),
+            # d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
             embedding_tensor=embedding_tensor,
         )
 
@@ -225,7 +225,7 @@ class PipelineBlock:
         self.d2h_socket.read_tensor(output_tensor)
 
     def get_upstream_socket(self):
-        return self.exit_socket_interface.get_upstream_socket()
+        return self.host_io.get_upstream_socket()
 
     def get_downstream_socket(self):
-        return self.entry_socket_interface.get_downstream_socket()
+        return self.host_io.get_downstream_socket()

@@ -62,6 +62,7 @@ class HostInterface:
         self.d2h_socket = d2h_socket
         self.h2d_page_size = h2d_page_size
         self.d2h_page_size = d2h_page_size
+        print(f"h2d_page_size: {self.h2d_page_size}, d2h_page_size: {self.d2h_page_size}")
         if self.h2d_socket:
             self.h2d_socket.set_page_size(self.h2d_page_size)
         if self.d2h_socket:
@@ -150,6 +151,24 @@ class HostInterface:
                     self.mesh_device, self.mesh_device, upstream_socket_config
                 )
 
+            if (
+                self.h2d_socket
+                and self.d2h_socket
+                and self.h2d_downstream_core is None
+                and self.d2h_upstream_core is None
+            ):
+                direct_socket_connection = ttnn.SocketConnection(
+                    self.h2d_mesh_core_coord,
+                    self.d2h_mesh_core_coord,
+                )
+                direct_socket_config = ttnn.SocketConfig(
+                    [direct_socket_connection],
+                    socket_memory_config,
+                )
+                direct_socket_pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, direct_socket_config)
+                self.downstream_socket_pair = direct_socket_pair
+                self.upstream_socket_pair = direct_socket_pair
+
         self.has_embedding = self.embedding_tensor is not None
         if self.has_embedding:
             # For now, we assume that tokens will be passed in as 64 bytes packets to embedding.
@@ -171,8 +190,9 @@ class HostInterface:
         self.num_bwd_links = 1
 
     def _create_h2d_kernel(self):
+        downstream_core = self.h2d_downstream_core if self.h2d_downstream_core is not None else self.d2h_mesh_core_coord
         use_fabric = (not self.loopback_mode) and (
-            self.h2d_downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
+            downstream_core.device_coord != self.h2d_mesh_core_coord.device_coord
         )
 
         fabric_max_payload_size = 0
@@ -234,9 +254,8 @@ class HostInterface:
         # D2H Sender Core will forward data to upstream core via fabric if:
         # 1. Not in loopback mode (i.e. real workload)
         # 2. Upstream core is not on the same device as the D2H sender core
-        use_fabric = (not self.loopback_mode) and (
-            self.d2h_upstream_core.device_coord != self.d2h_mesh_core_coord.device_coord
-        )
+        upstream_core = self.d2h_upstream_core if self.d2h_upstream_core is not None else self.h2d_mesh_core_coord
+        use_fabric = (not self.loopback_mode) and (upstream_core.device_coord != self.d2h_mesh_core_coord.device_coord)
         d2h_socket_kernel_ct_args = [
             self.d2h_socket.get_config_buffer_address(),
             ttnn.get_global_semaphore_address(self.termination_semaphore),
@@ -322,10 +341,12 @@ class HostInterface:
             h2d_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_mesh_core_coord.device_coord)
         if self.d2h_mesh_core_coord is not None:
             d2h_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_mesh_core_coord.device_coord)
-        if self.h2d_downstream_core is not None:
-            my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.h2d_downstream_core.device_coord)
-        if self.d2h_upstream_core is not None:
-            my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(self.d2h_upstream_core.device_coord)
+        downstream_core = self.h2d_downstream_core if self.h2d_downstream_core is not None else self.d2h_mesh_core_coord
+        upstream_core = self.d2h_upstream_core if self.d2h_upstream_core is not None else self.h2d_mesh_core_coord
+        if downstream_core is not None:
+            my_downstream_fabric_node_id = self.mesh_device.get_fabric_node_id(downstream_core.device_coord)
+        if upstream_core is not None:
+            my_upstream_fabric_node_id = self.mesh_device.get_fabric_node_id(upstream_core.device_coord)
 
         h2d_kernel = None
         h2d_cb_descriptors = None

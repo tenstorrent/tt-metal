@@ -55,6 +55,7 @@ FORCE_INLINE void write_data_to_remote_core_with_ack(
     uint64_t dst_addr,
     uint64_t downstream_bytes_sent_noc_addr,
     uint32_t packet_size) {
+    DPRINT << "Send " << packet_size << " bytes downstream" << ENDL();
     packet_header_addr->to_noc_fused_unicast_write_atomic_inc(
         NocUnicastAtomicIncFusedCommandHeader{dst_addr, downstream_bytes_sent_noc_addr, packet_size, false},
         packet_size);
@@ -196,7 +197,7 @@ void kernel_main() {
             downstream_enc.d2d.downstream_noc_x,
             downstream_enc.d2d.downstream_noc_y,
             sender_socket.downstream_bytes_sent_addr);
-
+        DPRINT << "Downstream  addr: " << sender_socket.downstream_bytes_sent_addr << ENDL();
         downstream_data_addr = get_noc_addr(
             downstream_enc.d2d.downstream_noc_x,
             downstream_enc.d2d.downstream_noc_y,

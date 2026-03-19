@@ -107,6 +107,8 @@ void kernel_main() {
         } else {
             // Wait for pages in receiver socket with timeout and termination checks
             DPRINT << "D2H wait for pages with termination iteration " << iteration << ENDL();
+            DPRINT << "D2H Page size: " << page_size << ENDL();
+            DPRINT << "D2H waiting on address: " << receiver_socket.bytes_sent_addr << ENDL();
             if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
                 break;
             }

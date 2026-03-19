@@ -69,13 +69,13 @@ class EmbeddingStage(StageKind):
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            d2h_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            d2h_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
         )
 

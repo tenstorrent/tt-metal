@@ -104,24 +104,20 @@ std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
             return {
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 4},
+                 .entry_node_asic_location = 1,
+                 .exit_node_asic_location = 2},
                 {.entry_node_tray_id = 1,
                  .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 3,
+                 .exit_node_asic_location = 4},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
                  .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3}};
+                 .exit_node_asic_location = 3},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 2,
+                 .exit_node_asic_location = 1}};
         case 16:
             return {
                 // First Tray

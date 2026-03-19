@@ -149,7 +149,7 @@ class DecoderBlockStage(StageKind):
         sender_coord = pipeline_config[my_mesh_id].entry_node_coord
         reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
 
-        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+        downstream_socket = pipeline_block.get_upstream_socket()
 
         num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
         available_cores = ttnn.num_cores_to_corerangeset(
@@ -340,7 +340,7 @@ class DenseBlockStage(StageKind):
         sender_coord = pipeline_config[my_mesh_id].entry_node_coord
         reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
 
-        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+        downstream_socket = pipeline_block.get_upstream_socket()
 
         num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
         available_cores = ttnn.num_cores_to_corerangeset(
@@ -758,7 +758,7 @@ def test_persistent_moe_multi_token(
 
         downstream_socket = None
         if my_mesh_id >= 1:
-            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+            downstream_socket = pipeline_block.get_upstream_socket()
 
         # ── MoE tensors (MoE stages only) ──
         state_dict = get_reference_model_state_dict(
