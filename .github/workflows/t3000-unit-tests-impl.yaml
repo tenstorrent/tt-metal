@@ -24,7 +24,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.kickoff-filter.outputs.matrix || steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_unit_tests.yaml
     steps:
@@ -59,6 +59,15 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
           filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$filtered" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: "[TO REVERT] Filter matrix to t3k_ttnn_tests for PR 40315 kickoff"
+        id: kickoff-filter
+        env:
+          MATRIX: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+        run: |
+          filtered=$(echo "$MATRIX" | jq -c '[.[] | select(.name == "t3k_ttnn_tests")]')
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
