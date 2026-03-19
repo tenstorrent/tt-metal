@@ -1605,6 +1605,30 @@ class TTNNQwen3MoE(TTNNMoE):
         self.num_dispatch_devices = self.device.shape[0]
         self.num_experts_per_device = even_int_div(self.config.n_routed_experts, self.num_devices)
         residual = x
+        single_device = self.num_devices == 1 or self.device_state is None
+
+        if single_device:
+            # No collectives: tensor already full on one device
+            x_full = x
+            router_logits = self.gate(residual)
+            router_logits = router_logits.to_ttnn if hasattr(router_logits, "to_ttnn") else router_logits
+            topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
+            x = ttnn.unsqueeze(x, 1)
+            routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
+            routed_output = routed_output.to_ttnn if hasattr(routed_output, "to_ttnn") else routed_output
+            shared_output = self.shared_experts(x_full)
+            gate_raw = self.shared_expert_gate(x_full)
+            gate_raw = gate_raw.to_ttnn if hasattr(gate_raw, "to_ttnn") else gate_raw
+            gate_val = ttnn.sigmoid(gate_raw)
+            shared_raw = shared_output.to_ttnn if hasattr(shared_output, "to_ttnn") else shared_output
+            gated_shared = ttnn.mul(gate_val, shared_raw)
+            combined = ttnn.add(routed_output, gated_shared)
+            combined_shape = list(combined.shape)
+            while len(combined_shape) < 4:
+                combined_shape.insert(1, 1)
+            output = ttnn.reshape(combined, combined_shape)
+            output = ttnn.squeeze(output, 1)
+            return output
 
         # 1. All-gather to revert tensor parallelism
         x = ttnn.experimental.all_gather_async(
