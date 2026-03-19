@@ -68,9 +68,7 @@ def _avg_timings(entry: dict) -> dict:
     # Fall back to naive_timings
     naive = entry.get("naive_timings") or {}
     if naive:
-        device_key = (
-            "device_host" if "device_host" in naive else next(iter(naive), None)
-        )
+        device_key = "device_host" if "device_host" in naive else next(iter(naive), None)
         if device_key:
             return naive[device_key].get("average") or {}
 
@@ -178,13 +176,7 @@ def to_dataframe(data: list[dict]) -> "pd.DataFrame":
     """Convert results JSON list to a pandas DataFrame."""
     import pandas as _pd
 
-    rows = [
-        {
-            k: round(v, 2) if isinstance(v, float) else v
-            for k, v in process_entry(e).items()
-        }
-        for e in data
-    ]
+    rows = [{k: round(v, 2) if isinstance(v, float) else v for k, v in process_entry(e).items()} for e in data]
     return _pd.DataFrame(rows, columns=COLUMNS)
 
 
@@ -195,20 +187,12 @@ def main():
     else:
         input_path = Path(sys.argv[1])
 
-    output_path = (
-        input_path.with_suffix(".csv") if len(sys.argv) < 3 else Path(sys.argv[2])
-    )
+    output_path = input_path.with_suffix(".csv") if len(sys.argv) < 3 else Path(sys.argv[2])
 
     with open(input_path) as f:
         data = json.load(f)
 
-    rows = [
-        {
-            k: round(v, 2) if isinstance(v, float) else v
-            for k, v in process_entry(e).items()
-        }
-        for e in data
-    ]
+    rows = [{k: round(v, 2) if isinstance(v, float) else v for k, v in process_entry(e).items()} for e in data]
 
     with open(output_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=COLUMNS)

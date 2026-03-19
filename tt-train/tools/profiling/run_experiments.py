@@ -49,24 +49,12 @@ def _resolve_tt_metal_home() -> Path:
 TT_METAL_HOME = _resolve_tt_metal_home()
 TT_TRAIN_HOME = TT_METAL_HOME / "tt-train"
 BASE_DIR = TT_TRAIN_HOME / "tools" / "profiling"
-NANO_GPT_BIN = (
-    TT_METAL_HOME
-    / "build"
-    / "tt-train"
-    / "sources"
-    / "examples"
-    / "nano_gpt"
-    / "nano_gpt"
-)
+NANO_GPT_BIN = TT_METAL_HOME / "build" / "tt-train" / "sources" / "examples" / "nano_gpt" / "nano_gpt"
 
 DEFAULT_NAME = "llama_8b"
 DEFAULT_MODEL_TEMPLATE = TT_TRAIN_HOME / "configs" / "model_configs" / "llama8b.yaml"
 DEFAULT_TRAINING_TEMPLATE = (
-    TT_TRAIN_HOME
-    / "configs"
-    / "training_configs"
-    / "llama8b"
-    / "training_shakespeare_llama_8b_galaxy.yaml"
+    TT_TRAIN_HOME / "configs" / "training_configs" / "llama8b" / "training_shakespeare_llama_8b_galaxy.yaml"
 )
 
 # Overridable at runtime via CLI args
@@ -88,9 +76,7 @@ class _Dumper(yaml.SafeDumper):
 
 _Dumper.add_representer(
     list,
-    lambda d, data: d.represent_sequence(
-        "tag:yaml.org,2002:seq", data, flow_style=True
-    ),
+    lambda d, data: d.represent_sequence("tag:yaml.org,2002:seq", data, flow_style=True),
 )
 
 # =============================================================================
@@ -101,11 +87,7 @@ _Dumper.add_representer(
 
 
 def _name(exp):
-    rt = (
-        "memeff"
-        if exp.get("runner_type", "default") == "memory_efficient"
-        else "default"
-    )
+    rt = "memeff" if exp.get("runner_type", "default") == "memory_efficient" else "default"
     prof = exp.get("profiler", True)
     suffix = "_noprof" if prof is False else "_naive" if prof == "naive" else ""
     return (
@@ -140,15 +122,9 @@ _ALL_EXPERIMENTS = [
     _exp(phase="1", local_batch=1, num_blocks=8, runner_type="default"),
     _exp(phase="1", local_batch=1, num_blocks=8, runner_type="memory_efficient"),
     # No profiler - to compare tracy to naive profiler, and estimate host overhead
-    _exp(
-        phase="1", local_batch=1, num_blocks=2, runner_type="default", profiler="naive"
-    ),
-    _exp(
-        phase="1", local_batch=1, num_blocks=4, runner_type="default", profiler="naive"
-    ),
-    _exp(
-        phase="1", local_batch=1, num_blocks=8, runner_type="default", profiler="naive"
-    ),
+    _exp(phase="1", local_batch=1, num_blocks=2, runner_type="default", profiler="naive"),
+    _exp(phase="1", local_batch=1, num_blocks=4, runner_type="default", profiler="naive"),
+    _exp(phase="1", local_batch=1, num_blocks=8, runner_type="default", profiler="naive"),
     # =================================================================
     # Phase 2 — TP characterization (differential method)
     #   Profiled: TP=2,4,8 at 2, 4, 8 blocks, batch=1
@@ -628,12 +604,8 @@ def main():
         default=DEFAULT_MAX_STEPS,
         help=f"Number of training steps per experiment (default: {DEFAULT_MAX_STEPS})",
     )
-    parser.add_argument(
-        "--phases", nargs="+", help="Run only these phases (e.g. 1 2 5)"
-    )
-    parser.add_argument(
-        "--experiments", nargs="+", help="Run only these experiments by name"
-    )
+    parser.add_argument("--phases", nargs="+", help="Run only these phases (e.g. 1 2 5)")
+    parser.add_argument("--experiments", nargs="+", help="Run only these experiments by name")
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -649,9 +621,7 @@ def main():
         action="store_true",
         help="Skip tt-smi board reset between experiments",
     )
-    parser.add_argument(
-        "--run-dir", type=str, help="Output directory (default: timestamped)"
-    )
+    parser.add_argument("--run-dir", type=str, help="Output directory (default: timestamped)")
     args = parser.parse_args()
 
     # Apply overrides
@@ -756,10 +726,7 @@ def main():
         tag = " OK " if r["returncode"] == 0 else "FAIL"
         print(f"  [{tag}] {r['name']:<40s} {r['elapsed_s']:>8.1f}s")
 
-    print(
-        f"\n  {ok} passed, {fail} failed, "
-        f"total elapsed: {total_s:.0f}s ({total_s / 60:.1f}m)"
-    )
+    print(f"\n  {ok} passed, {fail} failed, " f"total elapsed: {total_s:.0f}s ({total_s / 60:.1f}m)")
     print(f"  Results: {run_dir}")
 
     with open(run_dir / "results.json", "w") as f:

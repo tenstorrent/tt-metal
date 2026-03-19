@@ -95,11 +95,7 @@ def make_plot(
     tp_dense = np.linspace(TP_VALUES[0], TP_VALUES[-1], 200)
     ideal_drawn = False
     has_mfu = MFU_COL in subset.columns and subset[MFU_COL].notna().any()
-    has_ccl = (
-        ccl_col is not None
-        and ccl_col in subset.columns
-        and subset[ccl_col].notna().any()
-    )
+    has_ccl = ccl_col is not None and ccl_col in subset.columns and subset[ccl_col].notna().any()
 
     for blk in sorted(subset["n_blocks"].unique()):
         grp = subset[subset["n_blocks"] == blk].sort_values("tp")
@@ -270,9 +266,7 @@ def make_ccl_util_plot(
         print(f"  saved {out_path}")
 
 
-def plot_all(
-    df: pd.DataFrame, output_dir: Path | None = None, show: bool = False
-) -> pd.DataFrame:
+def plot_all(df: pd.DataFrame, output_dir: Path | None = None, show: bool = False) -> pd.DataFrame:
     """Filter and plot all TP scaling charts. Returns the filtered subset."""
     subset = filter_tp_scaling(df)
     if subset.empty:

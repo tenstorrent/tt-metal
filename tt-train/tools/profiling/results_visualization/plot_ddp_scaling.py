@@ -140,9 +140,7 @@ def make_plot(
         print(f"  saved {out_path}")
 
 
-def plot_all(
-    df: pd.DataFrame, output_dir: Path | None = None, show: bool = False
-) -> pd.DataFrame:
+def plot_all(df: pd.DataFrame, output_dir: Path | None = None, show: bool = False) -> pd.DataFrame:
     """Filter and plot all DDP scaling charts. Returns the filtered subset."""
     subset = filter_ddp_scaling(df)
     if subset.empty:

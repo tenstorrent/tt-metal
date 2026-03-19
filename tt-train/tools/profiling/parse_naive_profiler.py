@@ -41,13 +41,8 @@ def parse(lines):
 
             # "other" = everything between optimizer_step_done of the previous
             # iteration and dataloader_step_done of this iteration.
-            if (
-                prev_optimizer_done_ts is not None
-                and "dataloader_step_done" in timestamps
-            ):
-                row["other_ms"] = (
-                    timestamps["dataloader_step_done"] - prev_optimizer_done_ts
-                ) / 1000.0
+            if prev_optimizer_done_ts is not None and "dataloader_step_done" in timestamps:
+                row["other_ms"] = (timestamps["dataloader_step_done"] - prev_optimizer_done_ts) / 1000.0
 
             if "optimizer_step_done" in timestamps:
                 prev_optimizer_done_ts = timestamps["optimizer_step_done"]
@@ -62,9 +57,7 @@ def parse(lines):
 
 
 def main():
-    lines = (
-        sys.stdin.readlines() if len(sys.argv) < 2 else open(sys.argv[1]).readlines()
-    )
+    lines = sys.stdin.readlines() if len(sys.argv) < 2 else open(sys.argv[1]).readlines()
     steps = parse(lines)
     if not steps:
         print("No profiler data found.")

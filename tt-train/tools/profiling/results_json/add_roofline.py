@@ -158,9 +158,7 @@ def _enrich_one(entry, hardware, peak_tflops_override):
     timing = result["timing_breakdown"]
     hw = result.get("hardware", {})
     ccl = result.get("ccl", {})
-    peak_tflops = peak_tflops_override or hw.get(
-        "peak_tflops_hifi4", DEFAULT_BF16_PEAK_TFLOPS
-    )
+    peak_tflops = peak_tflops_override or hw.get("peak_tflops_hifi4", DEFAULT_BF16_PEAK_TFLOPS)
 
     rf_fwd = _extract_phase(timing, "forward")
     rf_bwd = _extract_phase(timing, "backward")
@@ -188,18 +186,12 @@ def _enrich_one(entry, hardware, peak_tflops_override):
         if meas_ms and meas_ms > 0:
             phase_data["measured_ms"] = round(meas_ms, 3)
             phase_data["roofline_perc"] = round(r_ms / meas_ms * 100, 1)
-            phase_data["mfu_perc"] = round(
-                r_flops / (meas_ms / 1000) / peak_tflops * 100, 1
-            )
+            phase_data["mfu_perc"] = round(r_flops / (meas_ms / 1000) / peak_tflops * 100, 1)
         roofline_data[label] = phase_data
 
     rf_total_ms = rf_fwd["roofline_ms"] + rf_bwd["roofline_ms"] + rf_opt["roofline_ms"]
-    rf_total_flops = (
-        rf_fwd["flops_tflops"] + rf_bwd["flops_tflops"] + rf_opt["flops_tflops"]
-    )
-    meas_total = entry.get("throughput", {}).get(
-        "step_time_ms"
-    ) or get_measured_phase_ms(entry, "total_ms")
+    rf_total_flops = rf_fwd["flops_tflops"] + rf_bwd["flops_tflops"] + rf_opt["flops_tflops"]
+    meas_total = entry.get("throughput", {}).get("step_time_ms") or get_measured_phase_ms(entry, "total_ms")
     total_data = {
         "roofline_ms": round(rf_total_ms, 4),
         "flops_tflops": round(rf_total_flops, 4),
@@ -207,9 +199,7 @@ def _enrich_one(entry, hardware, peak_tflops_override):
     if meas_total and meas_total > 0:
         total_data["measured_ms"] = round(meas_total, 3)
         total_data["roofline_perc"] = round(rf_total_ms / meas_total * 100, 1)
-        total_data["mfu_perc"] = round(
-            rf_total_flops / (meas_total / 1000) / peak_tflops * 100, 1
-        )
+        total_data["mfu_perc"] = round(rf_total_flops / (meas_total / 1000) / peak_tflops * 100, 1)
     roofline_data["total"] = total_data
 
     # --- CCL utilization ---
@@ -250,14 +240,10 @@ def _enrich_one(entry, hardware, peak_tflops_override):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Add roofline analysis to experiment results"
-    )
+    parser = argparse.ArgumentParser(description="Add roofline analysis to experiment results")
     parser.add_argument("results_json", help="Path to extracted_results JSON")
     parser.add_argument("roofline_dir", help="Path to tt-train-roofline directory")
-    parser.add_argument(
-        "-o", "--output", help="Output JSON (default: <input>_roofline.json)"
-    )
+    parser.add_argument("-o", "--output", help="Output JSON (default: <input>_roofline.json)")
     parser.add_argument(
         "--hardware",
         default="bh_glx",
@@ -268,8 +254,7 @@ def main():
         type=float,
         default=None,
         help=(
-            "Peak BF16 TFLOPs/s for MFU calculation. "
-            "If not set, uses the value from the roofline hardware config."
+            "Peak BF16 TFLOPs/s for MFU calculation. " "If not set, uses the value from the roofline hardware config."
         ),
     )
     args = parser.parse_args()
@@ -279,9 +264,7 @@ def main():
     output = (
         Path(args.output)
         if args.output
-        else results_path.with_name(
-            results_path.stem + "_roofline" + results_path.suffix
-        )
+        else results_path.with_name(results_path.stem + "_roofline" + results_path.suffix)
     )
 
     if not roofline_dir.exists():

@@ -71,12 +71,8 @@ DRAM_LINE_RE = re.compile(
     r"Deallocations ([\d.]+) MB, "
     r"Segment Change ([+\-\d.]+) MB"
 )
-DRAM_CUM_RE = re.compile(
-    r"DRAM: Cumulative Peak ([\d.]+) MB, " r"Cumulative Current ([\d.]+) MB"
-)
-FINAL_DRAM_RE = re.compile(
-    r"Overall DRAM Peak: ([\d.]+) MB, Final DRAM Usage: ([\d.]+) MB"
-)
+DRAM_CUM_RE = re.compile(r"DRAM: Cumulative Peak ([\d.]+) MB, " r"Cumulative Current ([\d.]+) MB")
+FINAL_DRAM_RE = re.compile(r"Overall DRAM Peak: ([\d.]+) MB, Final DRAM Usage: ([\d.]+) MB")
 PARAMS_RE = re.compile(r"Number of parameters:\s*(\d+)")
 SEGMENT_RE = re.compile(r"^--- (\w+) ---$")
 STEP_TIME_RE = re.compile(r"Full step time ([\d.]+) ms")
@@ -160,9 +156,7 @@ def extract_step_timings(stdout_data: dict) -> dict | None:
 
     avg = {}
     if steady:
-        avg["total_step_ms"] = round(
-            sum(it["total_step_ms"] for it in steady) / len(steady), 3
-        )
+        avg["total_step_ms"] = round(sum(it["total_step_ms"] for it in steady) / len(steady), 3)
 
     return {
         "step_times": {
@@ -256,9 +250,7 @@ def extract_naive_timings(exp_dir: Path) -> dict | None:
 
     df = pd.DataFrame(records)
     pivot = (
-        df.pivot_table(
-            index="iteration", columns="phase", values="duration_ms", aggfunc="sum"
-        )
+        df.pivot_table(index="iteration", columns="phase", values="duration_ms", aggfunc="sum")
         .reindex(columns=PHASE_COLS, fill_value=0.0)
         .reset_index()
     )
@@ -322,14 +314,12 @@ def find_csv(exp_dir: Path):
 def extract_timings(csv_path: Path) -> dict | None:
     """Parse profiler CSV and return per-device per-iteration phase timings."""
     raw = pd.read_csv(csv_path, low_memory=False)
-    raw["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(
-        raw["DEVICE KERNEL DURATION [ns]"], errors="coerce"
-    )
+    raw["DEVICE KERNEL DURATION [ns]"] = pd.to_numeric(raw["DEVICE KERNEL DURATION [ns]"], errors="coerce")
 
     # Drop everything up to (and including) compilation_finished marker
-    comp_mask = (raw["OP CODE"] == "ProfilerNoopOperation") & raw[
-        "ATTRIBUTES"
-    ].str.contains("compilation_finished", na=False)
+    comp_mask = (raw["OP CODE"] == "ProfilerNoopOperation") & raw["ATTRIBUTES"].str.contains(
+        "compilation_finished", na=False
+    )
     comp_idx = raw.index[comp_mask]
     if comp_idx.empty:
         return None
@@ -339,9 +329,7 @@ def extract_timings(csv_path: Path) -> dict | None:
     raw["_is_marker"] = False
     raw["_ident"] = None
     noop = raw["OP CODE"] == "ProfilerNoopOperation"
-    raw.loc[noop, "_ident"] = raw.loc[noop, "ATTRIBUTES"].str.extract(
-        r"'identifier':\s*'([^']+)'", expand=False
-    )
+    raw.loc[noop, "_ident"] = raw.loc[noop, "ATTRIBUTES"].str.extract(r"'identifier':\s*'([^']+)'", expand=False)
     raw.loc[raw["_ident"].notna(), "_is_marker"] = True
 
     # Collapse marker groups (MARKERS_PER_CALL consecutive rows with same id)
@@ -381,11 +369,7 @@ def extract_timings(csv_path: Path) -> dict | None:
         boundary_idents.add(a)
         boundary_idents.add(b)
 
-    boundary_groups = [
-        g
-        for g in groups
-        if re.sub(r"iteration_\d+", "iteration", g["ident"]) in boundary_idents
-    ]
+    boundary_groups = [g for g in groups if re.sub(r"iteration_\d+", "iteration", g["ident"]) in boundary_idents]
 
     # Walk consecutive boundary marker pairs and compute durations
     records = []
@@ -399,9 +383,7 @@ def extract_timings(csv_path: Path) -> dict | None:
         if pair not in PHASE_MAP:
             continue
 
-        between = raw.iloc[
-            boundary_groups[gi - 1]["last"] + 1 : boundary_groups[gi]["first"]
-        ]
+        between = raw.iloc[boundary_groups[gi - 1]["last"] + 1 : boundary_groups[gi]["first"]]
         between = between[~between["_is_marker"]]
 
         # Determine iteration number
@@ -424,11 +406,7 @@ def extract_timings(csv_path: Path) -> dict | None:
         ccl_prefix = PHASE_TO_CCL_PREFIX.get(phase)
 
         for dev_id in device_ids:
-            ops = (
-                between[between["DEVICE ID"] == dev_id]
-                if dev_id is not None
-                else between
-            )
+            ops = between[between["DEVICE ID"] == dev_id] if dev_id is not None else between
             if len(ops) >= 1:
                 duration_ms = ops["DEVICE KERNEL DURATION [ns]"].sum() / 1e6
             else:
@@ -469,9 +447,7 @@ def extract_timings(csv_path: Path) -> dict | None:
         dev_df = df[df["device_id"] == dev_val]
 
         pivot = (
-            dev_df.pivot_table(
-                index="iteration", columns="phase", values="duration_ms", aggfunc="sum"
-            )
+            dev_df.pivot_table(index="iteration", columns="phase", values="duration_ms", aggfunc="sum")
             .reindex(columns=PHASE_COLS, fill_value=0.0)
             .reset_index()
         )
@@ -495,9 +471,7 @@ def extract_timings(csv_path: Path) -> dict | None:
 
         # Average over steady-state (exclude first iteration)
         if len(iterations) > 1:
-            steady = [
-                it for it in iterations if it["iteration"] > iterations[0]["iteration"]
-            ]
+            steady = [it for it in iterations if it["iteration"] > iterations[0]["iteration"]]
         else:
             steady = list(iterations)
 
@@ -567,9 +541,7 @@ def main_run_dir(
 
     exp_dirs = []
     for run_dir in run_dirs:
-        found = sorted(
-            d for d in run_dir.iterdir() if d.is_dir() and (d / "meta.json").exists()
-        )
+        found = sorted(d for d in run_dir.iterdir() if d.is_dir() and (d / "meta.json").exists())
         print(f"Found {len(found)} experiments in {run_dir}")
         exp_dirs.extend(found)
     print()
@@ -620,13 +592,9 @@ def main_run_dir(
             first_dev = next(iter(timings))
             best_step_ms = timings[first_dev].get("average", {}).get("total_ms")
         elif naive_timings:
-            best_step_ms = (
-                naive_timings["device_host"].get("average", {}).get("total_ms")
-            )
+            best_step_ms = naive_timings["device_host"].get("average", {}).get("total_ms")
         elif step_timings and profiler_mode is not True:
-            best_step_ms = (
-                step_timings["step_times"].get("average", {}).get("total_step_ms")
-            )
+            best_step_ms = step_timings["step_times"].get("average", {}).get("total_step_ms")
 
         throughput = {}
         if best_step_ms and best_step_ms > 0:
@@ -681,9 +649,7 @@ def main_run_dir(
             )
         elif step_timings:
             avg = step_timings["step_times"].get("average", {})
-            print(
-                f"  [{name}] step_time={avg.get('total_step_ms', 0):.1f} ms (no profiler)"
-            )
+            print(f"  [{name}] step_time={avg.get('total_step_ms', 0):.1f} ms (no profiler)")
         else:
             print(f"  [{name}] no timing data")
 
@@ -692,9 +658,7 @@ def main_run_dir(
     for r in results:
         seen[r["name"]] = r
     if len(seen) < len(results):
-        print(
-            f"\n  Deduped: {len(results)} → {len(seen)} (later runs override earlier)"
-        )
+        print(f"\n  Deduped: {len(results)} → {len(seen)} (later runs override earlier)")
     results = list(seen.values())
 
     # Merge with existing results if requested
@@ -718,26 +682,16 @@ def main_run_dir(
     with open(output, "w") as f:
         json.dump(results, f, indent=2)
 
-    ok = sum(
-        1
-        for r in results
-        if r.get("timings") or r.get("naive_timings") or r.get("step_timings")
-    )
+    ok = sum(1 for r in results if r.get("timings") or r.get("naive_timings") or r.get("step_timings"))
     print(f"\n{ok}/{len(results)} experiments with data → {output}")
 
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Extract profiling results from experiment runs or a single CSV"
-    )
-    parser.add_argument(
-        "run_dirs", nargs="*", help="Experiment run directories (batch mode)"
-    )
-    parser.add_argument(
-        "--csv", type=str, help="Single profiler CSV file (standalone mode)"
-    )
+    parser = argparse.ArgumentParser(description="Extract profiling results from experiment runs or a single CSV")
+    parser.add_argument("run_dirs", nargs="*", help="Experiment run directories (batch mode)")
+    parser.add_argument("--csv", type=str, help="Single profiler CSV file (standalone mode)")
     parser.add_argument(
         "-o",
         "--output",
@@ -761,9 +715,7 @@ def main():
     elif args.run_dirs:
         output = Path(args.output) if args.output else None
         merge_from = Path(args.merge) if args.merge else None
-        main_run_dir(
-            [Path(d) for d in args.run_dirs], output, merge_from, seq_len=args.seq_len
-        )
+        main_run_dir([Path(d) for d in args.run_dirs], output, merge_from, seq_len=args.seq_len)
     else:
         parser.error("Provide run_dir(s) or --csv <path>")
 
