@@ -118,8 +118,6 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32),
         input_b_dtype if input_b_dtype else input_a_dtype,
     )(shape_b)
-    # Convert to binary mask: values > 0 become 1, else 0
-    torch_mask_tensor = (torch_mask_tensor > 0).to(torch.float32)
 
     # Get golden output using the ttnn golden function
     golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)

@@ -94,41 +94,38 @@ def run(
         shape_a
     )
 
-    # Generate causal mask if mask params are provided (arg2 in JSON)
+    # Generate causal mask if mask params are provided (arg2 in JSON).
+    # The op expects a pre-computed causal mask with -100000 for masked (future) positions
+    # and 0 for unmasked positions, matching how falcon7b creates the attention mask.
     mask_shape = kwargs.get("input_b_shape", None)
     if mask_shape is not None:
         mask_shape = tuple(mask_shape) if isinstance(mask_shape, (list, tuple)) else mask_shape
-        torch_mask = gen_func_with_cast_tt(
-            partial(torch_random, low=-10, high=10, dtype=torch.float32),
-            input_b_dtype if input_b_dtype else input_a_dtype,
-        )(mask_shape)
+        h, w = mask_shape[-2], mask_shape[-1]
+        causal_bool = torch.ones(h, w, dtype=torch.bool).triu(diagonal=1)
+        torch_mask = causal_bool.float().masked_fill(causal_bool, -100000.0)
+        # Expand to full mask shape
+        while torch_mask.ndim < len(mask_shape):
+            torch_mask = torch_mask.unsqueeze(0)
+        torch_mask = torch_mask.expand(*mask_shape)
     else:
         torch_mask = None
 
-    # Golden: softmax(scale * input + mask)
+    # Golden: softmax(scale * input + tiled_mask)
+    # The "hw_dims" op tiles the mask across the input height — each mask-height block
+    # of rows gets its own causal mask applied independently.
     golden_input = scale * torch_input_a.float()
     if torch_mask is not None:
         mask_float = torch_mask.float()
-        # Pad mask height to match input if needed (causal mask may be smaller)
         input_h = golden_input.shape[-2]
         mask_h = mask_float.shape[-2]
         if mask_h < input_h:
-            pad_h = input_h - mask_h
-            mask_float = torch.nn.functional.pad(mask_float, (0, 0, pad_h, 0), value=0.0)
+            # Tile mask to cover full input height
+            repeats = (input_h + mask_h - 1) // mask_h
+            mask_float = mask_float.repeat(1, 1, repeats, 1)[..., :input_h, :]
         elif mask_h > input_h:
-            mask_float = mask_float[..., -input_h:, :]
-        # Pad mask width if needed
-        input_w = golden_input.shape[-1]
-        mask_w = mask_float.shape[-1]
-        if mask_w < input_w:
-            pad_w = input_w - mask_w
-            mask_float = torch.nn.functional.pad(mask_float, (pad_w, 0, 0, 0), value=0.0)
-        elif mask_w > input_h:
-            mask_float = mask_float[..., -input_w:]
+            mask_float = mask_float[..., :input_h, :]
         golden_input = golden_input + mask_float
-    x_max = torch.max(golden_input, dim=-1, keepdim=True)[0]
-    x_exp = torch.exp(golden_input - x_max)
-    torch_output = x_exp / torch.sum(x_exp, dim=-1, keepdim=True)
+    torch_output = torch.softmax(golden_input, dim=-1)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
