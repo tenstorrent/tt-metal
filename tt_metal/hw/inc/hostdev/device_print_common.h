@@ -23,6 +23,8 @@ enum class DevicePrintRiscCoreState : uint8_t {
 struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+#elif defined(COMPILE_FOR_DRISC)
+    static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::COUNT);
 #else
     static constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif

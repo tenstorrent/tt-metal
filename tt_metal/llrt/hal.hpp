@@ -74,6 +74,9 @@ struct HalJitBuildConfig {
     DeviceAddr fw_launch_addr;
     uint32_t fw_launch_addr_value;
     ll_api::memory::Loading memory_load;
+    // Offset added to all L1 addresses when writing from host (via write_core).
+    // Non-zero for cores where L1 NOC address != private address (e.g. DRAM cores: 0x2000000000).
+    DeviceAddr l1_noc_offset = 0;
 };
 
 // Ethernet Firmware mailbox messages
@@ -324,7 +327,11 @@ private:
     float inf_ = 0.0f;
 
     void initialize_wh(bool is_base_routing_fw_enabled, uint32_t profiler_dram_bank_size_per_risc_bytes);
-    void initialize_bh(bool enable_2_erisc_mode, uint32_t profiler_dram_bank_size_per_risc_bytes);
+    void initialize_bh(
+        bool enable_2_erisc_mode,
+        uint32_t profiler_dram_bank_size_per_risc_bytes,
+        bool is_simulator,
+        bool enable_blackhole_dram_programmable_cores);
     void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes);
 
     // Functions where implementation varies by architecture
@@ -350,7 +357,9 @@ public:
     Hal(tt::ARCH arch,
         bool is_base_routing_fw_enabled,
         bool enable_2_erisc_mode,
-        uint32_t profiler_dram_bank_size_per_risc_bytes);
+        uint32_t profiler_dram_bank_size_per_risc_bytes,
+        bool is_simulator = false,
+        bool enable_blackhole_dram_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -425,6 +434,9 @@ public:
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
     uint32_t get_programmable_core_type_count() const;
+    bool has_programmable_core_type(HalProgrammableCoreType programmable_core_type) const {
+        return static_cast<uint32_t>(programmable_core_type) < get_programmable_core_type_count();
+    }
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
@@ -439,6 +451,8 @@ public:
     bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     DeviceAddr get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
+    // Returns get_dev_addr() + get_l1_noc_offset(): the NOC-visible address for host-side read/write_core calls.
+    DeviceAddr get_dev_noc_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
@@ -541,6 +555,8 @@ public:
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
+
+    DeviceAddr get_l1_noc_offset(HalProgrammableCoreType programmable_core_type) const;
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -579,6 +595,11 @@ inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_ty
     return this->core_info_[index].get_dev_addr(addr_type);
 }
 
+inline DeviceAddr Hal::get_dev_noc_addr(
+    HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
+    return get_dev_addr(programmable_core_type, addr_type) + get_l1_noc_offset(programmable_core_type);
+}
+
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
@@ -595,6 +616,20 @@ inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
     return this->dram_bases_[index];
+}
+
+// Returns the NOC offset to apply to L1 addresses when writing from the host.
+// Non-zero only for cores where L1 private address != L1 NOC address (e.g. DRAM cores: 0x2000000000).
+inline DeviceAddr Hal::get_l1_noc_offset(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    TT_ASSERT(index < this->core_info_.size());
+    if (this->core_info_[index].get_processor_classes_count() == 0) {
+        return 0;
+    }
+    if (this->core_info_[index].get_processor_types_count(0) == 0) {
+        return 0;
+    }
+    return this->core_info_[index].get_jit_build_config(0, 0).l1_noc_offset;
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
@@ -729,6 +764,9 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER);
         case HalProgrammableCoreType::IDLE_ETH:
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
+        case HalProgrammableCoreType::DRAM:
+            // DRAM kernels are always loaded directly to L1; no config buffer indirection.
+            return false;
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
     }
 }
@@ -740,6 +778,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
         case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
         case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
         case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        case CoreType::DRAM: return HalProgrammableCoreType::DRAM;
         default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
@@ -764,3 +803,10 @@ struct std::hash<tt::tt_metal::HalProcessorIdentifier> {
 #define HAL_MEM_ETH_SIZE                                         \
     ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
         ::tt::tt_metal::HalProgrammableCoreType::IDLE_ETH, ::tt::tt_metal::HalL1MemAddrType::BASE)
+
+#define HAL_MEM_DRAM_L1_BASE                                     \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_addr( \
+        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)
+#define HAL_MEM_DRAM_L1_SIZE                                     \
+    ::tt::tt_metal::MetalContext::instance().hal().get_dev_size( \
+        ::tt::tt_metal::HalProgrammableCoreType::DRAM, ::tt::tt_metal::HalL1MemAddrType::BASE)

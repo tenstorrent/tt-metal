@@ -55,6 +55,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
+#elif defined(COMPILE_FOR_DRISC)
+#define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
 #elif defined(ARCH_QUASAR)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
 #else
@@ -64,6 +66,8 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 // (and hal abstracts them on host), get these from there (same as above for dprint)
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(EthProcessorTypes::COUNT);
+#elif defined(COMPILE_FOR_DRISC)
+constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DramProcessorTypes::COUNT);
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
@@ -146,7 +150,7 @@ struct kernel_config_msg_t {
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[MaxProcessorsPerCoreType];
     volatile uint8_t mode;     // dispatch mode host/dev
-    volatile uint8_t pad2[1];  // CODEGEN:skip
+    volatile uint8_t pad2[3];  // CODEGEN:skip
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint64_t local_cb_mask;
 
@@ -166,7 +170,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 4];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel; values fit in 8 bits)
     // The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of 16 bytes for the pair).
@@ -374,6 +378,7 @@ enum class CoreMagicNumber : uint32_t {
     WORKER = 0x50ec09a3,
     ACTIVE_ETH = 0xc63050d1,
     IDLE_ETH = 0x837b6cae,
+    DRAM = 0x4d92f8e1,
 };
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
