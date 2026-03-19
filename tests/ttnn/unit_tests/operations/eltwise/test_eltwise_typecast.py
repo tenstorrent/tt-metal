@@ -5,16 +5,9 @@
 import pytest
 import torch
 import ttnn
-from functools import partial
 
-
-from tests.tt_eager.python_api_testing.sweep_tests import (
-    comparison_funcs,
-    generation_funcs,
-)
-from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
-    run_single_pytorch_test,
-)
+from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -122,28 +115,18 @@ class TestTypecast:
         if tt_output_dtype == ttnn.uint8:
             in_low = -257
             in_high = 257
-        datagen_func = [
-            generation_funcs.gen_func_with_cast(
-                partial(generation_funcs.gen_rand, low=in_low, high=in_high), pt_input_dtype
-            )
-        ]
-        test_args = generation_funcs.gen_default_dtype_layout_device(input_shapes)[0]
-        test_args["tt_input_dtype"] = [tt_input_dtype]
-        test_args["tt_output_dtype"] = [tt_output_dtype]
-        test_args["input_mem_config"] = [input_mem_config]
-        test_args.update({"output_mem_config": dst_mem_config})
-        comparison_func = comparison_funcs.comp_pcc
-        if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b:
-            comparison_func = partial(comparison_funcs.comp_pcc, pcc=0.98)
+        shape = input_shapes[0]
+        torch_input = (torch.rand(shape) * (in_high - in_low) + in_low).to(pt_input_dtype)
 
-        run_single_pytorch_test(
-            "eltwise-typecast",
-            input_shapes,
-            datagen_func,
-            comparison_func,
-            device,
-            test_args,
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
         )
+        tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype, memory_config=dst_mem_config)
+        torch_output = ttnn.to_torch(tt_output)
+
+        torch_golden = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
+        pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.9999
+        assert_with_pcc(torch_golden, torch_output, pcc=pcc)
 
 
 @pytest.mark.skip("Issue #17237: Does not work with new mantissa rounding")
