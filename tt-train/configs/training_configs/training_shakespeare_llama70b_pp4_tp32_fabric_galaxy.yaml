@@ -7,8 +7,8 @@ training_config:
   max_steps: 5000
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  model_config: "model_configs/llama70b_tp32.yaml"
-  multihost_config: "multihost_configs/4worker_80block_pp_fabric.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama70b_tp32.yaml"
+  multihost_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/multihost_configs/4worker_80block_pp_fabric.yaml"
   optimizer:
     type: AdamW
     lr: 0.00015

@@ -35,7 +35,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                 return torch.topk(input_tensor, k, dim=dim, largest=largest, sorted=sorted, *, output_tensor=None)
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor. Must be on the device.
                 k (number): the number of top elements to look for.
                 dim (number): the dimension to reduce.
                 largest (bool): whether to return the largest or the smallest elements. Defaults to `True`.
@@ -43,9 +43,9 @@ void bind_reduction_topk_operation(nb::module_& mod) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                output_tensor (tuple[ttnn.Tensor, ttnn.Tensor], optional): A tuple with preallocated output tensors for the values and indices. If specified, must be on the same device as :attr:`input_tensor`. Defaults to (`None`, `None`).
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
-                indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor with filled values. Defaults to `None`.
+                indices_tensor (ttnn.Tensor, optional): Input tensor containing pre-computed index values. When provided, the operation reads indices from this tensor instead of generating them. Defaults to `None`.
 
             Returns:
                 tuple[ttnn.Tensor, ttnn.Tensor]: a tuple of (values_tensor, indices_tensor).
@@ -70,7 +70,7 @@ void bind_reduction_topk_operation(nb::module_& mod) {
                       - TILE
 
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and will be in TILE layout.
-                The :attr:`output_index_tensor` will be UINT16 and will be in TILE layout.
+                The :attr:`output_index_tensor` will be UINT16 if the dimension size is less than or equal to 65535, otherwise it will be UINT32. It will be in TILE layout.
 
             Memory Support:
                 - Interleaved: DRAM and L1

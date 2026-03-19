@@ -116,9 +116,7 @@ class ModelConfig:
     runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
     weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
-    experimental: ModelExperimentalConfig = field(
-        default_factory=ModelExperimentalConfig
-    )
+    experimental: ModelExperimentalConfig = field(default_factory=ModelExperimentalConfig)
     # Llama-specific fields (universal naming YAML conventions)
     num_groups: int = 3  # GQA: num_key_value_heads
     theta: float = 500000.0  # RoPE theta parameter
@@ -218,9 +216,7 @@ def create_warmup_linear_scheduler(optimizer, total_steps: int):
             factor = float(adjusted) / float(warmup_steps)
         else:
             decay_step = adjusted - warmup_steps
-            factor = max(
-                0.0, 1.0 - (0.99 * float(decay_step) / float(linear_decay_steps))
-            )
+            factor = max(0.0, 1.0 - (0.99 * float(decay_step) / float(linear_decay_steps)))
         return base_lr * factor
 
     return compute_lr, warmup_steps, linear_decay_steps
@@ -271,9 +267,7 @@ def create_dataset_from_text(
     return InMemoryTokenDataset(tokens, sequence_length), tokenizer
 
 
-def collate_fn(
-    samples: list, sequence_length: int
-) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
+def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
     Args:
@@ -287,17 +281,11 @@ def collate_fn(
         data.extend(seq)
         targets.extend(target)
 
-    data_np = np.array(data, dtype=np.uint32).reshape(
-        actual_batch_size, 1, 1, sequence_length
-    )
-    targets_np = np.array(targets, dtype=np.uint32).reshape(
-        actual_batch_size, sequence_length
-    )
+    data_np = np.array(data, dtype=np.uint32).reshape(actual_batch_size, 1, 1, sequence_length)
+    targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
-    data_tensor = ttml.autograd.Tensor.from_numpy(
-        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
     targets_tensor = ttml.autograd.Tensor.from_numpy(
         targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
     )
@@ -358,9 +346,7 @@ def train_step(
     logits = model(input_tokens, mask)
 
     # Compute loss
-    loss = ttml.ops.loss.cross_entropy_loss(
-        logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN
-    )
+    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
@@ -428,19 +414,13 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
     config.num_blocks = transformer_config.get("num_blocks", config.num_blocks)
     config.num_heads = transformer_config.get("num_heads", config.num_heads)
     config.dropout_prob = transformer_config.get("dropout_prob", config.dropout_prob)
-    config.max_sequence_length = transformer_config.get(
-        "max_sequence_length", config.max_sequence_length
-    )
+    config.max_sequence_length = transformer_config.get("max_sequence_length", config.max_sequence_length)
 
     if "runner_type" in transformer_config:
-        config.runner_type = ttml.models.RunnerType.from_string(
-            transformer_config["runner_type"]
-        )
+        config.runner_type = ttml.models.RunnerType.from_string(transformer_config["runner_type"])
 
     if "weight_tying" in transformer_config:
-        config.weight_tying = ttml.models.WeightTyingType.from_string(
-            transformer_config["weight_tying"]
-        )
+        config.weight_tying = ttml.models.WeightTyingType.from_string(transformer_config["weight_tying"])
 
     if config.model_type == "gpt2":
         # GPT2-specific fields
@@ -458,25 +438,15 @@ def parse_model_config(yaml_config: dict) -> ModelConfig:
         # Llama-specific fields
         config.num_groups = transformer_config.get("num_groups", config.num_groups)
         config.theta = transformer_config.get("theta", config.theta)
-        config.intermediate_dim = transformer_config.get(
-            "intermediate_dim", config.intermediate_dim
-        )
+        config.intermediate_dim = transformer_config.get("intermediate_dim", config.intermediate_dim)
 
         # RoPE NTK-aware scaling parameters (nested under rope_scaling in YAML)
         if "rope_scaling" in transformer_config:
             rope_scaling = transformer_config["rope_scaling"]
-            config.scaling_factor = rope_scaling.get(
-                "scaling_factor", config.scaling_factor
-            )
-            config.high_freq_factor = rope_scaling.get(
-                "high_freq_factor", config.high_freq_factor
-            )
-            config.low_freq_factor = rope_scaling.get(
-                "low_freq_factor", config.low_freq_factor
-            )
-            config.original_context_length = rope_scaling.get(
-                "original_context_length", config.original_context_length
-            )
+            config.scaling_factor = rope_scaling.get("scaling_factor", config.scaling_factor)
+            config.high_freq_factor = rope_scaling.get("high_freq_factor", config.high_freq_factor)
+            config.low_freq_factor = rope_scaling.get("low_freq_factor", config.low_freq_factor)
+            config.original_context_length = rope_scaling.get("original_context_length", config.original_context_length)
     else:
         raise ValueError(f"Unsupported model type: {config.model_type}")
 
@@ -593,9 +563,7 @@ def sample_greedy(
                 ],
             )
             # Reshape to [B, 1, 1, vocab_size] using ttnn (no autograd needed for inference)
-            reshaped = ttnn.reshape(
-                sliced_tensor, [logits_shape[0], 1, 1, logits_shape[4]]
-            )
+            reshaped = ttnn.reshape(sliced_tensor, [logits_shape[0], 1, 1, logits_shape[4]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
         elif len(logits_shape) == 4:
             # [B, 1, seq_len, vocab_size] -> extract last position: [B, 1, 1, vocab_size]
@@ -607,9 +575,7 @@ def sample_greedy(
                 [logits_shape[0], logits_shape[1], seq_len, logits_shape[3]],
             )
             # Reshape to [B, 1, 1, vocab_size] using ttnn (no autograd needed for inference)
-            reshaped = ttnn.reshape(
-                sliced_tensor, [logits_shape[0], 1, 1, logits_shape[3]]
-            )
+            reshaped = ttnn.reshape(sliced_tensor, [logits_shape[0], 1, 1, logits_shape[3]])
             last_logits = ttml.autograd.Tensor(reshaped, False)
         else:
             # Fallback: use reshape and take last element
@@ -664,9 +630,7 @@ def sample_greedy(
                     # Extract threshold (k-th largest = last element of topk_values)
                     # topk_values shape: [1, 1, 1, top_k_val]
                     # Get the last element which is the smallest of top-k (our threshold)
-                    threshold_tensor = ttnn.slice(
-                        topk_values, [0, 0, 0, top_k_val - 1], [1, 1, 1, top_k_val]
-                    )
+                    threshold_tensor = ttnn.slice(topk_values, [0, 0, 0, top_k_val - 1], [1, 1, 1, top_k_val])
                     # threshold_tensor shape: [1, 1, 1, 1]
                     # Use threshold_tensor directly - ttnn.lt() will automatically broadcast
                     # This avoids extracting scalar and recreating tensor with full_like
@@ -676,12 +640,8 @@ def sample_greedy(
                     topk_mask = ttnn.lt(last_logits_ttnn, threshold_tensor)
 
                     # Apply mask: set values below threshold to -1e9
-                    filter_value_tensor = ttnn.full_like(
-                        last_logits_ttnn, -1e9, dtype=ttnn.bfloat16
-                    )
-                    filtered_logits_ttnn = ttnn.where(
-                        topk_mask, filter_value_tensor, last_logits_ttnn
-                    )
+                    filter_value_tensor = ttnn.full_like(last_logits_ttnn, -1e9, dtype=ttnn.bfloat16)
+                    filtered_logits_ttnn = ttnn.where(topk_mask, filter_value_tensor, last_logits_ttnn)
 
                     # Cleanup intermediate tensors
                     ttnn.deallocate(topk_values)
@@ -694,9 +654,7 @@ def sample_greedy(
                     last_logits = ttml.autograd.Tensor(filtered_logits_ttnn, False)
 
             # Use ttml sampling operation
-            sampled_tensor = ttml.ops.sample.sample_op(
-                last_logits, temperature, seed, None
-            )  # logits_padding_mask
+            sampled_tensor = ttml.ops.sample.sample_op(last_logits, temperature, seed, None)  # logits_padding_mask
 
             # Extract the sampled token ID directly using .item() - avoids NumPy conversion
             next_id = int(sampled_tensor.get_value().item())
@@ -783,9 +741,7 @@ def create_model_from_config(model_config: ModelConfig) -> Model:
         if model_config.num_groups <= 0:
             raise ValueError("model_config.num_groups must be a positive integer.")
         if model_config.num_heads % model_config.num_groups != 0:
-            raise ValueError(
-                "model_config.num_heads must be divisible by model_config.num_groups."
-            )
+            raise ValueError("model_config.num_heads must be divisible by model_config.num_groups.")
         rope_scaling_config = LlamaRopeScalingConfig(
             scaling_factor=model_config.scaling_factor,
             high_freq_factor=model_config.high_freq_factor,
@@ -1084,44 +1040,36 @@ def main():
     print("=" * 70)
     print()
 
-    # Set TT_METAL_RUNTIME_ROOT if not set and TT_METAL_HOME is available
+    # Set TT_METAL_RUNTIME_ROOT if not set and a valid runtime root is available
     # This is needed for the runtime to find kernel files like moreh_mean
     if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_home = get_tt_metal_home()
-        if tt_metal_home and os.path.exists(tt_metal_home):
-            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_home
-            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_home} (from get_tt_metal_home)")
+        tt_metal_root = get_tt_metal_runtime_root()
+        if tt_metal_root and os.path.exists(tt_metal_root):
+            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_root
+            print(f"Set TT_METAL_RUNTIME_ROOT={tt_metal_root} (from get_tt_metal_runtime_root)")
         else:
             # Try to auto-detect from current directory
             current_dir = os.getcwd()
             # Check if we're in the repo root (has tt_metal/ subdirectory)
             if os.path.exists(os.path.join(current_dir, "tt_metal")):
                 os.environ["TT_METAL_RUNTIME_ROOT"] = current_dir
-                print(
-                    f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)"
-                )
+                print(f"Set TT_METAL_RUNTIME_ROOT={current_dir} (auto-detected from current directory)")
             else:
                 # Try parent directories
                 parent_dir = os.path.dirname(current_dir)
                 if os.path.exists(os.path.join(parent_dir, "tt_metal")):
                     os.environ["TT_METAL_RUNTIME_ROOT"] = parent_dir
-                    print(
-                        f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)"
-                    )
+                    print(f"Set TT_METAL_RUNTIME_ROOT={parent_dir} (auto-detected from parent directory)")
                 else:
-                    print(
-                        "Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected."
-                    )
-                    print(
-                        "  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable"
-                    )
+                    print("Warning: TT_METAL_RUNTIME_ROOT not set and could not be auto-detected.")
+                    print("  Kernel files may not be found. Set TT_METAL_RUNTIME_ROOT environment variable")
                     print("  to point to the tt-metal repository root directory.")
     else:
         print(f"Using TT_METAL_RUNTIME_ROOT={os.environ.get('TT_METAL_RUNTIME_ROOT')}")
     print()
 
     # Load configs using ttml.common.config utilities
-    tt_train_root = f"{get_tt_metal_home()}/tt-train"
+    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
     configs_root = f"{tt_train_root}/configs"
     try:
         print(f"Loading training config from: {args.config}")
@@ -1221,9 +1169,7 @@ def main():
                 "tt-train/data/shakespeare.txt",
                 "../data/shakespeare.txt",
                 os.path.join(
-                    os.path.dirname(
-                        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                    ),
+                    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                     "data",
                     "shakespeare.txt",
                 ),
@@ -1233,9 +1179,7 @@ def main():
                     training_config.data_path = path
                     break
             if not training_config.data_path:
-                print(
-                    "Warning: No data path specified and Shakespeare dataset not found."
-                )
+                print("Warning: No data path specified and Shakespeare dataset not found.")
                 print("Please specify --data_path or place shakespeare.txt in data/")
                 print(f"  Searched paths: {possible_paths}")
                 ttml.autograd.AutoContext.get_instance().close_device()
@@ -1312,9 +1256,7 @@ def main():
             model = create_model_from_config(model_config)
 
             # Count parameters
-            total_params = sum(
-                math.prod(p.shape()) for p in model.parameters().values()
-            )
+            total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
             print(
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
@@ -1343,9 +1285,7 @@ def main():
         print("\n4. Setting up learning rate scheduler...")
         compute_lr = None
         if training_config.scheduler_type == "warmup_linear":
-            compute_lr, warmup_steps, decay_steps = create_warmup_linear_scheduler(
-                optimizer, training_config.max_steps
-            )
+            compute_lr, warmup_steps, decay_steps = create_warmup_linear_scheduler(optimizer, training_config.max_steps)
             print(f"   - Scheduler: warmup_linear")
             print(f"   - Warmup steps: {warmup_steps}")
             print(f"   - Decay steps: {decay_steps}")
@@ -1358,9 +1298,7 @@ def main():
     else:
         print("\n5. Creating attention mask...")
     mask_np = build_causal_mask(seq_len)
-    mask = ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
     # Training or inference mode
     if args.prompt:
@@ -1370,21 +1308,15 @@ def main():
         print("\n6. Training...")
         print()
         remaining_steps = training_config.max_steps - start_step
-        print(
-            f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})..."
-        )
+        print(f"Training for {remaining_steps} steps (step {start_step} to {training_config.max_steps})...")
         print(f"  - Batch size: {training_config.batch_size}")
         print(f"  - Sequence length: {seq_len}")
         print(f"  - Training data: {len(dataset)} samples")
         print(f"  - Scheduler: {training_config.scheduler_type}")
-        print(
-            f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}"
-        )
+        print(f"  - Gradient accumulation steps: {training_config.gradient_accumulation_steps}")
         print(f"  - Dropout: {model_config.dropout_prob}")
         if training_config.use_clip_grad_norm:
-            print(
-                f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}"
-            )
+            print(f"  - Gradient clipping: max_norm={training_config.clip_grad_norm_max_norm}")
         print()
 
         # Set model to training mode
@@ -1392,9 +1324,7 @@ def main():
 
         # Training setup
         loss_meter = LossAverageMeter()
-        gradient_accumulator = GradientAccumulator(
-            training_config.gradient_accumulation_steps
-        )
+        gradient_accumulator = GradientAccumulator(training_config.gradient_accumulation_steps)
         global_step = start_step
 
         # Training loop
@@ -1445,14 +1375,9 @@ def main():
                     global_step += 1
                     avg_loss = gradient_accumulator.average_loss()
                     loss_meter.update(avg_loss)
-                    print(
-                        f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms"
-                    )
+                    print(f"Step: {global_step}, Loss: {avg_loss:.6f}, Time: {step_time:.2f} ms")
 
-                    if (
-                        args.model_save_path
-                        and global_step % training_config.model_save_interval == 0
-                    ):
+                    if args.model_save_path and global_step % training_config.model_save_interval == 0:
                         save_checkpoint(
                             f"{args.model_save_path}_step_{global_step}.pkl",
                             global_step,

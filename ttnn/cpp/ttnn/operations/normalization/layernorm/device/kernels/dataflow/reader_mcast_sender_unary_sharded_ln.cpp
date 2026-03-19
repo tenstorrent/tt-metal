@@ -71,14 +71,14 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // CB definitions
     // ---------------------------------------------------------------------------
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
+    constexpr uint32_t cb_ex_partial = get_named_compile_time_arg_val("cb_ex_partial");
+    constexpr uint32_t cb_ex = get_named_compile_time_arg_val("cb_ex");
+    constexpr uint32_t cb_ex_external = get_named_compile_time_arg_val("cb_ex_external");
+    constexpr uint32_t cb_ex_partial2 = get_named_compile_time_arg_val("cb_ex_partial2");
+    constexpr uint32_t cb_ex2 = get_named_compile_time_arg_val("cb_ex2");
+    constexpr uint32_t cb_ex_external2 = get_named_compile_time_arg_val("cb_ex_external2");
+    constexpr uint32_t cb_ex2pe = get_named_compile_time_arg_val("cb_ex2pe");
+    constexpr uint32_t cb_ex_global = get_named_compile_time_arg_val("cb_ex_global");  // E[x] global reduce
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
@@ -224,10 +224,13 @@ void kernel_main() {
         uint32_t l1_read_addr_ex_remote = cb_ex_obj.get_read_ptr();
         cb_ex_global_obj.reserve_back(block_h * num_tiles_scaler);
         uint32_t gather_write_offset = 0;
+        // Account for num_tiles_scaler (2 for Welford, 1 otherwise) when checking
+        // if the gather read fits in a single NOC packet.
+        constexpr uint32_t gather_tiles_scaler = use_welford ? 2 : 1;
         for (uint32_t block = 0; block < num_all_to_all_workers_first_stage; ++block) {
             uint32_t num_tiles_bytes = block == num_all_to_all_workers_first_stage - 1 ? num_tiles_per_worker_last_bytes
                                                                                        : num_tiles_per_worker_bytes;
-            if constexpr (num_tiles_per_worker_bytes <= NOC_MAX_BURST_SIZE) {
+            if constexpr (num_tiles_per_worker_bytes * gather_tiles_scaler <= NOC_MAX_BURST_SIZE) {
                 noc.async_read<experimental::Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
                     remote_ep,
                     cb_ex_global_obj,

@@ -10,12 +10,9 @@ from loguru import logger
 
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_inpainting import test_demo
-from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
-)
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG, SDXL_TRACE_REGION_SIZE
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
+    accuracy_assert,
     calculate_accuracy_metrics,
     check_clip_scores,
     create_report_json,
@@ -39,7 +36,6 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 1260, 2
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
@@ -47,7 +43,6 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 1260, 2
         ),
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
                 "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
@@ -101,6 +96,8 @@ def test_accuracy_sdxl_inpaint(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_inpainting_pipeline_location,
     image_resolution,
     num_inference_steps,
     vae_on_device,
@@ -125,6 +122,8 @@ def test_accuracy_sdxl_inpaint(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_inpainting_pipeline_location,
         image_resolution,
         prompts,
         negative_prompt,
@@ -171,6 +170,7 @@ def test_accuracy_sdxl_inpaint(
     print(json.dumps(report_json, indent=4))
 
     check_clip_scores(model_name, evaluation_range, prompts, accuracy_metrics["clip_scores"])
+    accuracy_assert(metadata, accuracy_metrics)
 
 
 def get_dataset_for_inpainting_accuracy(n_prompts: int):

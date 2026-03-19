@@ -6,6 +6,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
@@ -162,6 +163,8 @@ class TtDecoder(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        # On Blackhole, disable Welford algorithm due to precision issues
+        use_welford_decoder = not is_blackhole()
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -171,8 +174,8 @@ class TtDecoder(LightweightModule):
             bias=self.beta_t,
             epsilon=self.norm_eps,
             memory_config=hidden_states.memory_config(),
-            use_welford=True,
-            reciprocals=reciprocals_tensor,
+            use_welford=use_welford_decoder,
+            reciprocals=reciprocals_tensor if use_welford_decoder else None,
             **self.groupnorm_config,
         )
 

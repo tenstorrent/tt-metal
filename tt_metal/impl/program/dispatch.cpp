@@ -180,16 +180,14 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[idx]);
             // Per-kernel check: Only set actual offset if this kernel has RTAs
             if (max_rtas[idx] > 0) {
+                TT_FATAL(
+                    rta_offset <= std::numeric_limits<uint16_t>::max(), "RTA offset {} overflows uint16_t", rta_offset);
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                    uint32_t processor_index = hal.get_processor_index(
-                        kernel->get_kernel_programmable_core_type(),
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(i));
-                    TT_FATAL(
-                        rta_offset <= std::numeric_limits<uint16_t>::max(),
-                        "RTA offset {} overflows uint16_t",
-                        rta_offset);
-                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                    std::vector<uint32_t> processor_indices =
+                        kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                    for (uint32_t processor_index : processor_indices) {
+                        kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                    }
                 }
             }
         }
@@ -241,17 +239,17 @@ uint32_t configure_crta_offsets_for_kernel_groups(
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
             if (kg->crta_sizes[idx] > 0) {
+                TT_FATAL(
+                    kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
+                    "CRTA offset {} overflows uint16_t",
+                    kg->crta_offsets[idx]);
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                    uint32_t processor_index = hal.get_processor_index(
-                        kernel->get_kernel_programmable_core_type(),
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(i));
-                    TT_FATAL(
-                        kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
-                        "CRTA offset {} overflows uint16_t",
-                        kg->crta_offsets[idx]);
-                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
-                        kg->crta_offsets[idx];
+                    std::vector<uint32_t> processor_indices =
+                        kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                    for (uint32_t processor_index : processor_indices) {
+                        kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
+                            kg->crta_offsets[idx];
+                    }
                 }
             }
         }
@@ -341,7 +339,8 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     // Mock devices don't have real binaries, skip finalization
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
+        tt::TargetDevice::Mock) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
@@ -2037,8 +2036,8 @@ void assemble_device_commands(
     }
 }
 
-void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
-    const auto& hal = MetalContext::instance().hal();
+void initialize_worker_config_buf_mgr(
+    const Hal& hal, WorkerConfigBufferMgr& config_buffer_mgr, uint32_t worker_l1_unreserved_start) {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         uint32_t ringbuffer_size;
         if (hal.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::TENSIX) {
@@ -2684,13 +2683,14 @@ uint32_t program_base_addr_on_core(
 }
 
 void reset_config_buf_mgrs_and_expected_workers(
+    const Hal& hal,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgrs,
     DispatchArray<uint32_t>& expected_num_workers_completed,
     uint32_t num_entries_to_reset,
     uint32_t worker_l1_unreserved_start) {
     for (uint32_t i = 0; i < num_entries_to_reset; ++i) {
         config_buffer_mgrs[i] = WorkerConfigBufferMgr();
-        initialize_worker_config_buf_mgr(config_buffer_mgrs[i], worker_l1_unreserved_start);
+        initialize_worker_config_buf_mgr(hal, config_buffer_mgrs[i], worker_l1_unreserved_start);
     }
     std::fill(expected_num_workers_completed.begin(), expected_num_workers_completed.begin() + num_entries_to_reset, 0);
 }
