@@ -37,8 +37,8 @@ Use this file when the stack is known; otherwise follow project conventions.
 
 ## C++ (GoogleTest)
 
-- Use `TEST(Suite, Name)` for free functions; `TEST_F(Fixture, Name)` when setup
- /teardown or shared state lives in a `::testing::Test` subclass.
+- Use `TEST(Suite, Name)` for free functions; `TEST_F(Fixture, Name)` when
+  setup/teardown or shared state lives in a `::testing::Test` subclass.
 - Prefer `EXPECT_*` when later assertions still add signal; use `ASSERT_*`
   when the rest of the test is invalid if the check fails.
 - Equality / contracts: `EXPECT_EQ`, `EXPECT_NE`, `EXPECT_TRUE`, `EXPECT_STREQ`

@@ -1,8 +1,8 @@
 # pr-review-generic
 
-Do a comprehensive review of this branch as a PR into 'origin/main'. Identify files with `git diff origin/main --name-only`.
+Do a comprehensive review of this branch as a PR into 'origin/main'. Identify files with `git diff --name-only origin/main...HEAD`.
 **Do not consider this branch's history or untracked files in your evaluation.**
-Use `git diff --histogram origin/main` as the diff invocation.
+Use `git diff --histogram origin/main...HEAD` as the diff invocation.
 Evaluate for best practices, security, correctness, completeness, readability, maintainability, organization, test coverage, and documentation.
 You may dispatch subagents or swarm to help you.
 If a file touched by this branch contains thread-safe items such as std::mutex or std::atomic, additionally evaluate for thread-safety, race conditions, and deadlocks. Prefer std::atomic_flag over std::atomic<bool>.

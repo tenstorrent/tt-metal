@@ -419,7 +419,7 @@ fi
 ```bash
 # BAD with set -e – exits if i is 0
 i=0
-(( i++ ))    # exit status 1 because expression value is 0 (pre-increment)
+(( i++ ))    # exit status 1 because expression value is 0 (post-increment; value before increment)
 
 # GOOD – use pre-increment or suppress failure
 (( ++i ))
