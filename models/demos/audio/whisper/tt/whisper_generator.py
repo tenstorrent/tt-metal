@@ -922,6 +922,16 @@ class WhisperGenerator:
                         self.cross_attn_cache_valid = True
                         # Capture trace for reuse in subsequent prefill and decode iterations
                         if self.kv_cache_per_batch_size[trace_key] and not self.trace_id_prefill_decoder[trace_key]:
+                            # Write correct prefix token to staging buffers so trace warmup/compile
+                            # runs don't corrupt KV cache at position 0 with stale token data
+                            correct_token_host = ttnn.from_torch(
+                                prefill_input.reshape(-1, prefill_input.shape[-1]),
+                                dtype=ttnn.uint32,
+                                layout=ttnn.ROW_MAJOR_LAYOUT,
+                                mesh_mapper=self.input_mesh_mapper,
+                            )
+                            self.token_id_host[trace_key] = correct_token_host
+                            ttnn.copy_host_to_device_tensor(correct_token_host, self.token_id_device[trace_key])
                             self._capture_prefill_trace(trace_key, decode_pos=prefill_pos)
 
                 # On last prefill iteration, sample the first transcription token
@@ -994,10 +1004,11 @@ class WhisperGenerator:
                 # For KV cache mode without prefill, start with just the first token
                 input_ids = input_ids[:, :1]
 
-        # Generation loop start: if prefill ran, first token was already sampled, so start from transcription_start_pos + 1
-        # Otherwise start from 0
+        # Generation loop start: if prefill ran, first transcription token was already sampled
+        # during prefill. The decode loop feeds it to the decoder at position prefix_len
+        # (= transcription_start_pos) to generate the next token.
         if self.kv_cache_per_batch_size[trace_key] and prompt is not None:
-            generation_start = transcription_start_pos + 1
+            generation_start = transcription_start_pos
         else:
             generation_start = 0
 
@@ -1109,6 +1120,10 @@ class WhisperGenerator:
                 else:
                     input_ids = next_tokens[:, None]
                     ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
+                    # Keep decode_pos_embed in sync for correct position embedding
+                    # when transitioning from untraced to traced decode
+                    if self.decode_pos_embed[trace_key] is not None:
+                        ttnn.plus_one(self.decode_pos_embed[trace_key])
 
                 # Capture enlarged decode trace after sampling and position update
                 if (
