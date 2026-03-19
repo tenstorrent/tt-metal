@@ -15,6 +15,8 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ternary_composite_op.hpp"
 
+using namespace ttnn::operations::ternary;
+
 namespace ttnn::operations::ternary {
 
 namespace ternary_utils {
@@ -115,32 +117,24 @@ Tensor invoke_impl(
     Tensor condition = predicate;
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
         condition.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
-    bool typecast_needed = operations::ternary::ternary_utils::typecast_predicate(predicate, t_true, t_false);
+    bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true, t_false);
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
 
-    if (operations::ternary::is_invalid_bcast(broadcast_type)) {
-        return operations::ternary::ternary_utils::where_impl(
+    if (is_invalid_bcast(broadcast_type)) {
+        return ternary_utils::where_impl(
             condition,
             t_true,
             t_false,
-            operations::ternary::ternary_utils::determine_memory_config(memory_config, predicate.memory_config()),
+            ternary_utils::determine_memory_config(memory_config, predicate.memory_config()),
             output);
     }
 
-    std::optional<DataType> output_dtype =
-        operations::ternary::ternary_utils::determine_output_dtype(output, t_true.dtype());
+    std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
-        operations::ternary::TernaryOpType::WHERE,
-        condition,
-        t_true,
-        t_false,
-        output_dtype,
-        memory_config,
-        output,
-        sub_core_grids);
+        TernaryOpType::WHERE, condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
 }
 
 // TTS: tensor, tensor, scalar
@@ -213,15 +207,14 @@ namespace ttnn {
 
 Tensor where(
     const Tensor& predicate,
-    const operations::ternary::TensorScalarVariant& value_true,
-    const operations::ternary::TensorScalarVariant& value_false,
+    const TensorScalarVariant& value_true,
+    const TensorScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
-            return ttnn::operations::ternary::invoke_impl(
-                predicate, true_val, false_val, memory_config, output, sub_core_grids);
+            return ttnn::invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
         },
         value_true,
         value_false);
@@ -275,32 +268,31 @@ Tensor addcmul(
         input_a.dtype());
 
     // Only TTT variant is supported for addcmul
-    auto broadcast_type = operations::ternary::get_broadcast_type(
-        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
-    bool is_subtile_bcast = (broadcast_type == operations::ternary::TernaryBroadcastType::ROW_BCAST) ||
-                            (broadcast_type == operations::ternary::TernaryBroadcastType::COL_BCAST) ||
-                            (broadcast_type == operations::ternary::TernaryBroadcastType::SCALAR_BCAST);
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
 
-    if (operations::ternary::is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
         float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
-        return operations::ternary::_addcmul(input_a, input_b, input_c, value_f, memory_config);
+        return _addcmul(input_a, input_b, input_c, value_f, memory_config);
     }
 
     // Use LLK implementation - pass value as scalar parameter
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
     return ttnn::prim::ternary(
-        operations::ternary::TernaryOpType::ADDCMUL,
+        TernaryOpType::ADDCMUL,
         input_a,
         input_b,
         input_c,
         value,
-        operations::ternary::ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
         memory_config,
         output,
         std::nullopt);
@@ -316,8 +308,7 @@ Tensor addcdiv(
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
 
     // Only TTT variant is supported for addcdiv
-    auto broadcast_type = operations::ternary::get_broadcast_type(
-        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+    auto broadcast_type = get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input_a.dtype()) || is_block_float(input_b.dtype()) || is_block_float(input_c.dtype());
@@ -326,21 +317,21 @@ Tensor addcdiv(
 
     TT_FATAL(!is_input_int32, "Addcdiv TTT does not support INT32 inputs.");
 
-    if (operations::ternary::is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
+    if (is_invalid_bcast(broadcast_type) || is_any_input_block_format) {
         log_debug(tt::LogOp, "Addcdiv Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
-        return operations::ternary::_addcdiv(input_a, input_b, input_c, value, memory_config);
+        return _addcdiv(input_a, input_b, input_c, value, memory_config);
     }
 
     // Use LLK implementation - pass value as scalar parameter
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
     return ttnn::prim::ternary(
-        operations::ternary::TernaryOpType::ADDCDIV,
+        TernaryOpType::ADDCDIV,
         input_a,
         input_b,
         input_c,
         value,
-        operations::ternary::ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
         memory_config,
         output,
         std::nullopt);
@@ -352,28 +343,27 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type = operations::ternary::get_broadcast_type(input.logical_shape(), end.logical_shape());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
-    bool is_subtile_bcast = (broadcast_type == operations::ternary::TernaryBroadcastType::ROW_BCAST) ||
-                            (broadcast_type == operations::ternary::TernaryBroadcastType::COL_BCAST) ||
-                            (broadcast_type == operations::ternary::TernaryBroadcastType::SCALAR_BCAST);
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
     bool is_input_int32 = (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32);
 
-    if (operations::ternary::is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) ||
-        is_input_int32) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTS (scalar weight)");
-        return operations::ternary::_lerp_overload(input, end, weight, memory_config, output);
+        return _lerp_overload(input, end, weight, memory_config, output);
     }
 
     log_debug(tt::LogOp, "Lerp LLK - TTS (scalar weight)");
     return ttnn::prim::ternary(
-        operations::ternary::TernaryOpType::LERP,
+        TernaryOpType::LERP,
         input,
         end,
         weight,
-        operations::ternary::ternary_utils::determine_output_dtype(output, input.dtype()),
-        operations::ternary::ternary_utils::determine_memory_config(memory_config, input.memory_config()),
+        ternary_utils::determine_output_dtype(output, input.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input.memory_config()),
         output,
         std::nullopt);
 }
@@ -384,31 +374,29 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    auto broadcast_type =
-        operations::ternary::get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
+    auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =
         is_block_float(input.dtype()) || is_block_float(end.dtype()) || is_block_float(weight.dtype());
-    bool is_subtile_bcast = (broadcast_type == operations::ternary::TernaryBroadcastType::ROW_BCAST) ||
-                            (broadcast_type == operations::ternary::TernaryBroadcastType::COL_BCAST) ||
-                            (broadcast_type == operations::ternary::TernaryBroadcastType::SCALAR_BCAST);
+    bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
+                            (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
     bool is_input_int32 =
         (input.dtype() == DataType::INT32) && (end.dtype() == DataType::INT32) && (weight.dtype() == DataType::INT32);
 
-    if (operations::ternary::is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) ||
-        is_input_int32) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
         log_debug(tt::LogOp, "Lerp Fallback - TTT (tensor weight)");
-        return operations::ternary::_lerp(input, end, weight, memory_config, output);
+        return _lerp(input, end, weight, memory_config, output);
     }
 
     log_debug(tt::LogOp, "Lerp LLK - TTT (tensor weight)");
     return ttnn::prim::ternary(
-        operations::ternary::TernaryOpType::LERP,
+        TernaryOpType::LERP,
         input,
         end,
         weight,
-        operations::ternary::ternary_utils::determine_output_dtype(output, input.dtype()),
-        operations::ternary::ternary_utils::determine_memory_config(memory_config, input.memory_config()),
+        ternary_utils::determine_output_dtype(output, input.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input.memory_config()),
         output,
         std::nullopt);
 }
