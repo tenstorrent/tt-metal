@@ -46,6 +46,28 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
+def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
+    """Map mode string to (num_routed_experts_to_upload, rigged_group_count).
+
+    Supported modes:
+      - unrigged_all_experts
+      - rigged_groups1 ... rigged_groups8
+
+    For rigged_groupsN we upload contiguous groups [0..N-1] and rig
+    pseudo-random experts within those uploaded groups.
+    """
+    if expert_upload_mode == "unrigged_all_experts":
+        return 256, None
+    if expert_upload_mode.startswith("rigged_groups"):
+        suffix = expert_upload_mode.removeprefix("rigged_groups")
+        if suffix.isdigit():
+            rigged_group_count = int(suffix)
+            if not (1 <= rigged_group_count <= 8):
+                raise ValueError(f"Invalid expert_upload_mode: {expert_upload_mode}")
+            return rigged_group_count * 32, rigged_group_count
+    raise ValueError(f"Invalid expert_upload_mode: {expert_upload_mode}")
+
+
 # ============================================================================
 # Unified decoder block tensor setup (single BDW instance for all L1 weights)
 # ============================================================================
@@ -64,7 +86,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     num_routed_experts: int = 0,
     preloaded_weights=None,
-    rigged_experts: bool = False,
+    rigged_group_count: int | None = None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -172,7 +194,7 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
-    if rigged_experts:
+    if rigged_group_count is not None:
         # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
         # (all-ones can produce brittle saturation in downstream low-precision paths)
         torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -183,12 +205,29 @@ def create_decoder_block_tensors(
 
     rigged_group_ids = None
     rigged_expert_ids = None
-    if rigged_experts and is_moe and preloaded_weights is None:
-        # Deterministically pick 4 groups and 2 experts/group, then bias-rig gate selection.
+    if rigged_group_count is not None and is_moe and preloaded_weights is None:
+        # Pseudo-random rigging within uploaded groups:
+        # - pick up to 4 groups among [0 .. rigged_group_count-1]
+        # - pick exactly 8 total experts, split pseudo-randomly across selected groups
         g = torch.Generator()
         g.manual_seed(2026)
-        rigged_group_ids = torch.randperm(8, generator=g)[:4].tolist()
-        rigged_expert_ids = {grp: torch.randperm(32, generator=g)[:2].tolist() for grp in rigged_group_ids}
+        if not (1 <= rigged_group_count <= 8):
+            raise ValueError(f"rigged_group_count must be in [1, 8], got {rigged_group_count}")
+        num_selected_groups = min(4, rigged_group_count)
+        rigged_group_ids = torch.randperm(rigged_group_count, generator=g)[:num_selected_groups].tolist()
+
+        total_rigged_experts = 8
+        # Start with one expert per selected group, then randomly distribute the remainder.
+        experts_per_group = [1] * num_selected_groups
+        remaining = total_rigged_experts - num_selected_groups
+        for _ in range(remaining):
+            chosen_group = int(torch.randint(0, num_selected_groups, (1,), generator=g).item())
+            experts_per_group[chosen_group] += 1
+
+        rigged_expert_ids = {
+            grp: torch.randperm(32, generator=g)[:num_experts].tolist()
+            for grp, num_experts in zip(rigged_group_ids, experts_per_group, strict=True)
+        }
 
         rigged_bias = torch.full((8, 32), -10.0, dtype=torch.bfloat16)
         for grp in rigged_group_ids:
@@ -845,7 +884,20 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
-@pytest.mark.parametrize("rigged_experts", [False, True], ids=["normal_gate", "fixed_experts"])
+@pytest.mark.parametrize(
+    "expert_upload_mode",
+    [
+        pytest.param("unrigged_all_experts", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups4", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups5", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
+        "rigged_groups8",
+    ],
+)
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
@@ -884,7 +936,7 @@ def test_decoder(
     position_id,
     noc_mode,
     num_internal_iterations,
-    rigged_experts,
+    expert_upload_mode,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -899,15 +951,28 @@ def test_decoder(
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
 
+    if validate_standalone_moe and not validate_standalone_mla:
+        pytest.skip("validate_standalone_moe requires validate_standalone_mla as it uses the MLA output")
+
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
+
+    effective_num_routed_experts, rigged_group_count = _decode_expert_upload_mode(expert_upload_mode)
+    logger.info(f"Expert upload mode: {expert_upload_mode}")
+    if effective_num_routed_experts != num_routed_experts:
+        logger.info(
+            "Mode {}: uploading {} routed experts instead of {}",
+            expert_upload_mode,
+            effective_num_routed_experts,
+            num_routed_experts,
+        )
 
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=num_routed_experts,
+        num_routed_experts=effective_num_routed_experts,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -922,8 +987,8 @@ def test_decoder(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         max_seq_len=max_seq_len,
         is_moe=True,
-        num_routed_experts=num_routed_experts,
-        rigged_experts=rigged_experts,
+        num_routed_experts=effective_num_routed_experts,
+        rigged_group_count=rigged_group_count,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
