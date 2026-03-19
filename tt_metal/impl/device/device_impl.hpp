@@ -141,8 +141,6 @@ public:
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
-    bool compile_fabric();
-    void configure_fabric();
     // Puts device into reset
     bool close() override;
 
@@ -226,9 +224,6 @@ private:
 
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
-
-    // Fabric program includes ethernet router kernel
-    std::unique_ptr<Program> fabric_program_;
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;
