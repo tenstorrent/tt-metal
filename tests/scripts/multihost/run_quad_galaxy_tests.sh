@@ -241,10 +241,15 @@ run_dual_demo_test() {
 }
 
 run_dual_demo_mtp_test() {
+    fail=0
     setup_dual_galaxy_env
     local timeout=$(_demo_timeout 2400)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo_mtp]' 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/dual_demo_mtp_output.log" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
 }
 
 run_quad_demo_test() {
@@ -260,10 +265,15 @@ run_quad_demo_test() {
 }
 
 run_quad_demo_mtp_test() {
+    fail=0
     setup_quad_galaxy_env
     local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo_mtp]' 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log"
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_mtp_demo.py 2>&1 | tee generated/artifacts/quad_demo_mtp_output.log" ; fail+=$?
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
 }
 
 ###############################################################################
