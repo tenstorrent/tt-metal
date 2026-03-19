@@ -83,7 +83,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     # Exclude program_config: traced configs have block_w computed for the original device grid;
     # letting ttnn auto-compute program_config ensures it matches the local device
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape

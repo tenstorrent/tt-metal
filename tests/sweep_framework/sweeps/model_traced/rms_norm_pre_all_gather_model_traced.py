@@ -156,7 +156,7 @@ def run(
             )
 
     # Parse compute_kernel_config and dtype from traced config via build_op_kwargs
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
     # Ensure dtype has a default
     if "dtype" not in op_kwargs:
         op_kwargs["dtype"] = ttnn.bfloat16

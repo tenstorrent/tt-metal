@@ -135,7 +135,7 @@ def run(
 
     # Build op kwargs from traced config; exclude program_config since ttnn.softmax
     # doesn't accept it (sharded program config is computed internally)
-    op_kwargs = build_op_kwargs(kwargs, exclude={"dim", "program_config"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"dim"}, output_memory_config=output_memory_config)
 
     # Sharded softmax with random test data needs numeric_stable=True to avoid
     # exp() overflow producing all-zero output

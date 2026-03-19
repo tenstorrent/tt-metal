@@ -111,7 +111,7 @@ def run(
     # Build op kwargs — auto-parses compute_kernel_config, memory_config dicts;
     # auto-filters weight_* named tensor kwargs and infrastructure keys.
     # Exclude program_config because it needs custom parsing (LayerNorm-specific).
-    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Handle program_config with custom parser
     program_config = kwargs.get("program_config")

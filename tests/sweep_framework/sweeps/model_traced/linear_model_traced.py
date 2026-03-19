@@ -152,7 +152,7 @@ def run(
     # Use build_op_kwargs to parse dict values for op kwargs (compute_kernel_config, etc.).
     # Exclude program_config (handled above), activation (used for golden too),
     # and output_tile (a Tile object that can't be auto-parsed from dict).
-    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"program_config", "activation", "output_tile"})
+    parsed_op_kwargs = build_op_kwargs(kwargs, exclude={"output_tile"})
 
     # When program_config is None (grid-based configs dropped), the shard_spec in
     # memory configs was computed for the original device and is invalid. Clear sharded
