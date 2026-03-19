@@ -437,14 +437,19 @@ void kernel_main() {
         pkt_unicast_hdr = PacketHeaderPool::allocate_header();
         pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
-        // Pre-configure scatter write header: chunk sizes and payload size are constant
-        uint64_t dummy_addrs[2] = {0, 0};
-        uint16_t scatter_chunk_sizes[1] = {static_cast<uint16_t>(ag_page_size)};
+        // Pre-configure scatter write header with max packet size; per-call with_state
+        // overrides DstAddrs, ChunkSizes, and PayloadSize for the actual tile count.
+        constexpr uint32_t scatter_init_count = ag_packet_size_in_pages >= 2 ? ag_packet_size_in_pages : 2;
+        uint64_t dummy_addrs[4] = {0, 0, 0, 0};
+        uint16_t scatter_chunk_sizes[3] = {
+            static_cast<uint16_t>(ag_page_size),
+            static_cast<uint16_t>(ag_page_size),
+            static_cast<uint16_t>(ag_page_size)};
         fabric_unicast_noc_scatter_write_set_state<
             UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
             pkt_scatter_hdr, 1,
-            NocUnicastScatterCommandHeader(dummy_addrs, scatter_chunk_sizes, 2),
-            ag_page_size * 2);
+            NocUnicastScatterCommandHeader(dummy_addrs, scatter_chunk_sizes, scatter_init_count),
+            ag_page_size * ag_packet_size_in_pages);
 
         // Pre-configure unicast write header: payload size is constant
         fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
@@ -643,30 +648,37 @@ void kernel_main() {
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
                             for (uint32_t col = 0; col < DHt; ++col) {
-                                for (uint32_t row = my_row_start; row < my_row_end; row += 2) {
-                                    if (kv_slice.d2_start + row >= end_seq_tile) break;
+                                for (uint32_t row = my_row_start; row < my_row_end; row += ag_packet_size_in_pages) {
+                                    uint32_t tiles_in_batch = 0;
+                                    uint64_t k_noc_addrs[4] = {0, 0, 0, 0};
+                                    for (uint32_t i = 0; i < ag_packet_size_in_pages && row + i < my_row_end; i++) {
+                                        if (kv_slice.d2_start + row + i >= end_seq_tile) break;
+                                        const uint32_t dest_id = bh_offset
+                                            + (kv_global_start_tile + row + i) * ag_output_Wt + col;
+                                        k_noc_addrs[tiles_in_batch] =
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                gathered_k_writer, dest_id, 0);
+                                        tiles_in_batch++;
+                                    }
+                                    if (tiles_in_batch == 0) break;
                                     const uint32_t src_l1_addr = base_k_read_ptr
                                         + (row + col * Sk_chunk_t) * ag_page_size;
-                                    const uint32_t dest_id0 = bh_offset
-                                        + (kv_global_start_tile + row) * ag_output_Wt + col;
-                                    const bool have_second =
-                                        (row + 1 < my_row_end) && (kv_slice.d2_start + row + 1 < end_seq_tile);
-                                    if (have_second) {
-                                        const uint32_t dest_id1 = bh_offset
-                                            + (kv_global_start_tile + row + 1) * ag_output_Wt + col;
-                                        uint64_t k_noc_addrs[2] = {
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_k_writer, dest_id0, 0),
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_k_writer, dest_id1, 0)};
-                                        uint16_t k_cs[1] = {static_cast<uint16_t>(ag_page_size)};
-                                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                    if (tiles_in_batch > 1) {
+                                        uint16_t k_cs[3] = {
+                                            static_cast<uint16_t>(ag_page_size),
+                                            static_cast<uint16_t>(ag_page_size),
+                                            static_cast<uint16_t>(ag_page_size)};
+                                        fabric_unicast_noc_scatter_write_with_state<
+                                            UnicastScatterWriteUpdateMask::DstAddrs |
+                                            UnicastScatterWriteUpdateMask::ChunkSizes |
+                                            UnicastScatterWriteUpdateMask::PayloadSize>(
                                             &mux_conn, pkt_scatter_hdr, src_l1_addr,
-                                            NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, 2));
+                                            NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, tiles_in_batch),
+                                            ag_page_size * tiles_in_batch);
                                     } else {
-                                        uint64_t k_noc_addr =
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_k_writer, dest_id0, 0);
                                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                             &mux_conn, pkt_unicast_hdr, src_l1_addr,
-                                            NocUnicastCommandHeader{k_noc_addr});
+                                            NocUnicastCommandHeader{k_noc_addrs[0]});
                                     }
                                     noc_async_write_barrier();
                                 }
@@ -683,28 +695,36 @@ void kernel_main() {
                             const uint32_t base_v_read_ptr = get_read_ptr(cb_v_writer_in);
                             for (uint32_t row = my_row_start; row < my_row_end; ++row) {
                                 if (kv_slice.d2_start + row >= end_seq_tile) break;
-                                for (uint32_t col = 0; col < DHt; col += 2) {
+                                for (uint32_t col = 0; col < DHt; col += ag_packet_size_in_pages) {
+                                    uint32_t tiles_in_batch = 0;
+                                    uint64_t v_noc_addrs[4] = {0, 0, 0, 0};
+                                    for (uint32_t i = 0; i < ag_packet_size_in_pages && col + i < DHt; i++) {
+                                        const uint32_t dest_id = bh_offset
+                                            + (kv_global_start_tile + row) * ag_output_Wt + col + i;
+                                        v_noc_addrs[tiles_in_batch] =
+                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(
+                                                gathered_v_writer, dest_id, 0);
+                                        tiles_in_batch++;
+                                    }
+                                    if (tiles_in_batch == 0) break;
                                     const uint32_t src_l1_addr = base_v_read_ptr
                                         + (row * DHt + col) * ag_page_size;
-                                    const uint32_t dest_id0 = bh_offset
-                                        + (kv_global_start_tile + row) * ag_output_Wt + col;
-                                    const bool have_second = (col + 1 < DHt);
-                                    if (have_second) {
-                                        const uint32_t dest_id1 = bh_offset
-                                            + (kv_global_start_tile + row) * ag_output_Wt + col + 1;
-                                        uint64_t v_noc_addrs[2] = {
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_v_writer, dest_id0, 0),
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_v_writer, dest_id1, 0)};
-                                        uint16_t v_cs[1] = {static_cast<uint16_t>(ag_page_size)};
-                                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                                    if (tiles_in_batch > 1) {
+                                        uint16_t v_cs[3] = {
+                                            static_cast<uint16_t>(ag_page_size),
+                                            static_cast<uint16_t>(ag_page_size),
+                                            static_cast<uint16_t>(ag_page_size)};
+                                        fabric_unicast_noc_scatter_write_with_state<
+                                            UnicastScatterWriteUpdateMask::DstAddrs |
+                                            UnicastScatterWriteUpdateMask::ChunkSizes |
+                                            UnicastScatterWriteUpdateMask::PayloadSize>(
                                             &mux_conn, pkt_scatter_hdr, src_l1_addr,
-                                            NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, 2));
+                                            NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, tiles_in_batch),
+                                            ag_page_size * tiles_in_batch);
                                     } else {
-                                        uint64_t v_noc_addr =
-                                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(gathered_v_writer, dest_id0, 0);
                                         fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                             &mux_conn, pkt_unicast_hdr, src_l1_addr,
-                                            NocUnicastCommandHeader{v_noc_addr});
+                                            NocUnicastCommandHeader{v_noc_addrs[0]});
                                     }
                                     noc_async_write_barrier();
                                 }
