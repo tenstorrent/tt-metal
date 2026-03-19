@@ -409,22 +409,10 @@ void kernel_main() {
     }
 
     // ---- MUX writer setup: parsed by all MUX writers with valid connections ----
-    bool do_ag = false;
-    volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_injector_sem = nullptr;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_write = nullptr;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr_sem = nullptr;
-    uint32_t ag_direction = 0;
-    uint32_t ag_input_Wt = 0, ag_input_Ht = 0, ag_output_Wt = 0, ag_output_Ht = 0;
-    uint32_t ag_gather_dim = 0, ag_batch_head_count = 0;
-    uint32_t ag_tile_id_start = 0, ag_tile_id_end = 0, ag_ring_size = 0;
-    uint32_t ag_writes_expected = 0, ag_slice_writes = 0;
-    uint32_t kv_scratch_addr = 0;
-    OpSignaler op_signaler;
-    uint32_t ag_local_gathered_tile_id_start = 0;
-    uint32_t k_addr_ag_rt = 0, v_addr_ag_rt = 0;
+    uint32_t ag_output_Wt = 0, ag_output_Ht = 0;
     uint32_t gathered_k_addr_ag_rt = 0, gathered_v_addr_ag_rt = 0;
-    
     uint32_t injector_noc_x = 0, injector_noc_y = 0;
     uint32_t num_muxes_in_direction = 1, my_mux_index = 0;
 
@@ -434,55 +422,27 @@ void kernel_main() {
         injector_noc_y = get_arg_val<uint32_t>(argidx++);
         num_muxes_in_direction = get_arg_val<uint32_t>(argidx++);
         my_mux_index = get_arg_val<uint32_t>(argidx++);
-        ag_direction = get_arg_val<uint32_t>(argidx++);
-        ag_input_Wt = get_arg_val<uint32_t>(argidx++);
-        ag_input_Ht = get_arg_val<uint32_t>(argidx++);
         ag_output_Wt = get_arg_val<uint32_t>(argidx++);
         ag_output_Ht = get_arg_val<uint32_t>(argidx++);
-        ag_gather_dim = get_arg_val<uint32_t>(argidx++);
-        ag_batch_head_count = get_arg_val<uint32_t>(argidx++);
-        ag_tile_id_start = get_arg_val<uint32_t>(argidx++);
-        ag_tile_id_end = get_arg_val<uint32_t>(argidx++);
-        ag_ring_size = get_arg_val<uint32_t>(argidx++);
-        k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
-        v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_k_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
         gathered_v_addr_ag_rt = get_arg_val<uint32_t>(argidx++);
 
-        op_signaler = OpSignaler(argidx);
+        // OpSignaler constructor advances argidx past its RT args
+        OpSignaler(argidx);
 
-        out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
-
-        // Allocate L1 scratch for one packet of K or V tiles
-        cb_reserve_back(ag_kv_scratch_cb_id, ag_packet_size_in_pages);
-        kv_scratch_addr = get_write_ptr(ag_kv_scratch_cb_id);
-        cb_push_back(ag_kv_scratch_cb_id, ag_packet_size_in_pages);
-
-        // Allocate three packet header slots: data writes, self sem_inc, injector sem_inc
+        // Allocate two packet header slots: data writes and injector sem_inc
         cb_reserve_back(ag_pkt_hdr_cb_id, 1);
         const uint32_t pkt_hdr_write_addr = get_write_ptr(ag_pkt_hdr_cb_id);
-        cb_push_back(ag_pkt_hdr_cb_id, 1);
-        cb_reserve_back(ag_pkt_hdr_cb_id, 1);
-        const uint32_t pkt_hdr_sem_addr = get_write_ptr(ag_pkt_hdr_cb_id);
         cb_push_back(ag_pkt_hdr_cb_id, 1);
         cb_reserve_back(ag_pkt_hdr_cb_id, 1);
         const uint32_t pkt_hdr_injector_sem_l1 = get_write_ptr(ag_pkt_hdr_cb_id);
         cb_push_back(ag_pkt_hdr_cb_id, 1);
 
         pkt_hdr_write = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_write_addr);
-        pkt_hdr_sem = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_sem_addr);
         pkt_hdr_injector_sem = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(pkt_hdr_injector_sem_l1);
 
-        // Set routing: always 1 hop in direction (store-and-forward handles multi-hop)
         fabric_set_unicast_route<false>(pkt_hdr_write, 1);
-        fabric_set_unicast_route<false>(pkt_hdr_sem, 1);
         fabric_set_unicast_route<false>(pkt_hdr_injector_sem, 1);
-
-        // Destination for self sem_inc packets: same physical NOC coordinates on all chips
-        const uint64_t remote_out_ready_sem_noc_addr =
-            safe_get_noc_addr(my_x[0], my_y[0], out_ready_sem_addr, 0);
-        pkt_hdr_sem->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_out_ready_sem_noc_addr, 1});
 
         // Packet header for signaling the injector core on the next device
         const uint64_t injector_out_ready_sem_noc_addr =
@@ -491,142 +451,10 @@ void kernel_main() {
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{injector_out_ready_sem_noc_addr, 1});
 
         DPRINT << "injector sem x,y: " << injector_noc_x << "," << injector_noc_y << " addr: " << out_ready_sem_addr << ENDL();
-
-        // Tile offset of our chip's local slice in the gathered output tensor
-        ag_local_gathered_tile_id_start =
-            (ag_gather_dim == 3) ? ag_device_index * ag_input_Wt : ag_device_index * ag_input_Ht * ag_input_Wt;
-
-        // Number of additional slices to relay after the local one (mirrors CCL writer)
-        if constexpr (ag_topology == ttnn::ccl::Topology::Ring) {
-            ag_writes_expected = (ag_direction == 1) ? (ag_num_targets_backward > 0 ? ag_num_targets_backward - 1 : 0)
-                                                     : (ag_num_targets_forward > 0 ? ag_num_targets_forward - 1 : 0);
-        } else {
-            // Linear
-            ag_writes_expected =
-                (ag_direction == 1 && ag_num_targets_backward > 0)
-                    ? ag_num_targets_forward
-                    : ((ag_direction == 0 && ag_num_targets_forward > 0) ? ag_num_targets_backward : 0);
-        }
-
-        do_ag = true;
     }
 
     const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size);
     const auto gathered_v_writer = TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size);
-
-    // Lambda: send all tiles for one local K or V tensor to the next device.
-    // Reads from local input DRAM, writes to the gathered output tensor on the next device.
-    auto send_local_slice = [&](const auto& input_acc, const auto& gathered_acc) {
-        uint32_t gathered_bh_start = ag_local_gathered_tile_id_start;
-        uint32_t input_bh_start = 0;
-        for (uint32_t bh = 0; bh < ag_batch_head_count; ++bh) {
-            uint32_t tiles_read = ag_tile_id_start;
-            uint32_t pages_in_row = ag_tile_id_start % ag_input_Wt;
-            uint32_t input_row_off = (ag_tile_id_start / ag_input_Wt) * ag_input_Wt;
-            uint32_t output_row_off = (ag_tile_id_start / ag_input_Wt) * ag_output_Wt;
-
-            while (tiles_read < ag_tile_id_end) {
-                const uint32_t num_pages = std::min(ag_tile_id_end - tiles_read, ag_packet_size_in_pages);
-
-                const uint32_t input_id0 = input_bh_start + input_row_off + pages_in_row;
-                const uint32_t gathered_id0 = gathered_bh_start + output_row_off + pages_in_row;
-                pages_in_row++;
-                if (pages_in_row >= ag_input_Wt) {
-                    input_row_off += ag_input_Wt;
-                    output_row_off += ag_output_Wt;
-                    pages_in_row = 0;
-                }
-
-                if constexpr (ag_packet_size_in_pages == 2) {
-                    if (num_pages == 2) {
-                        const uint32_t input_id1 = input_bh_start + input_row_off + pages_in_row;
-                        const uint32_t gathered_id1 = gathered_bh_start + output_row_off + pages_in_row;
-                        pages_in_row++;
-                        if (pages_in_row >= ag_input_Wt) {
-                            input_row_off += ag_input_Wt;
-                            output_row_off += ag_output_Wt;
-                            pages_in_row = 0;
-                        }
-                        noc_async_read_tile(input_id0, input_acc, kv_scratch_addr);
-                        noc_async_read_tile(input_id1, input_acc, kv_scratch_addr + ag_page_size);
-                        noc_async_read_barrier();
-                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
-                            ag_page_size, pkt_hdr_write, gathered_id0, gathered_id1, gathered_acc);
-                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size * 2);
-                    } else {
-                        noc_async_read_tile(input_id0, input_acc, kv_scratch_addr);
-                        noc_async_read_barrier();
-                        tt::tt_fabric::linear::to_noc_unicast_write(
-                            ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
-                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size);
-                    }
-                } else {
-                    noc_async_read_tile(input_id0, input_acc, kv_scratch_addr);
-                    noc_async_read_barrier();
-                    tt::tt_fabric::linear::to_noc_unicast_write(
-                        ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
-                    tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size);
-                }
-
-                tiles_read += num_pages;
-            }
-            gathered_bh_start += ag_output_Wt * ag_output_Ht;
-            input_bh_start += ag_input_Wt * ag_input_Ht;
-        }
-    };
-
-    // Lambda: store-and-forward one received slice from gathered DRAM to the next device.
-    // slice_tile_id_start: offset of the forwarded chip's slice within the gathered K or V tensor.
-    auto forward_slice = [&](const auto& gathered_acc, uint32_t slice_tile_id_start) {
-        uint32_t tile_id_start = slice_tile_id_start;
-        for (uint32_t bh = 0; bh < ag_batch_head_count; ++bh) {
-            uint32_t tiles_read = ag_tile_id_start;
-            uint32_t pages_in_row = ag_tile_id_start % ag_input_Wt;
-            uint32_t row_offset = (ag_tile_id_start / ag_input_Wt) * ag_output_Wt;
-
-            while (tiles_read < ag_tile_id_end) {
-                const uint32_t num_pages = std::min(ag_tile_id_end - tiles_read, ag_packet_size_in_pages);
-
-                const uint32_t gathered_id0 = tile_id_start + row_offset + pages_in_row;
-
-                noc_async_read_tile(gathered_id0, gathered_acc, kv_scratch_addr);
-                pages_in_row++;
-                if (pages_in_row >= ag_input_Wt) {
-                    row_offset += ag_output_Wt;
-                    pages_in_row = 0;
-                }
-
-                if constexpr (ag_packet_size_in_pages == 2) {
-                    if (num_pages == 2) {
-                        const uint32_t gathered_id1 = tile_id_start + row_offset + pages_in_row;
-                        noc_async_read_tile(gathered_id1, gathered_acc, kv_scratch_addr + ag_page_size);
-                        pages_in_row++;
-                        if (pages_in_row >= ag_input_Wt) {
-                            row_offset += ag_output_Wt;
-                            pages_in_row = 0;
-                        }
-                        noc_async_read_barrier();
-                        tt::tt_fabric::linear::to_noc_unicast_scatter_write(
-                            ag_page_size, pkt_hdr_write, gathered_id0, gathered_id1, gathered_acc);
-                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size * 2);
-                    } else {
-                        noc_async_read_barrier();
-                        tt::tt_fabric::linear::to_noc_unicast_write(
-                            ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
-                        tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size);
-                    }
-                } else {
-                    noc_async_read_barrier();
-                    tt::tt_fabric::linear::to_noc_unicast_write(
-                        ag_page_size, pkt_hdr_write, gathered_id0, gathered_acc);
-                    tt::tt_fabric::fabric_async_write(mux_conn, pkt_hdr_write, kv_scratch_addr, ag_page_size);
-                }
-
-                tiles_read += num_pages;
-            }
-            tile_id_start += ag_output_Wt * ag_output_Ht;
-        }
-    };
 #endif
 
     // c_6/c_17 carry softmax statistics between compute and writer for DRAM round-trips.
@@ -681,59 +509,6 @@ void kernel_main() {
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
-
-// #ifdef USE_MUX
-//         // Interleaved K/V all-gather step: one phase-1 (ring_iter==0) or phase-2 step per iter.
-//         // This prevents deadlock by ensuring cb_out is drained between AG waits.
-//         if (do_ag) {
-//             if (ring_iter == 0) {
-//                 // Phase 1: send our local K/V slice to the next device
-//                 send_local_slice(
-//                     TensorAccessor(ag_input_k_args, k_addr_ag_rt, ag_page_size),
-//                     TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size));
-//                 send_local_slice(
-//                     TensorAccessor(ag_input_v_args, v_addr_ag_rt, ag_page_size),
-//                     TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size));
-//                 noc_async_write_barrier();
-//                 tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-//                 // Signal SDPA reader that our local slice is available (direction==1 only)
-//                 if (ag_direction == 1) {
-//                     op_signaler.synchronize_workers_and_signal_op(ag_device_index);
-//                 }
-//             } else if (ag_slice_writes < ag_writes_expected) {
-//                 // Phase 2 step: wait for next slice to arrive, signal reader, then forward it
-//                 noc_semaphore_wait_min(out_ready_sem_ptr, ag_slice_writes + 1);
-
-//                 // Compute which chip's slice just arrived
-//                 int slice_chip_id;
-//                 uint32_t actual_slice_chip_id;
-//                 if (ag_direction == 1) {
-//                     slice_chip_id = static_cast<int>(ag_device_index) + static_cast<int>(ag_slice_writes) + 1;
-//                     actual_slice_chip_id = (slice_chip_id >= static_cast<int>(ag_ring_size))
-//                                                ? slice_chip_id - ag_ring_size
-//                                                : slice_chip_id;
-//                 } else {
-//                     slice_chip_id = static_cast<int>(ag_device_index) - static_cast<int>(ag_slice_writes) - 1;
-//                     actual_slice_chip_id = (slice_chip_id < 0) ? ag_ring_size + slice_chip_id : slice_chip_id;
-//                 }
-
-//                 // Signal SDPA reader that this chip's K/V is now in gathered DRAM
-//                 op_signaler.synchronize_workers_and_signal_op(actual_slice_chip_id);
-
-//                 const uint32_t slice_tile_id_start = (ag_gather_dim == 3)
-//                                                          ? actual_slice_chip_id * ag_input_Wt
-//                                                          : actual_slice_chip_id * ag_input_Ht * ag_input_Wt;
-
-//                 forward_slice(
-//                     TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size), slice_tile_id_start);
-//                 forward_slice(
-//                     TensorAccessor(ag_gathered_v_args, gathered_v_addr_ag_rt, ag_page_size), slice_tile_id_start);
-//                 noc_async_write_barrier();
-//                 tt::tt_fabric::fabric_atomic_inc(mux_conn, pkt_hdr_sem);
-//                 ag_slice_writes++;
-//             }
-//         }
-// #endif
 
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -841,30 +616,11 @@ void kernel_main() {
                         }
                         KV_chunks_processed_in_iter++;
 
-                        Slice kv_slice;
-                        uint32_t end_seq_tile;
-                        ASSERT(kv_chunk_is_joint == false);
-
-                        if (kv_chunk_is_joint) {
-                            const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
-                            const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
-                            kv_slice =
-                                Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                            end_seq_tile = Lt;
-                        } else {
-                            // if (ring_iter == 0) {
-                            //     const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-                            //     kv_slice = Slice(
-                            //         nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                            //     end_seq_tile = std::min(logical_nt, local_padded_Nt);
-                            // } else {
-                            const uint32_t gathered_kv_start_tile =
-                                ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                            kv_slice = Slice(
-                                nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                            end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
-                            // }
-                        }
+                        const uint32_t gathered_kv_start_tile =
+                            ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
+                        const Slice kv_slice(
+                            nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                        const uint32_t end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
 
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
@@ -873,14 +629,6 @@ void kernel_main() {
                         if (!is_last_ring_iter) {
                         if (!kv_chunk_is_joint) {
                             const uint32_t base_k_read_ptr = get_read_ptr(cb_k_writer_in);
-                            volatile tt_l1_ptr uint16_t* k_data_peek =
-                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_k_read_ptr);
-                            // DPRINT << "MUX_FWD ri=" << ring_iter << " rid=" << ring_id
-                            //        << " kc=" << k_chunk << " nb=" << nb << " nq=" << nq
-                            //        << " glob_st=" << kv_global_start_tile
-                            //        << " mux=" << my_mux_index << " rows=[" << my_row_start << "," << my_row_end << ")"
-                            //        << " k_data[0]=0x" << HEX() << (uint32_t)k_data_peek[0] << DEC()
-                            //        << ENDL();
                             for (uint32_t col = 0; col < DHt; ++col) {
                                 for (uint32_t row = my_row_start; row < my_row_end; row += 2) {
                                     if (kv_slice.d2_start + row >= end_seq_tile) break;
@@ -953,7 +701,6 @@ void kernel_main() {
                     }
 
                     if (KV_chunks_processed_in_iter % 2 == 0) {
-                    //     DPRINT << " HELP, I'm doing the THING!!!!" << ENDL();
                         cb_wait_front(cb_k_writer_in, k_chunk_tiles);
                         cb_wait_front(cb_v_writer_in, v_chunk_tiles);
                         cb_pop_front(cb_k_writer_in, k_chunk_tiles);
