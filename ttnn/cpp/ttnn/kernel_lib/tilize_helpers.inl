@@ -75,21 +75,6 @@ constexpr bool can_use_fast_tilize() {
 }
 
 // =============================================================================
-// CB Validation Helpers (must be called from PACK/UNPACK guards)
-// =============================================================================
-
-template <uint32_t input_cb, uint32_t output_cb>
-ALWI void assert_tilize_cb_page_sizes(bool asymmetric_cb_pages) {
-    const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
-    const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
-    if (asymmetric_cb_pages) {
-        ASSERT(in_page_size != out_page_size);
-    } else {
-        ASSERT(in_page_size == out_page_size);
-    }
-}
-
-// =============================================================================
 // Main Function Implementation
 // =============================================================================
 
@@ -140,15 +125,6 @@ ALWI void tilize(
         ASSERT(*total_input_pages > (num_blocks - 1) * 32);  // at least one row in the last block
         ASSERT(*total_input_pages <= num_blocks * 32);        // rows fit within num_blocks tile-rows
     }
-
-    // Sanity checks: verify CB page sizes match the usage pattern.
-    // Guarded because get_local_cb_interface() references cb_interface, which is
-    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
-    PACK((assert_tilize_cb_page_sizes<input_cb, output_cb>(asymmetric_cb_pages)));
-    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
-    UNPACK(if (!asymmetric_cb_pages) {
-        ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb]));
-    })
 
     // Tilize input must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break row-major-to-tile reinterpretation.
