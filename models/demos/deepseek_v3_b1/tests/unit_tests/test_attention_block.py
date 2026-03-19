@@ -485,7 +485,7 @@ def test_attention_block(
 
     ttnn_trans_mat = ttnn.from_torch(
         trans_mat_replicated,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
         memory_config=trans_mem_config,
@@ -869,7 +869,6 @@ def test_attention_block(
             dkv_matmul_weights_overlapped,
             dkv_rmsnorm_gamma_overlapped,
             ttnn_kv_cache,
-            position_id,
             ttnn_position_ids,
             scale,
             ttnn_output,
@@ -893,7 +892,6 @@ def test_attention_block(
             bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1.0,  # sdpa_scale_fp32
             1,  # num_links
             epsilon,
             use_fp32,
@@ -1113,7 +1111,8 @@ def test_attention_block(
             assert dev_eq, f"Device {device_idx} output mismatch"
 
         passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
-        logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
+        max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
+        logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc} Max Diff: {max_diff}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 
     logger.info("✓ Attention Block mesh test passed!")
