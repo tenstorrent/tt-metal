@@ -352,13 +352,13 @@ TEST_F(PolyNormOpTest, PolyNorm_BackwardMatchesFiniteDifferences) {
 // Section 3: Nightly Larger Shape Coverage
 // ============================================================================
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveSmall) {
-    CompareKernelVsReferenceWithShape({1, 1, 16, 96}, 1e-5F, /*run_backward=*/false);
-}
-
-TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveMedium) {
     CompareKernelVsReferenceWithShape({1, 1, 16, 128}, 1e-5F, /*run_backward=*/false);
 }
 
+TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveMedium) {
+    CompareKernelVsReferenceWithShape({2, 1, 64, 512}, 1e-5F, /*run_backward=*/false);
+}
+
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveLarge) {
-    CompareKernelVsReferenceWithShape({2, 1, 64, 128}, 1e-5F, /*run_backward=*/false);
+    CompareKernelVsReferenceWithShape({4, 1, 128, 768}, 1e-5F, /*run_backward=*/false);
 }
