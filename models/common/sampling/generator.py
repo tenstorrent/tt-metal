@@ -392,6 +392,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         "repetition_penalty": 1.0,
         "seed": None,
         "num_logprobs": 0,
+        "enable_log_probs": False,
     }
 
     def _pad(lst, name):
@@ -421,6 +422,7 @@ def format_sampling_params(sampling_params, max_batch_size):
     repetition_penalty = _normalise_and_pad("repetition_penalty")
     seed = _normalise_and_pad("seed")
     num_logprobs = _normalise_and_pad("num_logprobs")
+    enable_log_probs = _normalise_and_pad("enable_log_probs")
 
     # Clamp / transform values in the new lists (no mutation of the input)
     TOP_P_MIN = 0.0
@@ -455,6 +457,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         repetition_penalty=repetition_penalty,
         seed=seed,
         num_logprobs=num_logprobs,
+        enable_log_probs=enable_log_probs,
     )
 
 
