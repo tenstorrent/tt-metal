@@ -85,9 +85,13 @@ class DistributedConfig:
                 or tensor.shape[-1] % self.mesh_device.shape[-1] != 0
                 or tensor.shape[0] % self.mesh_device.shape[0] != 0
             ):
-                print(
-                    f"Could not determine tensor config for {module_name} with shape {tensor.shape}. Assuming replication to all devices. Override set_output_tensors_config_impl in the module to set the correct config for this tensor."
-                )
+                # module_name is None when wrapping torch dispatch results (no TTNN module context).
+                # Small/scalar shapes are always replicated; skip noisy warning for expected cases.
+                if module_name is not None:
+                    print(
+                        f"Could not determine tensor config for {module_name} with shape {tensor.shape}. "
+                        "Assuming replication to all devices. Override set_output_tensors_config_impl."
+                    )
                 return DistributedTensorConfig(
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     mesh_composer=ttnn.create_mesh_composer(
