@@ -240,6 +240,8 @@ bool MeshDeviceImpl::is_initialized() const {
 bool MeshDeviceImpl::is_remote_only() const {
     // A MeshDevice is remote-only if it has been initialized but has no local devices.
     // This happens when the mesh contains only devices on remote hosts in a multi-host setup.
+    // view_ is guaranteed non-null after construction (all ctors require a MeshDeviceView).
+    TT_FATAL(view_ != nullptr, "MeshDeviceImpl::is_remote_only() called before view_ is initialized");
     return is_internal_state_initialized && view_->get_devices().empty();
 }
 

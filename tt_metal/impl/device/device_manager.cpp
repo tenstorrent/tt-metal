@@ -701,8 +701,9 @@ bool DeviceManager::close_devices(const std::vector<IDevice*>& devices, bool /*s
         initializers_[ProfilerInitializer::key]->teardown(init_done_);
     }
 
-    TT_ASSERT(init_done_.contains(CommandQueueInitializer::key));
-    initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+    if (init_done_.contains(CommandQueueInitializer::key)) {
+        initializers_[CommandQueueInitializer::key]->teardown(init_done_);
+    }
 
     TT_FATAL(init_done_.empty(), "All firmware initializers must remove themselves from init_done_ during teardown");
 
