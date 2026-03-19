@@ -245,6 +245,11 @@ def build_op_kwargs(
         # Parse dict values into ttnn objects
         parsed = parse_dict_value(key, value)
         if parsed is not None:
+            # Convert float values that are whole numbers to int.
+            # V2 JSON stores all numbers as floats, but many ops expect int
+            # (num_heads, num_groups, dim, block_h, etc.)
+            if isinstance(parsed, float) and parsed == int(parsed):
+                parsed = int(parsed)
             op_kwargs[key] = parsed
 
     return op_kwargs

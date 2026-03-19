@@ -160,6 +160,9 @@ def run(
 
     # Read num_groups and epsilon from op_kwargs (from traced config), falling back to function params
     num_groups = op_kwargs.get("num_groups", num_groups)
+    if num_groups is not None:
+        num_groups = int(num_groups)
+        op_kwargs["num_groups"] = num_groups  # Ensure int type in op_kwargs too
     epsilon = op_kwargs.get("epsilon", epsilon)
 
     if input_a_memory_config is None:
