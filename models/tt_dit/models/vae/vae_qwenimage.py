@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 import ttnn
 
-from ...models.vae.vae_wan2_1 import WanDecoder
-from ...parallel.config import VAEParallelConfig
+from ...models.vae.vae_wan2_1 import WanDecoder, WanEncoder
+from ...parallel.config import VaeHWParallelConfig, VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import bf16_tensor_2dshard
@@ -101,3 +101,82 @@ class QwenImageVaeDecoder:
             2
         )  # remove the temporal dimension
         return decoded_output
+
+
+class QwenImageVaeEncoder:
+    """On-device VAE encoder for QwenImage, wrapping WanEncoder."""
+
+    def __init__(
+        self,
+        *,
+        base_dim: int = 96,
+        z_dim: int = 16,
+        dim_mult: Sequence[int] = (1, 2, 4, 4),
+        num_res_blocks: int = 2,
+        attn_scales: Sequence[float] = (),
+        temperal_downsample: Sequence[bool] = (False, True, True),
+        is_residual: bool = False,
+        parallel_config: VaeHWParallelConfig,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager | None,
+    ) -> None:
+        self.wan_encoder = WanEncoder(
+            base_dim=base_dim,
+            in_channels=3,
+            z_dim=z_dim,
+            dim_mult=dim_mult,
+            num_res_blocks=num_res_blocks,
+            attn_scales=list(attn_scales),
+            temperal_downsample=list(temperal_downsample),
+            is_residual=is_residual,
+            mesh_device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+        )
+        self._parallel_config = parallel_config
+        self._device = device
+        self._is_loaded = False
+
+    def load_torch_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
+        self.wan_encoder.load_state_dict(state_dict)
+        self._is_loaded = True
+
+    def deallocate_weights(self) -> None:
+        del self.wan_encoder
+        self.wan_encoder = None
+        self._is_loaded = False
+
+    def is_loaded(self) -> bool:
+        return self._is_loaded
+
+    def prepare_input(self, image_BCHW: torch.Tensor, height_parallel_factor: int) -> tuple[ttnn.Tensor, int]:
+        """Convert image tensor (B,C,H,W) to device-ready (B,T,H,W,C) format."""
+        image_BTHWC = image_BCHW.unsqueeze(2).permute(0, 2, 3, 4, 1).to(torch.float32)
+        image_BTHWC = conv_pad_in_channels(image_BTHWC)
+        image_BTHWC, logical_h = conv_pad_height(image_BTHWC, height_parallel_factor)
+        tt_image = bf16_tensor_2dshard(
+            image_BTHWC,
+            self._device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={
+                self._parallel_config.height_parallel.mesh_axis: 2,
+                self._parallel_config.width_parallel.mesh_axis: 3,
+            },
+        )
+        return tt_image, logical_h
+
+    def forward(self, tt_image: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+        return self.wan_encoder(tt_image, logical_h)
+
+    def postprocess_output(self, tt_latents: ttnn.Tensor, logical_h: int) -> torch.Tensor:
+        """Convert device output (B,C,T,H,W) back to torch, trimming padding."""
+        concat_dims = [None, None]
+        concat_dims[self._parallel_config.height_parallel.mesh_axis] = 3
+        concat_dims[self._parallel_config.width_parallel.mesh_axis] = 4
+        latents = ttnn.to_torch(
+            tt_latents,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self._device, mesh_shape=tuple(self._device.shape), dims=concat_dims
+            ),
+        )
+        return latents[:, :, :, :logical_h, :]
