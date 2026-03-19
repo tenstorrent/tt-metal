@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
@@ -33,9 +34,11 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(10)
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(12);
 constexpr bool direction = get_compile_time_arg_val(13);  // 1 is forward, 0 is backward
+constexpr uint32_t unicast_route_arg0 = get_compile_time_arg_val(14);
+constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 14;
+    constexpr uint32_t page_size_base_idx = 16;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
 
     ///////////////////////////////////////////////////
@@ -88,8 +91,12 @@ void kernel_main() {
     cb_push_back(reserved_packet_header_cb_id, 1);
 
     // pre-populate packet headers
+    constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
+        .dst_mesh_id = static_cast<uint16_t>(unicast_route_arg0),
+        .dst_chip_id = static_cast<uint16_t>(unicast_route_arg1)};
+
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    fabric_set_unicast_route<false>(pkt_hdr, 1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     fabric_connection.open();
 
@@ -201,13 +208,14 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
+    pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            out_ready_sem_noc_addr_in_pkt, static_cast<uint32_t>(1)});  // increment 1
 
     // Write the unicast packet
     if constexpr (num_targets_in_direction) {
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
@@ -316,7 +324,7 @@ void kernel_main() {
 
         // 2. unicast output ready semaphore forward
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_sem_inc, unicast_route_info);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 

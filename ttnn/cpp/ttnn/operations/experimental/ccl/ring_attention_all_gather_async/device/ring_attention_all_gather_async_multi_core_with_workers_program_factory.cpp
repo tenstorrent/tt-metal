@@ -182,6 +182,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::vector<Tensor> input_tensors = input_tensor;
     const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        target_device_coord, forward_device_coord, backward_device_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
     if (topology == ttnn::ccl::Topology::Ring && ring_index % 2 == 0) {
@@ -310,6 +312,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         tiles_to_write_per_packet,                // contig_pages_advanced
         num_inputs,                               // num_inputs
         1,                                        // direction
+        unicast_backward_args[0],                 // unicast route arg0 (dst_mesh_id or 0)
+        unicast_backward_args[1],                 // unicast route arg1 (dst_chip_id or distance_in_hops)
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
@@ -376,6 +380,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
         tiles_to_write_per_packet,                 // contig_pages_advanced
         num_inputs,                                // num_inputs
         0,                                         // direction
+        unicast_forward_args[0],                   // unicast route arg0 (dst_mesh_id or 0)
+        unicast_forward_args[1],                   // unicast route arg1 (dst_chip_id or distance_in_hops)
     };
     for (uint32_t i = 0; i < num_inputs; i++) {
         sender_writer_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
