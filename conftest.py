@@ -1192,7 +1192,12 @@ def ttnn_graph_report(request):
             logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
         else:
             report_path.mkdir(parents=True, exist_ok=True)
-            json_path = report_path / "graph_capture.json"
+            if ttnn.distributed_context_is_initialized():
+                rank = int(ttnn.distributed_context_get_rank())
+                world_size = int(ttnn.distributed_context_get_size())
+            else:
+                rank, world_size = 0, 1
+            json_path = report_path / f"graph_capture_{rank}_of_{world_size}.json"
             ttnn.graph.end_graph_capture_to_file(str(json_path))
             if json_path.exists():
                 from ttnn.graph_report import import_report

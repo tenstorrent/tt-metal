@@ -21,6 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <unordered_map>
@@ -768,6 +769,11 @@ nlohmann::json GraphProcessor::get_report() const {
     if (!graph.empty() && graph.back().node_type == kNodeCaptureEnd) {
         metadata[kReportTotalDurationNs] = graph.back().duration_ns;
     }
+
+    // Add distributed context metadata
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    metadata[kReportDistributedRank] = *world_ctx->rank();
+    metadata[kReportDistributedWorldSize] = *world_ctx->size();
 
     report[kReportMetadata] = metadata;
 
