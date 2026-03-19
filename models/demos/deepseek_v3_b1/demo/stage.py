@@ -65,6 +65,7 @@ class EmbeddingStage(StageKind):
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
+        print("Create Pipeline Block")
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -98,6 +99,7 @@ class PassthroughStage(StageKind):
         else:
             up_fifo = down_fifo = TOKEN_FIFO_SIZE
             up_page = down_page = TOKEN_PAGE_SIZE_BYTES
+        print("Create Passthrough Pipeline Block")
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -194,6 +196,7 @@ class LMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
         )
+        print("Create Pipeline Block")
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,

@@ -42,9 +42,11 @@ def create_single_galaxy_pipeline_configuration(
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        print("Creating Embedding Stage")
         return EmbeddingStage(weight_provider.load_embedding(device))
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        print("Creating LMHead Stage")
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,

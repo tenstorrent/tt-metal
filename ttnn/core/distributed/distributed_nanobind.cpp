@@ -1002,6 +1002,99 @@ void py_module(nb::module_& mod) {
                 >>> size_int = int(size)
         )doc");
 
+    mod.def(
+        "send_token",
+        [](uint32_t token, Rank peer_rank) {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            DistributedContext::get_current_world()->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&token), sizeof(token)), peer_rank, Tag(0));
+        },
+        nb::arg("token"),
+        nb::arg("peer_rank"),
+        R"doc(
+            Send a uint32 token to a peer rank.
+
+            Args:
+                token (int): The token to send.
+                peer_rank (Rank): The rank of the peer to send the token to.
+        )doc");
+
+    mod.def(
+        "recv_token",
+        [](Rank source_rank) -> uint32_t {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            uint32_t token = 0;
+            DistributedContext::get_current_world()->recv(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&token), sizeof(token)), source_rank, Tag(0));
+            return token;
+        },
+        nb::arg("source_rank"),
+        R"doc(
+            Receive a uint32 token from a source rank.
+
+            Args:
+                source_rank (Rank): The rank of the source to receive the token from.
+
+            Returns:
+                int: The received token.
+        )doc");
+
+    mod.def(
+        "send_tensor",
+        [](Tensor& tensor, Rank peer_rank) {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            const auto& storage = tensor.host_storage();
+            std::vector<tt::tt_metal::HostBuffer> buffers;
+            storage.buffer().apply([&](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+            for (auto& buf : buffers) {
+                DistributedContext::get_current_world()->send(buf.view_bytes(), peer_rank, Tag(0));
+            }
+        },
+        nb::arg("tensor"),
+        nb::arg("peer_rank"),
+        R"doc(
+            Send a host-backed tensor to a peer rank.
+
+            The tensor must be backed by a host buffer. Each shard of the tensor
+            is sent as raw bytes to the peer rank.
+
+            Args:
+                tensor (Tensor): The host-backed tensor to send.
+                peer_rank (Rank): The rank of the peer to send the tensor to.
+        )doc");
+
+    mod.def(
+        "recv_tensor",
+        [](Tensor& tensor, Rank source_rank) {
+            if (!DistributedContext::is_initialized()) {
+                throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
+            }
+            const auto& storage = tensor.host_storage();
+            std::vector<tt::tt_metal::HostBuffer> buffers;
+            storage.buffer().apply([&](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+            for (auto& buf : buffers) {
+                DistributedContext::get_current_world()->recv(buf.view_bytes(), source_rank, Tag(0));
+            }
+        },
+        nb::arg("tensor"),
+        nb::arg("source_rank"),
+        R"doc(
+            Receive into a pre-allocated host-backed tensor from a source rank.
+
+            The tensor must already be allocated on the host with the correct shape
+            and dtype. Each shard is received as raw bytes from the source rank.
+
+            Args:
+                tensor (Tensor): The pre-allocated host-backed tensor to receive into.
+                source_rank (Rank): The rank of the source to receive the tensor from.
+        )doc");
+
     // Synchronize all processes
     mod.def(
         "barrier",

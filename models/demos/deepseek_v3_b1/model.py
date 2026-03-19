@@ -39,6 +39,10 @@ import ttnn
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
+ACTIVATION_DIM = 7168
+
+ACIVATION_SIZE_BYTES = ACTIVATION_DIM * 2
+
 # Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 
@@ -84,6 +88,8 @@ class DeepSeekV3:
         write_fn: Callable[[ttnn.Tensor], None],
         read_fn: Callable[[ttnn.Tensor], None],
         batch_size: int = 1,
+        prev_rank: int | None = None,
+        next_rank: int | None = None,
     ) -> None:
         """
         Args:
@@ -91,21 +97,32 @@ class DeepSeekV3:
             read_fn: Called with an output tensor; implementation fills it (e.g. Pipeline.read_output).
             batch_size: Batch size B. Current implementation supports only B=1;
                 payload size is B * TOKEN_ID_BYTES (int32).
+            prev_rank: MPI rank of the upstream pipeline stage (None for the first stage).
+            next_rank: MPI rank of the downstream pipeline stage (None for the last stage).
         """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
         self._write_fn = write_fn
         self._read_fn = read_fn
         self.batch_size = batch_size
-        payload_bytes: int = batch_size * TOKEN_ID_BYTES
+        self._prev_rank = ttnn.Rank(prev_rank) if prev_rank is not None else None
+        self._next_rank = ttnn.Rank(next_rank) if next_rank is not None else None
+        payload_bytes: int = batch_size * ACTIVATION_SIZE_BYTES
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
-        self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
+
+        self._activation_size_datums: int = ACTIVATION_SIZE_BYTES // TOKEN_ID_BYTES
+        self._token_size_datums: int = TOKEN_ID_BYTES // TOKEN_ID_BYTES
+
         self._position: int = 0
-        self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
+        self._input_buffer = ttnn.Tensor = create_output_buffer(self._activation_size_datums)
+        if not next_rank:
+            self._output_buffer = ttnn.Tensor = create_output_buffer(self._token_size_datums)
+        else:
+            self._output_buffer = ttnn.Tensor = create_output_buffer(self._activation_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
-    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
+    def prefill(self, prompt_tokens: list[ttnn.Tensor] | None, num_iterations: int | None = None) -> ttnn.Tensor:
         """
         Prefill-by-decode: for i = 0..S-1, send input_ids = x[i], get logits
         (and device updates cache). Outputs for i < S-1 are discarded. Returns the
@@ -121,17 +138,24 @@ class DeepSeekV3:
             (B, V) in real decoder). None if prompt_tokens is empty. Caller uses this
             to sample(logits) -> y0 for the generation loop.
         """
-        if len(prompt_tokens) == 0:
-            raise ValueError("Expected at least one prompt token")
 
-        last_output: ttnn.Tensor | None = None
-        for token in prompt_tokens:
-            self._write_fn(token)
-            self._read_fn(self._output_buffer)
-            last_output = self._output_buffer
-            self._position += 1
-        assert last_output is not None, "Last output tensor is None"
-        return last_output
+        if prompt_tokens is not None:
+            for token in prompt_tokens:
+                self._write_fn(token)
+                self._read_fn(self._output_buffer)
+                self._position += 1
+                if self._next_rank is not None:
+                    ttnn.send_tensor(self._output_buffer, self._next_rank)
+        else:
+            assert self._prev_rank is not None, "Non-first stage must have a prev_rank"
+            assert num_iterations is not None, "Non-first stage must be given num_iterations"
+            for _ in range(num_iterations):
+                ttnn.recv_tensor(self._input_buffer, self._prev_rank)
+                self._write_fn(self._input_buffer)
+                self._read_fn(self._output_buffer)
+                self._position += 1
+                if self._next_rank is not None:
+                    ttnn.send_tensor(self._output_buffer, self._next_rank)
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """

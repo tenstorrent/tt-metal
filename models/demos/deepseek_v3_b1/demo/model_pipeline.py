@@ -68,35 +68,43 @@ class ModelPipeline:
         self.pipeline.setup_and_run()
 
         self._page_size_datums = page_size_bytes(1) // TOKEN_ID_BYTES
-        self.model: DeepSeekV3 | None = None
-        if self.pipeline.my_mesh_id == 0:
-            # Initialize host-side model interface for mesh id 0 (first stage)
-            self.model = DeepSeekV3(
-                write_fn=self.pipeline.write_token,
-                read_fn=self.pipeline.read_output,
-                batch_size=1,
-            )
-        logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
+        my_rank = self.pipeline.my_mesh_id
+        prev_rank = my_rank - 1 if my_rank > 0 else None
+        next_rank = my_rank + 1 if my_rank < num_procs - 1 else None
+        self.model = DeepSeekV3(
+            write_fn=self.pipeline.write_token,
+            read_fn=self.pipeline.read_output,
+            batch_size=1,
+            prev_rank=prev_rank,
+            next_rank=next_rank,
+        )
+        logger.info(f"Created ModelPipeline for mesh id {my_rank} (prev={prev_rank}, next={next_rank}).")
 
-    def prefill_forward(self, tokens: list[int]) -> int:
-        """Prefill 1 user's prompt tokens and return the next token id."""
-        # Host-side model interface is only invoked on mesh id 0
-        if self.pipeline.my_mesh_id != 0:
-            raise RuntimeError("prefill_forward() should only be called on mesh id 0")
+    def prefill_forward(self, tokens: list[int] | None) -> None:
+        """Prefill 1 user's prompt tokens. Rank 0 drives; others recv/fwd via MPI."""
         assert self.model is not None
-        logger.debug(f"Prefilling with {len(tokens)} tokens...")
-        prompt_token_tensors = [
-            to_padded_input(
-                torch.tensor([[tid]], dtype=torch.int32),
-                batch_size=1,
-                page_size_datums=self._page_size_datums,
-            )
-            for tid in tokens
-        ]
-        last_output = self.model.prefill(prompt_token_tensors)
-        next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
-        logger.debug(f"Done prefilling with {len(tokens)} tokens.")
-        return next_token_id
+        prompt_token_tensors = None
+        num_iterations = None
+        if self.pipeline.my_mesh_id == 0:
+            assert tokens is not None
+            print(f"Prefilling with {len(tokens)} tokens...")
+            num_iterations = len(tokens)
+            prompt_token_tensors = [
+                to_padded_input(
+                    torch.tensor([[tid]], dtype=torch.int32),
+                    batch_size=1,
+                    page_size_datums=self._page_size_datums,
+                )
+                for tid in tokens
+            ]
+            ttnn.send_token(num_iterations, ttnn.Rank(1))
+        else:
+            num_iterations = ttnn.recv_token(ttnn.Rank(self.pipeline.my_mesh_id - 1))
+            print(f"Stage {self.pipeline.my_mesh_id} received num_iterations: {num_iterations}")
+            num_procs = int(ttnn.distributed_context_get_size())
+            if self.pipeline.my_mesh_id < num_procs - 1:
+                ttnn.send_token(num_iterations, ttnn.Rank(self.pipeline.my_mesh_id + 1))
+        self.model.prefill(prompt_token_tensors, num_iterations=num_iterations)
 
     def decode_forward(self, input_token: int) -> int:
         """Run 1 decode step and return the next token id."""
@@ -128,6 +136,8 @@ class ModelPipeline:
 
         # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
         next_token_id = self.prefill_forward(prompt_token_ids)
+        return
+
         if on_token is not None:
             on_token(next_token_id)
         if return_generated_tokens:

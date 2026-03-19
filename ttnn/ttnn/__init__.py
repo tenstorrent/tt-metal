@@ -127,6 +127,10 @@ from ttnn._ttnn.multi_device import (
     get_rank as distributed_context_get_rank,
     get_size as distributed_context_get_size,
     barrier as distributed_context_barrier,
+    send_token,
+    recv_token,
+    send_tensor,
+    recv_tensor,
 )
 
 from ttnn._ttnn.events import (
