@@ -141,6 +141,7 @@ std::vector<std::uint8_t> read_file_bytes(const std::string& path) {
 
 void build_target(
     const std::string& gpp,
+    const std::string& kernel_name,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
     tt::tt_metal::jit_server::CompileResponse& response) {
@@ -210,6 +211,20 @@ void build_target(
         }
     }
 
+    {
+        static std::mutex stats_mutex;
+        std::lock_guard lock(stats_mutex);
+        std::ofstream stats("/tmp/tt-jit-compile-server-stats.log", std::ios::app);
+        if (stats) {
+            auto now = std::chrono::system_clock::now();
+            std::time_t t = std::chrono::system_clock::to_time_t(now);
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+            stats << buf << "  " << kernel_name << "/" << target.target_name << "  recompiled=" << recompiled
+                  << "  cache_hit=" << cache_hit << "\n";
+        }
+    }
+
     std::string elf_path = out_dir + target.target_name + ".elf";
     tt::tt_metal::jit_server::ElfBlob blob;
     blob.name = target.target_name;
@@ -254,23 +269,10 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
         // Build each target.
         for (const auto& target : request.targets) {
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, target, out_dir, response);
+            build_target(request.gpp, request.kernel_name, target, out_dir, response);
         }
 
         response.success = true;
-
-        {
-            static std::mutex stats_mutex;
-            std::lock_guard lock(stats_mutex);
-            std::ofstream stats("/tmp/tt-jit-compile-server-stats.log", std::ios::app);
-            if (stats) {
-                auto now = std::chrono::system_clock::now();
-                std::time_t t = std::chrono::system_clock::to_time_t(now);
-                char buf[32];
-                std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
-                stats << buf << "  " << request.kernel_name << "  targets=" << request.targets.size() << "\n";
-            }
-        }
 
         auto elapsed_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - request_start)

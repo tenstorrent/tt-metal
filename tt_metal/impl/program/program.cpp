@@ -1648,6 +1648,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             bool has_response = false;
         };
         std::vector<KernelElfInfo> kernel_infos;
+        std::unordered_set<size_t> sent_hashes;
 
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
@@ -1682,7 +1683,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     info.elf_paths.push_back(build_state.get_target_out_path(kernel_path_suffix));
                 }
 
-                jit_build_once(kernel_hash, [&] {
+                if (sent_hashes.insert(kernel_hash).second) {
                     jit_build_genfiles_descriptors(build_env.build_env, build_options);
                     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
                         jit_build_genfiles_triscs_src(build_env.build_env, *kernel, kernel->kernel_source());
@@ -1703,7 +1704,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                     session.send(request);
                     info.has_response = true;
-                });
+                }
 
                 Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 kernel_infos.push_back(std::move(info));
