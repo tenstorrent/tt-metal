@@ -7,7 +7,6 @@
 #include <cstdint>
 
 #include "sfpi.h"
-#include "sfpi_fp16.h"
 
 namespace ckernel
 {
