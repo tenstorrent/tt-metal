@@ -195,7 +195,7 @@ def compute_lead_models_matrix(modules, batch_size, dynamic_hw=False):
                     max_jobs = 5
                     effective_batch_size = max(1, -(-len(base_modules) // max_jobs))
                 else:
-                    effective_batch_size = 5
+                    effective_batch_size = 4
                 shape_batches = chunk_modules(base_modules, effective_batch_size)
                 batches.extend(shape_batches)
                 for batch in shape_batches:

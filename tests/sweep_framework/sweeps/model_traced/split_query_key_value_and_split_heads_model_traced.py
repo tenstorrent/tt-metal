@@ -85,7 +85,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     output_memory_config = kwargs.get("output_memory_config", None)
     op_kwargs = build_op_kwargs(
-        kwargs, exclude={"compute_with_storage_grid_size"}, output_memory_config=output_memory_config
+        kwargs, exclude={"compute_with_storage_grid_size", "memory_config"}, output_memory_config=output_memory_config
     )
 
     # Read num_heads from op_kwargs if present (traced config), falling back to function param

@@ -82,10 +82,10 @@ def run(
 
     if dim is None:
         dim = kwargs.get("arg1", None)
-    # Read keepdim from op_kwargs (from traced config), defaulting to True
-    keepdim = op_kwargs.get("keepdim", True)
+    # Read keepdim from op_kwargs (from traced config), defaulting to False (TTNN default)
+    keepdim = op_kwargs.get("keepdim", False)
     if keepdim is None:
-        keepdim = True
+        keepdim = False
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 

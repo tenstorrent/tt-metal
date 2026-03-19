@@ -428,7 +428,10 @@ def run(
     if use_welford:
         group_norm_kwargs["use_welford"] = use_welford
 
-    group_norm_kwargs.update(op_kwargs)
+    # Merge op_kwargs but don't overwrite explicitly set params
+    for k, v in op_kwargs.items():
+        if k not in group_norm_kwargs:
+            group_norm_kwargs[k] = v
     output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
