@@ -24,6 +24,12 @@ Produce either:
 1. A draft PR linked to the issue, with a proposed fix and test plan, or
 2. A clear "cannot safely/credibly fix alone" handoff with recommended owners.
 
+## Forbidden: `.github/time_budget.yaml`
+
+- **Never modify `.github/time_budget.yaml`** when solving CI tickets. It exists to cap total pipeline time per team/SKU; editing it to pass `verify_time_budget.py` or unblock longer jobs circumvents that enforcement.
+- If a longer job timeout in `tests/pipeline_reorg/*.yaml` (or similar) would exceed the summed budget, prefer: speeding up or slimming the failing tests, splitting/sharding into separate jobs that fit within the existing budget, or carefully reducing another job’s timeout in the **same** matrix when justified—otherwise hand off (e.g. `#tt-metal-infra` / CODEOWNERS) rather than raising budget caps.
+- Only change `time_budget.yaml` if the user explicitly instructs you to override this rule.
+
 ## Required Safety Gate (Workflow Runs)
 
 You must never trigger GitHub workflow runs automatically.
