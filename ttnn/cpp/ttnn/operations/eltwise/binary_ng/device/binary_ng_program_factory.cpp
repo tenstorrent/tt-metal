@@ -393,8 +393,18 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
-            handle_args(program, reader_kernel_id, core, std::array<uint32_t, 24>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 16>{0});
+            // Keep dummy runtime-arg sizes aligned with the active kernel variant so unused cores do not
+            // inflate the per-kernel max runtime-arg allocation.
+            if (row_major_inputs) {
+                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 26>{0});
+                handle_args(program, writer_kernel_id, core, std::array<uint32_t, 14>{0});
+            } else if (b.has_value()) {
+                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
+                handle_args(program, writer_kernel_id, core, std::array<uint32_t, 11>{0});
+            } else {
+                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
+                handle_args(program, writer_kernel_id, core, std::array<uint32_t, 12>{0});
+            }
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
