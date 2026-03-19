@@ -13,11 +13,22 @@
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 // TODO: These constants should be queriable from the public API (currently HAL, for consistency)
-// They are currently hardcoded in the temporary Quasar host_api.hpp too.
+//       They are currently also hardcoded in the temporary Quasar host_api.hpp. Need to clean this up.
 static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
 static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
 
-// TODO: See if these NodeRangeSet helpers are needed. They may already exist (for CoreRangeSet).
+inline bool is_gen2_arch() {
+    tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    return arch == tt::ARCH::QUASAR;
+}
+inline bool is_gen1_arch() {
+    tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
+}
+
+// TODO: Are these NodeRangeSet helpers really needed?
+//       I'm sure a convert-to-CoreRangeSet helper already exists.
+//       Everything is converted to CoreRangeSet upfront in the iterative API.
 
 // Helper: Convert Nodes variant to NodeRangeSet
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes) {
@@ -54,27 +65,46 @@ bool nodes_contains(
     return superset_node_range_set.contains(subset_node_range_set);
 }
 
-void ValidateProgramSpec(const ProgramSpec& spec) {
-    // Check target architecture
+// Data structure built up from ProgramSpec to enable fast lookups
+struct CollectedSpecData {
+    // Name -> spec lookups
+    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
+    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
+    std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+
+    // DFB endpoint info lives on the kernel spec
+    struct DFBEndpointInfo {
+        const KernelSpec* producer = nullptr;
+        const KernelSpec* consumer = nullptr;
+        const KernelSpec::DFBBinding* producer_binding = nullptr;
+        const KernelSpec::DFBBinding* consumer_binding = nullptr;
+    };
+    std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
+};
+
+// Perform ALL validation checks required on the ProgramSpec.
+// If the call succeeds, the ProgramSpec is guaranteed to be valid.
+// Return a CollectedSpecData structure (derived from the ProgramSpec) for re-use during program creation.
+CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
+    CollectedSpecData collected_spec_data;
+
+    // Check target architecture (temporary)
     TT_FATAL(
         tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR,
         "Metal 2.0 API is currently only implemented for Quasar. WH/BH support coming soon.");
 
-    // Data structures
-    std::unordered_map<KernelSpecName, const KernelSpec*> kernels;
-    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfbs;
-    std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphores;
-
     //////////////////////////////
-    // KernelSpec validation
+    // Validate KernelSpecs
     //////////////////////////////
 
+    // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
 
     // All KernelSpecs must have unique names
     for (const auto& kernel : spec.kernels) {
-        auto [it, inserted] = kernels.try_emplace(kernel.unique_id, &kernel);
-        TT_FATAL(inserted, "Duplicate name '{}' found in data_movement_kernels", kernel.unique_id);
+        // Populate kernel_by_name lookup while validating
+        auto [it, inserted] = collected_spec_data.kernel_by_name.try_emplace(kernel.unique_id, &kernel);
+        TT_FATAL(inserted, "Duplicate name '{}' found KernelSpec list", kernel.unique_id);
     }
 
     // Validate kernel thread counts
@@ -83,26 +113,46 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
         if (kernel.is_compute_kernel()) {
             TT_FATAL(
                 kernel.num_threads <= QUASAR_TENSIX_CORES_PER_NODE,
-                "KernelSpec '{}' has too many threads!",
-                kernel.unique_id);
+                "KernelSpec '{}' has too many threads. The architecture supports up to {} for compute kernels.",
+                kernel.unique_id,
+                QUASAR_TENSIX_CORES_PER_NODE);
         }
         if (kernel.is_dm_kernel()) {
             TT_FATAL(
                 kernel.num_threads <= QUASAR_DM_CORES_PER_NODE,
-                "KernelSpec '{}' has too many threads!",
-                kernel.unique_id);
+                "KernelSpec '{}' has too many data movement threads. The architecture supports up to {} for data "
+                "movement kernels.",
+                kernel.unique_id,
+                QUASAR_DM_CORES_PER_NODE);
         }
     }
 
-    // Check DM config specs
+    // Check DM configs
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_dm_kernel()) {
             const auto& data_movement_config = std::get<DataMovementConfiguration>(kernel.config_spec);
+
+            // Both Gen1 and Gen2 configs are optional. But at least one must be specified.
             TT_FATAL(
                 data_movement_config.gen1_data_movement_config.has_value() ||
                     data_movement_config.gen2_data_movement_config.has_value(),
                 "KernelSpec '{}' must specify a DM config for Gen1, Gen2, or both.",
                 kernel.unique_id);
+
+            // The config for the current target architecture must be specified.
+            if (is_gen2_arch()) {
+                TT_FATAL(
+                    data_movement_config.gen2_data_movement_config.has_value(),
+                    "KernelSpec '{}' must specify a Gen2 DM config when targeting Quasar.",
+                    kernel.unique_id);
+            } else if (is_gen1_arch()) {
+                TT_FATAL(
+                    data_movement_config.gen1_data_movement_config.has_value(),
+                    "KernelSpec '{}' must specify a Gen1 DM config when targeting WH or BH.",
+                    kernel.unique_id);
+            } else {
+                TT_FATAL(false, "Unknown architecture");
+            }
         }
     }
 
@@ -112,48 +162,44 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
 
     // All DataflowBufferSpecs must have unique names
     for (const auto& dfb : spec.dataflow_buffers) {
-        auto [it, inserted] = dfbs.try_emplace(dfb.unique_id, &dfb);
+        // Populate dfb_by_name lookup while validating
+        auto [it, inserted] = collected_spec_data.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
         TT_FATAL(inserted, "Duplicate name '{}' found in dataflow_buffers", dfb.unique_id);
     }
 
     // A DFB must have exactly one producer and one consumer
-    struct DFBProducerConsumerRecord {
-        std::vector<const KernelSpec*> producer_kernels = {};
-        std::vector<const KernelSpec*> consumer_kernels = {};
-    };
-    std::unordered_map<DFBSpecName, DFBProducerConsumerRecord> dfb_endpoints;
     for (const auto& kernel : spec.kernels) {
         for (const auto& dfb_binding : kernel.dfb_bindings) {
-            // Get the DFBProducerConsumerRecord for this DFB (if it doesn't exist, create it)
-            DFBProducerConsumerRecord& pc_record = dfb_endpoints[dfb_binding.dfb_spec_name];
+            // Get the DFBEndpointInfo for this DFB (if it doesn't exist, create it)
+            CollectedSpecData::DFBEndpointInfo& endpoint_info =
+                collected_spec_data.dfb_endpoints[dfb_binding.dfb_spec_name];
 
-            // Add the kernel to the endpoint list
             if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
-                pc_record.producer_kernels.push_back(&kernel);
+                TT_FATAL(
+                    endpoint_info.producer == nullptr, "DFB '{}' has multiple producers", dfb_binding.dfb_spec_name);
+                endpoint_info.producer = &kernel;
+                endpoint_info.producer_binding = &dfb_binding;
             } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
-                pc_record.consumer_kernels.push_back(&kernel);
+                TT_FATAL(
+                    endpoint_info.consumer == nullptr, "DFB '{}' has multiple consumers", dfb_binding.dfb_spec_name);
+                endpoint_info.consumer = &kernel;
+                endpoint_info.consumer_binding = &dfb_binding;
             } else {
                 TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
             }
         }
     }
-    for (const auto& [dfb_name, pc_record] : dfb_endpoints) {
-        TT_FATAL(
-            pc_record.producer_kernels.size() == 1,
-            "DFB '{}' has {} producer kernels; a DFB must have exactly one producer.",
-            dfb_name,
-            pc_record.producer_kernels.size());
-        TT_FATAL(
-            pc_record.consumer_kernels.size() == 1,
-            "DFB '{}' has {} consumer kernels; a DFB must have exactly one consumer.",
-            dfb_name,
-            pc_record.consumer_kernels.size());
+    for (const auto& [dfb_name, endpoint_info] : collected_spec_data.dfb_endpoints) {
+        TT_FATAL(endpoint_info.producer != nullptr, "DFB '{}' has no producer", dfb_name);
+        TT_FATAL(endpoint_info.consumer != nullptr, "DFB '{}' has no consumer", dfb_name);
     }
 
     // Check for unbound DFBs
     for (const auto& dfb : spec.dataflow_buffers) {
         TT_FATAL(
-            dfb_endpoints.contains(dfb.unique_id), "DFB '{}' is defined but not bound by any kernel", dfb.unique_id);
+            collected_spec_data.dfb_endpoints.contains(dfb.unique_id),
+            "DFB '{}' is defined but not bound by any kernel",
+            dfb.unique_id);
     }
 
     // Remote DFBs are not supported yet
@@ -162,53 +208,47 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
         TT_FATAL(!dfb.producer_consumer_map || dfb.producer_consumer_map->empty(), "Remote DFBs are not supported yet");
     }
 
-    // Data format metadata must be specified for any DFB with a compute endpoint
-    // TODO: This is inefficient. We have to recover this info later. Refactor.
-    //       The clean separation of legality checks and program creation is getting awkward.
-    for (const auto& dfb : spec.dataflow_buffers) {
-        // Find the DFBProducerConsumerRecord for this DFB
-        auto it = dfb_endpoints.find(dfb.unique_id);
-        TT_FATAL(it != dfb_endpoints.end(), "DFB '{}' missing endpoint information", dfb.unique_id);
-        const auto& pc_record = it->second;
-        bool has_compute_producer = false;
-        bool has_compute_consumer = false;
-        if (!pc_record.producer_kernels.empty()) {
-            has_compute_producer = pc_record.producer_kernels.front()->is_compute_kernel();
-        }
-        if (!pc_record.consumer_kernels.empty()) {
-            has_compute_consumer = pc_record.consumer_kernels.front()->is_compute_kernel();
-        }
-        if (has_compute_producer || has_compute_consumer) {
+    // Data format metadata (optional param) MUST be specified a DFB with a compute endpoint
+    for (const auto& [dfb_name, endpoint_info] : collected_spec_data.dfb_endpoints) {
+        // Does it have a compute kernel endpoint?
+        if ((endpoint_info.producer && endpoint_info.producer->is_compute_kernel()) ||
+            (endpoint_info.consumer && endpoint_info.consumer->is_compute_kernel())) {
+            // Data format metadata is required
+            const DataflowBufferSpec* dfb_spec = collected_spec_data.dfb_by_name.at(dfb_name);
             TT_FATAL(
-                dfb.data_format_metadata.has_value(),
-                "DFB '{}' is used by a compute kernel (as producer or consumer), but no data_format_metadata is "
-                "specified",
-                dfb.unique_id);
+                dfb_spec->data_format_metadata.has_value(),
+                "DFB '{}' is used by a compute kernel, but no data_format_metadata is specified",
+                dfb_name);
         }
     }
 
-    //////////////////////////////
+    //////////////////////////////////
     // SemaphoreSpec validation
-    //////////////////////////////
+    //////////////////////////////////
 
+    // Semaphores aren't supported yet for Quasar
     TT_FATAL(spec.semaphores.empty(), "Semaphores are not supported yet");
 
     // All SemaphoreSpecs must have unique names
     for (const auto& semaphore : spec.semaphores) {
-        auto [it, inserted] = semaphores.try_emplace(semaphore.unique_id, &semaphore);
+        // Populate semaphore_by_name lookup while validating
+        auto [it, inserted] = collected_spec_data.semaphore_by_name.try_emplace(semaphore.unique_id, &semaphore);
         TT_FATAL(inserted, "Duplicate name '{}' found in semaphores", semaphore.unique_id);
     }
-
-    // ... TODO
 
     //////////////////////////////
     // WorkerSpec validation
     //////////////////////////////
 
-    // Check that WorkerSpecs are provided
+    // Check that WorkerSpecs are provided on Quasar
+    // NOTE: WorkerSpec data is redundant, but improves clarity and messaging.
+    //       If it's hated, we can make it optional on Gen2 and derive the WorkerSpec if absent.
     TT_FATAL(spec.workers.has_value(), "Workers are required on Gen2+");
     const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
+
+    // WorkerSpecs don't really need unique names, as the names are only used for error messaging.
+    // No need to validate uniqueness.
 
     // WorkerSpecs may not overlap in their target nodes
     for (const auto& worker : workers) {
@@ -226,51 +266,88 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
         }
     }
 
-    // Check each WorkerSpec
+    // A WorkerSpec must have at least one kernel
     for (const auto& worker : workers) {
-        // A WorkerSpec must have at least one kernel
-        TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels!", worker.unique_id);
+        TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels", worker.unique_id);
+    }
 
-        // Each KernelSpec's target nodes must contain the WorkerSpec's target nodes
+    // Does the Worker have enough cores to run all its kernels?
+    for (const auto& worker : workers) {
+        uint32_t dm_cores_needed = 0;
+        uint32_t compute_cores_needed = 0;
         for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = kernels.at(kernel_name);
+            const auto& kernel_spec = collected_spec_data.kernel_by_name.at(kernel_name);
+            if (kernel_spec->is_compute_kernel()) {
+                compute_cores_needed += kernel_spec->num_threads;
+            }
+            if (kernel_spec->is_dm_kernel()) {
+                dm_cores_needed += kernel_spec->num_threads;
+            }
+        }
+        TT_FATAL(
+            compute_cores_needed <= QUASAR_TENSIX_CORES_PER_NODE,
+            "WorkerSpec '{}' needs {} compute cores, but only {} are available",
+            worker.unique_id,
+            compute_cores_needed,
+            QUASAR_TENSIX_CORES_PER_NODE);
+        TT_FATAL(
+            dm_cores_needed <= QUASAR_DM_CORES_PER_NODE,
+            "WorkerSpec '{}' needs {} data movement cores, but only {} are available",
+            worker.unique_id,
+            dm_cores_needed,
+            QUASAR_DM_CORES_PER_NODE);
+    }
+
+    // A worker can have at most one compute kernel
+    for (const auto& worker : workers) {
+        uint32_t num_compute_kernels = 0;
+        for (const auto& kernel_name : worker.kernels) {
+            const auto& kernel_spec = collected_spec_data.kernel_by_name.at(kernel_name);
+            if (kernel_spec->is_compute_kernel()) {
+                num_compute_kernels++;
+            }
+        }
+        TT_FATAL(num_compute_kernels <= 1, "WorkerSpec '{}' has more than one compute kernel", worker.unique_id);
+    }
+
+    // Check that WorkerSpec target nodes are valid nodes
+    // (TODO once legality rules on Quasar are defined)
+    // (For WH/BH, this check should catch attempts to assign kernels to dispatch nodes.)
+
+    // Kernels in a WorkerSpec must contain the WorkerSpec's target nodes
+    for (const auto& worker : workers) {
+        for (const auto& kernel_name : worker.kernels) {
+            const auto& kernel_spec = collected_spec_data.kernel_by_name.at(kernel_name);
             TT_FATAL(
                 nodes_contains(kernel_spec->target_nodes, worker.target_nodes),
                 "Kernel '{}' target nodes must contain WorkerSpec '{}' target nodes",
                 kernel_name,
                 worker.unique_id);
         }
+    }
 
-        // Each DFBSpec's target nodes must contain the WorkerSpec's target nodes
+    // DFBs in a WorkerSpec must contain the WorkerSpec's target nodes
+    for (const auto& worker : workers) {
         for (const auto& dfb_name : worker.dataflow_buffers) {
-            const auto& dfb_spec = dfbs.at(dfb_name);
+            const auto& dfb_spec = collected_spec_data.dfb_by_name.at(dfb_name);
             TT_FATAL(
                 nodes_contains(dfb_spec->target_nodes, worker.target_nodes),
                 "DFB '{}' target nodes must contain WorkerSpec '{}' target nodes",
                 dfb_name,
                 worker.unique_id);
         }
+    }
 
-        // The WorkerSpec's kernels must (together) target a legal number of cores
-        uint32_t num_dm_cores = 0;
-        uint32_t num_compute_cores = 0;
-        for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = kernels.at(kernel_name);
-            if (kernel_spec->is_compute_kernel()) {
-                num_compute_cores += kernel_spec->num_threads;
-            }
-            if (kernel_spec->is_dm_kernel()) {
-                num_dm_cores += kernel_spec->num_threads;
-            }
+    // Semaphores in a WorkerSpec must contain the WorkerSpec's target nodes
+    for (const auto& worker : workers) {
+        for (const auto& semaphore_name : worker.semaphores) {
+            const auto& semaphore_spec = collected_spec_data.semaphore_by_name.at(semaphore_name);
+            TT_FATAL(
+                nodes_contains(semaphore_spec->target_nodes, worker.target_nodes),
+                "Semaphore '{}' target nodes must contain WorkerSpec '{}' target nodes",
+                semaphore_name,
+                worker.unique_id);
         }
-        TT_FATAL(
-            num_compute_cores <= QUASAR_TENSIX_CORES_PER_NODE,
-            "WorkerSpec '{}' has too many compute cores!",
-            worker.unique_id);
-        TT_FATAL(
-            num_dm_cores <= QUASAR_DM_CORES_PER_NODE,
-            "WorkerSpec '{}' has too many data movement cores!",
-            worker.unique_id);
     }
 
     // Check that all kernel target nodes are "accounted for" by a WorkerSpec
@@ -298,7 +375,7 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
     }
 
     // Check that all DFB target nodes are "accounted for" by a WorkerSpec
-    // (TODO: Revisit once we have remote DFB support)
+    // (May revisit this, depending on how remote DFBs are implemented)
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_ranges;
     for (const auto& worker : workers) {
         for (const auto& dfb_name : worker.dataflow_buffers) {
@@ -322,7 +399,7 @@ void ValidateProgramSpec(const ProgramSpec& spec) {
             dfb_name);
     }
 
-    return;
+    return collected_spec_data;
 }
 
 // Handy struct used for solving kernel->core assignments
@@ -349,7 +426,7 @@ struct ProcessorMask {
         return *this;
     }
 
-    // Handy helpers
+    // Helpers
     uint8_t num_in_use() const { return std::popcount(bits); }
     uint8_t num_available() const { return NUM_CORES - num_in_use(); }
     bool is_idx_available(uint8_t idx) const { return (bits & (1 << idx)) == 0; }
@@ -385,46 +462,41 @@ struct ProcessorMask {
 using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
 using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
 
-// Helper: Assign or verify DM processor mask for a kernel on a worker.
-// Returns the kernel's mask (existing or newly reserved).
-// Updates cumulative_mask in place. Throws TT_FATAL on conflict or allocation failure.
-DMProcessorMask AssignDMProcessors(
+// Helper: Reserve DM processors for a kernel on a WorkerSpec (aka KernelGroup)
+// Returns {this_kernel_mask, updated_cumulative_mask}
+// Throws TT_FATAL on conflict or allocation failure (see simplifying assumption notes)
+std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
-    const KernelSpecName& kernel_name,
-    const WorkerSpecName& worker_id,
-    std::unordered_map<const KernelSpec*, DMProcessorMask>& kernel_masks,
-    DMProcessorMask& cumulative_mask) {
-    // Already assigned from a previous worker?
-    if (kernel_masks.contains(kernel_spec)) {
-        DMProcessorMask existing = kernel_masks.at(kernel_spec);
+    std::optional<DMProcessorMask> existing_mask,
+    DMProcessorMask cumulative_mask,
+    const WorkerSpecName& worker_id) {
+    // Was this kernel already assigned a mask from a previous WorkerSpec?
+    if (existing_mask.has_value()) {
+        DMProcessorMask existing = existing_mask.value();
 
-        // Check for conflict with what's already allocated
+        // Check for conflict with what's already allocated on the current WorkerSpec
         TT_FATAL(
             !existing.conflicts_with(cumulative_mask),
             "Kernel '{}' requires processors already in use on WorkerSpec '{}'. "
             "The \"common DM cores\" assumption has been violated!",
-            kernel_name,
+            kernel_spec->unique_id,
             worker_id);
 
-        // Otherwise, update the cumulative mask
-        cumulative_mask |= existing;
-        return existing;
+        // Return existing mask and updated cumulative
+        return {existing, cumulative_mask | existing};
     }
 
     // First time seeing this kernel - reserve new processors
-    auto reserved = DMProcessorMask::reserve_n(kernel_spec->num_threads, cumulative_mask);
+    std::optional<DMProcessorMask> reserved = DMProcessorMask::reserve_n(kernel_spec->num_threads, cumulative_mask);
     TT_FATAL(
         reserved.has_value(),
         "Failed to reserve processors for DM kernel '{}' on WorkerSpec '{}'. "
         "The \"common DM cores\" assumption has been violated!",
-        kernel_name,
+        kernel_spec->unique_id,
         worker_id);
 
-    // Update the kernel mask and cumulative mask
     DMProcessorMask mask = reserved.value();
-    kernel_masks[kernel_spec] = mask;
-    cumulative_mask |= mask;
-    return mask;
+    return {mask, cumulative_mask | mask};
 }
 
 // Helper: Assign compute processor mask for a kernel.
@@ -432,163 +504,190 @@ ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, cons
     auto reserved = ComputeProcessorMask::reserve_n(kernel_spec->num_threads, ComputeProcessorMask::create(0x00));
     TT_FATAL(
         reserved.has_value(),
-        "Compute kernel '{}' reservation failed; should be unreachable after validation.",
+        "Compute kernel '{}' reservation failed. Condition should be unreachable after validation.",
         kernel_name);
     return reserved.value();
 }
 
-// Helper: Convert DFBAccessPattern (user-facing) to AccessPattern (hardware interface)
-experimental::dfb::AccessPattern ToHwAccessPattern(DFBAccessPattern pattern) {
-    switch (pattern) {
-        case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
-        case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
-        case DFBAccessPattern::CONTIGUOUS: TT_FATAL(false, "CONTIGUOUS access pattern is not yet supported");
-    }
-    TT_FATAL(false, "Unknown DFBAccessPattern value: {}", static_cast<int>(pattern));
-}
+using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
+using ComputeProcessorMaskMap = std::unordered_map<const KernelSpec*, ComputeProcessorMask>;
 
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false) {
-    auto impl = std::make_shared<detail::ProgramImpl>();
+// Helper: Solve kernel-to-core assignments
+// NOTE: Despite the earlier legality checks, it is possible for the solver to fail! (with TT_FATAL)
+//   The current implementation makes a (likely temporary) simplifying assumption:
+//      A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
+//   If the input ProgramSpec passes legality checks but fails in the solver, the resulting error
+//   message will make it clear what went wrong (i.e. overly restrictive "common DM cores" assumption).
+std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAssignments(
+    const ProgramSpec& spec, const CollectedSpecData& derived_data) {
+    // Mapping from kernel specs to their processor masks
+    DMProcessorMaskMap kernels_to_dm_processor_mask;
+    ComputeProcessorMaskMap kernels_to_compute_processor_mask;
 
-    //////////////////////////////
-    // Legality checks
-    //////////////////////////////
-
-    // May want to make an option to skip legality checks in production to reduce runtime overhead.
-    // If you skip legality checks, you will get undefined behavior if the ProgramSpec is invalid.
-    if (skip_validation) {
-        TT_FATAL(false, "For now, bypassing legality checks on Quasar isn't allowed.");
-    }
-    ValidateProgramSpec(spec);
-
-    //////////////////////////////////////
-    // Kernel->core assignments
-    /////////////////////////////////////
-
-    // Mapping from kernel names to KernelSpecs (inefficiency -- also created in legality checks)
-    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
-    for (const auto& kernel : spec.kernels) {
-        kernel_by_name[kernel.unique_id] = &kernel;
-    }
-
-    // Processor masks for each kernel in the ProgramSpec
-    std::unordered_map<const KernelSpec*, DMProcessorMask> kernel_dm_processor_mask;
-    std::unordered_map<const KernelSpec*, ComputeProcessorMask> kernel_compute_processor_mask;
-
-    // NOTE:
-    // The current implementation makes a simplifying assumption:
-    // A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
-    // This assumption is overly restrictive! it is easy to create a counterexample where it doesn't hold.
-    // If we encounter a case that violates the simplifying assumption, ValidateProgramSpec will succeed,
-    // but kernel->core assignment will fail. The error message will make it clear what happened.
-    //
-    // While the initial Quasar implementation uses this simplifying assumption, this is probably temporary.
-    // When the time comes to relax this assumption, several aspects of the implementation will need to change:
-    //   - The simple solver logic here will need to be re-written.
-    //   - DFBs will need to be created per-KernelGroup/WorkerSpec, not per-kernel.
-    //   - One DFBSpec may map to multiple DFBHandles.
-    //   - DFB bindings will no longer have the character of CTAs! They'll act like implicit RTAs.
-    //   - Possibly other knock-on effects, TBD.
-
-    for (const auto& worker : spec.workers.value()) {
+    // Solver loop (with simplifying assumption)
+    for (const WorkerSpec& worker : spec.workers.value()) {
         // Cumulative DM processor mask for this WorkerSpec
-        // (If we decide to reserve DM cores for interal use, just update the initial mask.)
+        // (If we decide to reserve DM cores for interal use, just update the initial mask here.)
         DMProcessorMask cumulative_dm_mask = DMProcessorMask::create(0x00);
 
-        for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = kernel_by_name.at(kernel_name);
+        // Since we enforce (at most) one compute kernel per WorkerSpec, no need to track cumulative mask.
+
+        for (const KernelSpecName& kernel_name : worker.kernels) {
+            const KernelSpec* kernel_spec = derived_data.kernel_by_name.at(kernel_name);
 
             if (kernel_spec->is_dm_kernel()) {
-                AssignDMProcessors(
-                    kernel_spec, kernel_name, worker.unique_id, kernel_dm_processor_mask, cumulative_dm_mask);
+                // Look up existing DM mask, if any (from previous WorkerSpec iterations)
+                std::optional<DMProcessorMask> existing_mask =
+                    kernels_to_dm_processor_mask.contains(kernel_spec)
+                        ? std::optional(kernels_to_dm_processor_mask.at(kernel_spec))
+                        : std::nullopt;  // (redundant lookup, for code readability)
+
+                auto [mask, new_cumulative] =
+                    ReserveDMProcessors(kernel_spec, existing_mask, cumulative_dm_mask, worker.unique_id);
+
+                kernels_to_dm_processor_mask[kernel_spec] = mask;
+                cumulative_dm_mask = new_cumulative;
             } else {
-                kernel_compute_processor_mask[kernel_spec] = AssignComputeProcessors(kernel_spec, kernel_name);
+                // compute kernel
+                kernels_to_compute_processor_mask[kernel_spec] = AssignComputeProcessors(kernel_spec, kernel_name);
             }
         }
     }
 
-    //////////////////////////////
-    // Create DataflowBuffers
-    //////////////////////////////
+    return std::make_pair(kernels_to_dm_processor_mask, kernels_to_compute_processor_mask);
+}
 
-    // DFB info & endpoint mapping info
-    // (inefficient -- similar data struct was created in legality checks; should refactor)
-    // Legality checks ensure that each DFB has exactly one producer and one consumer.
-    struct DFBInfo {
-        const DataflowBufferSpec* dfb_spec = nullptr;
-        const KernelSpec* producer = nullptr;
-        const KernelSpec* consumer = nullptr;
-        experimental::dfb::DataflowBufferConfig config = {};
-        uint32_t dfb_id = 0;
+// Helper: Make a DataflowBufferConfig from a DataflowBufferSpec
+experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
+    const DataflowBufferSpec* dfb_spec,
+    const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
+    const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
+    const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map) {
+    const KernelSpec* producer = dfb_endpoint_info.producer;
+    const KernelSpec* consumer = dfb_endpoint_info.consumer;
+
+    // Create the combined processor mask for producer and consumer
+    // (uint16_t, where bits 0-7 = DM riscs, bits 8-15 = Tensix riscs)
+    auto get_dfb_risc_mask = [&](const KernelSpec* kernel) -> uint16_t {
+        if (kernel->is_dm_kernel()) {
+            return kernel_to_dm_processor_mask_map.at(kernel).bits;
+        } else {
+            return kernel_to_compute_processor_mask_map.at(kernel).bits << 8;
+        }
     };
-    std::unordered_map<DFBSpecName, DFBInfo> dfb_name_to_info_map;
+    uint16_t producer_risc_mask = get_dfb_risc_mask(producer);
+    uint16_t consumer_risc_mask = get_dfb_risc_mask(consumer);
 
-    // Populate map with DFBSpec info
-    for (const DataflowBufferSpec& dfb_spec : spec.dataflow_buffers) {
-        dfb_name_to_info_map[dfb_spec.unique_id] = DFBInfo{
-            .dfb_spec = &dfb_spec,
-            .config = {
-                .entry_size = dfb_spec.entry_size,
-                .num_entries = dfb_spec.num_entries,
-                .enable_implicit_sync = !dfb_spec.disable_implicit_sync,
-                // Data format metadata is optional; default to Invalid if not specified
-                // Earlier, we validated that it was provided for any DFB with a compute endpoint.
-                .data_format = dfb_spec.data_format_metadata.value_or(tt::DataFormat::Invalid),
-                // Tile metadata is optional; just pass through the std::optional<Tile>
-                .tile = dfb_spec.tile_format_metadata}};
+    // Convert user-facing access pattern enum to hardware interface access pattern enum
+    // (TODO: We should merge these enums; it's silly to have separate ones.)
+    auto to_hw_access_pattern = [](DFBAccessPattern pattern) -> experimental::dfb::AccessPattern {
+        switch (pattern) {
+            case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
+            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
+            case DFBAccessPattern::CONTIGUOUS: TT_FATAL(false, "CONTIGUOUS access pattern is not yet supported");
+        }
+        TT_FATAL(false, "Unknown DFBAccessPattern");
+    };
+    auto producer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.producer_binding->access_pattern);
+    auto consumer_access_pattern = to_hw_access_pattern(dfb_endpoint_info.consumer_binding->access_pattern);
+
+    return experimental::dfb::DataflowBufferConfig{
+        .entry_size = dfb_spec->entry_size,
+        .num_entries = dfb_spec->num_entries,
+        .producer_risc_mask = producer_risc_mask,
+        .num_producers = dfb_endpoint_info.producer->num_threads,
+        .pap = producer_access_pattern,
+        .consumer_risc_mask = consumer_risc_mask,
+        .num_consumers = dfb_endpoint_info.consumer->num_threads,
+        .cap = consumer_access_pattern,
+        .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
+        .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
+        .tile = dfb_spec->tile_format_metadata};
+}
+
+Program MakeProgramFromSpec(const ProgramSpec& spec) {
+    // Validate and collect derived data
+    // (We could add a flag to skip validation at production runtime, to reduce overhead.)
+    CollectedSpecData derived_data = ValidateAndCollectSpecData(spec);
+
+    // Solve kernel-to-core assignments
+    // NOTE: Current solver assumes that a given DM kernel uses the _same_ set of DM cores on every node/cluster.
+    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
+        SolveKernelToProcessorAssignments(spec, derived_data);
+
+    // Create ProgramImpl
+    auto program_impl = std::make_shared<detail::ProgramImpl>();
+
+    // Create DataflowBuffers
+    std::unordered_map<DFBSpecName, uint32_t> dfb_name_to_id_map;
+    for (const auto& [dfb_name, dfb_endpoint_info] : derived_data.dfb_endpoints) {
+        // Create the DFB + add it to the ProgramImpl
+        const DataflowBufferSpec* dfb_spec = derived_data.dfb_by_name.at(dfb_name);
+        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
+            dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
+
+        // Remember the generated ID
+        dfb_name_to_id_map[dfb_name] = dfb_id;
     }
 
-    // Populate map with DFB endpoint info
-    for (const auto& kernel : spec.kernels) {
-        for (const auto& dfb_binding : kernel.dfb_bindings) {
-            // Get the DFB info for this DFB (legality checks ensure that the entry exists)
-            auto& dfb_info = dfb_name_to_info_map.at(dfb_binding.dfb_spec_name);
+    // Create Kernels
+    // (TODO... WIP)
+    /*
 
-            // Create the combined processor mask for this kernel
-            // (bits 0-7 = DM riscs, bits 8-15 = Tensix riscs)
-            uint16_t dfb_processor_mask = 0x00;
+    // Ok, what will we need?
 
-            if (kernel.is_dm_kernel()) {
-                DMProcessorMask dm_mask = kernel_dm_processor_mask.at(&kernel);
-                dfb_processor_mask |= dm_mask.bits;
-            } else {
-                ComputeProcessorMask compute_mask = kernel_compute_processor_mask.at(&kernel);
-                dfb_processor_mask |= compute_mask.bits << 8;  // shift Tensix riscs to bits 8-15
-            }
+    //  - [DONE] We need a CreateKernel API that will accept our pre-solved processor list
+    //     - We'll need some silly helpers to convert from our mask to the official enum
+    //  - We need a way to get our consts into the headergen (new CTA mechanism)
+    //    ... and later, our location-specific consts into the RTA list...
+    //    ... tempted to do this via the experimental Quasar config
 
-            // Set the DFB info for the producer or consumer endpoint
-            if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
-                dfb_info.producer = &kernel;
-                dfb_info.config.producer_risc_mask = dfb_processor_mask;
-                dfb_info.config.num_producers = kernel.num_threads;
-                dfb_info.config.pap = ToHwAccessPattern(dfb_binding.access_pattern);
-            } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
-                dfb_info.consumer = &kernel;
-                dfb_info.config.consumer_risc_mask = dfb_processor_mask;
-                dfb_info.config.num_consumers = kernel.num_threads;
-                dfb_info.config.cap = ToHwAccessPattern(dfb_binding.access_pattern);
-            } else {
-                TT_FATAL(false, "RELAY endpoints are only for remote DFB, which is not supported yet");
-            }
+    for (const KernelSpec& kernel_spec : spec.kernels) {
+
+        if (kernel_spec.is_dm_kernel()) {
+
+            // Data movement kernel
+            KernelSource kernel_source = MakeKernelSource(kernel_spec);
+            QuasarDataMovementConfig config = MakeQuasarDataMovementConfig(kernel_spec);
+            std::set<DataMovementProcessor> dm_processors = MakeDMProcessorSet(DMProcessorMask);
+            // Get DFB local accessor names -> DFB ID
+            // (crap, this means walking the dfb bindings vector again...)
+
+            // Create the kernel
+            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config,
+    dm_processors);
+
+            // Add it to the ProgramImpl & save the kernel handle
+            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+            // TODO... save kernel handle
+        }
+        else {
+            // Compute kernel
+            KernelSource kernel_source = MakeKernelSource(kernel_spec);
+            QuasarDataMovementConfig config = MakeQuasarComputeConfig(kernel_spec);
+            std::set<DataMovementProcessor> dm_processors = MakeComputeProcessorSet(ComputeProcessorMask);
+            // Get DFB local accessor names -> DFB ID
+
+            // Create the kernel
+            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config,
+    compute_processors);
+
+            // Add it to the ProgramImpl & save the kernel handle
+            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+            // TODO... save kernel handle
         }
     }
 
-    // Create the DFBs (and keep track of the DFB IDs)
-    for (auto& [dfb_spec_name, dfb_info] : dfb_name_to_info_map) {
-        // Create the DFB, adding it to the ProgramImpl
-        const DataflowBufferSpec& dfb_spec = *(dfb_info.dfb_spec);
-        uint32_t dfb_id = impl->add_dataflow_buffer(to_node_range_set(dfb_spec.target_nodes), dfb_info.config);
+    // Shoot.
+    // In order to implement ProgramRunParams, I'm going to need to store the
+    // KernelSpecName and DFBSpecName in the ProgramImpl.
+    // I need these to hold the mapping data from spec names to the handles.
+    // Luckily, ProgramImpl is not part of the public API, so I can add members to it.
 
-        // Remember the generated id
-        // (We will need it to set up local accessor names for the kernel endpoints.)
-        dfb_info.dfb_id = dfb_id;
-    }
+    */
 
-    //////////////////////////////////
-    // Create Kernels
-    //////////////////////////////////
-
-    return Program(std::move(impl));
+    return Program(std::move(program_impl));
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
