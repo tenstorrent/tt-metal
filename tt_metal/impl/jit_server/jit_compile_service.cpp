@@ -14,8 +14,8 @@
 
 namespace tt::tt_metal::jit_server {
 
-JitCompileService::JitCompileService(CompileCallback compile_callback) :
-    compile_callback_(std::move(compile_callback)) {}
+JitCompileService::JitCompileService(CompileCallback compile_callback, UploadFirmwareCallback upload_fw_callback) :
+    compile_callback_(std::move(compile_callback)), upload_fw_callback_(std::move(upload_fw_callback)) {}
 
 std::string JitCompileService::make_dedup_key(const CompileRequest& request) const {
     return std::to_string(request.build_key) + ":" + request.kernel_name;
@@ -91,6 +91,48 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
             blobs_builder[i].setData(
                 kj::arrayPtr(response.elf_blobs[i].data.data(), response.elf_blobs[i].data.size()));
         }
+    });
+}
+
+kj::Promise<void> JitCompileService::uploadFirmware(UploadFirmwareContext context) {
+    UploadFirmwareRequest request;
+    auto reader = context.getParams().getRequest();
+    request.build_key = reader.getBuildKey();
+    for (auto artifact : reader.getArtifacts()) {
+        FirmwareArtifact a;
+        a.target_name = artifact.getTargetName().cStr();
+        a.file_name = artifact.getFileName().cStr();
+        a.is_kernel_object = artifact.getIsKernelObject();
+        auto data = artifact.getData();
+        a.data.assign(data.begin(), data.end());
+        request.artifacts.push_back(std::move(a));
+    }
+
+    auto paf = kj::newPromiseAndCrossThreadFulfiller<UploadFirmwareResponse>();
+    auto fulfiller =
+        std::make_shared<kj::Own<kj::CrossThreadPromiseFulfiller<UploadFirmwareResponse>>>(kj::mv(paf.fulfiller));
+
+    thread_pool_.silent_async([this, request = std::move(request), fulfiller]() mutable {
+        UploadFirmwareResponse response;
+        try {
+            if (!upload_fw_callback_) {
+                throw std::runtime_error("No firmware upload callback configured on server");
+            }
+            response = upload_fw_callback_(request);
+        } catch (const std::exception& e) {
+            response.success = false;
+            response.error_message = e.what();
+        }
+        (*fulfiller)->fulfill(kj::mv(response));
+    });
+
+    return paf.promise.then([context](UploadFirmwareResponse response) mutable {
+        if (!response.success) {
+            log_warning(tt::LogMetal, "uploadFirmware FAIL: {}", response.error_message);
+        }
+        auto response_builder = context.getResults().initResponse();
+        response_builder.setSuccess(response.success);
+        response_builder.setErrorMessage(response.error_message);
     });
 }
 

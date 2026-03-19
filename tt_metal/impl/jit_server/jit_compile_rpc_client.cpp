@@ -95,6 +95,24 @@ void fill_compile_request(rpc::CompileRequest::Builder& builder, const CompileRe
     }
 }
 
+void fill_upload_firmware_request(rpc::UploadFirmwareRequest::Builder& builder, const UploadFirmwareRequest& request) {
+    builder.setBuildKey(request.build_key);
+    auto artifacts = builder.initArtifacts(request.artifacts.size());
+    for (std::size_t i = 0; i < request.artifacts.size(); ++i) {
+        artifacts[i].setTargetName(request.artifacts[i].target_name);
+        artifacts[i].setFileName(request.artifacts[i].file_name);
+        artifacts[i].setIsKernelObject(request.artifacts[i].is_kernel_object);
+        artifacts[i].setData(kj::arrayPtr(request.artifacts[i].data.data(), request.artifacts[i].data.size()));
+    }
+}
+
+UploadFirmwareResponse read_upload_firmware_response(rpc::UploadFirmwareResponse::Reader reader) {
+    UploadFirmwareResponse response;
+    response.success = reader.getSuccess();
+    response.error_message = reader.getErrorMessage().cStr();
+    return response;
+}
+
 CompileResponse read_compile_response(rpc::CompileResponse::Reader reader) {
     CompileResponse response;
     response.success = reader.getSuccess();
@@ -161,6 +179,25 @@ CompileResponse JitCompileRpcClient::compile(const CompileRequest& request) cons
     } catch (const kj::Exception& e) {
         throw std::runtime_error(
             "Failed to connect to remote JIT compile server at " + endpoint_ + ": " + e.getDescription().cStr());
+    }
+}
+
+UploadFirmwareResponse JitCompileRpcClient::upload_firmware(const UploadFirmwareRequest& request) const {
+    if (endpoint_.empty()) {
+        throw std::runtime_error("Missing TT_METAL_JIT_SERVER_ENDPOINT for remote JIT firmware upload");
+    }
+
+    try {
+        capnp::EzRpcClient client(endpoint_);
+        auto cap = client.getMain<rpc::JitCompile>();
+        auto rpc_request = cap.uploadFirmwareRequest();
+        auto builder = rpc_request.initRequest();
+        fill_upload_firmware_request(builder, request);
+        auto result = rpc_request.send().wait(client.getWaitScope());
+        return read_upload_firmware_response(result.getResponse());
+    } catch (const kj::Exception& e) {
+        throw std::runtime_error(
+            "Failed firmware upload to remote JIT server at " + endpoint_ + ": " + e.getDescription().cStr());
     }
 }
 
@@ -238,6 +275,14 @@ std::vector<CompileResponse> JitCompileRpcSession::wait_all() {
     }
     impl_->promises.clear();
     return responses;
+}
+
+UploadFirmwareResponse JitCompileRpcSession::upload_firmware(const UploadFirmwareRequest& request) {
+    auto rpc_request = impl_->cap.uploadFirmwareRequest();
+    auto builder = rpc_request.initRequest();
+    fill_upload_firmware_request(builder, request);
+    auto result = rpc_request.send().wait(impl_->client.getWaitScope());
+    return read_upload_firmware_response(result.getResponse());
 }
 
 }  // namespace tt::tt_metal::jit_server

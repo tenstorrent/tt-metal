@@ -17,7 +17,9 @@ namespace tt::tt_metal::jit_server {
 
 class JitCompileServerController {
 public:
-    explicit JitCompileServerController(JitCompileService::CompileCallback compile_callback);
+    explicit JitCompileServerController(
+        JitCompileService::CompileCallback compile_callback,
+        JitCompileService::UploadFirmwareCallback upload_fw_callback = {});
     ~JitCompileServerController();
 
     void start(std::string address);

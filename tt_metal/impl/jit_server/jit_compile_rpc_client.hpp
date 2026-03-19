@@ -22,6 +22,7 @@ public:
 
     CompileResponse compile(const CompileRequest& request) const;
     std::vector<CompileResponse> compile_batch(const std::vector<CompileRequest>& requests) const;
+    UploadFirmwareResponse upload_firmware(const UploadFirmwareRequest& request) const;
 
 private:
     std::string endpoint_;
@@ -37,6 +38,8 @@ public:
     void send(const CompileRequest& request);
     CompileResponse send_and_wait(const CompileRequest& request);
     std::vector<CompileResponse> wait_all();
+
+    UploadFirmwareResponse upload_firmware(const UploadFirmwareRequest& request);
 
 private:
     struct Impl;
