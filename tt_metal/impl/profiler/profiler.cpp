@@ -2133,13 +2133,10 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
     }
 
     this->device_logs_output_dir = std::filesystem::path(get_profiler_logs_dir());
-    tt::filesystem::safe_create_directories(this->device_logs_output_dir);
-    if (!tt::filesystem::safe_is_directory(this->device_logs_output_dir).value_or(false)) {
-        log_warning(
-            tt::LogMetal,
-            "Could not create profiler output directory '{}'; profiler output may be lost.",
-            this->device_logs_output_dir);
-    }
+    TT_FATAL(
+        tt::filesystem::safe_create_directories(this->device_logs_output_dir),
+        "Could not create profiler output directory '{}'",
+        this->device_logs_output_dir);
 
     if (new_logs) {
         std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
@@ -2259,13 +2256,10 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
     if (!getDeviceProfilerState(context_id)) {
         return;
     }
-    tt::filesystem::safe_create_directories(new_output_dir);
-    if (!tt::filesystem::safe_is_directory(std::filesystem::path(new_output_dir)).value_or(false)) {
-        log_warning(
-            tt::LogMetal,
-            "Could not create profiler output directory '{}'; profiler output may be lost.",
-            new_output_dir);
-    }
+    TT_FATAL(
+        tt::filesystem::safe_create_directories(new_output_dir),
+        "Could not create profiler output directory '{}'",
+        new_output_dir);
     device_logs_output_dir = new_output_dir;
 #endif
 }
