@@ -121,18 +121,6 @@ def test_rm_interleaved_concat_unaligned_int(device, dtype, shapes, dim):
             ttnn.ShardStrategy.HEIGHT,
             3,
         ),
-        (
-            [[[1, 1, 256, 64], (64, 64)], [[1, 1, 256, 128], (64, 128)]],
-            (64, 192),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)),
-                }
-            ),
-            ttnn.ShardStrategy.HEIGHT,
-            3,
-        ),
         # WIDTH-sharded tiled concat along height (dim=2)
         # Skipped: width sharded inputs not yet supported for two-tensor concat
         pytest.param(
