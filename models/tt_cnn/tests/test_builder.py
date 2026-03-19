@@ -7,6 +7,7 @@ import torch
 from ttnn.model_preprocessing import infer_ttnn_module_args
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.tt_cnn.tt.builder import (
     AutoShardedStrategyConfiguration,
     BlockShardedStrategyConfiguration,
@@ -184,6 +185,7 @@ def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES)  # Use first 2 sizes
 @pytest.mark.parametrize("channels", [16, 8])
@@ -230,6 +232,7 @@ def test_pool2d(input_size, channels, batch_size, pool_config, device):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", [(224, 224), (32, 32)])
 @pytest.mark.parametrize("batch_size", [1, 4])
@@ -396,6 +399,7 @@ def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channels", [16, 8])
@@ -445,6 +449,7 @@ def test_pool2d_configuration_from_torch_layer(input_size, channels, batch_size,
     assert_with_pcc(torch_output, ttnn_output_torch, PCC_THRESHOLD)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", INPUT_SIZES[:1])
 @pytest.mark.parametrize("channels", [16])
@@ -633,6 +638,7 @@ def test_conv2d_slicing_validation_errors(device):
         ChannelSliceStrategyConfiguration(num_slices=1)
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_pool2d_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for MaxPool2d slicing"""
@@ -670,6 +676,7 @@ def test_pool2d_slicing_validation_errors(device):
         )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 def test_upsample_slicing_validation_errors(device):
     """Test that validation errors are raised correctly for Upsample configuration"""
@@ -800,6 +807,7 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing
@@ -871,6 +879,7 @@ def test_maxpool2d_slicing_strategies(input_size, channels, batch_size, pool_con
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39447")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("input_size", SLICE_INPUT_SIZES)
 @pytest.mark.parametrize("channels", SLICE_CHANNEL_CONFIGS)  # Must be divisible by num_slices for channel slicing
