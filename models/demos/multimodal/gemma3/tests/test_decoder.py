@@ -60,6 +60,7 @@ def test_decoder_inference(
 ):
     mode = Mode.DECODE
     dtype = ttnn.bfloat8_b
+    generation_length = 1
 
     model_args = Gemma3ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
 
@@ -144,6 +145,7 @@ def test_decoder_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
+        first_layer=True,
     )
 
     seqlen = 1
