@@ -56,18 +56,27 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
+_DANGEROUS_PATH_PREFIXES = (
+    "/proc/",  # Kernel/process virtual filesystem
+    "/sys/",  # Kernel sysfs
+    "/dev/",  # Device files
+    "/etc/",  # System configuration (passwords, keys, etc.)
+    "/run/",  # Runtime state files (PIDs, sockets)
+    "/boot/",  # Bootloader and kernel images
+    "/var/",  # System logs, etc.
+)
+
+
 def _is_safe_path(file_path: str) -> bool:
-    """Validate that the file path is safe to open (no path traversal)."""
+    """Validate that the file path is safe to open (no path traversal or dangerous system paths)."""
     if not file_path:
         return False
     normalized = Path(file_path)
-    # Reject paths that resolve to a parent directory escape
     if ".." in normalized.parts:
         return False
     if normalized.is_absolute():
-        allowed_prefixes = ("/work/", "/home/", "/opt/", "/tmp/", "/usr/")
         normalized_str = str(normalized)
-        if not any(normalized_str.startswith(prefix) for prefix in allowed_prefixes):
+        if any(normalized_str.startswith(prefix) for prefix in _DANGEROUS_PATH_PREFIXES):
             return False
     return True
 

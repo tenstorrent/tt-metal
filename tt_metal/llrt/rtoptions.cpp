@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rtoptions.hpp"
+#include "llrt/hal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -265,11 +266,17 @@ std::filesystem::path get_rank_scoped_logs_root(const std::string& logs_dir, int
         return logs_root;
     }
 
-    std::array<char, 256> hostname{};
-    if (gethostname(hostname.data(), hostname.size() - 1) != 0 || hostname.front() == '\0') {
+#ifndef HOST_NAME_MAX
+#ifdef _POSIX_HOST_NAME_MAX
+#define HOST_NAME_MAX _POSIX_HOST_NAME_MAX
+#else
+#define HOST_NAME_MAX 255
+#endif
+#endif
+    std::vector<char> hostname(HOST_NAME_MAX + 1, '\0');
+    if (gethostname(hostname.data(), HOST_NAME_MAX) != 0 || hostname.front() == '\0') {
         return logs_root;
     }
-    hostname.back() = '\0';
     return logs_root / fmt::format("{}_rank_{}", hostname.data(), rank);
 }
 
@@ -288,40 +295,33 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
 /** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
- * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
- * (e.g. run_cluster_validation under mpirun), each still gets a distinct port.
+ * Precedence (highest to lowest):
+ *   1. OMPI_COMM_WORLD_RANK  — OpenMPI standard
+ *   2. PMI_RANK              — MPICH / Hydra / Slurm PMI
+ *   3. SLURM_PROCID          — Slurm native (without PMI layer)
+ *   4. PMIX_RANK             — PMIx-aware launchers (OpenPMIx, PRRTE)
+ *   5. TT_MESH_HOST_RANK     — TT-specific fallback (may be duplicated across ranks)
+ *
+ * OMPI/PMI variants are checked first so that when multiple processes share
+ * TT_MESH_HOST_RANK=0 (e.g. run_cluster_validation under mpirun) each still
+ * gets a distinct Inspector port.
  *
  * Thread Safety Note:
- * This function uses std::getenv() which is not thread-safe on all platforms
- * (environment variables may be modified by other threads concurrently).
- * RunTimeOptions is typically a singleton - port-related methods should ideally
- * be called during initialization or with appropriate synchronization if called
- * concurrently from multiple threads. The rank value is deterministic once the
- * process starts, so computing it once at construction would be ideal.
+ * std::getenv() is not thread-safe on all platforms when environment
+ * variables may be modified concurrently. The result is cached in
+ * cached_mpi_rank_ at construction time to avoid repeated unsafe reads.
  */
 int get_rank_from_env() {
-    const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
-        }
-    }
-    rank_str = std::getenv("PMI_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
-        }
-    }
-    rank_str = std::getenv("TT_MESH_HOST_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
+    for (const char* var : {"OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"}) {
+        const char* rank_str = std::getenv(var);
+        if (rank_str) {
+            try {
+                return std::stoi(rank_str);
+            } catch (const std::invalid_argument&) {
+                return -1;
+            } catch (const std::out_of_range&) {
+                return -1;
+            }
         }
     }
     return -1;
@@ -378,12 +378,13 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
-    InitializeFromEnvVars();
-
-    // Cache MPI rank for Inspector RPC port selection.
-    // This must be done after InitializeFromEnvVars so all env vars are parsed,
-    // and the value is deterministic for the lifetime of the process.
+    // Cache MPI rank before InitializeFromEnvVars so rank-scoped helpers
+    // (e.g. get_rank_scoped_logs_root for inspector_settings.log_path) see the
+    // correct value. get_rank_from_env() reads only MPI launcher env vars and
+    // does not depend on any Metal env vars parsed inside InitializeFromEnvVars.
     this->cached_mpi_rank_ = get_rank_from_env();
+
+    InitializeFromEnvVars();
 
     if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
@@ -1659,6 +1660,12 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
     }
 
     fabric_telemetry_settings = parsed_settings;
+}
+
+void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        ParseFeatureEnv(static_cast<RunTimeDebugFeatures>(i), hal);
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {

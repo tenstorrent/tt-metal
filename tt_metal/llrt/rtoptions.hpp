@@ -20,7 +20,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "llrt/hal.hpp"
+#include "llrt/hal_proc_set.hpp"  // HalProcessorSet — avoids pulling in the full Hal singleton
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
@@ -37,6 +37,10 @@ class ControlPlane;
 namespace tt::tt_metal::distributed {
 class SystemMesh;
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal {
+class Hal;
+}  // namespace tt::tt_metal
 
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
@@ -392,6 +396,9 @@ public:
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
     uint16_t get_inspector_rpc_server_port() const;
+    /** Rank-aware Inspector RPC port: base_port + MPI rank (or base_port if not running under MPI).
+     *  Use this when connecting to a specific rank's Inspector instance. */
+    uint16_t get_effective_inspector_rpc_server_port() const;
     bool get_serialize_inspector_on_dispatch_timeout() const {
         return inspector_settings.serialize_on_dispatch_timeout;
     }
@@ -743,11 +750,7 @@ public:
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
-    void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
-        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-            ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
-        }
-    }
+    void ParseAllFeatureEnv(const tt_metal::Hal& hal);
 
     // Resolve FabricNodeIds to physical chip IDs using the control plane.
     // This must be called after the control plane is initialized, since during
@@ -761,9 +764,6 @@ public:
     void resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distributed::SystemMesh& system_mesh);
 
 private:
-    /** Rank-aware port for Inspector RPC when running under MPI/tt-run (base_port + rank). */
-    uint16_t get_effective_inspector_rpc_server_port() const;
-
     // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
