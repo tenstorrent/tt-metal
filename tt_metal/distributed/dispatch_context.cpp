@@ -50,7 +50,7 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
         "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
 
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices();
+    const auto& active_devices = device_manager->get_all_active_devices_impl();
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
 
