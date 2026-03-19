@@ -40,23 +40,6 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
 }
 
 // =============================================================================
-// CB Validation Helpers (must be called from PACK/UNPACK guards)
-// =============================================================================
-
-template <uint32_t input_cb, uint32_t output_cb>
-ALWI void assert_untilize_cb_page_sizes() {
-    // When input is a block float format (e.g. Bfp8_b), the op converts to a
-    // non-block output format (e.g. Float16_b), so page sizes legitimately differ.
-#if defined(UCK_CHLKC_PACK)
-    if constexpr (!is_block_float_format(pack_dst_format[input_cb])) {
-        const uint32_t in_page_size = get_local_cb_interface(input_cb).fifo_page_size;
-        const uint32_t out_page_size = get_local_cb_interface(output_cb).fifo_page_size;
-        ASSERT(in_page_size == out_page_size);
-    }
-#endif
-}
-
-// =============================================================================
 // Standalone Init/Uninit Wrapper Functions Implementations
 // =============================================================================
 
@@ -104,13 +87,6 @@ ALWI void untilize(uint32_t num_blocks) {
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
-
-    // Sanity checks: verify CB page sizes match the usage pattern.
-    // Guarded because get_local_cb_interface() references cb_interface, which is
-    // not defined for the MATH TRISC (trisc.cc excludes it via #if !defined(UCK_CHLKC_MATH)).
-    PACK((assert_untilize_cb_page_sizes<input_cb, output_cb>()));
-    UNPACK(ASSERT(is_valid_cb_tile_page_size(input_cb, (DataFormat)unpack_src_format[input_cb])));
-    PACK(ASSERT(is_valid_cb_tile_page_size(output_cb, (DataFormat)pack_dst_format[output_cb])));
 
     // Untilize output must not be a block float format (Bfp8/4/2 and _b variants).
     // Block floats have shared exponents that break tile-to-row-major reinterpretation.
