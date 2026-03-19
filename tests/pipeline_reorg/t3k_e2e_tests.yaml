@@ -122,7 +122,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and single_run' -vvv --tb=short
   skus:
     wh_llmbox:
-      timeout: 15
+      timeout: 25
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill

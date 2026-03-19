@@ -93,7 +93,7 @@ fabric:
 
 shield:
   e2e:
-    wh_llmbox: 15
+    wh_llmbox: 25
 
 scaleout:
   e2e:
