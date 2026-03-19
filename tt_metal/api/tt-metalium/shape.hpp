@@ -46,9 +46,13 @@ public:
 
     uint32_t get_normalized_index(std::int64_t index) const;
 
-    // Needed for reflect / fmt
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->value_); }
+    // Needed for reflect / fmt.
+    // rank is included because value_ is padded to min-4D with leading 1s (see ShapeBase::init()),
+    // so shapes with different ranks can have identical value_ (e.g., [128,128] and [1,128,128]
+    // both store {1,1,128,128}). Without rank, their hashes collide and cause incorrect program
+    // cache hits, reusing a program compiled for the wrong rank.
+    static constexpr auto attribute_names = std::forward_as_tuple("value", "rank");
+    auto attribute_values() const { return std::tuple<const Container&, size_t>{this->value_, rank()}; }
 
     std::array<uint32_t, 4> to_array_4D() const;
     Shape to_rank(size_t new_rank) const;
