@@ -777,8 +777,14 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                     CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
-                uint32_t completion_queue_start_addr =
-                    cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_start_addr;
+                if (device->sysmem_manager().is_dram_backed()) {
+                    completion_queue_start_addr =
+                        device->sysmem_manager().get_dram_region_start_addr(cq_id) + cq_start + issue_queue_size;
+                } else {
+                    completion_queue_start_addr =
+                        cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                }
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 detail::WriteToDeviceL1(
