@@ -67,6 +67,14 @@ void kernel_main() {
 
     const uint32_t is_mux_writer = get_arg_val<uint32_t>(argidx++);
 
+    // Per-link semaphore addresses for chunk-level sync
+    const uint32_t num_links = get_arg_val<uint32_t>(argidx++);
+    volatile tt_l1_ptr uint32_t* per_link_sem_ptrs[2] = {nullptr, nullptr};
+    for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
+        per_link_sem_ptrs[lnk] =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));
+    }
+
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         // true, /* wait_for_op_signal */
         is_injector,
@@ -255,11 +263,12 @@ void kernel_main() {
                     }
                 }
 
-                // Per-chunk sync: wait for remote MUX writers to finish writing this chunk
+                // Per-chunk sync: wait for EACH link's MUX writer to finish writing this chunk
                 if (is_injector && ring_iter > 0 && !kv_chunk_is_joint) {
                     chunks_signaled_by_remote++;
-                    noc_semaphore_wait_min(
-                        fused_op_receiver.signal_op_semaphore_addr_ptr, chunks_signaled_by_remote * 2);
+                    for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
+                        noc_semaphore_wait_min(per_link_sem_ptrs[lnk], chunks_signaled_by_remote);
+                    }
                 }
 
                 // K: either read locally (injector or not participant) or receive from previous core
@@ -417,9 +426,10 @@ void kernel_main() {
         }
     }
 
-    // Reset the out-ready semaphore so it is clean for the next invocation
+    // Reset all per-link out-ready semaphores so they are clean for the next invocation
     if (is_injector) {
-        DPRINT << "Resetting out-ready semaphore" << ENDL();
-        noc_semaphore_set(fused_op_receiver.signal_op_semaphore_addr_ptr, 0);
+        for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
+            noc_semaphore_set(per_link_sem_ptrs[lnk], 0);
+        }
     }
 }
