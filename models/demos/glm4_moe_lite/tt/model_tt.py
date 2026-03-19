@@ -644,6 +644,8 @@ class Glm4MoeLiteDenseOnlyTT:
         prefill_profile: dict[str, float] = {}
         t_prefill0 = time.perf_counter() if profile_on else 0.0
 
+        max_prefill_chunk = int(os.environ.get("GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE", "0").strip() or "0")
+
         out_logits: list[torch.Tensor] = []
 
         for i in range(int(batch)):
@@ -655,7 +657,12 @@ class Glm4MoeLiteDenseOnlyTT:
             if prompt_len > int(seq_total):
                 raise ValueError(f"prompt_len[{i}]={prompt_len} > tokens.shape[1]={int(seq_total)}")
 
-            padded_len = ((prompt_len + pad_multiple - 1) // pad_multiple) * pad_multiple
+            use_chunked = max_prefill_chunk > 0 and prompt_len > max_prefill_chunk
+            if use_chunked:
+                chunk_size = max_prefill_chunk
+                padded_len = ((prompt_len + pad_multiple - 1) // pad_multiple) * pad_multiple
+            else:
+                padded_len = ((prompt_len + pad_multiple - 1) // pad_multiple) * pad_multiple
             if padded_len > int(self.max_seq_len):
                 raise ValueError(
                     f"padded_len={padded_len} exceeds max_seq_len={int(self.max_seq_len)} "
@@ -666,7 +673,7 @@ class Glm4MoeLiteDenseOnlyTT:
             input_padded = torch.zeros((1, padded_len), dtype=torch.int32)
             input_padded[0, :prompt_len] = prompt_ids
 
-            # Convert page table row to TT.
+            # Convert full page table row to TT (used for attention reads).
             page_row = page_table[i : i + 1, :].to(torch.int32)
             page_table_tt = ttnn.from_torch(
                 page_row,
@@ -677,33 +684,213 @@ class Glm4MoeLiteDenseOnlyTT:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
             )
 
-            # Slice RoPE tables to the padded sequence length (shared across layers).
-            #
-            # IMPORTANT: `ttnn.slice` may return the input tensor itself when the slice spans the
-            # entire tensor. Since TTNN does not refcount view aliases, deallocating the slice can
-            # accidentally deallocate the cached base RoPE tensor. Avoid slicing when we want the
-            # full table.
-            rope_slices_owned = True
-            if int(padded_len) == int(self.rope["cos_matrix"].shape[2]) and int(rope_dim) == int(
-                self.rope["cos_matrix"].shape[3]
-            ):
-                cos_matrix = self.rope["cos_matrix"]
-                sin_matrix = self.rope["sin_matrix"]
-                rope_slices_owned = False
+            if use_chunked:
+                logits_i = self._prefill_chunked_single_user(
+                    prompt_ids=prompt_ids,
+                    input_padded=input_padded,
+                    page_row=page_row,
+                    page_table_tt=page_table_tt,
+                    kv_cache=kv_cache,
+                    prompt_len=prompt_len,
+                    padded_len=padded_len,
+                    chunk_size=chunk_size,
+                    hidden=hidden,
+                    vocab=vocab,
+                    rope_dim=rope_dim,
+                    is_mesh_device=is_mesh_device,
+                    profile_on=profile_on,
+                    profile_layer=profile_layer,
+                    prefill_profile=prefill_profile,
+                )
             else:
-                cos_matrix = ttnn.slice(self.rope["cos_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
-                sin_matrix = ttnn.slice(self.rope["sin_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
+                logits_i = self._prefill_unchunked_single_user(
+                    input_padded=input_padded,
+                    page_table_tt=page_table_tt,
+                    kv_cache=kv_cache,
+                    prompt_len=prompt_len,
+                    padded_len=padded_len,
+                    hidden=hidden,
+                    vocab=vocab,
+                    rope_dim=rope_dim,
+                    is_mesh_device=is_mesh_device,
+                    profile_on=profile_on,
+                    profile_layer=profile_layer,
+                    prefill_profile=prefill_profile,
+                )
+            out_logits.append(logits_i)
+            ttnn.deallocate(page_table_tt, force=False)
 
-            # Embedding.
+        if profile_on and profile_token_count > 0:
+            prefill_profile["total_s"] = prefill_profile.get("total_s", 0.0) + (time.perf_counter() - t_prefill0)
+            self._profile_record(
+                phase="prefill",
+                stage_totals=prefill_profile,
+                token_count=profile_token_count,
+                layer_filter=profile_layer,
+            )
+        # vLLM expects prefill logits as [B, 1, vocab] so it can slice the last
+        # prompt position with `logits[:, -1, :]`. Each entry in out_logits is
+        # [1, vocab], so stacking already yields [B, 1, vocab].
+        return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
+
+    def _prefill_unchunked_single_user(
+        self,
+        *,
+        input_padded: torch.Tensor,
+        page_table_tt: ttnn.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        prompt_len: int,
+        padded_len: int,
+        hidden: int,
+        vocab: int,
+        rope_dim: int,
+        is_mesh_device: bool,
+        profile_on: bool,
+        profile_layer: int,
+        prefill_profile: dict[str, float],
+    ) -> torch.Tensor:
+        """Non-chunked prefill for a single user (original path)."""
+        rope_slices_owned = True
+        if int(padded_len) == int(self.rope["cos_matrix"].shape[2]) and int(rope_dim) == int(
+            self.rope["cos_matrix"].shape[3]
+        ):
+            cos_matrix = self.rope["cos_matrix"]
+            sin_matrix = self.rope["sin_matrix"]
+            rope_slices_owned = False
+        else:
+            cos_matrix = ttnn.slice(self.rope["cos_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
+            sin_matrix = ttnn.slice(self.rope["sin_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
+
+        t0 = time.perf_counter() if profile_on else 0.0
+        x = run_tt_embedding(device=self.device, token_ids=input_padded, tt_weight=self.embed_w)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.reshape(x, (1, 1, padded_len, hidden))
+        if profile_on:
+            prefill_profile["embed_s"] = prefill_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
+
+        for layer_idx in range(self.num_layers_to_run):
+            w = self._ensure_layer_weights(layer_idx)
+            layer_profile: dict[str, float] | None = None
+            if profile_on and (profile_layer < 0 or profile_layer == layer_idx):
+                layer_profile = {}
+            x_next = run_decoder_layer_prefill_update_cache_tt(
+                device=self.device,
+                x_embed=x,
+                page_table_tt=page_table_tt,
+                kvpe_cache=kv_cache[layer_idx],
+                cos_matrix=cos_matrix,
+                sin_matrix=sin_matrix,
+                trans_matrix=self.rope["trans_matrix"],
+                w=w,
+                hparams=self.hparams,
+                prompt_len=prompt_len,
+                moe_runtime=self.moe_runtime,
+                profile=layer_profile,
+            )
+            if layer_profile is not None:
+                for key, value in layer_profile.items():
+                    stage_key = f"layer_{key}"
+                    prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
+            ttnn.deallocate(x, force=False)
+            x = x_next
+
+        logits_i = self._extract_logits(x, prompt_len, hidden, vocab, profile_on, prefill_profile)
+        if rope_slices_owned:
+            ttnn.deallocate(cos_matrix, force=False)
+            ttnn.deallocate(sin_matrix, force=False)
+        return logits_i
+
+    def _prefill_chunked_single_user(
+        self,
+        *,
+        prompt_ids: torch.Tensor,
+        input_padded: torch.Tensor,
+        page_row: torch.Tensor,
+        page_table_tt: ttnn.Tensor,
+        kv_cache: list[ttnn.Tensor],
+        prompt_len: int,
+        padded_len: int,
+        chunk_size: int,
+        hidden: int,
+        vocab: int,
+        rope_dim: int,
+        is_mesh_device: bool,
+        profile_on: bool,
+        profile_layer: int,
+        prefill_profile: dict[str, float],
+    ) -> torch.Tensor:
+        """Chunked prefill for a single user — splits long sequences into chunks.
+
+        Each chunk is processed through the full decoder stack. KV cache is
+        filled incrementally using chunk_page_table. Attention uses
+        chunked_flash_mla_prefill to read all previously cached KV.
+        """
+        block_size = int(kv_cache[0].shape[2])
+        pad_mult = max(block_size, 32)
+
+        # Build chunk boundaries: full chunks of chunk_size, last chunk may be smaller.
+        chunk_starts: list[int] = []
+        chunk_ends: list[int] = []
+        pos = 0
+        while pos < padded_len:
+            c_end = min(pos + chunk_size, padded_len)
+            chunk_starts.append(pos)
+            chunk_ends.append(c_end)
+            pos = c_end
+
+        logger.info(
+            "Chunked prefill: prompt_len={}, padded_len={}, chunk_size={}, num_chunks={}, block_size={}",
+            prompt_len,
+            padded_len,
+            chunk_size,
+            len(chunk_starts),
+            block_size,
+        )
+
+        logits_i = None
+        for c_idx, (chunk_start, chunk_end) in enumerate(zip(chunk_starts, chunk_ends)):
+            is_last_chunk = c_idx == len(chunk_starts) - 1
+            this_chunk_len = chunk_end - chunk_start
+
+            chunk_prompt_len = min(prompt_len, chunk_end) - chunk_start
+            if chunk_prompt_len <= 0:
+                break
+
+            # Pad this chunk to tile/block alignment.
+            this_chunk_padded = ((this_chunk_len + pad_mult - 1) // pad_mult) * pad_mult
+            chunk_tokens = torch.zeros((1, this_chunk_padded), dtype=torch.int32)
+            chunk_tokens[0, :this_chunk_len] = input_padded[0, chunk_start:chunk_end]
+
+            # Slice page table for this chunk's pages (for paged_fill_cache).
+            chunk_page_start = chunk_start // block_size
+            chunk_page_end = (chunk_start + this_chunk_padded) // block_size
+            chunk_pt = page_row[:, chunk_page_start:chunk_page_end]
+            chunk_page_table_tt = ttnn.from_torch(
+                chunk_pt,
+                device=self.device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh_device else None,
+            )
+
+            # RoPE tables for absolute positions [chunk_start, chunk_start + this_chunk_padded).
+            cos_matrix = ttnn.slice(
+                self.rope["cos_matrix"], [0, 0, chunk_start, 0], [1, 1, chunk_start + this_chunk_padded, rope_dim]
+            )
+            sin_matrix = ttnn.slice(
+                self.rope["sin_matrix"], [0, 0, chunk_start, 0], [1, 1, chunk_start + this_chunk_padded, rope_dim]
+            )
+
             t0 = time.perf_counter() if profile_on else 0.0
-            x = run_tt_embedding(device=self.device, token_ids=input_padded, tt_weight=self.embed_w)
+            x = run_tt_embedding(device=self.device, token_ids=chunk_tokens, tt_weight=self.embed_w)
             if x.layout != ttnn.TILE_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.reshape(x, (1, 1, padded_len, hidden))
+            x = ttnn.reshape(x, (1, 1, this_chunk_padded, hidden))
             if profile_on:
                 prefill_profile["embed_s"] = prefill_profile.get("embed_s", 0.0) + (time.perf_counter() - t0)
 
-            # Decoder stack (prefill).
             for layer_idx in range(self.num_layers_to_run):
                 w = self._ensure_layer_weights(layer_idx)
                 layer_profile: dict[str, float] | None = None
@@ -719,9 +906,11 @@ class Glm4MoeLiteDenseOnlyTT:
                     trans_matrix=self.rope["trans_matrix"],
                     w=w,
                     hparams=self.hparams,
-                    prompt_len=prompt_len,
+                    prompt_len=chunk_prompt_len,
                     moe_runtime=self.moe_runtime,
                     profile=layer_profile,
+                    chunk_page_table=chunk_page_table_tt,
+                    chunk_start_idx=chunk_start,
                 )
                 if layer_profile is not None:
                     for key, value in layer_profile.items():
@@ -730,59 +919,63 @@ class Glm4MoeLiteDenseOnlyTT:
                 ttnn.deallocate(x, force=False)
                 x = x_next
 
-            # Logits for the last *real* prompt token only.
-            x_last = ttnn.slice(x, [0, 0, prompt_len - 1, 0], [1, 1, prompt_len, hidden])
-            ttnn.deallocate(x, force=False)
+            ttnn.deallocate(cos_matrix, force=False)
+            ttnn.deallocate(sin_matrix, force=False)
+            ttnn.deallocate(chunk_page_table_tt, force=False)
 
-            t0 = time.perf_counter() if profile_on else 0.0
-            x_last = self.final_norm(x_last, mode="decode")
-            logits_tt = ttnn.linear(x_last, self.lm_head_w)  # [1,1,1,vocab]
-            if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
-                cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
-                logits_tt_full = ttnn.all_gather(
-                    logits_tt,
-                    dim=3,
-                    num_links=1,
-                    topology=ttnn.Topology.Linear,
-                    cluster_axis=cluster_axis,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.deallocate(logits_tt, force=False)
-                logits_tt = logits_tt_full
-            if profile_on:
-                prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
+            if is_last_chunk:
+                last_token_in_chunk = prompt_len - chunk_start
+                logits_i = self._extract_logits(x, last_token_in_chunk, hidden, vocab, profile_on, prefill_profile)
+            else:
+                ttnn.deallocate(x, force=False)
 
-            logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
-            logits_torch = logits_torch[..., :vocab]
-            logits_flat = logits_torch.reshape(-1, vocab)
-            if logits_flat.shape[0] != 1:
-                raise RuntimeError(
-                    f"prefill logits shape mismatch: expected 1 row, got {int(logits_flat.shape[0])} "
-                    f"(logits_torch.shape={tuple(logits_torch.shape)})"
-                )
-            logits_i = logits_flat.to(dtype=torch.float32).cpu()
-            out_logits.append(logits_i)
+        if logits_i is None:
+            raise RuntimeError("chunked prefill produced no logits")
+        return logits_i
 
-            # Cleanup.
-            ttnn.deallocate(logits_tt, force=False)
-            ttnn.deallocate(x_last, force=False)
-            if rope_slices_owned:
-                ttnn.deallocate(cos_matrix, force=False)
-                ttnn.deallocate(sin_matrix, force=False)
-            ttnn.deallocate(page_table_tt, force=False)
+    def _extract_logits(
+        self,
+        x: ttnn.Tensor,
+        last_real_token: int,
+        hidden: int,
+        vocab: int,
+        profile_on: bool,
+        prefill_profile: dict[str, float],
+    ) -> torch.Tensor:
+        """Extract logits for the last real token position, apply norm + lm_head."""
+        x_last = ttnn.slice(x, [0, 0, last_real_token - 1, 0], [1, 1, last_real_token, hidden])
+        ttnn.deallocate(x, force=False)
 
-        if profile_on and profile_token_count > 0:
-            prefill_profile["total_s"] = prefill_profile.get("total_s", 0.0) + (time.perf_counter() - t_prefill0)
-            self._profile_record(
-                phase="prefill",
-                stage_totals=prefill_profile,
-                token_count=profile_token_count,
-                layer_filter=profile_layer,
+        t0 = time.perf_counter() if profile_on else 0.0
+        x_last = self.final_norm(x_last, mode="decode")
+        logits_tt = ttnn.linear(x_last, self.lm_head_w)
+        if self.lm_head_sharded_vocab and _is_mesh_device(self.device):
+            cluster_axis = None if self.lm_head_tp_axis is None else int(self.lm_head_tp_axis)
+            logits_tt_full = ttnn.all_gather(
+                logits_tt,
+                dim=3,
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                cluster_axis=cluster_axis,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        # vLLM expects prefill logits as [B, 1, vocab] so it can slice the last
-        # prompt position with `logits[:, -1, :]`. Each entry in out_logits is
-        # [1, vocab], so stacking already yields [B, 1, vocab].
-        return torch.stack(out_logits, dim=0)  # [B, 1, vocab]
+            ttnn.deallocate(logits_tt, force=False)
+            logits_tt = logits_tt_full
+        if profile_on:
+            prefill_profile["head_s"] = prefill_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
+
+        logits_torch = _tt_to_torch_for_vllm_output(tensor=logits_tt, device=self.device)
+        logits_torch = logits_torch[..., :vocab]
+        logits_flat = logits_torch.reshape(-1, vocab)
+        if logits_flat.shape[0] != 1:
+            raise RuntimeError(
+                f"prefill logits shape mismatch: expected 1 row, got {int(logits_flat.shape[0])} "
+                f"(logits_torch.shape={tuple(logits_torch.shape)})"
+            )
+        logits_i = logits_flat.to(dtype=torch.float32).cpu()
+        ttnn.deallocate(logits_tt, force=False)
+        ttnn.deallocate(x_last, force=False)
+        return logits_i
 
     def _prefill_compute_inner_batched(
         self,
