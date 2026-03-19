@@ -665,12 +665,6 @@ static void sdpa_inner_loop_step(
 
     exp_packthread_tile_init<true, true, scale_fp32, InputClamping::None>();
 
-    if constexpr (!uniform_pack_format) {
-        pack_reconfig_data_format(cb_qkt_im);
-    }
-    if constexpr (!uniform_unpack_format) {
-        reconfig_data_format(cb_kt_in, cb_q_in);
-    }
     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
     cb_reserve_back(cb_qkt_im, Sq_chunk_t * KT_stride);
 
@@ -688,6 +682,13 @@ static void sdpa_inner_loop_step(
         MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
         kt_index_offset = 0;
+
+        if constexpr (!uniform_pack_format) {
+            pack_reconfig_data_format(cb_qkt_im);
+        }
+        if constexpr (!uniform_unpack_format) {
+            reconfig_data_format(cb_kt_in, cb_q_in);
+        }
 #ifdef ARCH_BLACKHOLE
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
 #else
@@ -708,6 +709,13 @@ static void sdpa_inner_loop_step(
                     kt_subblock * actual_sbw,
                     qkt_subblock_h,
                     actual_sbw);
+
+                if constexpr (!uniform_pack_format) {
+                    pack_reconfig_data_format(cb_qkt_im);
+                }
+                if constexpr (!uniform_unpack_format) {
+                    reconfig_data_format(cb_kt_in, cb_q_in);
+                }
 #ifdef ARCH_BLACKHOLE
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
 #else
