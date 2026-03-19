@@ -245,9 +245,14 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
     Rebuilds RT args and CB buffer pointers so that generic_op's
     override_runtime_arguments copies the correct values into the
     cached Program.  Uses C++ helpers (~50us total).
+
+    Returns a NEW FusedOp with a deep-copied descriptor.  The cached
+    entry is never mutated, which prevents races with in-flight DMA
+    when EnqueueMeshWorkload returns before remote devices finish
+    reading the host-side descriptor.
     """
-    fused = entry.fused_op
-    desc = fused.descriptor
+    # Deep-copy via C++ copy constructor (async-safe)
+    desc = ttnn.merge_program_descriptors([entry.fused_op.descriptor])
 
     # 1. Rebuild per-kernel RT args via C++ helpers
     for ki, fused_kernel in enumerate(desc.kernels):
@@ -281,7 +286,7 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
         new_cb = ops[op_idx].descriptor.cbs[orig_cb_idx]
         desc.cbs[merged_cb_idx].set_global_circular_buffer_from_cb(new_cb)
 
-    # 5. Update tensor lists
+    # 5. Build tensor lists
     all_inputs: List = []
     seen_ids: Set[int] = set()
     for op in ops:
@@ -291,9 +296,13 @@ def _update_cached_descriptor(entry: _CacheEntry, ops: List[OpDescriptor]) -> "F
                 all_inputs.append(t)
                 seen_ids.add(tid)
     all_outputs = [ops[pi].output_tensors[ti] for pi, ti in entry.output_sources]
-    fused.op = OpDescriptor(desc, all_inputs, all_outputs)
 
-    return fused
+    # Return NEW FusedOp — cached entry.fused_op is never mutated
+    return FusedOp(
+        op=OpDescriptor(desc, all_inputs, all_outputs),
+        semaphores=entry.fused_op.semaphores,
+        kernel_labels=entry.fused_op.kernel_labels,
+    )
 
 
 def _recompute_rebind(spec_entries: List[Tuple[int, int, int]], ops: List[OpDescriptor]) -> List[int]:
