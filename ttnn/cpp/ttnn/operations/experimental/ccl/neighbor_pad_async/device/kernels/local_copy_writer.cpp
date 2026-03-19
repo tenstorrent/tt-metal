@@ -68,7 +68,8 @@ void kernel_main() {
             uint64_t sem_noc_addr = get_noc_addr(signal_noc_x[t], signal_noc_y[t], phase2_barrier_sem);
             noc_semaphore_inc(sem_noc_addr, 1);
         }
-        // Ensure sem inc signals are delivered before kernel exits.
-        noc_async_write_barrier();
+        // Flush nonposted atomics (noc_semaphore_inc) before kernel exits.
+        // noc_async_write_barrier only flushes posted writes, not atomics.
+        noc_async_atomic_barrier();
     }
 }
