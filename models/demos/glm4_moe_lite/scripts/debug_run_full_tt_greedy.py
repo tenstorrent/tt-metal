@@ -96,7 +96,15 @@ def _alloc_paged_kvpe_cache_from_cpu(
 def main() -> int:
     ap = argparse.ArgumentParser(description="Run GLM-4.7-Flash end-to-end on TT without vLLM (debug helper).")
     ap.add_argument("--model-id", default="zai-org/GLM-4.7-Flash")
-    ap.add_argument("--prompt", default="Say hello in exactly 3 words.")
+    ap.add_argument(
+        "--prompt", default="Say hello in exactly 3 words.", help="Prompt text (ignored if --prompt-file is set)."
+    )
+    ap.add_argument(
+        "--prompt-file",
+        default=None,
+        metavar="PATH",
+        help="Read prompt from file (e.g. long document to summarize). Overrides --prompt.",
+    )
     ap.add_argument("--max-new-tokens", type=int, default=32)
     ap.add_argument(
         "--cache-dir",
@@ -139,6 +147,14 @@ def main() -> int:
         help="Repeat prompt tokens to reach this context length (0=disabled). "
         "Useful for testing prefill/decode at long sequence lengths without a real long prompt.",
     )
+    ap.add_argument(
+        "--fake-context-len",
+        type=int,
+        default=0,
+        help="Skip prefill and treat KV cache as already filled to this length (0=disabled). "
+        "Cache is zero-filled; decode runs at this context length for fast decode-only benchmarking. "
+        "Incompatible with phase=prefill.",
+    )
     args = ap.parse_args()
 
     model_id = str(args.model_id)
@@ -153,22 +169,43 @@ def main() -> int:
     if batch_size < 1:
         raise ValueError("--batch-size must be >= 1")
 
+    prompt_text = str(args.prompt)
+    if getattr(args, "prompt_file", None):
+        path = Path(os.path.expanduser(str(args.prompt_file)))
+        if not path.is_file():
+            raise SystemExit(f"--prompt-file not found: {path}")
+        prompt_text = path.read_text(encoding="utf-8", errors="replace").strip()
+        print(f"[DEBUG] Loaded prompt from {path} ({len(prompt_text)} chars)", flush=True)
+
     tok = AutoTokenizer.from_pretrained(snap, local_files_only=True, use_fast=True)
-    enc = tok(str(args.prompt), return_tensors="pt", add_special_tokens=True)
+    enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
     prompt_ids_single = enc["input_ids"].to(dtype=torch.int32)  # [1, S]
     if prompt_ids_single.ndim != 2 or int(prompt_ids_single.shape[0]) != 1:
         raise ValueError(f"expected prompt input_ids [1,S], got {tuple(prompt_ids_single.shape)}")
     prompt_len = int(prompt_ids_single.shape[1])
 
-    sim_ctx = int(args.simulate_context_len)
-    if sim_ctx > 0 and sim_ctx > prompt_len:
-        repeats = (sim_ctx + prompt_len - 1) // prompt_len
-        prompt_ids_single = prompt_ids_single.repeat(1, repeats)[:, :sim_ctx]  # [1, sim_ctx]
-        prompt_len = sim_ctx
-        print(f"[DEBUG] Expanded prompt to {prompt_len} tokens via repetition", flush=True)
+    fake_context_len = int(args.fake_context_len)
+    if fake_context_len > 0:
+        if args.phase == "prefill":
+            raise SystemExit("--fake-context-len requires phase=decode or phase=both (prefill is skipped).")
+        # Use short prompt (one token) for bootstrap decode; context length is fake.
+        prompt_len = fake_context_len
+        prompt_ids_single = prompt_ids_single[:, :1].contiguous()  # [1, 1]
+        prompt_lens = [1] * batch_size
+        print(
+            f"[DEBUG] Fake context: skip prefill, KV cache zero-filled, decode at context_len={fake_context_len}",
+            flush=True,
+        )
+    else:
+        sim_ctx = int(args.simulate_context_len)
+        if sim_ctx > 0 and sim_ctx > prompt_len:
+            repeats = (sim_ctx + prompt_len - 1) // prompt_len
+            prompt_ids_single = prompt_ids_single.repeat(1, repeats)[:, :sim_ctx]  # [1, sim_ctx]
+            prompt_len = sim_ctx
+            print(f"[DEBUG] Expanded prompt to {prompt_len} tokens via repetition", flush=True)
+        prompt_lens = [prompt_len] * batch_size
 
     prompt_ids = prompt_ids_single.repeat(batch_size, 1)  # [B, S]
-    prompt_lens = [prompt_len] * batch_size
 
     mesh_rows = int(args.mesh_rows)
     mesh_cols = int(args.mesh_cols)
@@ -242,9 +279,39 @@ def main() -> int:
         )
 
         phase = str(args.phase)
+        use_fake_context = fake_context_len > 0
 
-        # -- Prefill phase --
-        if phase in ("prefill", "both"):
+        # -- Prefill phase (skipped when --fake-context-len) --
+        if use_fake_context:
+            prefill_s = 0.0
+            logits = None
+            last_sampling_result = None
+            use_trace = args.enable_trace
+            use_sampling = use_trace and args.trace_mode == "sampling"
+            # Bootstrap decode at start_pos=fake_context_len (cache is zero-filled).
+            bootstrap_token = prompt_ids[:, 0:1].contiguous()  # [B, 1]
+            pos_bootstrap = torch.tensor([fake_context_len] * batch_size, dtype=torch.int32)
+            print(f"[DEBUG] Bootstrap decode at start_pos={fake_context_len} (no prefill)...", flush=True)
+            t0 = time.perf_counter()
+            if use_sampling:
+                last_sampling_result = runner.decode(
+                    tokens=bootstrap_token,
+                    start_pos=pos_bootstrap,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    sampling_params=True,
+                )
+            else:
+                logits = runner.decode(
+                    tokens=bootstrap_token,
+                    start_pos=pos_bootstrap,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=use_trace,
+                )
+            prefill_s = time.perf_counter() - t0
+        elif phase in ("prefill", "both"):
             t0 = time.perf_counter()
             logits = runner.prefill(
                 tokens=prompt_ids,
@@ -306,7 +373,7 @@ def main() -> int:
 
         # For batch>1, track per-sequence generated tokens; use sequence 0 for display.
         generated: list[list[int]] = [[] for _ in range(batch_size)]
-        if use_sampling and phase == "decode":
+        if use_sampling and (phase == "decode" or use_fake_context):
             token_in = _sampling_result_to_token(last_sampling_result, mesh_device)
             tokens_in = [token_in] * batch_size
         else:
@@ -318,8 +385,10 @@ def main() -> int:
 
         step_times: list[float] = []
         t_decode0 = time.perf_counter()
+        # When using fake context, bootstrap already wrote at prompt_len; start loop at prompt_len+1.
+        pos_offset = 1 if use_fake_context else 0
         for step in range(max_new_tokens - 1):
-            pos = torch.tensor([prompt_len + step] * batch_size, dtype=torch.int32)  # [B]
+            pos = torch.tensor([prompt_len + pos_offset + step] * batch_size, dtype=torch.int32)  # [B]
             tok_in = torch.tensor([[t] for t in tokens_in], dtype=torch.int32)  # [B, 1]
             t_step = time.perf_counter()
 
@@ -360,7 +429,11 @@ def main() -> int:
             f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase} batch_size={batch_size}",
             flush=True,
         )
-        print(f"prompt_len={prompt_len} new_tokens={len(generated[0])} blocks_per_seq={blocks_per_seq}", flush=True)
+        print(
+            f"prompt_len={prompt_len} new_tokens={len(generated[0])} blocks_per_seq={blocks_per_seq}"
+            + (" (fake context, no prefill)" if use_fake_context else ""),
+            flush=True,
+        )
         num_gen = max(1, len(generated[0]) - 1)
         if decode_s > 0:
             print(
