@@ -7,17 +7,6 @@ import torch
 import ttnn
 from loguru import logger
 
-connections_to_test = [
-    (0, 1),
-    (1, 2),
-    (2, 3),
-    (3, 0),
-    (0, 3),
-    (3, 2),
-    (2, 1),
-    (1, 0),
-]
-
 
 def run_ttnn_fabric_verification(num_rows: int = 4, num_cols: int = 8) -> None:
     """
@@ -25,6 +14,9 @@ def run_ttnn_fabric_verification(num_rows: int = 4, num_cols: int = 8) -> None:
 
     This helper contains the verification logic for send/recv between ranks. It is not invoked by default.
     The number of rows and cols passed in must match the MGD you are using.
+
+    Currently, the function just tests forward connections for a ring topology, but this could be extende
+    in the future by modifying connections_to_test.
     """
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
@@ -52,6 +44,8 @@ def run_ttnn_fabric_verification(num_rows: int = 4, num_cols: int = 8) -> None:
 
     test_shape = (1, 1, 32, 32)
     torch_tensor = torch.randn(test_shape, dtype=torch.bfloat16)
+
+    connections_to_test = [(i, (i + 1) % world_size) for i in range(world_size)]
 
     for sender, receiver in connections_to_test:
         ttnn.distributed_context_barrier()
@@ -139,3 +133,7 @@ def run_ttnn_fabric_verification(num_rows: int = 4, num_cols: int = 8) -> None:
     ttnn.close_device(device)
 
     return
+
+
+if __name__ == "__main__":
+    run_ttnn_fabric_verification(num_rows=1, num_cols=8)

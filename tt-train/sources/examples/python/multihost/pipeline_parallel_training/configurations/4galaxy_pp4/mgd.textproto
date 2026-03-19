@@ -35,30 +35,26 @@ graph_descriptors {
   connections {
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 1 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     directional: false
-    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 1 } }
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 2 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     directional: false
-    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 2 } }
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 3 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     directional: false
-    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 3 } }
     nodes { mesh { mesh_descriptor: "Galaxy_4x8" mesh_id: 0 } }
-    channels { count: 2 policy: RELAXED }
+    channels { count: 4 policy: RELAXED }
     directional: false
-    assign_z_direction: true
   }
 }
 

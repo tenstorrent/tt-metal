@@ -22,7 +22,6 @@ import click
 
 from ttml.common.data import prepare_data
 from trainer import train
-from ttnn_fabric_verification import run_ttnn_fabric_verification
 
 import socket
 import ttnn

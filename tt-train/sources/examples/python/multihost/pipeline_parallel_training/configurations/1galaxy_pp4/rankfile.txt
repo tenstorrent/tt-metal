@@ -1,4 +1,0 @@
-rank 0=bh-glx-c08u08 slot=0
-rank 1=bh-glx-c08u08 slot=0
-rank 2=bh-glx-c08u08 slot=0
-rank 3=bh-glx-c08u08 slot=0
