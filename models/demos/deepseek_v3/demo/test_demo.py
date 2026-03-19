@@ -3,6 +3,7 @@
 
 import json
 import os
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,50 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+
+
+def is_allowed_unicode_letter(char: str) -> bool:
+    """True for Latin and Greek script letters per Unicode character name."""
+    if not char.isalpha():
+        return False
+    name = unicodedata.name(char, "")
+    return name.startswith("LATIN ") or name.startswith("GREEK ")
+
+
+def find_disallowed_non_ascii_letter(text: str) -> tuple[int, str] | None:
+    """Find the first disallowed non-ASCII letter in the text."""
+    for char_index, char in enumerate(text):
+        if char.isascii() or not char.isalpha() or is_allowed_unicode_letter(char):
+            continue
+        return char_index, char
+    return None
+
+
+def validate_english_keyboard_output(results: dict) -> None:
+    generations = results.get("generations", [])
+    for generation_index, generation in enumerate(generations, start=1):
+        generated_text = generation.get("text")
+        if generated_text is None:
+            continue
+        if not isinstance(generated_text, str):
+            raise ValueError(
+                "Generated output text must be a string or None: "
+                f"generation_index={generation_index}, got={type(generated_text).__name__}"
+            )
+
+        bad_char = find_disallowed_non_ascii_letter(generated_text)
+        if bad_char is None:
+            continue
+
+        bad_char_index, bad_char = bad_char
+        unicode_name = unicodedata.name(bad_char, "UNKNOWN")
+        raise ValueError(
+            "Generated output contains disallowed non-Latin letter: "
+            f"generation_index={generation_index}, char_index={bad_char_index}, "
+            f"char={bad_char!r}, codepoint=U+{ord(bad_char):04X}, unicode_name={unicode_name}. "
+            "Punctuation/symbols and Latin letters (including accents, e.g. é) are allowed; "
+            "other scripts (e.g. CJK) are not."
+        )
 
 
 def _demo_case(
@@ -178,6 +223,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         run_kwargs["stop_at_eos"] = case["stop_at_eos"]
 
     results = run_demo(**run_kwargs)
+    validate_english_keyboard_output(results)
 
     # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
     # should always produce the requested token count.
