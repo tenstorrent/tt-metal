@@ -73,6 +73,8 @@ on:
 
 jobs:
   define-ops-tests:
+    # Test suite is not supported on P100a runners (Blackhole P100 CIv2 label).
+    if: ${{ inputs.runner-label != 'P100a' }}
     runs-on: ubuntu-latest
     outputs:
       ops-tests: ${{ steps.compute-tests.outputs.ops-tests }}
