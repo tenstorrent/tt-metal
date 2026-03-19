@@ -6,7 +6,7 @@
 
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/operations/creation/creation.hpp"

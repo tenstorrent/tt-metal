@@ -11,13 +11,6 @@
 
 namespace ttnn::operations::complex_binary {
 
-enum class ComplexBinaryOpType {
-    ADD,
-    SUB,
-    MUL,
-    DIV,
-};
-
 ComplexTensor add(
     const ComplexTensor& input_a, const ComplexTensor& input_b, const tt::tt_metal::MemoryConfig& output_mem_config);
 ComplexTensor subtract(

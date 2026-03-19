@@ -13,25 +13,6 @@
 
 namespace ttnn::operations::unary {
 
-enum class UnaryCompositeOpType {
-    DIGAMMA,
-    LGAMMA,
-    MULTIGAMMALN,
-    VAR_HW,
-    STD_HW,
-    NORMALIZE_HW,
-    GLU,
-    REGLU,
-    GEGLU,
-    SWIGLU,
-    POW,
-    TRIL,
-    TRIU,
-    POLYGAMMA,
-    LOGICAL_NOT_,
-    NORMALIZE_GLOBAL,
-    FRAC,
-};
 Tensor frac(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor is_odd(const Tensor&, const std::optional<MemoryConfig>&);
 

@@ -14,7 +14,7 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/types.hpp"
 

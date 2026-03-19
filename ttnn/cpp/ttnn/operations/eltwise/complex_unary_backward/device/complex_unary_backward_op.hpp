@@ -13,16 +13,6 @@
 
 namespace ttnn::operations::complex_unary_backward {
 
-enum class ComplexUnaryBackwardOpType {
-    POLAR_BW,
-    IMAG_BW,
-    REAL_BW,
-    ANGLE_BW,
-    CONJ_BW,
-    COMPLEX_ABS_BW,
-    COMPLEX_RECIP_BW,
-};
-
 std::vector<ComplexTensor> _polar_bw(
     const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config);
 std::vector<ComplexTensor> _conj_bw(

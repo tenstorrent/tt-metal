@@ -19,13 +19,6 @@
 
 namespace ttnn::operations::ternary {
 
-enum class TernaryCompositeOpType {
-    ADDCMUL,
-    ADDCDIV,
-    LERP,
-    MAC,
-};
-
 Tensor _addcmul(const Tensor&, const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _addcdiv(const Tensor&, const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _lerp(
