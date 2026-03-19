@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -768,6 +769,7 @@ TEST_F(SDPABackwardTest, CausalMask_MHA) {
 }
 
 TEST_F(SDPABackwardTest, CausalMask_GQA) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Test causal mask with Grouped Query Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
     SDPABackwardTestConfig config{
