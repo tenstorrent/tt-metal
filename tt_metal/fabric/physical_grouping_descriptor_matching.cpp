@@ -968,6 +968,7 @@ static bool add_forbidden_for_used_asics_to_all_groupings(
 }
 
 // TODO: Opimize constraints for maximum usage
+// FIXME: Fix for t3k please
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
     const GroupingInfo& grouping_info,
     const AdjacencyGraph<AsicID>& physical_graph,
