@@ -84,13 +84,6 @@ def run(
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"head_size", "program_config"})
-    if (
-        "memory_config" in op_kwargs
-        and hasattr(op_kwargs["memory_config"], "is_sharded")
-        and op_kwargs["memory_config"].is_sharded()
-    ):
-        del op_kwargs["memory_config"]
-
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
     # Scale factor (arg1 in JSON, passed as scalar by loader)

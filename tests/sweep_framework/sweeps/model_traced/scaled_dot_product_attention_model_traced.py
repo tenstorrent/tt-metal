@@ -157,8 +157,6 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
     # Clear sharded memory_config from op_kwargs too
-    if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
-        del op_kwargs["memory_config"]
 
     # Validate program_config grid fits current device
     pc = op_kwargs.get("program_config")

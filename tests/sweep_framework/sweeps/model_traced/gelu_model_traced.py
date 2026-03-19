@@ -76,13 +76,6 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-    # Remove sharded memory_config — traced shard specs may not fit test device
-    if (
-        "memory_config" in op_kwargs
-        and hasattr(op_kwargs["memory_config"], "is_sharded")
-        and op_kwargs["memory_config"].is_sharded()
-    ):
-        del op_kwargs["memory_config"]
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
@@ -121,20 +114,6 @@ def run(
                     pass  # Stay on DRAM if shard spec is incompatible
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
-
-    # Validate output memory_config shard spec against device grid
-    if "memory_config" in op_kwargs:
-        mc = op_kwargs["memory_config"]
-        if hasattr(mc, "is_sharded") and mc.is_sharded():
-            try:
-                grid = device.compute_with_storage_grid_size()
-                shard_grid = mc.shard_spec.grid
-                for cr in shard_grid:
-                    if cr.end.x >= grid.x or cr.end.y >= grid.y:
-                        del op_kwargs["memory_config"]
-                        break
-            except Exception:
-                del op_kwargs["memory_config"]
 
     start_time = start_measuring_time()
     output_tensor = ttnn.gelu(input_tensor_a, **op_kwargs)
