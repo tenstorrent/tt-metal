@@ -79,7 +79,7 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
-    runs-on: ${{ matrix.test-group.runs_on }}
+    runs-on: g04glx01
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
