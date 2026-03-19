@@ -1505,22 +1505,35 @@ class Generator(WarmupForwardMixin):
         """
         from models.common.sampling.tt_log_probs import LogProbsResult
 
-        def _read_logprobs(lp, blocking):
+        def _read_logprobs_sync(lp):
+            """Non-async: .cpu() with no extra args, matching old behavior."""
             if lp is None:
                 return None
             if isinstance(lp, LogProbsResult):
-                # New path: use LogProbsCalculator.to_cpu pattern
                 return LogProbsResult(
-                    topk_logprobs_host=lp.topk_logprobs.cpu(blocking=blocking, cq_id=0),
-                    topk_indices_host=lp.topk_indices.cpu(blocking=blocking, cq_id=0),
+                    topk_logprobs_host=lp.topk_logprobs.cpu(),
+                    topk_indices_host=lp.topk_indices.cpu(),
                     topk_logprobs=None,
                     topk_indices=None,
                 )
-            return lp.cpu(blocking=blocking)
+            return lp.cpu()
+
+        def _read_logprobs_async(lp):
+            """Async: .cpu(blocking=False) matching old behavior."""
+            if lp is None:
+                return None
+            if isinstance(lp, LogProbsResult):
+                return LogProbsResult(
+                    topk_logprobs_host=lp.topk_logprobs.cpu(blocking=False),
+                    topk_indices_host=lp.topk_indices.cpu(blocking=False),
+                    topk_logprobs=None,
+                    topk_indices=None,
+                )
+            return lp.cpu(blocking=False)
 
         if not async_read:
             if isinstance(tt_out[0], tuple):
-                return [(out[0].cpu(), _read_logprobs(out[1], blocking=True)) for out in tt_out]
+                return [(out[0].cpu(), _read_logprobs_sync(out[1])) for out in tt_out]
             elif isinstance(tt_out[0], ttnn.Tensor):
                 return [out.cpu() for out in tt_out]
 
@@ -1530,7 +1543,7 @@ class Generator(WarmupForwardMixin):
             if isinstance(tt_out[i], tuple):
                 outputs = (
                     tt_out[i][0].cpu(blocking=False),
-                    _read_logprobs(tt_out[i][1], blocking=False),
+                    _read_logprobs_async(tt_out[i][1]),
                 )
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
