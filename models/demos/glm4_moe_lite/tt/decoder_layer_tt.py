@@ -571,6 +571,8 @@ def run_decoder_layer_prefill_update_cache_tt(
     prompt_lens: list[int] | None = None,  # per-request prompt lengths (required when batch > 1)
     moe_runtime: Any | None = None,
     profile: dict[str, float] | None = None,
+    chunk_page_table: ttnn.Tensor | None = None,  # page table slice for this chunk (chunked prefill)
+    chunk_start_idx: int | None = None,  # absolute token position of this chunk's start
 ) -> ttnn.Tensor:
     """Run prefill for a single decoder layer and fill its paged KVPE cache.
 
@@ -582,6 +584,10 @@ def run_decoder_layer_prefill_update_cache_tt(
     MoE) operate on the flat ``[1,1,B*S_pad,hidden]`` shape.  For RoPE and
     FlashMLA the tensors are reshaped to ``[B,...,S_pad,...]`` so that
     positional encoding and causal masking are per-request.
+
+    For chunked prefill (``chunk_start_idx is not None``), the KV cache is
+    filled using ``chunk_page_table`` and attention reads from the full cache
+    via ``page_table_tt`` using ``chunked_flash_mla_prefill``.
     """
     if len(x_embed.shape) != 4:
         raise ValueError(f"expected x_embed rank 4, got shape={tuple(x_embed.shape)}")
@@ -802,6 +808,9 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     # Fill KV cache for each request. paged_fill_cache operates on one batch
     # item at a time (no batched API), so we loop over the batch dimension.
+    # For chunked prefill, use chunk_page_table so data lands at the correct
+    # physical pages for this chunk.
+    fill_page_table = chunk_page_table if chunk_page_table is not None else page_table_tt
     for bi in range(batch):
         plen = int(prompt_lens[bi])
         kvpe_bi = ttnn.slice(kvpe, [bi, 0, 0, 0], [bi + 1, 1, plen, kvpe_dim])
@@ -811,7 +820,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         else:
             kvpe_bi_cast = kvpe_bi
 
-        ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_bi_cast, page_table=page_table_tt, batch_idx=bi)
+        ttnn.experimental.paged_fill_cache(kvpe_cache, kvpe_bi_cast, page_table=fill_page_table, batch_idx=bi)
 
         if kvpe_bi_cast is not kvpe_bi:
             ttnn.deallocate(kvpe_bi_cast, force=False)
@@ -858,20 +867,37 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     # FlashMLA prefill with batch dimension: q_kvpe [B,H,S_pad,kvpe_dim],
     # kvpe [B,1,S_pad,kvpe_dim].  is_causal=True applies per-batch causal mask.
+    # For chunked prefill, use chunked_flash_mla_prefill which reads K/V from
+    # the paged cache (including all previously filled chunks) via page_table_tt.
     t0 = time.perf_counter() if profile is not None else 0.0
-    attn_latent = ttnn.transformer.flash_mla_prefill(
-        q_kvpe,
-        kvpe,
-        head_dim_v=int(hparams.kv_lora_rank),
-        scale=scale,
-        program_config=sdpa_program_config,
-        compute_kernel_config=compute_kernel_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        attn_mask=None,
-        is_causal=True,
-    )  # [B,H_padded,S_pad,kv_lora_rank]
-    ttnn.deallocate(q_kvpe, force=False)
-    ttnn.deallocate(kvpe, force=False)
+    if chunk_start_idx is not None:
+        ttnn.deallocate(kvpe, force=False)
+        attn_latent = ttnn.transformer.chunked_flash_mla_prefill(
+            q_kvpe,
+            kvpe_cache,
+            int(hparams.kv_lora_rank),
+            page_table_tt,
+            chunk_start_idx=chunk_start_idx,
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [B,H_padded,S_pad,kv_lora_rank]
+        ttnn.deallocate(q_kvpe, force=False)
+    else:
+        attn_latent = ttnn.transformer.flash_mla_prefill(
+            q_kvpe,
+            kvpe,
+            head_dim_v=int(hparams.kv_lora_rank),
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            attn_mask=None,
+            is_causal=True,
+        )  # [B,H_padded,S_pad,kv_lora_rank]
+        ttnn.deallocate(q_kvpe, force=False)
+        ttnn.deallocate(kvpe, force=False)
     _profile_add(profile, "flash_mla_prefill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # flash_mla_prefill pads heads up to q_chunk_size. Slice back to num_heads.
