@@ -159,6 +159,12 @@ def run(
                 num_shards = (total_rows + shard_shape[0] - 1) // shard_shape[0]
                 if num_shards > num_cores:
                     shard_ok = False
+                # Also validate core coordinates fit device grid
+                shard_grid = shard_spec.grid
+                for cr in shard_grid:
+                    if cr.end.x >= grid.x or cr.end.y >= grid.y:
+                        shard_ok = False
+                        break
         except Exception:
             pass
 

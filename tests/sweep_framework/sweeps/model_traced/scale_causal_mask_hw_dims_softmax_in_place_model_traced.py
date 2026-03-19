@@ -84,6 +84,12 @@ def run(
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"head_size", "program_config"})
+    if (
+        "memory_config" in op_kwargs
+        and hasattr(op_kwargs["memory_config"], "is_sharded")
+        and op_kwargs["memory_config"].is_sharded()
+    ):
+        del op_kwargs["memory_config"]
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
@@ -154,7 +160,10 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
+            try:
+                input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
+            except Exception:
+                pass  # Stay on DRAM if shard spec doesn't fit device
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_a,

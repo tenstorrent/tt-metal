@@ -236,7 +236,12 @@ def run(
     result = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Convert back to [N, C, H, W] format
+    # Convert TTNN output back to [N, C, H, W] format for PCC comparison.
+    # TTNN max_pool2d returns [1, 1, N*outH*outW, C] — reshape to [N, outH, outW, C] then permute.
+    out_h = (H + 2 * pad_h - dil_h * (kH - 1) - 1) // stride_h + 1
+    out_w = (W + 2 * pad_w - dil_w * (kW - 1) - 1) // stride_w + 1
+    if result.ndim == 4 and result.shape[0] == 1 and result.shape[1] == 1:
+        result = result.reshape(N, out_h, out_w, C)
     output_tensor = torch.permute(result, (0, 3, 1, 2))
 
     # Check with PCC

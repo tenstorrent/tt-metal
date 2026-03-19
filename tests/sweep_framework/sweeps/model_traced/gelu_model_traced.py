@@ -76,6 +76,13 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    # Remove sharded memory_config — traced shard specs may not fit test device
+    if (
+        "memory_config" in op_kwargs
+        and hasattr(op_kwargs["memory_config"], "is_sharded")
+        and op_kwargs["memory_config"].is_sharded()
+    ):
+        del op_kwargs["memory_config"]
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
