@@ -122,7 +122,7 @@ class TestParametrized:
             ("prefill", 4, 32, 1, 128, 0, "BFLOAT16-DRAM", 0.070),
             ("prefill", 4, 32, 1, 256, 0, "BFLOAT16-DRAM", 0.142),
             ("prefill", 4, 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.41),
-            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.00),
+            ("prefill", 4, 32, 1, 2048, 0, "BFLOAT16-DRAM", 0.98),
             ("decode", 4, 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.059),
             ("decode", 4, 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
             ("decode", 4, 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.071),
