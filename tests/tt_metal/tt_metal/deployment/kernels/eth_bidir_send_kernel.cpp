@@ -2,17 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "args.hpp"
 #include "sync.hpp"
 #include "timestamp.hpp"
 
+#define ARGS(X)           \
+    X(num_bytes_per_send) \
+    X(transfer_size)      \
+    X(transfer_count)     \
+    X(send_delta_addr)    \
+    X(send_l1_address)    \
+    X(recv_l1_address)    \
+    X(barrier_address)
+
 void kernel_main() {
-    constexpr uint32_t num_bytes_per_send = get_compile_time_arg_val(0);
-    constexpr uint32_t transfer_size = get_compile_time_arg_val(1);
-    constexpr uint32_t transfer_count = get_compile_time_arg_val(2);
-    constexpr uint32_t send_delta_addr = get_compile_time_arg_val(3);
-    constexpr uint32_t send_l1_address = get_compile_time_arg_val(4);
-    constexpr uint32_t recv_l1_address = get_compile_time_arg_val(5);
-    constexpr uint32_t barrier_address = get_compile_time_arg_val(6);
+    ARG_INIT(ARGS);
 
     struct barrier* b = (struct barrier*)barrier_address;
     barrier_init(b, 2);
