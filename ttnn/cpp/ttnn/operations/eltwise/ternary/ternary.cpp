@@ -214,7 +214,7 @@ Tensor where(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
-            return ttnn::invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
+            return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
         },
         value_true,
         value_false);

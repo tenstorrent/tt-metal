@@ -6,7 +6,9 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 
-namespace ttnn::operations::ternary {
+namespace ttnn {
+
+namespace operations::ternary {
 
 // addcmul(input,tensor1,tensor2,value)=input+value×tensor1×tensor2
 Tensor _addcmul(
@@ -142,6 +144,7 @@ Tensor _lerp(
 
     return result;
 }
+}  // namespace operations::ternary
 
 // Function: MAC
 // compute multiply-accumulate: y = a * b + c,  over various 8 combinations of a, b, c
@@ -175,4 +178,4 @@ Tensor mac(const Tensor& a, float b, float c, const std::optional<MemoryConfig>&
     return ttnn::add(ttnn::multiply(a, b, std::nullopt, output_mem_config), c, std::nullopt, output_mem_config);
 }
 
-}  // namespace ttnn::operations::ternary
+}  // namespace ttnn
