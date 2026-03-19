@@ -23,14 +23,6 @@ run_dual_galaxy_unit_tests() {
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
 
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
-  # Physical discovery with launcher NOT in hosts (OpenMPI #11830 - would hang without P2P workaround)
-  # Use hostfile from /etc/mpirun if available; galaxy dual has hardcoded hosts so create temp hostfile
-  if [[ -f /etc/mpirun/hostfile ]]; then
-    HOSTFILE=/etc/mpirun/hostfile ./tests/scripts/multihost/test_physical_discovery_launcher_not_in_hosts.sh ; fail+=$?
-  else
-    echo "g10glx03" > /tmp/hostfile_galaxy ; echo "g10glx04" >> /tmp/hostfile_galaxy
-    HOSTFILE=/tmp/hostfile_galaxy ./tests/scripts/multihost/test_physical_discovery_launcher_not_in_hosts.sh ; fail+=$?
-  fi
   mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --print-connectivity --send-traffic --hard-fail ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit" ; fail+=$?

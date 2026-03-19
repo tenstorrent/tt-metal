@@ -267,13 +267,19 @@ class TestPhase2Helpers:
         env_vars = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-x"]
         mock_env_vars = [e for e in env_vars if "TT_METAL_MOCK_CLUSTER_DESC_PATH" in e]
         assert len(mock_env_vars) == 2
-        # Each rank segment should have its own env var
-        # Rank 0 env var should be before the : separator
+        # Each rank segment should have its own env var (LD_LIBRARY_PATH is global, so find TT_METAL_MOCK_*)
         colon_idx = cmd.index(":")
-        rank0_env_idx = next(i for i, arg in enumerate(cmd[:colon_idx]) if arg == "-x")
+        rank0_env_idx = next(
+            i
+            for i, arg in enumerate(cmd[:colon_idx])
+            if arg == "-x" and "TT_METAL_MOCK_CLUSTER_DESC_PATH" in cmd[i + 1]
+        )
         assert str(mock_desc0.resolve()) in cmd[rank0_env_idx + 1]
-        # Rank 1 env var should be after the : separator
-        rank1_env_idx = next(i for i, arg in enumerate(cmd[colon_idx:]) if arg == "-x")
+        rank1_env_idx = next(
+            i
+            for i, arg in enumerate(cmd[colon_idx:])
+            if arg == "-x" and "TT_METAL_MOCK_CLUSTER_DESC_PATH" in cmd[colon_idx + i + 1]
+        )
         assert str(mock_desc1.resolve()) in cmd[colon_idx + rank1_env_idx + 1]
         # Check --output-dir is passed
         assert "--output-dir" in cmd

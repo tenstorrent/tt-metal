@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Union
 import click
 import yaml
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, ValidationInfo, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
@@ -639,12 +639,19 @@ class TTRunConfig(BaseModel):
         return bindings
 
     @field_validator("mesh_graph_desc_path", mode="before")
-    def validate_mesh_graph_exists(cls, path: Union[str, Path]) -> Path:
+    def validate_mesh_graph_exists(cls, path: Union[str, Path], info: ValidationInfo) -> Path:
         """Ensure mesh graph descriptor file exists.
 
         Uses resolve_path() to search multiple locations for relative paths.
+        Skips existence check when skip_mgd_check is True in validation context.
         """
-        return resolve_path(path, description="Mesh graph descriptor", must_be_file=True)
+        skip_check = info.context and info.context.get("skip_mgd_check", False)
+        return resolve_path(
+            path,
+            description="Mesh graph descriptor",
+            must_be_file=True,
+            must_exist=not skip_check,
+        )
 
 
 def get_search_paths() -> List[Optional[Path]]:
@@ -740,7 +747,11 @@ def resolve_path(
     return (ORIGINAL_CWD / expanded_path).resolve()
 
 
-def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
+def parse_binding_config(
+    yaml_path: Path,
+    mock_cluster_rank_binding: Optional[Path] = None,
+    skip_mgd_check: bool = False,
+) -> TTRunConfig:
     """Parse YAML configuration file with schema validation.
 
     Resolves all relative paths in the configuration against the launch directory
@@ -756,7 +767,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         data = yaml.safe_load(f)
 
     try:
-        config = TTRunConfig(**data)
+        config = TTRunConfig.model_validate(data, context={"skip_mgd_check": skip_mgd_check})
     except ValidationError as e:
         raise ValueError(f"Invalid configuration: {e}")
 
@@ -1022,6 +1033,7 @@ def legacy_flow(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    skip_mgd_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
     rankfile: Optional[Path] = None,
@@ -1265,7 +1277,7 @@ def legacy_flow(
             logger.info(f"{TT_RUN_PREFIX}   SLURM_SUBMIT_DIR: {os.environ.get('SLURM_SUBMIT_DIR', '<not set>')}")
 
     try:
-        config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
+        config = parse_binding_config(rank_binding, mock_cluster_rank_binding, skip_mgd_check)
     except (ValueError, ValidationError) as e:
         raise click.ClickException(f"Configuration error: {e}")
 
@@ -1421,6 +1433,7 @@ def new_mode_flow(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    skip_mgd_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
     rankfile_syntax: Optional[RankfileSyntax] = None,
@@ -1450,7 +1463,12 @@ def new_mode_flow(
         raise click.ClickException("No program specified. Please provide a program to run.")
 
     # Resolve mesh_graph_descriptor path
-    resolved_mgd = resolve_path(mesh_graph_descriptor, description="Mesh graph descriptor", must_be_file=True)
+    resolved_mgd = resolve_path(
+        mesh_graph_descriptor,
+        description="Mesh graph descriptor",
+        must_be_file=True,
+        must_exist=not skip_mgd_check,
+    )
 
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} New mode: Mesh Graph Descriptor = {resolved_mgd}")
@@ -1593,6 +1611,7 @@ def new_mode_flow(
         debug_gdbserver=debug_gdbserver,
         mock_cluster_rank_binding=phase2_mock_binding_path,  # Pass Phase 2 mock mapping
         skip_executable_check=skip_executable_check,
+        skip_mgd_check=skip_mgd_check,
         bare=bare,
         tcp_interface=tcp_interface,
         rankfile=rankfile_path,  # Pass generated rankfile
@@ -1651,6 +1670,7 @@ def new_mode_flow(
 @click.option(
     "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
 )
+@click.option("--skip-mgd-check", is_flag=True, help="Skip the check if MGD file exists on the local host")
 @click.option(
     "--bare",
     is_flag=True,
@@ -1681,6 +1701,7 @@ def main(
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
     skip_executable_check: bool,
+    skip_mgd_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
     rankfile_syntax: str,
@@ -1733,6 +1754,7 @@ def main(
             debug_gdbserver,
             mock_cluster_rank_binding,
             skip_executable_check,
+            skip_mgd_check,
             bare,
             tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
@@ -1759,6 +1781,7 @@ def main(
             debug_gdbserver,
             mock_cluster_rank_binding,
             skip_executable_check,
+            skip_mgd_check,
             bare,
             tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
