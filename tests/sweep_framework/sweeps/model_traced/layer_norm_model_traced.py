@@ -83,17 +83,6 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Validate program_config grid fits device
-    pc = op_kwargs.get("program_config")
-    if pc is not None:
-        try:
-            device_grid = device.compute_with_storage_grid_size()
-            pc_grid = pc.compute_with_storage_grid_size
-            if pc_grid.x > device_grid.x or pc_grid.y > device_grid.y:
-                del op_kwargs["program_config"]
-        except Exception:
-            del op_kwargs["program_config"]
-
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
