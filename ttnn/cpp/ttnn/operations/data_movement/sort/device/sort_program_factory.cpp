@@ -52,8 +52,9 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const uint32_t all_core_utilization_loop_residuum = Ht % total_number_of_cores;
 
     // uint32 index tensor support
-    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
-
+    const bool is_32_bit_data =
+        index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
+    std::cout << "is_32_bit_data: " << (is_32_bit_data ? "true" : "false") << std::endl;
     // Calculate core range
     /**
      * Calculates the core range based on the input tensor shape (Ht) and the total number of cores available
@@ -341,7 +342,8 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         total_number_of_cores_virtual);
 
     // uint32 index tensor support
-    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+    const bool is_32_bit_data =
+        index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
 
     /**
      * Calculates the core range based on the number of work units (all_core_utilization_count) and the total number of
@@ -724,7 +726,8 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
 
     // uint32 index tensor support
-    const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
+    const bool is_32_bit_data =
+        index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
 
     // Log 2 of Wt for compute kernel
     const uint32_t log2Wt = std::log2(Wt);
