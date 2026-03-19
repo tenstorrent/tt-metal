@@ -64,7 +64,12 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool enforce_fp32_accumulation>
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    typename AccumulateT,
+    bool enforce_fp32_accumulation,
+    bool use_matmul = false>
 ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
@@ -74,11 +79,15 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
             copy_tile(accumulate.config.cb_accumulator, 0, accumulate.config.dst_index);
             cb_pop_front(accumulate.config.cb_accumulator, onetile);
 
-            // CRITICAL: Re-init reduce after copy_tile corrupts SRCA config
-            // Use short version since packer config is still valid from initial reduce_init
+            // CRITICAL: Re-init after copy_tile corrupts SRCA config
+            // Use short version since packer config is still valid from initial init
             // Pass accumulator CB as old_cbid to reconfigure data format from accumulator to input CB
-            reduce_init_short_with_dt<reduce_type, reduce_dim, enforce_fp32_accumulation>(
-                accumulate.config.cb_accumulator, input_cb, scaler_cb);
+            if constexpr (use_matmul) {
+                mm_init_short_with_dt(input_cb, scaler_cb, accumulate.config.cb_accumulator);
+            } else {
+                reduce_init_short_with_dt<reduce_type, reduce_dim, enforce_fp32_accumulation>(
+                    accumulate.config.cb_accumulator, input_cb, scaler_cb);
+            }
         }
     }
 }
@@ -306,7 +315,7 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, enforce_fp32_accumulation>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, enforce_fp32_accumulation, use_matmul>(
                     input_cb, scaler_cb, accumulate);
 
                 const uint32_t dst_idx = get_dst_index(accumulate);
