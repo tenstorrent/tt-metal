@@ -4,6 +4,9 @@
 
 #include "to_layout_op.hpp"
 
+#include <bit>
+#include <limits>
+
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
