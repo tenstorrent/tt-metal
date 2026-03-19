@@ -144,23 +144,38 @@ void kernel_main() {
 
     uint32_t end_stick = start_stick_id + num_sticks;
 
-    DPRINT << "tile width bytes = " << tile_width_bytes << ENDL();
-    DPRINT << "ntiles/row = " << ntiles_per_row << ENDL();
-    DPRINT << "num full blocks = " << num_full_blocks << ENDL();
-    DPRINT << "tail rows = " << tail_rows << ENDL();
-    DPRINT << "start stick id = " << start_stick_id << ENDL();
-    DPRINT << "end stick = " << end_stick << ENDL();
+    // DPRINT << "stick size = " << stick_size << ENDL();
+    // DPRINT << "ntiles per row = " << ntiles_per_row << ENDL();
+    // DPRINT << "tile width bytes = " << tile_width_bytes << ENDL();
+    // DPRINT << "num sticks = " << num_sticks << ENDL();
+    // DPRINT << "start stick id = " << start_stick_id << ENDL();
+    // DPRINT << "end stick = " << end_stick << ENDL();
+
+    // DPRINT << "cb a id = " << static_cast<uint32_t>(cb_a) << ENDL();
+    // DPRINT << "cb b id = " << static_cast<uint32_t>(cb_b) << ENDL();
 
     uint32_t stick_id = start_stick_id;
     for (stick_id = start_stick_id; stick_id < end_stick; stick_id += TILE_HEIGHT) {
-        DPRINT << "[main] Pushing " << ntiles_per_row << " tiles to CB_A and " << ntiles_per_row << " tiles to CB_B"
-               << ENDL();
-
         uint32_t nrows = std::min(TILE_HEIGHT, end_stick - stick_id);
-        DPRINT << "stick id = " << stick_id << ", nrows = " << nrows << ENDL();
 
-        read_blocks(a, b, cb_a, cb_b, stick_id, ntiles_per_row * tile_width_bytes, nrows, ntiles_per_row);
-        DPRINT << "Push done" << ENDL();
+        // read_blocks(a, b, cb_a, cb_b, stick_id, ntiles_per_row * tile_width_bytes, nrows, ntiles_per_row);
+
+        // DPRINT << "Reading " << ntiles_per_row << " tiles from CB_A" << ENDL();
+
+        cb_reserve_back(cb_a, ntiles_per_row);
+        // cb_reserve_back(cb_b, ntiles_per_row);
+        uint32_t l1_a = get_write_ptr(cb_a);
+        for (uint32_t k = 0; k < nrows; ++k) {
+            noc_async_read_page(stick_id + k, a, l1_a);
+            l1_a += stick_size;  // each page/stick is stick_size bytes (= ntiles_per_row * tile_width_bytes)
+        }
+        noc_async_read_barrier();
+
+        print_data(reinterpret_cast<uint16_t*>(l1_a), 10);
+
+        cb_push_back(cb_a, ntiles_per_row);
+
+        // DPRINT << "Push done" << ENDL();
     }
-    DPRINT << "Reader completed" << ENDL();
+    // DPRINT << "Reader completed" << ENDL();
 }
