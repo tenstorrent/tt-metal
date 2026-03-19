@@ -22,6 +22,36 @@ from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import TracedRun
 from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE
+from models.experimental.tt_symbiote.modules.attention import (
+    PagedAttentionConfig,
+    TTNNBailingMoEAttention,
+    TTNNPagedAttentionKVCache,
+)
+
+
+def create_paged_kv_cache(model_config, device, batch_size=1):
+    """Create a paged attention KV cache for Ling-mini-2.0.
+
+    Args:
+        model_config: Model configuration
+        device: TTNN device
+        batch_size: Batch size
+
+    Returns:
+        TTNNPagedAttentionKVCache instance
+    """
+    config = PagedAttentionConfig(
+        block_size=64,
+        max_num_blocks=32,
+        batch_size=batch_size,
+    )
+    return TTNNPagedAttentionKVCache(
+        num_layers=model_config.num_hidden_layers,
+        num_kv_heads=model_config.num_key_value_heads,
+        head_dim=model_config.head_dim,
+        config=config,
+        device=None,
+    ).to_device(device)
 
 
 @pytest.mark.parametrize(
@@ -53,16 +83,17 @@ def test_ling_mini_2_0(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     nn_to_ttnn = {
-        model.model.layers[1].mlp.__class__: TTNNBailingMoE,  # Add TTNNBailingMoE module for BailingMoeV2
+        model.model.layers[1].mlp.__class__: TTNNBailingMoE,
+        model.model.layers[0].attention.__class__: TTNNBailingMoEAttention,
     }
     nn_to_ttnn2 = {
-        nn.Linear: TTNNLinearIColShardedWRowSharded,  # TTNNLinearLLamaIColShardedWRowSharded
+        nn.Linear: TTNNLinearIColShardedWRowSharded,
         nn.SiLU: TTNNSilu,
     }
     messages = [
         {
             "role": "user",
-            "content": "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?",
+            "content": "What is your favorite condiment?",
         },
     ]
     inputs = tokenizer.apply_chat_template(
@@ -72,6 +103,8 @@ def test_ling_mini_2_0(mesh_device):
         return_dict=True,
         return_tensors="pt",
     ).to(model.device)
+    if "token_type_ids" in inputs:
+        del inputs["token_type_ids"]
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
     set_device(model, mesh_device)
@@ -80,12 +113,28 @@ def test_ling_mini_2_0(mesh_device):
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
-    print("Running inference...")
-    model.eval()  # Disables dropout, batch norm updates
-    torch.set_grad_enabled(False)  # Disables autograd overhead
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True)
+
+    # Create paged KV cache
+    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+
+    print("Running inference with paged attention...")
+    model.eval()
+    torch.set_grad_enabled(False)
+
+    # Warmup run
+    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
+
+    # Reset cache for main run
+    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
-    print(f"Ling-mini-2.0 OUTPUT: {tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:])}")
-    DispatchManager.save_stats_to_file("ling_mini_2_0_timing_stats.csv")
+    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=paged_cache)
+
+    decoded = tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :])
+    print(f"Ling-mini-2.0 PAGED ATTENTION OUTPUT: {decoded}")
+
+    # Verify output is coherent (non-empty generated text)
+    assert len(decoded.strip()) > 0, "Generated output should not be empty"
+
+    DispatchManager.save_stats_to_file("ling_mini_2_0_paged_attention_timing_stats.csv")
     TracedRun.release_all()

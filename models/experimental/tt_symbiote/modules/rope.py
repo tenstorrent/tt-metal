@@ -229,6 +229,16 @@ class TTNNDistributedRotaryPositionEmbedding(TTNNModule):
         if sin.layout != ttnn.TILE_LAYOUT:
             sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+        # Ensure all tensors are BFLOAT16 (required by rotary_embedding_llama)
+        if q.dtype != ttnn.bfloat16:
+            q = ttnn.typecast(q, ttnn.bfloat16)
+        if k.dtype != ttnn.bfloat16:
+            k = ttnn.typecast(k, ttnn.bfloat16)
+        if cos.dtype != ttnn.bfloat16:
+            cos = ttnn.typecast(cos, ttnn.bfloat16)
+        if sin.dtype != ttnn.bfloat16:
+            sin = ttnn.typecast(sin, ttnn.bfloat16)
+
         # Get device and determine decode mode
         seq_len = q.shape[2] if len(q.shape) == 4 else q.shape[1]
         is_decode_mode = False  # (seq_len == 1)

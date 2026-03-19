@@ -35,6 +35,19 @@ def _to_torch_any(tensor):
     return TorchTTNNTensor(tensor).to_torch
 
 
+def _safe_repeat(tensor: ttnn.Tensor, shape: ttnn.Shape) -> ttnn.Tensor:
+    """
+    Repeat tensor along dimensions, ensuring a new tensor is always allocated.
+
+    When all repeat dimensions are 1, ttnn.repeat returns the original tensor
+    without allocation. This can cause "Buffer is not allocated" errors if the
+    caller deallocates the result. This function forces a clone in that case.
+    """
+    if all(s == 1 for s in shape):
+        return ttnn.clone(tensor)
+    return ttnn.repeat(tensor, shape)
+
+
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 SPARSITY_BLOCK_SIZE = 32
 
@@ -719,7 +732,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         experts_per_group = n_experts // self.torch_layer.n_group
 
         # Add correction bias
-        bias = ttnn.repeat(self.e_score_correction_bias, ttnn.Shape((1, 1, T, 1)))
+        bias = _safe_repeat(self.e_score_correction_bias, ttnn.Shape((1, 1, T, 1)))
         bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
 
         scores_with_bias = ttnn.add(scores, bias)
@@ -741,9 +754,9 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         ttnn.deallocate(group_scores)
 
         # Build group mask via scatter
-        input_mask = ttnn.repeat(self.scatter_input, ttnn.Shape((1, 1, T, 1)))
+        input_mask = _safe_repeat(self.scatter_input, ttnn.Shape((1, 1, T, 1)))
 
-        src_tensor = ttnn.repeat(self.scatter_src, ttnn.Shape((1, 1, T, 1)))
+        src_tensor = _safe_repeat(self.scatter_src, ttnn.Shape((1, 1, T, 1)))
         topk_group_idx = ttnn.unsqueeze(topk_group_idx, dim=1)
         active_groups_mask = ttnn.scatter(input=input_mask, index=topk_group_idx, src=src_tensor, dim=3)
         ttnn.deallocate(input_mask)
@@ -778,7 +791,7 @@ class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
         ttnn.deallocate(denom)
 
         # Apply scaling factor
-        scale = ttnn.repeat(self.expert_scale, ttnn.Shape((1, 1, T, 1)))
+        scale = _safe_repeat(self.expert_scale, ttnn.Shape((1, 1, T, 1)))
         scale = ttnn.to_layout(scale, ttnn.TILE_LAYOUT)
 
         topk_weights = ttnn.mul(topk_weights, scale)
@@ -895,7 +908,7 @@ class TTNNMoERouterDecode(TTNNModule):
         experts_per_group = n_experts // n_group
 
         bias_rm = self._bias_dev
-        bias_rep_rm = ttnn.repeat(bias_rm, ttnn.Shape((1, 1, T, 1)))
+        bias_rep_rm = _safe_repeat(bias_rm, ttnn.Shape((1, 1, T, 1)))
         bias = ttnn.to_layout(bias_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Convert bias to float32 for stable addition
         if bias.dtype != ttnn.float32:
@@ -959,8 +972,8 @@ class TTNNMoERouterDecode(TTNNModule):
             ttnn.deallocate(group_scores)
 
             # group mask via scatter
-            input_mask_rm = ttnn.repeat(self._scatter_input_dev, ttnn.Shape((1, 1, T, 1)))
-            src_rm = ttnn.repeat(self._scatter_src_dev, ttnn.Shape((1, 1, T, 1)))
+            input_mask_rm = _safe_repeat(self._scatter_input_dev, ttnn.Shape((1, 1, T, 1)))
+            src_rm = _safe_repeat(self._scatter_src_dev, ttnn.Shape((1, 1, T, 1)))
             idx_rm = ttnn.to_layout(topk_group_idx, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(topk_group_idx)
             idx_4d = ttnn.unsqueeze(idx_rm, dim=1)
@@ -995,7 +1008,7 @@ class TTNNMoERouterDecode(TTNNModule):
         ttnn.deallocate(denom)
 
         # apply routing scale
-        scale_rep_rm = ttnn.repeat(self._scale_dev, ttnn.Shape((1, 1, T, 1)))
+        scale_rep_rm = _safe_repeat(self._scale_dev, ttnn.Shape((1, 1, T, 1)))
         scale_bf16 = ttnn.to_layout(scale_rep_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if scale_bf16.dtype != ttnn.float32:
             scale_f32 = ttnn.typecast(scale_bf16, ttnn.float32)
