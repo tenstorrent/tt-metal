@@ -264,12 +264,8 @@ ALWI sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
     constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
 
-    // Parity active if either: template parameter says so, or macros are defined
-    constexpr bool parity_active = USE_PARITY
-#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
-                                   || true
-#endif
-        ;
+    // Parity controlled exclusively via template parameter — no macro leakage
+    constexpr bool parity_active = USE_PARITY;
 
     sfpi::vFloat x2;
     if constexpr (parity_active) {

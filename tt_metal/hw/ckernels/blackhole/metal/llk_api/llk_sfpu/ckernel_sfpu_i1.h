@@ -9,9 +9,8 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 
 // Parity: odd num / even den → x²-Horner (~2x speedup)
-#define RATIONAL_NUM_PARITY_ODD
-#define RATIONAL_DEN_PARITY_EVEN
-
+// Uses USE_PARITY=true template parameter (not macros) to avoid leaking
+// into other activations in the same translation unit.
 #include "ckernel_sfpu_piecewise_rational.h"
 
 
@@ -57,7 +56,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat result = piecewise_rational_eval<I1_NUM_DEGREE, I1_DEN_DEGREE, I1_NUM_SEGMENTS, I1_LUT_SIZE>(I1_LUT, x);
+        sfpi::vFloat result = piecewise_rational_eval<I1_NUM_DEGREE, I1_DEN_DEGREE, I1_NUM_SEGMENTS, I1_LUT_SIZE, true>(I1_LUT, x);
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
