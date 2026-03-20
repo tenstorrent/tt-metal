@@ -12,6 +12,7 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include "full_program_factory_sharded.hpp"
 #include "full_program_factory_common.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn::operations::full {
 
@@ -25,7 +26,6 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
     tensor_return_value_t& output) {
     auto fill_value = operation_attributes.fill_value;
     DataType dtype{operation_attributes.dtype};
-    MemoryConfig memory_config{operation_attributes.memory_config};
 
     Program program{};
 

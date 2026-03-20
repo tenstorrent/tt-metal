@@ -8,6 +8,7 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>

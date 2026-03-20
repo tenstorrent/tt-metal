@@ -105,18 +105,6 @@ def assert_cores_match(actual_cores, expected_cores):
 
 
 # ============================================================================
-#  Fixtures
-# ============================================================================
-
-
-@pytest.fixture(scope="module")
-def device():
-    device = ttnn.open_device(device_id=0)
-    yield device
-    ttnn.close_device(device)
-
-
-# ============================================================================
 #  ND Sharded Tests (ROUND_ROBIN_1D)
 # ============================================================================
 
