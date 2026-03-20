@@ -23,19 +23,18 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    PipelineConfiguration,
+    create_single_galaxy_mtp_bypass_pipeline_configuration,
+    create_single_galaxy_mtp_verification_pipeline_configuration,
+    create_single_galaxy_pipeline_configuration,
+)
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_PAGE_SIZE_BYTES,
     EmbeddingStage,
     LMHeadStage,
     PassthroughPayload,
     PassthroughStage,
-)
-from models.demos.deepseek_v3_b1.demo.pipeline import (
-    create_single_galaxy_mtp_bypass_pipeline_configuration,
-    create_single_galaxy_mtp_verification_pipeline_configuration,
-    create_single_galaxy_pipeline_configuration,
-    create_single_pod_pipeline_configuration,
-    PipelineConfiguration
 )
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
@@ -3247,7 +3246,6 @@ def test_persistent_mode(mesh_device, use_fp32):
     logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
 
 
-@pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
     "mesh_device",

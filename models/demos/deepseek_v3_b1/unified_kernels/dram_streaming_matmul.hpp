@@ -274,7 +274,6 @@ struct DRAMStreamingMatmul {
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
-
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
@@ -359,7 +358,6 @@ struct DRAMStreamingMatmul {
                     }
                     tile_regs_release();
                 }
-
                 cb_push_back(CTArgs::cb_out, CTArgs::subblock_w);
             }
             custom_mm_block_uninit<dense_packing>();
