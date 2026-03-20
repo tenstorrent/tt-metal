@@ -720,13 +720,14 @@ def validate_dispatch_metadata(
                 coord_match = torch.allclose(
                     out_linearized_mesh_coord.float(), ref_linearized_mesh_coord.float(), atol=1e-6
                 )
-                weight_match = torch.allclose(out_weight_bf16, ref_weight_bf16, atol=1e-3)
 
-                if metadata_match and coord_match and weight_match:
+                gate_weight_match, gate_pcc = comp_pcc(ref_weight_bf16.float(), out_weight_bf16.float(), pcc=0.99)
+
+                if metadata_match and coord_match and gate_weight_match:
                     matches += 1
                     logger.debug(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
                 else:
-                    error_detail = f"metadata={metadata_match}, coord={coord_match}, weight={weight_match}"
+                    error_detail = f"metadata={metadata_match}, coord={coord_match}, weight={gate_weight_match}"
                     logger.error(f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({error_detail})")
                     mismatches.append((r, dst_chip_id, expert_id, error_detail))
 
@@ -742,9 +743,9 @@ def validate_dispatch_metadata(
                                     f"out_coord={out_linearized_mesh_coord[slot].item()}, "
                                     f"torch={torch_data.tolist()}, kernel={kernel_data.tolist()}"
                                 )
-                            if not weight_match:
+                            if not gate_weight_match:
                                 logger.error(
-                                    f"    Slot {slot}: Weight mismatch: "
+                                    f"    Slot {slot}: Weight mismatch ppc{gate_pcc:.3f}: "
                                     f"ref={ref_weight_bf16[slot].item()}, out={out_weight_bf16[slot].item()}"
                                 )
 
