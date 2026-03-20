@@ -115,15 +115,7 @@ Tensor::Tensor(HostTensor tensor) :
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
-        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // Use get_device_bypass_deallocate_check() to preserve mesh_device_ even when the
-    // buffer is deallocated. This prevents nullptr device propagation when operations
-    // like reshape create new tensors from existing DeviceStorage.
-    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
-        mesh_device_ = device;
-    }
-}
+        std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
 Tensor& Tensor::operator=(const Tensor& other) {
     if (this == &other) {
@@ -133,7 +125,6 @@ Tensor& Tensor::operator=(const Tensor& other) {
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = other.tensor_attributes;
     }
-    this->mesh_device_ = other.mesh_device_;
     return *this;
 }
 
@@ -143,7 +134,6 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
-    this->mesh_device_ = other.mesh_device_;
     return *this;
 }
 
@@ -640,8 +630,9 @@ const HostTensor& Tensor::host_tensor() const& {
 }
 
 distributed::MeshDevice* Tensor::device() const {
-    if (this->mesh_device_.has_value()) {
-        return this->mesh_device_.value();
+    const auto* device_storage = std::get_if<DeviceStorage>(&this->storage());
+    if (device_storage != nullptr && device_storage->is_allocated()) {
+        return device_storage->get_device();
     }
     return nullptr;
 }
