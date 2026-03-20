@@ -19,6 +19,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.ccl_all_reduce.op import DeepseekMinimalAllReduce
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
@@ -30,6 +31,9 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
+@skip_with_llk_assert(
+    "Hit LLK assert in llk_math_eltwise_unary_datacopy, dest index out of bounds. TODO: add issue number."
+)
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
