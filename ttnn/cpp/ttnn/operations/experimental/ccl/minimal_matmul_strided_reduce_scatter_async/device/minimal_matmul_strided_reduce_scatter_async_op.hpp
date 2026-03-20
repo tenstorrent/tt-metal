@@ -1,0 +1,82 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include <tt-metalium/constants.hpp>
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include "ttnn/global_semaphore.hpp"
+
+#include "ttnn/operation.hpp"
+
+#include <optional>
+#include <vector>
+
+/* Fusion includes */
+#include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+
+#include "minimal_matmul_strided_reduce_scatter_async_device_operation_types.hpp"
+#include "minimal_matmul_strided_reduce_scatter_async_program.hpp"
+
+namespace ttnn::experimental::prim {
+
+struct MinimalMatmulStridedReduceScatterAsync {
+    using operation_attributes_t = MinimalMatmulStridedReduceScatterAsyncParams;
+    using tensor_args_t = MinimalMatmulStridedReduceScatterAsyncInputs;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+
+    using program_factory_t = std::variant<MinimalMatmulStridedReduceScatterAsyncProgramFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+};
+}  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    CoreCoord reduce_scatter_core_grid_offset,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config_mm,
+    const MemoryConfig& rs_output_mem_config,
+    const std::optional<MemoryConfig>& rs_intermediate_mem_config,
+    ttnn::ccl::Topology topology,
+    std::optional<uint32_t> cluster_axis,
+    const std::optional<const Tensor>& bias,
+    std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
+    std::optional<const ttnn::experimental::prim::MinimalMatmulConfig> config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> chunk_width_in_mm_blocks,
+    const std::optional<Tensor>& optional_rs_intermediate_tensor,
+    const std::optional<Tensor>& optional_rs_output_tensor,
+    std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);
+
+}  // namespace ttnn::prim

@@ -30,6 +30,7 @@ file(
     send_recv_async/recv_async/device/kernels/*
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
+    strided_reduce_scatter_async/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
     deepseek_b1_reduce_to_one/device/kernels/*
     moe_compute/device/kernels/*
@@ -51,6 +52,8 @@ target_sources(
             all_gather_async/device/all_gather_via_broadcast_factory.hpp
             all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
+            reduce_scatter_common/reduce_scatter_validate_utils.hpp
+            reduce_scatter_common/reduce_scatter_program_utils.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
@@ -63,6 +66,8 @@ target_sources(
     PRIVATE
         llama_common.cpp
         composite_common.cpp
+        reduce_scatter_common/reduce_scatter_validate_utils.cpp
+        reduce_scatter_common/reduce_scatter_program_utils.cpp
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.cpp
@@ -102,6 +107,9 @@ target_sources(
         strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.cpp
         strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_program.cpp
+        minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.cpp
+        minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.cpp
+        minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_program.cpp
         matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
         matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
@@ -123,6 +131,9 @@ target_sources(
         strided_all_gather_async/strided_all_gather_async.cpp
         strided_all_gather_async/device/strided_all_gather_async_op.cpp
         strided_all_gather_async/device/strided_all_gather_async_program.cpp
+        strided_reduce_scatter_async/strided_reduce_scatter_async.cpp
+        strided_reduce_scatter_async/device/strided_reduce_scatter_async_op_device_operation.cpp
+        strided_reduce_scatter_async/device/strided_reduce_scatter_async_program.cpp
         deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_device_operation.cpp
         deepseek_moe_reduce_scatter/device/deepseek_moe_reduce_scatter_program_factory.cpp
