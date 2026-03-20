@@ -209,6 +209,8 @@ class Glm4MoeDecoderLayer:
         kv_cache: list[ttnn.Tensor],
         mode: str = "decode",
         active_batch: int | None = None,
+        global_cb=None,
+        sub_device_id=None,
     ) -> ttnn.Tensor:
         """Forward pass for one decoder layer.
 
@@ -234,7 +236,8 @@ class Glm4MoeDecoderLayer:
             print(f"  [DEBUG DL{_lid_fwd}] forward entry ({mode}) sync OK", flush=True, file=_sys.stderr)
 
         if mode == "decode":
-            return self._forward_decode(x, current_pos, rot_mats, page_table, kv_cache, active_batch=active_batch)
+            return self._forward_decode(x, current_pos, rot_mats, page_table, kv_cache,
+                                        active_batch=active_batch, global_cb=global_cb, sub_device_id=sub_device_id)
         else:
             return self._forward_prefill(x, current_pos, rot_mats, page_table, kv_cache)
 
@@ -246,6 +249,8 @@ class Glm4MoeDecoderLayer:
         page_table: ttnn.Tensor,
         kv_cache: list[ttnn.Tensor],
         active_batch: int | None = None,
+        global_cb=None,
+        sub_device_id=None,
     ) -> ttnn.Tensor:
         """Decode forward: batch in dim=2, seq_len=1 per token."""
         w = self.layer_weights
@@ -293,7 +298,7 @@ class Glm4MoeDecoderLayer:
         t0 = _cs()
         attn_out = self.attention.forward(
             h, current_pos, rot_mats, mode="decode", page_table=page_table, kv_cache=kv_cache,
-            active_batch=active_batch,
+            active_batch=active_batch, global_cb=global_cb, sub_device_id=sub_device_id,
         )
         _ce(t0, "attention")
 

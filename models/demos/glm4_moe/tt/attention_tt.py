@@ -578,6 +578,8 @@ class Glm4MoeAttention(LightweightModule):
         page_table=None,
         kv_cache=None,
         active_batch: int | None = None,
+        global_cb=None,
+        sub_device_id=None,
     ) -> ttnn.Tensor:
         """Decode forward: single token per sequence.
 
@@ -606,12 +608,18 @@ class Glm4MoeAttention(LightweightModule):
             )
             ttnn.deallocate(x_sharded, force=False)
         else:
+            _linear_kwargs = {}
+            if global_cb is not None:
+                _linear_kwargs["global_cb"] = global_cb
+            if sub_device_id is not None:
+                _linear_kwargs["sub_device_id"] = sub_device_id
             xqkv = ttnn.linear(
                 x,
                 self.wqkv,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
                 compute_kernel_config=self.compute_kernel_config,
+                **_linear_kwargs,
             )
 
         # Add QKV bias
@@ -774,6 +782,11 @@ class Glm4MoeAttention(LightweightModule):
             )
             ttnn.deallocate(ao_sharded, force=False)
         else:
+            _oproj_kwargs = {}
+            if global_cb is not None:
+                _oproj_kwargs["global_cb"] = global_cb
+            if sub_device_id is not None:
+                _oproj_kwargs["sub_device_id"] = sub_device_id
             dense_out = ttnn.matmul(
                 attn_output,
                 self.wo,
@@ -781,6 +794,7 @@ class Glm4MoeAttention(LightweightModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.compute_kernel_config,
+                **_oproj_kwargs,
             )
             ttnn.deallocate(attn_output)
 
@@ -1003,6 +1017,8 @@ class Glm4MoeAttention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         active_batch: int | None = None,
+        global_cb=None,
+        sub_device_id=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1022,6 +1038,8 @@ class Glm4MoeAttention(LightweightModule):
                 page_table=page_table,
                 kv_cache=kv_cache,
                 active_batch=active_batch,
+                global_cb=global_cb,
+                sub_device_id=sub_device_id,
             )
 
     def _prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
