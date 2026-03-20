@@ -14,7 +14,10 @@ run_dual_t3k_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
-
+  # Repo root for absolute paths / JUnit (cwd may change for pytest below).
+  local repo_root
+  repo_root="$(pwd)"
+  mkdir -p "${repo_root}/generated/test_reports"
 
   # tcp flags are default for tt-run
   local mpi_args="--hostfile /etc/mpirun/hostfile"
@@ -26,7 +29,14 @@ run_dual_t3k_unit_tests() {
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
   mpirun $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation  --print-connectivity --send-traffic --hard-fail ; fail+=$?
 
-  pytest tests/ttnn/distributed/test_ttrun_env_passthrough.py -m multihost -v ; fail+=$?
+  # Run from /tmp with PYTHONPATH unset so repo-root ``ttnn/`` does not shadow the
+  # installed package (see setup.py editable-install notes). TT_METAL_HOME stays set
+  # for multihost probes and ttrun source fallback inside the test module.
+  echo "LOG_METAL: Running ttrun env passthrough multihost pytest (import-isolated)"
+  (cd /tmp && env -u PYTHONPATH pytest --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+    --junitxml="${repo_root}/generated/test_reports/most_recent_tests_ttrun_env_passthrough_multihost.xml" \
+    -m multihost \
+    "${repo_root}/tests/ttnn/distributed/test_ttrun_env_passthrough.py") ; fail+=$?
 
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml ; fail+=$?
   tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?

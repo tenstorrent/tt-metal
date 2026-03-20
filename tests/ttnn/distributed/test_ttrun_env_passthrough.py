@@ -12,41 +12,176 @@ Multihost integration tests (@pytest.mark.multihost) require a real MPI environm
 with tt-run available and a dual-T3K rank binding configuration.
 """
 
+import importlib.util
 import json
 import os
 import shutil
 import socket
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Iterable
 
 import pytest
 from click.testing import CliRunner
 
-import ttnn.distributed.ttrun as ttrun
-from ttnn.distributed.ttrun import (
-    ENV_BLOCKLIST,
-    ENV_BLOCKLIST_PREFIXES,
-    ENV_LAUNCHER_ONLY_BLOCKLIST,
-    FORCE_NAME_ONLY_MPI_EXPORT_VARS,
-    RANK_SCOPED_PATH_ENV_VARS,
-    RankBinding,
-    TTRunConfig,
-    apply_rank_scoped_paths,
-    build_rank_environment_args,
-    classify_mpi_env_exports,
-    get_launcher_environment,
-    get_rank_environment,
-    has_auto_passthrough_prefix,
-    has_blocked_prefix,
-    is_auto_passthrough_env_var,
-    is_blocklisted_env_var,
-    main,
-    should_use_name_only_mpi_export,
-    strip_blocklisted_env_vars,
-    validate_path_safety,
-)
+_TTRUN_MODULE_NAME = "ttnn.distributed.ttrun"
+_TTRUN_REL_PARTS = ("ttnn", "ttnn", "distributed", "ttrun.py")
+# Symbols that must exist on a usable ttrun module (guards against half-broken imports).
+_TTRUN_REQUIRED_ATTRS = ("ENV_BLOCKLIST", "RankBinding", "get_rank_environment", "validate_path_safety")
+
+
+def _unique_resolved_dirs(paths: Iterable[Path | str | None]) -> list[Path]:
+    """Return existing, unique directory paths (resolved, no duplicates)."""
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in paths:
+        if not p:
+            continue
+        try:
+            d = Path(p).expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not d.is_dir():
+            continue
+        if d in seen:
+            continue
+        seen.add(d)
+        out.append(d)
+    return out
+
+
+def _candidate_ttrun_source_paths() -> list[Path]:
+    """Ordered list of plausible ``ttrun.py`` locations in a tt-metal checkout."""
+    this_file = Path(__file__).resolve()
+    raw: list[Path | str | None] = [
+        os.environ.get("TT_METAL_HOME"),
+        os.environ.get("GITHUB_WORKSPACE"),
+        os.environ.get("CI_PROJECT_DIR"),
+        os.environ.get("WORKSPACE"),  # some Jenkins / custom runners
+        os.environ.get("TT_METAL_SRC_ROOT"),  # optional explicit checkout root
+        # Default layout: tests/ttnn/distributed/<this file> → repo root
+        this_file.parents[3],
+    ]
+    # Walk upward: supports extra nesting, symlinks, or non-standard test paths.
+    for depth, parent in enumerate(this_file.parents):
+        if depth > 20:
+            break
+        raw.append(parent)
+
+    roots = _unique_resolved_dirs(raw)
+    candidates: list[Path] = []
+    seen_paths: set[Path] = set()
+    for root in roots:
+        cand = root.joinpath(*_TTRUN_REL_PARTS).resolve()
+        if cand.is_file() and cand not in seen_paths:
+            seen_paths.add(cand)
+            candidates.append(cand)
+    return candidates
+
+
+def _ttrun_module_looks_valid(mod: object) -> bool:
+    return all(hasattr(mod, name) for name in _TTRUN_REQUIRED_ATTRS)
+
+
+def _load_ttrun_from_source(path: Path, *, first_exc: BaseException | None) -> object:
+    """Load ``ttrun`` from *path* and register as ``ttnn.distributed.ttrun``."""
+    name = _TTRUN_MODULE_NAME
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not create import spec for {path}") from first_exc
+
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
+
+    if not _ttrun_module_looks_valid(mod):
+        sys.modules.pop(name, None)
+        raise ImportError(
+            f"Loaded {path} as {_TTRUN_MODULE_NAME} but it is missing expected API " f"({_TTRUN_REQUIRED_ATTRS})"
+        ) from first_exc
+    return mod
+
+
+def _import_ttrun_module():
+    """Load ``ttnn.distributed.ttrun``, with a source-tree fallback.
+
+    When pytest runs from the repository root with ``PYTHONPATH`` including
+    ``TT_METAL_HOME``, the top-level ``ttnn/`` CMake directory can shadow the
+    real Python package and break ``import ttnn.distributed.ttrun`` (see
+    ``setup.py`` editable-install notes).  Loading ``ttrun.py`` by path from
+    the checkout avoids that failure while still registering the module as
+    ``ttnn.distributed.ttrun`` for tests that monkeypatch ``ttrun``.
+
+    A half-registered broken submodule in ``sys.modules`` (rare, but possible
+    after a failed import) is replaced when we load from source.
+    """
+    first_exc: BaseException | None = None
+    try:
+        import ttnn.distributed.ttrun as mod  # deferred: try site-packages / editable resolution first
+
+        if _ttrun_module_looks_valid(mod):
+            return mod
+        first_exc = ImportError(
+            f"import {_TTRUN_MODULE_NAME} succeeded but module is missing expected API "
+            f"({_TTRUN_REQUIRED_ATTRS}); will try source fallback"
+        )
+        sys.modules.pop(_TTRUN_MODULE_NAME, None)
+    except ImportError as exc:
+        first_exc = exc
+
+    existing = sys.modules.get(_TTRUN_MODULE_NAME)
+    if existing is not None and not _ttrun_module_looks_valid(existing):
+        sys.modules.pop(_TTRUN_MODULE_NAME, None)
+
+    tried_files: list[str] = []
+    last_exc: BaseException | None = first_exc
+    for path in _candidate_ttrun_source_paths():
+        tried_files.append(str(path))
+        try:
+            return _load_ttrun_from_source(path, first_exc=last_exc)
+        except ImportError as load_exc:
+            last_exc = load_exc
+            continue
+        except Exception as load_exc:
+            last_exc = load_exc
+            continue
+
+    detail = "\n  ".join(tried_files) if tried_files else "(no candidate paths)"
+    raise ImportError(
+        f"Could not import {_TTRUN_MODULE_NAME} ({last_exc!r}).\n"
+        f"Tried source fallbacks ({len(tried_files)} path(s)):\n  {detail}"
+    ) from last_exc
+
+
+ttrun = _import_ttrun_module()
+
+ENV_BLOCKLIST = ttrun.ENV_BLOCKLIST
+ENV_BLOCKLIST_PREFIXES = ttrun.ENV_BLOCKLIST_PREFIXES
+ENV_LAUNCHER_ONLY_BLOCKLIST = ttrun.ENV_LAUNCHER_ONLY_BLOCKLIST
+FORCE_NAME_ONLY_MPI_EXPORT_VARS = ttrun.FORCE_NAME_ONLY_MPI_EXPORT_VARS
+RANK_SCOPED_PATH_ENV_VARS = ttrun.RANK_SCOPED_PATH_ENV_VARS
+RankBinding = ttrun.RankBinding
+TTRunConfig = ttrun.TTRunConfig
+apply_rank_scoped_paths = ttrun.apply_rank_scoped_paths
+build_rank_environment_args = ttrun.build_rank_environment_args
+classify_mpi_env_exports = ttrun.classify_mpi_env_exports
+get_launcher_environment = ttrun.get_launcher_environment
+get_rank_environment = ttrun.get_rank_environment
+has_auto_passthrough_prefix = ttrun.has_auto_passthrough_prefix
+has_blocked_prefix = ttrun.has_blocked_prefix
+is_auto_passthrough_env_var = ttrun.is_auto_passthrough_env_var
+is_blocklisted_env_var = ttrun.is_blocklisted_env_var
+main = ttrun.main
+should_use_name_only_mpi_export = ttrun.should_use_name_only_mpi_export
+strip_blocklisted_env_vars = ttrun.strip_blocklisted_env_vars
+validate_path_safety = ttrun.validate_path_safety
 
 
 # ---------------------------------------------------------------------------
