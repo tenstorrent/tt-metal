@@ -11,7 +11,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 
 // Experimental Metal 2.0 API for creating a Program from a ProgramSpec (Metal 2.0 host API).
 // This will become a constructor for the Program class.
-Program MakeProgramFromSpec(const ProgramSpec& spec);
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = false);
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
 
