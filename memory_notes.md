@@ -118,3 +118,69 @@ Some matmul vectors only had `arg0`/`arg1` in JSON because `input_a_*` were `__A
 - Added exploration scoreboard (separate from strict merge gate):
   - `matmul_exploration_scoreboard.md`.
   - Keeps mixed but informative candidates instead of discarding them.
+- Added alternating A/B orchestration utility (code-only; not executed during rebuild):
+  - `tests/sweep_framework/benchmark_protocol/matmul_n150_alternating_ab.py`.
+  - Runs baseline/candidate in strict alternating order (B/C/B/C...), in fresh processes.
+  - Produces aggregate means/stdevs and strict merge-gate verdict (`p50<0 && p95<0`) in JSON.
+- Post-rebuild alternating A/B (5 rounds, baseline-first each round) for boundary-memory candidate `adaptive(dim==1536)` vs `dram`:
+  - Runner: `tests/sweep_framework/benchmark_protocol/matmul_n150_alternating_ab.py`.
+  - Report: `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_boundary_memory_n150_adaptive_dim1536_ab.json`.
+  - Mean `overall_p50`: improved (~-0.97% candidate vs baseline).
+  - Mean `overall_p95`: regressed (~+0.36% candidate vs baseline).
+  - Strict gate result: failed (`strict_merge_gate_pass=false`), candidate reverted.
+
+### Decode-regime kernelbench (with profiler) findings
+
+- Enabled profiler-backed kernelbench workflow:
+  - Wrapper: `tests/sweep_framework/benchmark_protocol/run_matmul_n150_kernelbench_with_profiler.sh`.
+  - Environment: `TT_METAL_DEVICE_PROFILER=1`, `TT_METAL_PROFILER_MID_RUN_DUMP=1`, `TT_METAL_PROFILER_CPP_POST_PROCESS=1`.
+  - Result: decode-regime runs now emit non-null `overall_kernel_p50_ns`/`overall_kernel_p95_ns`.
+- Discrete candidate A/B on decode regime (`decode_1d_dram_bound_small_m`), 3 rounds alternating baseline-first:
+  - Candidate A (`--output-memory-override dram`):
+    - `overall_e2e_p50`: regressed (~+9.87%).
+    - `overall_e2e_p95`: regressed (~+4.52%).
+    - `overall_kernel_p50`: regressed (~+7.43%).
+    - Strict gate: failed.
+  - Candidate B (`--output-memory-override l1`):
+    - `overall_e2e_p50`: improved (~-12.47%).
+    - `overall_e2e_p95`: improved (~-22.13%).
+    - `overall_kernel_p50`: slightly regressed (~+1.44%), while `overall_kernel_p95` improved slightly (~-0.74%).
+    - Strict e2e gate on this decode subset: passed.
+  - Candidate C (`--input-a-memory-override dram`):
+    - `overall_e2e_p50`: regressed (~+3.79%).
+    - `overall_e2e_p95`: improved (~-8.68%).
+    - Strict gate: failed.
+- Regime transfer checks for decode winner candidate (`--output-memory-override l1`):
+  - Prefill-only regime A/B: failed (`overall_e2e_p50` ~+4.86%, `overall_e2e_p95` ~+2.82%).
+  - Tiny/irregular-only regime A/B: mixed (`overall_e2e_p50` ~+0.06%, `overall_e2e_p95` ~-1.83%).
+  - All-regime A/B: failed (`overall_e2e_p50` ~+14.73%, `overall_e2e_p95` ~+5.62%), despite slightly better kernel aggregates.
+- Added protocol-slice runner:
+  - `tests/sweep_framework/benchmark_protocol/matmul_n150_sweeps_summary.py`.
+  - Runs `sweeps_runner` on a vector JSON and writes compact summary (`pass_rate`, `overall_p50_ms`, `overall_p95_ms`) for A/B orchestration.
+- Decode-only protocol slice experiment:
+  - Built `tests/sweep_framework/benchmark_protocol/generated/decode_only/matmul_n150_protocol_decode_only.json` (37 vectors with `M<=1`).
+  - First A/B had one severe tail outlier in candidate round 1 (p95 spike) and failed strict gate.
+  - Immediate rerun (same setup) passed strict gate (`overall_p50_ms` ~-6.38%, `overall_p95_ms` ~-4.33%).
+- Full protocol experiment with decode-only output-L1 sweep toggle (159 vectors):
+  - 2-round alternating A/B was mixed: `overall_p50_ms` improved (~-1.82%) but `overall_p95_ms` regressed (~+4.11%).
+  - Strict gate failed; decode-only sweep toggle was reverted from `matmul_model_traced.py`.
+
+### Quick profiler iteration (decode-only, baseline-first, post-rebuild)
+
+- Objective: close one fast iteration with Tracy-backed evidence while avoiding long full-protocol runtime.
+- Command path:
+  - `matmul_n150_alternating_ab.py` calling `run_matmul_n150_kernelbench_with_profiler.sh`.
+  - Regime filter: `decode_1d_dram_bound_small_m` (3 cases).
+  - Candidate: `--output-memory-override l1 --override-regimes decode_1d_dram_bound_small_m`.
+- Round set A (1 round, warmup=1, measure=4):
+  - Report: `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_n150_decode_profiler_ab_r1_quick.json`.
+  - Result: strict gate passed on this short sample (`overall_e2e_p50_ms` ~-14.51%, `overall_e2e_p95_ms` ~-5.54%).
+  - Kernel aggregates: `overall_kernel_p50_ns` slightly worse (~+0.70%), `overall_kernel_p95_ns` slightly better (~-0.72%).
+- Round set B (3 rounds, warmup=1, measure=4):
+  - Report: `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_n150_decode_profiler_ab_r3_quick.json`.
+  - Result: strict gate failed (`overall_e2e_p50_ms` ~+46.11%, `overall_e2e_p95_ms` ~-0.86%).
+  - Notable detail: kernel aggregates remained nearly flat/improved (`overall_kernel_p50_ns` ~-0.04%, `overall_kernel_p95_ns` ~-0.89%) while e2e median moved sharply.
+- Interpretation from Tracy-backed data:
+  - Signal is not random brute force: the same regime/policy is being tested under controlled alternating baseline-first A/B.
+  - Decode output-L1 appears to affect end-to-end behavior (likely boundary/data-movement interaction) more than kernel core math time.
+  - Stability is still insufficient for promotion: keep as exploration-only candidate until variance controls are tightened further (more iters/rounds and outlier-resistant aggregation).

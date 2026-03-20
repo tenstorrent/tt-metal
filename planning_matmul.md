@@ -51,6 +51,15 @@ Improve matmul efficiency in shared paths that can benefit multiple models on no
 - Add alternating-run variance controls:
   - baseline/candidate interleaving in fresh processes for A/B fairness.
   - track both per-run and per-shape variance.
+- Add reusable A/B orchestration utility:
+  - command-template based alternating runner over kernelbench outputs.
+  - emit aggregate means/stdevs + strict merge-gate verdict in JSON.
+- Validate decode-subset winner on broader coverage:
+  - promote decode kernelbench winner candidates to `matmul_n150` protocol smoke/train/holdout checks.
+  - require strict merge gate on broader set before considering any shared-path code change.
+- Add tail-robust decode policy search:
+  - constrain candidate to decode-like vectors only where it helps without large p95 outliers.
+  - evaluate p95 stability with repeated reruns before promoting to full-protocol checks.
 
 ## Notes
 

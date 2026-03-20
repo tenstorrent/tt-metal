@@ -44,6 +44,16 @@ def _to_memcfg(memcfg_json: dict) -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
+def _override_memcfg(memcfg: ttnn.MemoryConfig, override: str) -> ttnn.MemoryConfig:
+    if override == "none":
+        return memcfg
+    if override == "l1":
+        return ttnn.L1_MEMORY_CONFIG
+    if override == "dram":
+        return ttnn.DRAM_MEMORY_CONFIG
+    raise ValueError(f"Unsupported memory override: {override}")
+
+
 def _read_device_kernel_duration_ns(device: ttnn.Device) -> float | None:
     ttnn.ReadDeviceProfiler(device)
     rows = get_device_data_generate_report(
@@ -71,6 +81,10 @@ def _run_case(
     warmup_iters: int,
     measure_iters: int,
     measure_device_kernel: bool,
+    input_a_memory_override: str,
+    input_b_memory_override: str,
+    output_memory_override: str,
+    apply_memory_overrides: bool,
 ) -> dict:
     a_shape = _parse_shape(vector["input_a_shape"])
     b_shape = _parse_shape(vector["input_b_shape"])
@@ -81,24 +95,31 @@ def _run_case(
     k = int(a_shape[-1])
     n = int(b_shape[-1])
 
+    input_a_memcfg = _to_memcfg(vector["input_a_memory_config"])
+    input_b_memcfg = _to_memcfg(vector["input_b_memory_config"])
+    output_memcfg = _to_memcfg(vector["output_memory_config"])
+    if apply_memory_overrides:
+        input_a_memcfg = _override_memcfg(input_a_memcfg, input_a_memory_override)
+        input_b_memcfg = _override_memcfg(input_b_memcfg, input_b_memory_override)
+        output_memcfg = _override_memcfg(output_memcfg, output_memory_override)
+
     a = ttnn.from_torch(
         torch.randn(tuple(a_shape), dtype=torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=_to_memcfg(vector["input_a_memory_config"]),
+        memory_config=input_a_memcfg,
     )
     b = ttnn.from_torch(
         torch.randn(tuple(b_shape), dtype=torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=_to_memcfg(vector["input_b_memory_config"]),
+        memory_config=input_b_memcfg,
     )
-    out_memcfg = _to_memcfg(vector["output_memory_config"])
 
     for _ in range(warmup_iters):
-        out = ttnn.matmul(a, b, memory_config=out_memcfg)
+        out = ttnn.matmul(a, b, memory_config=output_memcfg)
         _ = ttnn.to_torch(out)
         if measure_device_kernel:
             _ = _read_device_kernel_duration_ns(device)
@@ -107,7 +128,7 @@ def _run_case(
     kernel_samples_ns: list[float] = []
     for _ in range(measure_iters):
         start_ns = time.time_ns()
-        out = ttnn.matmul(a, b, memory_config=out_memcfg)
+        out = ttnn.matmul(a, b, memory_config=output_memcfg)
         _ = ttnn.to_torch(out)
         e2e_samples_ms.append((time.time_ns() - start_ns) / 1_000_000.0)
         if measure_device_kernel:
@@ -124,9 +145,9 @@ def _run_case(
         "source": str(vector.get("traced_source")),
         "shape_mkn": [m, k, n],
         "memory": {
-            "input_a": vector["input_a_memory_config"]["data"]["buffer_type"],
-            "input_b": vector["input_b_memory_config"]["data"]["buffer_type"],
-            "output": vector["output_memory_config"]["data"]["buffer_type"],
+            "input_a": "L1" if input_a_memcfg == ttnn.L1_MEMORY_CONFIG else "DRAM",
+            "input_b": "L1" if input_b_memcfg == ttnn.L1_MEMORY_CONFIG else "DRAM",
+            "output": "L1" if output_memcfg == ttnn.L1_MEMORY_CONFIG else "DRAM",
         },
         "e2e_ms": {
             "mean": statistics.fmean(e2e_samples_ms),
@@ -162,6 +183,21 @@ def main() -> int:
     parser.add_argument("--measure-iters", type=int, default=8)
     parser.add_argument("--measure-device-kernel", action="store_true")
     parser.add_argument(
+        "--regimes",
+        nargs="*",
+        default=[],
+        help="Optional regime filter list. If empty, all regimes in manifest are used.",
+    )
+    parser.add_argument("--input-a-memory-override", choices=["none", "l1", "dram"], default="none")
+    parser.add_argument("--input-b-memory-override", choices=["none", "l1", "dram"], default="none")
+    parser.add_argument("--output-memory-override", choices=["none", "l1", "dram"], default="none")
+    parser.add_argument(
+        "--override-regimes",
+        nargs="*",
+        default=[],
+        help="Optional regime list where memory overrides apply. If empty, overrides apply to all selected cases.",
+    )
+    parser.add_argument(
         "--out-json",
         type=Path,
         default=Path(
@@ -173,6 +209,11 @@ def main() -> int:
     regimes = json.loads(args.regimes_json.read_text())
     all_vectors = json.loads(args.all_vectors_json.read_text())["model_traced"]
     cases = regimes["cases"]
+    if args.regimes:
+        selected = set(args.regimes)
+        cases = [c for c in cases if c.get("regime") in selected]
+        if not cases:
+            raise ValueError(f"No cases matched --regimes={args.regimes}")
 
     device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
     try:
@@ -181,6 +222,9 @@ def main() -> int:
             input_hash = case["input_hash"]
             if input_hash not in all_vectors:
                 raise KeyError(f"input_hash {input_hash} not found in {args.all_vectors_json}")
+            apply_overrides = True
+            if args.override_regimes:
+                apply_overrides = case.get("regime") in set(args.override_regimes)
             rows.append(
                 _run_case(
                     case=case,
@@ -189,6 +233,10 @@ def main() -> int:
                     warmup_iters=args.warmup_iters,
                     measure_iters=args.measure_iters,
                     measure_device_kernel=args.measure_device_kernel,
+                    input_a_memory_override=args.input_a_memory_override,
+                    input_b_memory_override=args.input_b_memory_override,
+                    output_memory_override=args.output_memory_override,
+                    apply_memory_overrides=apply_overrides,
                 )
             )
     finally:
@@ -205,6 +253,13 @@ def main() -> int:
         "warmup_iters": args.warmup_iters,
         "measure_iters": args.measure_iters,
         "measure_device_kernel": bool(args.measure_device_kernel),
+        "filters": {
+            "regimes": args.regimes,
+            "input_a_memory_override": args.input_a_memory_override,
+            "input_b_memory_override": args.input_b_memory_override,
+            "output_memory_override": args.output_memory_override,
+            "override_regimes": args.override_regimes,
+        },
         "results": rows,
         "summary": {
             "case_count": len(rows),
