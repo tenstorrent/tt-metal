@@ -316,7 +316,7 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
 // use clip y = min( max( x, min_value), max_value) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor clip(
-    const Tensor& a,
+    const Tensor& input_a,
     std::optional<float> min,
     std::optional<float> max,
     const std::optional<MemoryConfig>& output_mem_config) {
@@ -326,15 +326,15 @@ Tensor clip(
     std::optional<std::variant<float, int32_t>> max_variant =
         max ? std::make_optional<std::variant<float, int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
 
-    return clamp(a, min_variant, max_variant, output_mem_config);
+    return clamp(input_a, min_variant, max_variant, output_mem_config);
 }
 
 Tensor clip(
-    const Tensor& a,
+    const Tensor& input_a,
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return clamp(a, std::move(min), std::move(max), output_mem_config);
+    return clamp(input_a, std::move(min), std::move(max), output_mem_config);
 }
 
 // clamp
@@ -372,22 +372,28 @@ Tensor clamp(
 }
 
 Tensor clamp(
-    const Tensor& a,
+    const Tensor& input_a,
     std::optional<Tensor> min,
     std::optional<Tensor> max,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& /*output_tensor*/) {
-    auto output_memory_config = output_mem_config.value_or(a.memory_config());
+    auto output_memory_config = output_mem_config.value_or(input_a.memory_config());
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         return ttnn::where(
-            ttnn::ge(a, min.value(), std::nullopt, output_memory_config), a, min.value(), output_memory_config);
+            ttnn::ge(input_a, min.value(), std::nullopt, output_memory_config),
+            input_a,
+            min.value(),
+            output_memory_config);
     }
     if (!min.has_value()) {
         return ttnn::where(
-            ttnn::le(a, max.value(), std::nullopt, output_memory_config), a, max.value(), output_memory_config);
+            ttnn::le(input_a, max.value(), std::nullopt, output_memory_config),
+            input_a,
+            max.value(),
+            output_memory_config);
     }
-    Tensor a_max = ttnn::minimum(a, max.value(), std::nullopt, output_memory_config);
+    Tensor a_max = ttnn::minimum(input_a, max.value(), std::nullopt, output_memory_config);
     Tensor temp = ttnn::where(
         ttnn::eq(min.value(), 0.0f, std::nullopt, output_memory_config),
         ttnn::relu(a_max, output_memory_config),
