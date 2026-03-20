@@ -537,6 +537,7 @@ class LMHeadSampling:
         mcast_eh_data_receiver_semaphore_id = 6
         verify_output_ready_semaphore_id = 7
         skip_pipeline_semaphore_id = 8
+        eh_matmul_done_semaphore_id = 9  # [MTP] EH matmul cores inc this on argmax final core when shard is pushed
 
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
@@ -547,6 +548,20 @@ class LMHeadSampling:
 
                 # Sender identity is fixed by sender_coord even when skip_ccl=True.
                 is_sender = (row == sender_row) and (col == sender_col)
+
+                # Gate MTP pipeline to exit device only.
+                # MTP (embedding lookup, EH matmul, logits gather/send) only makes
+                # sense on the device that holds the global argmax winner.  Non-exit
+                # devices skip MTP entirely — they loop back to the CCL broadcast
+                # which is gated by persistent_next_iter from the exit device.
+                # Note: MTP token CCL broadcast config (further below) still uses the
+                # original enable_mtp so ALL devices participate in the broadcast.
+                if skip_ccl or argmax_final_mesh_coord is None:
+                    is_exit_device = True
+                else:
+                    is_exit_device = row == int(argmax_final_mesh_coord[0]) and col == int(argmax_final_mesh_coord[1])
+                enable_mtp_on_device = enable_mtp and is_exit_device
+                has_mtp_logits_socket_on_device = has_mtp_logits_socket_output and is_exit_device
                 if skip_ccl:
                     is_secondary_sender = False
                     is_receiver = False
@@ -647,7 +662,7 @@ class LMHeadSampling:
                 num_mcast_cores = mcast_grid.grid_size().x * mcast_grid.grid_size().y
 
                 # Compute per-core bank_id and vc for EH DRAM streaming matmul
-                if enable_mtp:
+                if enable_mtp_on_device:
                     eh_matmul_noc = ttnn.NOC.NOC_0
                     eh_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(eh_matmul_noc)
                     eh_matmul_core_grid = output_mtp_tensors_per_device[device_idx].memory_config().shard_spec.grid
@@ -684,18 +699,14 @@ class LMHeadSampling:
                     else 0
                 )
 
-                # Pre-compute MTP logits gather metadata (always when enable_mtp)
+                # Pre-compute MTP logits gather metadata (only on exit device)
                 eh_output_tile_size = 0
                 eh_shard_size_bytes = 0
                 num_eh_matmul_cores = 0
-                mtp_eh_shard_base_addr = 0
-                eh_core_phys_list = []
-                if enable_mtp:
+                if enable_mtp_on_device:
                     eh_output_tile_size = out_tile.get_tile_size(data_format)
                     eh_shard_size_bytes = eh_out_w_per_core * eh_output_tile_size
                     num_eh_matmul_cores = len(eh_worker_cores)
-                    mtp_eh_shard_base_addr = int(output_mtp_tensors_per_device[device_idx].buffer_address())
-                    eh_core_phys_list = [device.worker_core_from_logical_core(c) for c in eh_worker_cores]
 
                 if enable_argmax:
                     if indices_tensor_device.memory_config().shard_spec.grid != argmax_core_grid:
@@ -724,6 +735,7 @@ class LMHeadSampling:
                         raise ValueError("argmax_final_core_coord must be within the matmul core grid")
                     if output_index_core.x != argmax_final_core.x or output_index_core.y != argmax_final_core.y:
                         raise ValueError("output_index_tensor shard core must match argmax_final_core_coord")
+                    argmax_final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
                     emit_socket_on_this_device = bool(enable_socket_output)
                     argmax_num_values = n_per_core
                     argmax_num_senders = len(argmax_cores_row_wise)
@@ -828,7 +840,7 @@ class LMHeadSampling:
                                 "socket output active core must match argmax final core and emitting mesh device for lm_head_sampling"
                             )
 
-                    if enable_mtp:
+                    if enable_mtp_on_device:
                         argmax_socket_mode = socket_mode_none
                     else:
                         argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
@@ -985,28 +997,28 @@ class LMHeadSampling:
                     ("mesh_row", row),
                     ("mesh_col", col),
                     # [MTP]
-                    ("enable_mtp", 1 if enable_mtp else 0),
+                    ("enable_mtp", 1 if enable_mtp_on_device else 0),
                     ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
                     # MTP matmul, embedding, rmsnorm CBs
                     ("matmul_eh_in0", mcast_eh_dst_cb),
                     ("matmul_eh_in1", matmul_eh_cb),
                     ("matmul_eh_out", matmul_out_eh_cb),
-                    ("matmul_eh_k_num_tiles", eh_num_tiles_k if enable_mtp else 0),
-                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp else 0),
+                    ("matmul_eh_k_num_tiles", eh_num_tiles_k if enable_mtp_on_device else 0),
+                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp_on_device else 0),
                     (
                         "matmul_eh_dram_in1_tensor_addr",
-                        eh_proj_tensors_per_device[device_idx].buffer_address() if enable_mtp else 0,
+                        eh_proj_tensors_per_device[device_idx].buffer_address() if enable_mtp_on_device else 0,
                     ),
-                    ("matmul_eh_dram_in1_page_size", eh_page_size if enable_mtp else 0),
-                    ("matmul_eh_dram_in1_num_pages", eh_num_pages if enable_mtp else 0),
-                    ("matmul_eh_dram_in1_block_size_bytes", eh_in1_block_size_bytes if enable_mtp else 0),
-                    ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp else 0),
-                    ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp else 0),
-                    ("matmul_eh_out_num_tiles", eh_out_num_tiles if enable_mtp else 0),
+                    ("matmul_eh_dram_in1_page_size", eh_page_size if enable_mtp_on_device else 0),
+                    ("matmul_eh_dram_in1_num_pages", eh_num_pages if enable_mtp_on_device else 0),
+                    ("matmul_eh_dram_in1_block_size_bytes", eh_in1_block_size_bytes if enable_mtp_on_device else 0),
+                    ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp_on_device else 0),
+                    ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp_on_device else 0),
+                    ("matmul_eh_out_num_tiles", eh_out_num_tiles if enable_mtp_on_device else 0),
                     (
                         "eh_matmul_cb_in1_buf_addr",
                         ttnn.get_device_tensors(eh_proj_working_buf_tensor)[device_idx].buffer_address()
-                        if (enable_mtp and eh_proj_working_buf_tensor is not None)
+                        if (enable_mtp_on_device and eh_proj_working_buf_tensor is not None)
                         else 0,
                     ),
                     ("embedding_cb", embedding_cb),
@@ -1020,23 +1032,29 @@ class LMHeadSampling:
                     ("rmsnorm_e_output_cb", mcast_eh_src_cb),
                     # [MTP] semaphores
                     ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
-                    ("mcast_eh_data_sender_semaphore", mcast_eh_data_sender_semaphore_id if enable_mtp else 0),
+                    (
+                        "mcast_eh_data_sender_semaphore",
+                        mcast_eh_data_sender_semaphore_id if enable_mtp_on_device else 0,
+                    ),
                     ("mcast_eh_data_receiver_semaphore", mcast_eh_data_receiver_semaphore_id),
-                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp else 0),
-                    ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp else 0),
+                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp_on_device else 0),
+                    ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
                     ("rmsnorm_h_num_tiles", rms_num_tiles),
-                    ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp else 0),
-                    ("mcast_eh_tile_size_bytes", 2048 if enable_mtp else 0),
-                    ("embedding_size_bytes", embedding_dim * element_size if enable_mtp else 0),
+                    ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp_on_device else 0),
+                    ("mcast_eh_tile_size_bytes", 2048 if enable_mtp_on_device else 0),
+                    ("embedding_size_bytes", embedding_dim * element_size if enable_mtp_on_device else 0),
                     # Sender core NOC for L1-to-L1 copy (embedding region in mcast_eh_src_cb -> embedding_cb)
-                    ("sender_noc_x", int(core_noc_x) if enable_mtp else 0),
-                    ("sender_noc_y", int(core_noc_y) if enable_mtp else 0),
-                    ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp else 0),
+                    ("sender_noc_x", int(core_noc_x) if enable_mtp_on_device else 0),
+                    ("sender_noc_y", int(core_noc_y) if enable_mtp_on_device else 0),
+                    ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp_on_device else 0),
                     # [MTP Logits Socket]
-                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
-                    ("mtp_logits_num_eh_cores", num_eh_matmul_cores if enable_mtp else 0),
-                    ("mtp_logits_eh_shard_size", eh_shard_size_bytes if enable_mtp else 0),
-                    ("mtp_logits_payload_size", packet_size_bytes if (enable_mtp or enable_mtp_verification) else 0),
+                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_on_device else 0),
+                    ("mtp_logits_num_eh_cores", num_eh_matmul_cores if enable_mtp_on_device else 0),
+                    ("mtp_logits_eh_shard_size", eh_shard_size_bytes if enable_mtp_on_device else 0),
+                    (
+                        "mtp_logits_payload_size",
+                        packet_size_bytes if (enable_mtp_on_device or enable_mtp_verification) else 0,
+                    ),
                     # [Argmax socket deferral — main kernel handles all socket sends]
                     ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     # [Cross-core verification semaphore]
@@ -1049,6 +1067,8 @@ class LMHeadSampling:
                         "skip_pipeline_semaphore_id",
                         skip_pipeline_semaphore_id if enable_mtp_verification else 0,
                     ),
+                    # [MTP] EH matmul done semaphore (push-based logits gather)
+                    ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
                 ]
 
                 # ================================================================
@@ -1085,23 +1105,35 @@ class LMHeadSampling:
                     ("mesh_row", row),
                     ("mesh_col", col),
                     # [MTP] Second mcast (EH projection input)
-                    ("enable_mtp", 1 if enable_mtp else 0),
+                    ("enable_mtp", 1 if enable_mtp_on_device else 0),
                     ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
-                    ("mcast_eh_dest_noc_start_x", mcast_dest_noc_start.x if enable_mtp else 0),
-                    ("mcast_eh_dest_noc_start_y", mcast_dest_noc_start.y if enable_mtp else 0),
-                    ("mcast_eh_dest_noc_end_x", mcast_dest_noc_end.x if enable_mtp else 0),
-                    ("mcast_eh_dest_noc_end_y", mcast_dest_noc_end.y if enable_mtp else 0),
-                    ("mcast_eh_num_cores", num_mcast_cores if enable_mtp else 0),
-                    ("mcast_eh_data_sender_semaphore", mcast_eh_data_sender_semaphore_id if enable_mtp else 0),
-                    ("mcast_eh_data_receiver_semaphore", mcast_eh_data_receiver_semaphore_id if enable_mtp else 0),
-                    ("mcast_eh_src_cb", mcast_eh_src_cb if enable_mtp else 0),
-                    ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp else 0),
-                    ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp else 0),
-                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp else 0),
-                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
-                    ("mtp_logits_num_eh_cores", 0),
-                    ("mtp_logits_eh_shard_size", 0),
-                    ("mtp_logits_payload_size", packet_size_bytes if (enable_mtp or enable_mtp_verification) else 0),
+                    ("mcast_eh_dest_noc_start_x", mcast_dest_noc_start.x if enable_mtp_on_device else 0),
+                    ("mcast_eh_dest_noc_start_y", mcast_dest_noc_start.y if enable_mtp_on_device else 0),
+                    ("mcast_eh_dest_noc_end_x", mcast_dest_noc_end.x if enable_mtp_on_device else 0),
+                    ("mcast_eh_dest_noc_end_y", mcast_dest_noc_end.y if enable_mtp_on_device else 0),
+                    ("mcast_eh_num_cores", num_mcast_cores if enable_mtp_on_device else 0),
+                    (
+                        "mcast_eh_data_sender_semaphore",
+                        mcast_eh_data_sender_semaphore_id if enable_mtp_on_device else 0,
+                    ),
+                    (
+                        "mcast_eh_data_receiver_semaphore",
+                        mcast_eh_data_receiver_semaphore_id if enable_mtp_on_device else 0,
+                    ),
+                    ("mcast_eh_src_cb", mcast_eh_src_cb if enable_mtp_on_device else 0),
+                    ("mcast_eh_dst_cb", mcast_eh_dst_cb if enable_mtp_on_device else 0),
+                    ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp_on_device else 0),
+                    ("mcast_eh_src_num_pages", eh_concat_rms_tiles if enable_mtp_on_device else 0),
+                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_on_device else 0),
+                    # [MTP] EH matmul output CB (for BRISC push)
+                    ("matmul_eh_out", matmul_out_eh_cb),
+                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp_on_device else 0),
+                    ("mtp_logits_num_eh_cores", num_eh_matmul_cores if enable_mtp_on_device else 0),
+                    ("mtp_logits_eh_shard_size", eh_shard_size_bytes if enable_mtp_on_device else 0),
+                    (
+                        "mtp_logits_payload_size",
+                        packet_size_bytes if (enable_mtp_on_device or enable_mtp_verification) else 0,
+                    ),
                     ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     (
                         "verify_output_ready_semaphore_id",
@@ -1112,6 +1144,11 @@ class LMHeadSampling:
                         "skip_pipeline_semaphore_id",
                         skip_pipeline_semaphore_id if enable_mtp_verification else 0,
                     ),
+                    # [MTP] Push-based logits gather: EH cores write shards to argmax core
+                    ("eh_matmul_done_semaphore_id", eh_matmul_done_semaphore_id if enable_mtp_on_device else 0),
+                    ("mtp_logits_argmax_core_noc_x", int(argmax_final_core_phys.x) if enable_mtp_on_device else 0),
+                    ("mtp_logits_argmax_core_noc_y", int(argmax_final_core_phys.y) if enable_mtp_on_device else 0),
+                    ("mtp_logits_argmax_staging_addr", mcast_receiver_data_addr if enable_mtp_on_device else 0),
                 ]
 
                 # ================================================================
@@ -1138,7 +1175,7 @@ class LMHeadSampling:
                     # [MTP] h_rmsnorm and e_rmsnorm CTArgs
                     # Both RMSNorms write directly to mcast_eh_src_cb to avoid concat copy:
                     # h_rmsnorm writes first half (h_tiles), e_rmsnorm writes second half (e_tiles)
-                    ("enable_mtp", 1 if enable_mtp else 0),
+                    ("enable_mtp", 1 if enable_mtp_on_device else 0),
                     ("enable_mtp_verification", 1 if enable_mtp_verification else 0),
                     ("rmsnorm_h_input_cb", rmsnorm_input_cb),
                     ("rmsnorm_h_gamma_cb", h_gamma_cb),
@@ -1147,28 +1184,31 @@ class LMHeadSampling:
                     ("rmsnorm_e_input_cb", embedding_cb),
                     ("rmsnorm_e_gamma_cb", e_gamma_cb),
                     ("rmsnorm_e_output_cb", mcast_eh_src_cb),
-                    ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp else 0),
+                    ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp_on_device else 0),
                     # [MTP] EH matmul CTArgs
                     ("matmul_eh_in0", mcast_eh_dst_cb),
                     ("matmul_eh_in1", matmul_eh_cb),
                     ("matmul_eh_out", matmul_out_eh_cb),
-                    ("matmul_eh_k_num_tiles", eh_num_tiles_k if enable_mtp else 0),
-                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp else 0),
+                    ("matmul_eh_k_num_tiles", eh_num_tiles_k if enable_mtp_on_device else 0),
+                    ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp_on_device else 0),
                     # [MTP] EH matmul DRAM streaming CTArgs (TRISC compute)
-                    ("matmul_eh_subblock_w", eh_subblock_w if enable_mtp else 0),
-                    ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp else 0),
-                    ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp else 0),
+                    ("matmul_eh_subblock_w", eh_subblock_w if enable_mtp_on_device else 0),
+                    ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp_on_device else 0),
+                    ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp_on_device else 0),
                     (
                         "eh_matmul_cb_in1_buf_addr",
                         ttnn.get_device_tensors(eh_proj_working_buf_tensor)[device_idx].buffer_address()
-                        if (enable_mtp and eh_proj_working_buf_tensor is not None)
+                        if (enable_mtp_on_device and eh_proj_working_buf_tensor is not None)
                         else 0,
                     ),
-                    ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp else 0),
-                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_output else 0),
+                    ("mtp_embedding_done_cb", mtp_embedding_done_cb if enable_mtp_on_device else 0),
+                    ("has_mtp_logits_socket_output", 1 if has_mtp_logits_socket_on_device else 0),
                     ("mtp_logits_num_eh_cores", 0),
                     ("mtp_logits_eh_shard_size", 0),
-                    ("mtp_logits_payload_size", packet_size_bytes if (enable_mtp or enable_mtp_verification) else 0),
+                    (
+                        "mtp_logits_payload_size",
+                        packet_size_bytes if (enable_mtp_on_device or enable_mtp_verification) else 0,
+                    ),
                     ("argmax_defer_socket_output", 1 if enable_socket_output else 0),
                     (
                         "verify_output_ready_semaphore_id",
@@ -1185,7 +1225,7 @@ class LMHeadSampling:
                 # CCL Broadcast common runtime args
                 # ================================================================
                 if skip_ccl:
-                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
+                    final_core_phys = argmax_final_core_phys
                     ncrisc_bcast_common_args = [
                         int(indices_tensor_device.buffer_address()),
                         int(output_index_tensor_device.buffer_address()),
@@ -1196,7 +1236,7 @@ class LMHeadSampling:
                         0,
                     ]
                     # [MTP] All cores consume 4 alignment args + input_core gets embedding_base
-                    if enable_mtp:
+                    if enable_mtp_on_device:
                         sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
                         mtp_token_addr = int(intermediate_tensor_device.buffer_address())
                         embedding_tensor_device = embedding_tensors_per_device[device_idx]
@@ -1206,16 +1246,13 @@ class LMHeadSampling:
                             mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
                             int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
                         ]
-                    # [MTP LOGITS GATHER] staging (CB1) + EH shard base + core coords
-                    if enable_mtp:
+                    # [MTP LOGITS GATHER] staging addr for logits + metadata on argmax core
+                    if enable_mtp_on_device:
                         ncrisc_bcast_common_args += [
                             mcast_receiver_data_addr,
-                            mtp_eh_shard_base_addr,
                         ]
-                        ncrisc_bcast_common_args += [int(p.x) for p in eh_core_phys_list]
-                        ncrisc_bcast_common_args += [int(p.y) for p in eh_core_phys_list]
                     # [MTP LOGITS SOCKET] socket config addr (only when socket is present)
-                    if has_mtp_logits_socket_output:
+                    if has_mtp_logits_socket_on_device:
                         ncrisc_bcast_common_args += [
                             int(mtp_logits_socket_output.get_config_buffer_address()),
                         ]
@@ -1308,7 +1345,7 @@ class LMHeadSampling:
                         num_connections,  # num_connections
                     ]
 
-                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
+                    final_core_phys = argmax_final_core_phys
                     ncrisc_bcast_common_args = ncrisc_bcast_common_args + [
                         int(indices_tensor_device.buffer_address()),
                         int(output_index_tensor_device.buffer_address()),
@@ -1319,7 +1356,7 @@ class LMHeadSampling:
                         global_stage2_sem_addr,
                     ]
                     # [MTP] All cores consume 4 alignment args + input_core gets embedding_base
-                    if enable_mtp:
+                    if enable_mtp_on_device:
                         sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
                         mtp_token_addr = int(intermediate_tensor_device.buffer_address())
                         embedding_tensor_device = embedding_tensors_per_device[device_idx]
@@ -1329,16 +1366,13 @@ class LMHeadSampling:
                             mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
                             int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
                         ]
-                    # [MTP LOGITS GATHER] staging (CB1) + EH shard base + core coords
-                    if enable_mtp:
+                    # [MTP LOGITS GATHER] staging addr for logits + metadata on argmax core
+                    if enable_mtp_on_device:
                         ncrisc_bcast_common_args += [
                             mcast_receiver_data_addr,
-                            mtp_eh_shard_base_addr,
                         ]
-                        ncrisc_bcast_common_args += [int(p.x) for p in eh_core_phys_list]
-                        ncrisc_bcast_common_args += [int(p.y) for p in eh_core_phys_list]
                     # [MTP LOGITS SOCKET] socket config addr (only when socket is present)
-                    if has_mtp_logits_socket_output:
+                    if has_mtp_logits_socket_on_device:
                         ncrisc_bcast_common_args += [
                             int(mtp_logits_socket_output.get_config_buffer_address()),
                         ]
@@ -1462,9 +1496,9 @@ class LMHeadSampling:
                 # CB 16: Matmul output — tensor-backed on matmul cores
                 matmul_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_out_cb, output_tensor_device)
 
-                # [MTP] CB descriptors (only if enable_mtp)
+                # [MTP] CB descriptors (only on exit device)
                 mtp_cb_descriptors = []
-                if enable_mtp:
+                if enable_mtp_on_device:
                     # CB 11: h_gamma - tensor-backed on sender core
                     h_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         h_gamma_cb, h_gamma_tensors_per_device[device_idx]
@@ -1577,7 +1611,7 @@ class LMHeadSampling:
                     rmsnorm_out_cb_descriptor,
                     matmul_out_cb_descriptor,
                 ]
-                if enable_mtp:
+                if enable_mtp_on_device:
                     cbs_list.extend(mtp_cb_descriptors)
                 if enable_argmax:
                     argmax_winner_cb_descriptor = ttnn.CBDescriptor(
@@ -1661,7 +1695,7 @@ class LMHeadSampling:
                             ),
                         ]
                     )
-                if enable_mtp:
+                if enable_mtp_on_device:
                     semaphore_descriptors.extend(
                         [
                             ttnn.SemaphoreDescriptor(
@@ -1677,6 +1711,11 @@ class LMHeadSampling:
                             ttnn.SemaphoreDescriptor(
                                 id=mcast_eh_data_receiver_semaphore_id,
                                 core_ranges=all_cores,
+                                initial_value=0,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=eh_matmul_done_semaphore_id,
+                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
                                 initial_value=0,
                             ),
                         ]
@@ -1702,7 +1741,7 @@ class LMHeadSampling:
                 brisc_bcast_common_args.append(mcast_receiver_data_addr)
                 brisc_bcast_common_args.append(
                     (mcast_eh_receiver_data_addr if mcast_eh_dst_working_buf_tensor is not None else 0)
-                    if enable_mtp
+                    if enable_mtp_on_device
                     else 0
                 )
 
@@ -1727,7 +1766,7 @@ class LMHeadSampling:
                     trisc_common_runtime_args=[
                         epsilon_packed,
                         scalar_packed,
-                        float_to_uint32(1.0 / math.sqrt(float(embedding_dim))) if enable_mtp else 0,
+                        float_to_uint32(1.0 / math.sqrt(float(embedding_dim))) if enable_mtp_on_device else 0,
                     ],
                     unified_compile_time_core_descriptors=[
                         UnifiedCompileTimeCoreDescriptor(
@@ -1775,7 +1814,7 @@ class LMHeadSampling:
                         UnifiedCompileTimeCoreDescriptor(
                             named_compile_time_arg="enable_mtp",
                             core_range=all_cores,
-                            value=1 if enable_mtp else 0,
+                            value=1 if enable_mtp_on_device else 0,
                             other_value=0,
                         ),
                         UnifiedCompileTimeCoreDescriptor(
@@ -1794,7 +1833,7 @@ class LMHeadSampling:
                                 other_value=0,
                             ),
                         ]
-                        if enable_mtp
+                        if enable_mtp_on_device
                         else []
                     ),
                     per_core_compile_time_descriptors=(
@@ -1815,12 +1854,19 @@ class LMHeadSampling:
                         + [
                             PerCoreCompileTimeDescriptor(
                                 named_compile_time_arg="matmul_eh_bank_id",
-                                core_values=eh_bank_id_core_values if enable_mtp else [],
+                                core_values=eh_bank_id_core_values if enable_mtp_on_device else [],
                                 other_value=0,
                             ),
                             PerCoreCompileTimeDescriptor(
                                 named_compile_time_arg="matmul_eh_vc",
-                                core_values=eh_vc_core_values if enable_mtp else [],
+                                core_values=eh_vc_core_values if enable_mtp_on_device else [],
+                                other_value=0,
+                            ),
+                            PerCoreCompileTimeDescriptor(
+                                named_compile_time_arg="mtp_logits_eh_core_index",
+                                core_values=[(core, idx) for idx, core in enumerate(eh_worker_cores)]
+                                if enable_mtp_on_device
+                                else [],
                                 other_value=0,
                             ),
                         ]

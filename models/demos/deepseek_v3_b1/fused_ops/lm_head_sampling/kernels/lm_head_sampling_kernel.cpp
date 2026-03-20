@@ -107,7 +107,7 @@ void kernel_main() {
     //   │ CCL Broadcast writer │  13   │ !skip_ccl                           │
     //   │ Argmax reader        │   7   │ always                              │
     //   │ MTP token transfer   │   4   │ enable_mtp                          │
-    //   │ MTP logits gather    │ 2+2N  │ enable_mtp                          │
+    //   │ MTP logits staging   │   1   │ enable_mtp                          │
     //   │ MTP logits socket    │   1   │ has_mtp_logits_socket_output        │
     //   │ Verification         │  11   │ is_spec_stage                       │
     //   │ Fabric routing       │  var  │ !skip_ccl (per-core appended)       │
@@ -221,25 +221,13 @@ void kernel_main() {
     }
 
     // ── MTP logits gather runtime args (enable_mtp) ─────────────────
-    // Gather addresses (staging=CB1, shard base, core NOC coords) are
-    // emitted whenever enable_mtp; the socket config addr is only
-    // present when has_mtp_logits_socket_output.
+    // Staging addr (CB1 backing on argmax core) for logits + metadata.
+    // EH cores push their shards via BRISC noc_async_write (no pull needed).
+    // Socket config addr is only present when has_mtp_logits_socket_output.
     uint32_t mtp_logits_socket_config_addr = 0;
     uint32_t mtp_logits_staging_addr = 0;
-    uint32_t mtp_logits_eh_shard_base_addr = 0;
-    uint32_t mtp_logits_eh_core_noc_x[8] = {};
-    uint32_t mtp_logits_eh_core_noc_y[8] = {};
     if constexpr (Core::enable_mtp) {
         mtp_logits_staging_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        mtp_logits_eh_shard_base_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        constexpr uint32_t num_eh = get_named_compile_time_arg_val("mtp_logits_num_eh_cores");
-        static_assert(num_eh <= 8, "mtp_logits_num_eh_cores exceeds max array size");
-        for (uint32_t i = 0; i < num_eh; i++) {
-            mtp_logits_eh_core_noc_x[i] = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        }
-        for (uint32_t i = 0; i < num_eh; i++) {
-            mtp_logits_eh_core_noc_y[i] = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        }
         if constexpr (Core::has_mtp_logits_socket_output) {
             mtp_logits_socket_config_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         }
@@ -429,6 +417,10 @@ void kernel_main() {
         mcast_eh_dst_addr_override != 0 ? mcast_eh_dst_addr_override : get_write_ptr(mcast_eh_dst_cb),
     };
 
+    // ── MTP: EH matmul output push (eh_matmul_core → argmax_final_core) ──
+    constexpr uint32_t eh_out_cb = get_named_compile_time_arg_val("matmul_eh_out");
+    constexpr uint32_t eh_out_w = get_named_compile_time_arg_val("matmul_eh_out_w");
+
 #elif defined(COMPILE_FOR_TRISC)
     // ========================================================================
     // TRISC — RMSNorm compute, matmul compute, MTP h/e RMSNorm, EH matmul
@@ -557,10 +549,85 @@ void kernel_main() {
     }
 #endif
 
-#if defined(COMPILE_FOR_NCRISC)
+    // ── Token constants and output page helpers ────────────────────
+    // These are used by both NCRISC (payload assembly) and BRISC (socket send).
     constexpr uint32_t SENTINEL = 0xFFFFFFFF;
     constexpr uint32_t TOKEN_TYPE_BASE = 0;
     constexpr uint32_t TOKEN_TYPE_SPEC = 1;
+
+    // Output page layout (fits in TOKEN_PAGE_SIZE_BYTES = 64 = 16 uint32s):
+    //   [0]  token_0           first token
+    //   [1]  token_0_type      BASE or SPEC
+    //   [2]  token_0_pos       logical position
+    //   [3]  num_tokens        0 (STALE), 1 (ACCEPT), or 2 (REJECT/CONTINUE)
+    //   [4]  token_1           second token (valid when num_tokens == 2)
+    //   [5]  token_1_type      BASE or SPEC
+    //   [6]  token_1_pos       logical position
+    //   [7..15] reserved       zero-filled
+    //
+    // Spec stage cases:
+    //   STALE:    num_tokens=0  (SPEC arrived, BASE was rejected — discard)
+    //   ACCEPT:   num_tokens=1  (BASE matched speculation — send accepted token)
+    //   REJECT:   num_tokens=2  (BASE didn't match — send base_output + new spec)
+    //   CONTINUE: num_tokens=2  (SPEC arrived after ACCEPT — send base_output + new spec)
+    constexpr uint32_t TOKEN_PAGE_WORDS = 16;
+
+#if defined(COMPILE_FOR_NCRISC)
+    // Reserve socket CB, zero-fill, return pointer for caller to populate.
+    auto output_page_begin = [&]() -> volatile tt_l1_ptr uint32_t* {
+        cb_reserve_back(ArgmaxCTArgs::socket_cb_id, 1);
+        auto out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(ArgmaxCTArgs::socket_cb_id));
+        for (uint32_t i = 0; i < TOKEN_PAGE_WORDS; i++) {
+            out[i] = 0;
+        }
+        return out;
+    };
+
+    // Push the socket CB page so BRISC can forward it.
+    auto output_page_send = [&]() { cb_push_back(ArgmaxCTArgs::socket_cb_id, 1); };
+
+    // Convenience: write a skip page (count=0) and send.
+    auto output_page_skip = [&]() {
+        output_page_begin();
+        output_page_send();
+    };
+
+    // Convenience: write a 1-token page and send.
+    auto output_page_send_one = [&](uint32_t token_0, uint32_t type_0, uint32_t pos_0) {
+        auto out = output_page_begin();
+        out[0] = token_0;
+        out[1] = type_0;
+        out[2] = pos_0;
+        out[3] = 1;
+        output_page_send();
+    };
+
+    // Convenience: write a 2-token page and send.
+    auto output_page_send_two =
+        [&](uint32_t token_0, uint32_t type_0, uint32_t pos_0, uint32_t token_1, uint32_t type_1, uint32_t pos_1) {
+            auto out = output_page_begin();
+            out[0] = token_0;
+            out[1] = type_0;
+            out[2] = pos_0;
+            out[3] = 2;
+            out[4] = token_1;
+            out[5] = type_1;
+            out[6] = pos_1;
+            output_page_send();
+        };
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+    // Send socket CB page to host (D2H) or next stage (D2D).
+    auto output_page_flush = [&]() {
+        if constexpr (ArgmaxCTArgs::socket_mode == 1) {
+            unified_kernels::socket_send_d2h_from_cb(
+                sampling_args.socket_config_addr, ArgmaxCTArgs::socket_cb_id, ArgmaxCTArgs::socket_page_size_bytes);
+        } else if constexpr (ArgmaxCTArgs::socket_mode == 2) {
+            unified_kernels::socket_send_d2d_from_cb(
+                sampling_args.socket_config_addr, ArgmaxCTArgs::socket_cb_id, ArgmaxCTArgs::socket_page_size_bytes);
+        }
+    };
 #endif
 
     mcast.init(mcast_args);
@@ -600,6 +667,7 @@ void kernel_main() {
 
             // If the source token received was a BASE token
             if (source_token_type == TOKEN_TYPE_BASE) {
+                invalidate_l1_cache();
                 uint32_t expected_spec = unverified[0];
                 // Check if it was an acceptance
                 if (expected_spec != SENTINEL && base_output_token == expected_spec) {
@@ -763,15 +831,9 @@ void kernel_main() {
     // ========================================================================
     // mtp: h/e RMSNorm, Token Transfer, Embedding, EH Mcast,
     //      EH Matmul, Logits Gather, Logits Socket Send
+    // Note: ONLY runs on exit device
     // ========================================================================
     auto mtp = [&]() {
-
-#if defined(COMPILE_FOR_TRISC)
-        if constexpr (Core::is_rmsnorm_core) {
-            DeviceZoneScopedN("MTP_H_RMSNORM");
-            h_rmsnorm(rmsnorm_args);
-        }
-#endif
 
 #if defined(COMPILE_FOR_NCRISC)
         // Unicast the base token from argmax final core to input core for mcast
@@ -816,11 +878,12 @@ void kernel_main() {
         }
 #endif
 
-        // EH Mcast on the base token
-        {
-            DeviceZoneScopedN("MTP_EH_MCAST");
-            mcast_eh(mcast_eh_args);
+#if defined(COMPILE_FOR_TRISC)
+        if constexpr (Core::is_rmsnorm_core) {
+            DeviceZoneScopedN("MTP_H_RMSNORM");
+            h_rmsnorm(rmsnorm_args);
         }
+#endif
 
 #if defined(COMPILE_FOR_TRISC)
         // e rms norm input cb is used by embedding
@@ -836,7 +899,15 @@ void kernel_main() {
         }
 #endif
 
-// Run EH Matmul for MTP
+        // EH Mcast on the base token
+        {
+            DeviceZoneScopedN("MTP_EH_MCAST");
+            mcast_eh(mcast_eh_args);
+        }
+
+        // Run EH Matmul for MTP
+        // in0 Mcast src cb is popped after eh_matmul completes
+        // in1 is pushed and popped inside matmul
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
             DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
@@ -844,35 +915,57 @@ void kernel_main() {
         }
 #endif
 
-#if defined(COMPILE_FOR_NCRISC)
-        // Gather the logits from the EH Matmul
+// Each EH matmul core pushes its shard to the argmax final core after matmul completes
+#if defined(COMPILE_FOR_BRISC)
+        if constexpr (Core::is_eh_matmul_core) {
+            DeviceZoneScopedN("MTP_EH_LOGITS_PUSH");
+            constexpr uint32_t eh_shard_size = get_named_compile_time_arg_val("mtp_logits_eh_shard_size");
+            constexpr uint32_t eh_core_index = get_named_compile_time_arg_val("mtp_logits_eh_core_index");
+            constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("mtp_logits_argmax_core_noc_x");
+            constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("mtp_logits_argmax_core_noc_y");
+            constexpr uint32_t argmax_staging_addr = get_named_compile_time_arg_val("mtp_logits_argmax_staging_addr");
+            constexpr uint32_t eh_done_sem_id = get_named_compile_time_arg_val("eh_matmul_done_semaphore_id");
+            cb_wait_front(eh_out_cb, eh_out_w);
+            uint64_t dst_addr =
+                get_noc_addr(argmax_noc_x, argmax_noc_y, argmax_staging_addr + eh_core_index * eh_shard_size);
+            noc_async_write(get_read_ptr(eh_out_cb), dst_addr, eh_shard_size);
+            noc_async_write_barrier();
+            uint64_t sem_addr = get_noc_addr(argmax_noc_x, argmax_noc_y, get_semaphore(eh_done_sem_id));
+            noc_semaphore_inc(sem_addr, 1);
+            // add atomic barrier
+            cb_pop_front(eh_out_cb, eh_out_w);
+        }
+#endif
+
+#if defined(COMPILE_FOR_BRISC)
+        // Wait for all EH matmul cores to push their shards, then append token metadata
         if constexpr (Core::is_argmax_final_core) {
             DeviceZoneScopedN("MTP_LOGITS_GATHER");
             constexpr uint32_t num_eh = get_named_compile_time_arg_val("mtp_logits_num_eh_cores");
             constexpr uint32_t eh_shard_size = get_named_compile_time_arg_val("mtp_logits_eh_shard_size");
             constexpr uint32_t logits_size = num_eh * eh_shard_size;
-            for (uint32_t i = 0; i < num_eh; i++) {
-                uint64_t src_addr = get_noc_addr(
-                    mtp_logits_eh_core_noc_x[i], mtp_logits_eh_core_noc_y[i], mtp_logits_eh_shard_base_addr);
-                noc_async_read(src_addr, mtp_logits_staging_addr + i * eh_shard_size, eh_shard_size);
-            }
-            noc_async_read_barrier();
+            constexpr uint32_t eh_done_sem_id = get_named_compile_time_arg_val("eh_matmul_done_semaphore_id");
+            volatile tt_l1_ptr uint32_t* eh_done_sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(eh_done_sem_id));
+            noc_semaphore_wait(eh_done_sem, num_eh);
+            noc_semaphore_set(eh_done_sem, 0);
 
-            // Write the base token metadata to the logits staging area @ mtp_logits_staging_addr
+            invalidate_l1_cache();
+            // Append token metadata after the logits (same layout as output page)
             uint32_t base_token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sampling_args.output_addr);
             auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mtp_logits_staging_addr + logits_size);
+            for (uint32_t i = 0; i < TOKEN_PAGE_WORDS; i++) meta[i] = 0;
             meta[0] = base_token;
-            meta[1] = 0;
+            meta[1] = TOKEN_TYPE_BASE;
             meta[2] = iteration_count;
             meta[3] = base_token;
-            for (uint32_t i = 4; i < 16; i++) meta[i] = 0;
         }
-        // Send the logits + token metadata to the next stage (MTP decoder stage) from argmax final core
-        if constexpr (Core::has_mtp_logits_socket_output && Core::is_argmax_final_core) {
+        // Send logits + token metadata to MTP decoder stage via D2D socket
+        if constexpr (Core::is_argmax_final_core && Core::has_mtp_logits_socket_output) {
             DeviceZoneScopedN("MTP_LOGITS_SOCKET_SEND");
             constexpr uint32_t num_eh = get_named_compile_time_arg_val("mtp_logits_num_eh_cores");
             constexpr uint32_t eh_shard_size = get_named_compile_time_arg_val("mtp_logits_eh_shard_size");
-            constexpr uint32_t combined_page_size = num_eh * eh_shard_size + 64;
+            constexpr uint32_t combined_page_size = num_eh * eh_shard_size + TOKEN_PAGE_WORDS * sizeof(uint32_t);
             SocketSenderInterface logits_socket = create_sender_socket_interface(mtp_logits_socket_config_addr);
             set_sender_socket_page_size(logits_socket, combined_page_size);
             socket_reserve_pages(logits_socket, 1);
@@ -890,10 +983,6 @@ void kernel_main() {
             socket_push_pages(logits_socket, 1);
             socket_notify_receiver(logits_socket);
             update_socket_config(logits_socket);
-        }
-        // Drain the EH Matmul output cb
-        if constexpr (Core::is_eh_matmul_core) {
-            cb_pop_front(eh_out_cb, eh_out_w);
         }
         // Drain the EH Mcast output cb
         if constexpr (Core::is_mcast_receiver_core && !Core::is_eh_matmul_core) {
@@ -915,81 +1004,74 @@ void kernel_main() {
     // ========================================================================
     auto update_speculative_state = [&]() {
 #if defined(COMPILE_FOR_NCRISC)
+        // By the time we reach here, argmax has completed.
+        // Runs on argmax_final_core on the exit node.
         if constexpr (
-            // By the time we reach here, argmax has completed
             Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
             constexpr uint32_t verify_output_ready_sem_id =
                 get_named_compile_time_arg_val("verify_output_ready_semaphore_id");
 
-            // We got the metadata from the input core, now we can assemble the output
-            // verify_output_ready_semaphore_id is set when we finish verification in verify() lambda
+            // Wait for verification metadata from input_core (written in verify())
             volatile tt_l1_ptr uint32_t* metadata_sem =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(verify_output_ready_sem_id));
             noc_semaphore_wait(metadata_sem, 1);
             noc_semaphore_set(metadata_sem, 0);
 
             auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(verify_output_staging_addr);
-            uint32_t meta_source_token = meta[0];
             uint32_t meta_source_token_type = meta[1];
             uint32_t meta_source_token_pos = meta[2];
             uint32_t meta_base_output_token = meta[3];
             uint32_t meta_skip = meta[4];
             uint32_t meta_accept = meta[5];
 
-            cb_reserve_back(ArgmaxCTArgs::socket_cb_id, 1);
-            auto out_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(ArgmaxCTArgs::socket_cb_id));
-
-            // meta_skip = 1 means we treat the pipeline as passthrough (if we skip sampling)
-            if (meta_skip) {
-                DeviceZoneScopedN("MTP_VERIFY_EARLY_OUTPUT");
-                if (meta_accept) {
-                    out_ptr[0] = meta_base_output_token;
-                    out_ptr[1] = TOKEN_TYPE_BASE;
-                    out_ptr[2] = meta_source_token_pos + 1;
-                    out_ptr[3] = 1;
-                } else {
-                    out_ptr[0] = 0;
-                    out_ptr[1] = 0;
-                    out_ptr[2] = 0;
-                    out_ptr[3] = 0;
-                }
-                out_ptr[4] = 0;
-                out_ptr[5] = 0;
-                out_ptr[6] = 0;
-            } else
-            // meta_skip = 0 means we did run sampling (BASE REJECT or SPEC CONTINUATION)
-            {
-                DeviceZoneScopedN("MTP_VERIFY_LATE_OUTPUT");
-                uint32_t speculative_token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(verify_argmax_output_addr);
-
-                out_ptr[0] = meta_base_output_token;
-                out_ptr[1] = TOKEN_TYPE_BASE;
-                out_ptr[2] = meta_source_token_pos + 1;
-                out_ptr[3] = 2;
-                out_ptr[4] = speculative_token;
-                out_ptr[5] = TOKEN_TYPE_SPEC;
-                out_ptr[6] = meta_source_token_pos + 2;
-
-                // Write the verified[] and unverified[] arrays to back to input core
-                auto state_scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(verify_output_staging_addr);
-                if (meta_source_token_type == TOKEN_TYPE_BASE) {
-                    state_scratch[0] = speculative_token;
-                    uint64_t unverified_noc =
-                        get_noc_addr(verify_input_core_noc_x, verify_input_core_noc_y, mtp_unverified_spec_addr);
-                    noc_async_write(verify_output_staging_addr, unverified_noc, sizeof(uint32_t));
-                } else {
-                    state_scratch[0] = SENTINEL;
-                    state_scratch[1] = speculative_token;
-                    uint64_t verified_noc =
-                        get_noc_addr(verify_input_core_noc_x, verify_input_core_noc_y, mtp_verified_spec_addr);
-                    noc_async_write(verify_output_staging_addr, verified_noc, sizeof(uint32_t));
-                    uint64_t unverified_noc =
-                        get_noc_addr(verify_input_core_noc_x, verify_input_core_noc_y, mtp_unverified_spec_addr);
-                    noc_async_write(verify_output_staging_addr + sizeof(uint32_t), unverified_noc, sizeof(uint32_t));
-                }
-                noc_async_write_barrier();
+            // ── STALE: SPEC arrived but BASE was never accepted — discard ──
+            if (meta_skip && !meta_accept) {
+                DeviceZoneScopedN("MTP_VERIFY_STALE");
+                output_page_skip();
+                return;
             }
-            cb_push_back(ArgmaxCTArgs::socket_cb_id, 1);
+
+            // ── ACCEPT: BASE matched speculation — send accepted token back ──
+            // The SPEC packet is already in-flight; on the next iteration
+            // (CONTINUE) we will send 2 tokens (base_output + new_spec).
+            if (meta_skip && meta_accept) {
+                DeviceZoneScopedN("MTP_VERIFY_ACCEPT");
+                output_page_send_one(meta_base_output_token, TOKEN_TYPE_BASE, meta_source_token_pos + 1);
+                return;
+            }
+
+            // ── REJECT / CONTINUE: send 2 tokens ────────────────────
+            DeviceZoneScopedN("MTP_VERIFY_SEND");
+            uint32_t speculative_token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(verify_argmax_output_addr);
+
+            output_page_send_two(
+                meta_base_output_token,
+                TOKEN_TYPE_BASE,
+                meta_source_token_pos + 1,
+                speculative_token,
+                TOKEN_TYPE_SPEC,
+                meta_source_token_pos + 2);
+
+            // Update speculative state on input_core
+            auto state_scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(verify_output_staging_addr);
+            if (meta_source_token_type == TOKEN_TYPE_BASE) {
+                // REJECT: save new speculation
+                state_scratch[0] = speculative_token;
+                uint64_t unverified_noc =
+                    get_noc_addr(verify_input_core_noc_x, verify_input_core_noc_y, mtp_unverified_spec_addr);
+                noc_async_write(verify_output_staging_addr, unverified_noc, sizeof(uint32_t));
+            } else {
+                // CONTINUE: clear verified, save new speculation
+                state_scratch[0] = SENTINEL;
+                state_scratch[1] = speculative_token;
+                uint64_t verified_noc =
+                    get_noc_addr(verify_input_core_noc_x, verify_input_core_noc_y, mtp_verified_spec_addr);
+                noc_async_write(verify_output_staging_addr, verified_noc, sizeof(uint32_t));
+                uint64_t unverified_noc =
+                    get_noc_addr(verify_input_core_noc_x, verify_input_core_noc_y, mtp_unverified_spec_addr);
+                noc_async_write(verify_output_staging_addr + sizeof(uint32_t), unverified_noc, sizeof(uint32_t));
+            }
+            noc_async_write_barrier();
         }
 #endif
     };
@@ -1013,7 +1095,7 @@ void kernel_main() {
         // ════════════════════════════════════════════════════════════════
         if constexpr (Core::is_spec_stage) {
             verify();
-            lm_head_sampling();  // no-op if base token is OR spec token is
+            lm_head_sampling();  // depending on base/spec token accpetance or rejection can be no-op
             update_speculative_state();
         }
 
@@ -1031,45 +1113,29 @@ void kernel_main() {
             }
         }
 
-        // Write base token page to the pipeline socket CB so BRISC can
+        // For base stage
+        // Write base token + logits page to the pipeline socket CB so BRISC can
         // forward it downstream.  When MTP is enabled the base token is
-        // also carried in the MTP-logits metadata packet (D2D socket),
-        // but the pipeline token is still needed to trigger Stage 3's
-        // persistent-loop iteration via the passthrough stage.
+        // also carried in the MTP-logits metadata packet (D2D socket)
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (
             Core::is_base_stage && Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output &&
             ArgmaxCTArgs::socket_mode != 0) {
-            cb_reserve_back(ArgmaxCTArgs::socket_cb_id, 1);
-            auto out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(ArgmaxCTArgs::socket_cb_id));
             uint32_t base_token = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sampling_args.output_addr);
-            for (uint32_t i = 0; i < 16; i++) {
-                out[i] = 0;
-            }
-            out[0] = base_token;
-            out[1] = TOKEN_TYPE_BASE;
-            out[2] = iteration_count;
-            out[3] = 1;
-            cb_push_back(ArgmaxCTArgs::socket_cb_id, 1);
+            output_page_send_one(base_token, TOKEN_TYPE_BASE, iteration_count);
         }
 #endif
 
-        // Write output page to host or next stage
+        // ── BRISC: flush socket CB page to host or next stage ────────
 #if defined(COMPILE_FOR_BRISC)
-        // defer_socket_output = True means we write out to socket outside of argmax
         if constexpr (Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output) {
-            if constexpr (ArgmaxCTArgs::socket_mode == 1) {
-                unified_kernels::socket_send_d2h_from_cb(
-                    sampling_args.socket_config_addr, ArgmaxCTArgs::socket_cb_id, ArgmaxCTArgs::socket_page_size_bytes);
-            } else if constexpr (ArgmaxCTArgs::socket_mode == 2) {
-                unified_kernels::socket_send_d2d_from_cb(
-                    sampling_args.socket_config_addr, ArgmaxCTArgs::socket_cb_id, ArgmaxCTArgs::socket_page_size_bytes);
-            }
+            output_page_flush();
         }
 #endif
 
         // Signal persistent_next_iter after all work (MTP, LM Head Sampling) is done
         // This is used to signal we can start the next iteration
+        // NOTE: we have to make sure argmax_final_core is the LAST core doing work
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && Core::persistent_mode) {
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;

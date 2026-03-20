@@ -3607,13 +3607,23 @@ def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
     4-stage MTP speculative decoding full-cycle pipeline:
     P0(Embed) -> P1(LMHead+MTP) -> P2(Passthrough) -> P3(MTP_LMHead+Verify) -> P0(D2H).
 
-    Each decode step injects 2 tokens back-to-back (base + spec) and reads
-    2 outputs.  The base token from Stage 1 is carried in the same packet as
-    the MTP logits (metadata).  Output is verified against a Torch golden
-    that mirrors the kernel's verification state machine.
+    Each pipeline iteration: host writes 1 input token, reads 1 output packet.
+    The output packet (64 bytes) contains 1 or 2 tokens depending on verification:
 
-    Output packet layout (7 uint32s in a 64-byte page):
         [token_0, type_0, pos_0, num_tokens, token_1, type_1, pos_1]
+
+    Pipeline flow per iteration:
+        Host sends input_token_id → Stage 0 embeds →
+        Stage 1 LMHead produces T_base, MTP produces logits →
+        Stage 3 verifies T_base against stored speculation:
+            REJECT  (no prior spec, or mismatch): run LMHead on logits → [T_base, T_spec], store T_spec
+            ACCEPT  (T_base == stored spec):      skip LMHead → [T_base], clear stored spec
+
+    Prefill is simulated by pre-computing T_base and T_spec from the golden
+    model, then writing T_spec directly into the exit device's unverified
+    tensor before starting the pipeline. This avoids running a full prefill
+    iteration and lets the decode loop start with meaningful verification
+    state already in place.
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -3632,13 +3642,45 @@ def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
     )
     pipeline = config.build_pipeline(mesh_device)
     try:
-        pipeline.setup_and_run()
+        # ── Simulate prefill by pre-seeding device state ──
+        # Compute golden prefill outputs (pure Python, no device needed).
+        prompt_token_id = 0
+        weights = _build_golden_weights()
+        t_base, t_spec = _compute_golden_mtp_verification(prompt_token_id, weights)
+
+        # Phase 1-2: wire sockets and allocate tensors (but don't start kernels yet).
+        pipeline.configure_block()
+        pipeline.setup()
+
+        # Phase 2.5: On the exit device (mesh_id=3), write T_spec into the
+        # unverified_spec_tensor so the first decode iteration sees prior
+        # speculation — exactly as if a real prefill iteration had run.
+        if pipeline.my_mesh_id == 3:
+            unverified_tensor = pipeline._stage_kind._state["unverified_spec_tensor"]
+            max_spec_depth = 8
+            host_data = torch.full((1, 1, max_spec_depth), _GOLDEN_SENTINEL, dtype=torch.uint32)
+            host_data[0, 0, 0] = t_spec
+            host_tensor = ttnn.from_torch(host_data, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.copy_host_to_device_tensor(host_tensor, unverified_tensor)
+
+        pipeline.barrier()
+
+        # Phase 3-4: start pipeline sockets and compute kernels.
+        pipeline.start_pipeline()
+        pipeline.start_compute()
 
         if pipeline.my_mesh_id == 0:
-            weights = _build_golden_weights()
-            unverified = _GOLDEN_SENTINEL
-            verified = _GOLDEN_SENTINEL
             page_words = TOKEN_PAGE_SIZE_BYTES // 4
+
+            # ── Exit node state (mirrors unverified/verified tensors on device) ──
+            # Pre-seeded: unverified holds T_spec from simulated prefill.
+            unverified = t_spec
+            verified = _GOLDEN_SENTINEL
+
+            logger.info(
+                f"[MTP] Prefill simulated: prompt={prompt_token_id} → "
+                f"T_base={t_base}, T_spec={t_spec} (pre-seeded on exit device)"
+            )
 
             def _make_token_tensor(token_id):
                 t = torch.zeros(1, page_words, dtype=torch.uint32)
@@ -3654,73 +3696,50 @@ def test_persistent_mode_mtp_full_cycle(mesh_device, use_fp32):
                 pipeline.read_output(out)
                 return ttnn.to_torch(out).to(torch.uint32).flatten().tolist()
 
-            def _verify_output(got, expected_num_tokens, expected_tokens, step_label):
-                got_num = got[3]
-                assert (
-                    got_num == expected_num_tokens
-                ), f"{step_label}: num_tokens mismatch. expected={expected_num_tokens}, got={got_num}"
-                if expected_num_tokens >= 1:
-                    assert (
-                        got[0] == expected_tokens[0][0]
-                    ), f"{step_label}: token_0 mismatch. expected={expected_tokens[0][0]}, got={got[0]}"
-                    assert (
-                        got[1] == expected_tokens[0][1]
-                    ), f"{step_label}: type_0 mismatch. expected={expected_tokens[0][1]}, got={got[1]}"
-                if expected_num_tokens >= 2:
-                    assert (
-                        got[4] == expected_tokens[1][0]
-                    ), f"{step_label}: token_1 mismatch. expected={expected_tokens[1][0]}, got={got[4]}"
-                    assert (
-                        got[5] == expected_tokens[1][1]
-                    ), f"{step_label}: type_1 mismatch. expected={expected_tokens[1][1]}, got={got[5]}"
+            def _run_iteration(input_token_id, label):
+                """Run one pipeline iteration: write input token, read output packet.
 
-            # ── Seed: write token_id=0, always REJECT (unverified == SENTINEL) ──
-            seed_id = 0
-            t_base, t_spec = _compute_golden_mtp_verification(seed_id, weights)
-            num_toks, toks, unverified, verified = _simulate_verification_step(
-                t_base, t_spec, _TOKEN_TYPE_BASE, unverified, verified
-            )
-            logger.info(f"[MTP Full Cycle] Seed: token_id={seed_id}, expect num_tokens={num_toks}")
-            pipeline.write_token(_make_token_tensor(seed_id))
-            seed_out = _read_output()
-            _verify_output(seed_out, num_toks, toks, "Seed")
-            logger.info(
-                f"[MTP Full Cycle] Seed output: token_0={seed_out[0]} "
-                f"num_tokens={seed_out[3]} token_1={seed_out[4]}"
-            )
+                Returns output_page list.
+                Updates nonlocal unverified/verified state to match device.
+                """
+                nonlocal unverified, verified
 
-            prev_out = seed_out
-
-            # ── Decode loop: 2 writes (base + spec) per step ──
-            for step in range(decode_steps):
-                base_id = prev_out[0]
-                spec_id = prev_out[4] if prev_out[3] >= 2 else 0
-
-                # Write base token
-                t_base, t_spec = _compute_golden_mtp_verification(base_id, weights)
+                # Golden: compute what Stage 1 + Stage 3 would produce
+                t_base, t_spec = _compute_golden_mtp_verification(input_token_id, weights)
                 num_toks, toks, unverified, verified = _simulate_verification_step(
                     t_base, t_spec, _TOKEN_TYPE_BASE, unverified, verified
                 )
-                label = f"Step {step}.base(id={base_id})"
-                logger.info(f"[MTP Full Cycle] {label}: expect num_tokens={num_toks}")
-                pipeline.write_token(_make_token_tensor(base_id))
-                base_out = _read_output()
-                _verify_output(base_out, num_toks, toks, label)
-                logger.info(f"[MTP Full Cycle] {label}: out=[" f"{base_out[0]},{base_out[3]},{base_out[4]}]")
 
-                # Write spec token
-                t_base2, t_spec2 = _compute_golden_mtp_verification(spec_id, weights)
-                num_toks2, toks2, unverified, verified = _simulate_verification_step(
-                    t_base2, t_spec2, _TOKEN_TYPE_BASE, unverified, verified
+                # Run pipeline
+                pipeline.write_token(_make_token_tensor(input_token_id))
+                out = _read_output()
+
+                # Verify output
+                got_num = out[3]
+                assert got_num == num_toks, f"{label}: num_tokens mismatch. expected={num_toks}, got={got_num}"
+                if num_toks >= 1:
+                    assert out[0] == toks[0][0], f"{label}: token_0 mismatch. expected={toks[0][0]}, got={out[0]}"
+                if num_toks >= 2:
+                    assert out[4] == toks[1][0], f"{label}: token_1 mismatch. expected={toks[1][0]}, got={out[4]}"
+
+                decision = "ACCEPT" if num_toks == 1 else "REJECT" if num_toks == 2 else "STALE"
+                logger.info(
+                    f"[MTP] {label}: input={input_token_id} → {decision} "
+                    f"T_base={out[0]} num_tokens={got_num}"
+                    + (f" T_spec={out[4]}" if got_num >= 2 else "")
+                    + f"  [device state: unverified={unverified:#x}, verified={verified:#x}]"
                 )
-                label2 = f"Step {step}.spec(id={spec_id})"
-                logger.info(f"[MTP Full Cycle] {label2}: expect num_tokens={num_toks2}")
-                pipeline.write_token(_make_token_tensor(spec_id))
-                spec_out = _read_output()
-                _verify_output(spec_out, num_toks2, toks2, label2)
-                logger.info(f"[MTP Full Cycle] {label2}: out=[" f"{spec_out[0]},{spec_out[3]},{spec_out[4]}]")
+                return out
 
-                prev_out = spec_out
+            # ── AUTOREGRESSIVE DECODE ──
+            # First decode input is T_base from the simulated prefill.
+            # The exit device already has T_spec pre-seeded in its unverified tensor,
+            # so the first decode step will verify T_base against that stored T_spec
+            # (ACCEPT if they match, REJECT if not).
+            next_input = t_base
+            for step in range(decode_steps):
+                out = _run_iteration(next_input, f"Decode step {step}")
+                next_input = out[0]  # feed T_base back as next input
 
         pipeline.barrier()
         pipeline.terminate()

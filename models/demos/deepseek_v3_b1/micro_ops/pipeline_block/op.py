@@ -42,6 +42,7 @@ class PipelineBlock:
         entry_node_downstream=None,
         exit_node_upstream=None,
         embedding_tensor=None,
+        mtp_logits_config=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -157,6 +158,39 @@ class PipelineBlock:
                 receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
             )
 
+        # Optional MTP logits socket (cross-stage D2D channel for MTP logits).
+        # mtp_logits_config dict keys:
+        #   page_size, fifo_size: socket sizing
+        #   send_core, recv_core: MeshCoreCoord for relay endpoints
+        #   upstream_core / downstream_core: MeshCoreCoord for the actual compute cores
+        #   target_mesh_id / source_mesh_id: remote mesh ID
+        #   direction: "send" or "recv"
+        self.mtp_logits_socket_interface = None
+        if mtp_logits_config is not None:
+            cfg = mtp_logits_config
+            if cfg["direction"] == "send":
+                self.mtp_logits_socket_interface = SocketInterface(
+                    cfg["page_size"],
+                    cfg["fifo_size"],
+                    cfg["page_size"],
+                    cfg["send_core"],
+                    cfg["recv_core"],
+                    upstream_core_coord=cfg.get("upstream_core"),
+                    sender_mesh=MeshWrapper(mesh_device),
+                    receiver_mesh=MeshWrapper(mesh_id=cfg["target_mesh_id"]),
+                )
+            elif cfg["direction"] == "recv":
+                self.mtp_logits_socket_interface = SocketInterface(
+                    cfg["page_size"],
+                    cfg["fifo_size"],
+                    cfg["page_size"],
+                    cfg["send_core"],
+                    cfg["recv_core"],
+                    downstream_core_coord=cfg.get("downstream_core"),
+                    sender_mesh=MeshWrapper(mesh_id=cfg["source_mesh_id"]),
+                    receiver_mesh=MeshWrapper(mesh_device),
+                )
+
     def run(self):
         if self.is_pipeline_start:
             self.host_io.run()
@@ -165,11 +199,15 @@ class PipelineBlock:
         else:
             self.exit_socket_interface.run()
             self.entry_socket_interface.run()
+        if self.mtp_logits_socket_interface is not None:
+            self.mtp_logits_socket_interface.run()
 
     def terminate(self):
         # Multi-Process barrier here that all outstanding requests issued to pipeline block
         # are completed by all stages before termination signal is sent
         ttnn.distributed_context_barrier()
+        if self.mtp_logits_socket_interface is not None:
+            self.mtp_logits_socket_interface.terminate(False)
         if self.is_pipeline_start:
             self.host_io.terminate(False)
             self.entry_socket_interface.terminate(False)
@@ -196,3 +234,13 @@ class PipelineBlock:
     # Returns receiver socket draining entry node
     def get_downstream_socket(self):
         return self.entry_socket_interface.get_downstream_socket()
+
+    # Returns MTP logits sender socket (Stage 1 sends logits to Stage 3)
+    def get_mtp_logits_sender_socket(self):
+        assert self.mtp_logits_socket_interface is not None, "MTP logits socket not configured"
+        return self.mtp_logits_socket_interface.get_upstream_socket()
+
+    # Returns MTP logits receiver socket (Stage 3 receives logits from Stage 1)
+    def get_mtp_logits_receiver_socket(self):
+        assert self.mtp_logits_socket_interface is not None, "MTP logits socket not configured"
+        return self.mtp_logits_socket_interface.get_downstream_socket()

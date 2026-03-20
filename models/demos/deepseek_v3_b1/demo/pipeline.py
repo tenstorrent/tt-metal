@@ -336,11 +336,10 @@ class Pipeline:
         self._stage_kind.setup(self._ctx, self._pipeline_block)
 
     def start_pipeline(self) -> None:
-        """Phase 3: Start pipeline block kernels (socket interfaces + auxiliary sockets)."""
+        """Phase 3: Start pipeline block kernels (socket interfaces)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_pipeline()")
         self._pipeline_block.run()
-        self._stage_kind.run_auxiliary_sockets()
 
     def start_compute(self) -> None:
         """Phase 4: Launch stage compute (e.g. LMHeadSampling.op)."""
@@ -369,7 +368,6 @@ class Pipeline:
         ttnn.distributed_context_barrier()
 
     def terminate(self) -> None:
-        """Terminate the pipeline block and any auxiliary sockets."""
-        self._stage_kind.terminate_auxiliary()
+        """Terminate the pipeline block."""
         if self._pipeline_block is not None:
             self._pipeline_block.terminate()

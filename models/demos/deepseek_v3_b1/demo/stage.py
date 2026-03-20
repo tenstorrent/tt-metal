@@ -17,7 +17,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
@@ -42,10 +41,6 @@ num_dram_banks = 8
 mtp_n_per_core = mtp_output_dim // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
-# MTP logits relay: core used by the d2d_exchange relay for
-# Stage 1 → Stage 2 MTP logits socket (must differ from PIPELINE_CORE_COORD).
-MTP_LOGITS_D2D_CORE = ttnn.CoreCoord(11, 2)
-
 # MTP logits page/fifo sizing (7168 bf16 = 14336 bytes)
 MTP_LOGITS_PAGE_SIZE_BYTES = mtp_padded_dim * 2
 MTP_LOGITS_FIFO_SIZE = MTP_LOGITS_PAGE_SIZE_BYTES * 2
@@ -53,6 +48,9 @@ MTP_LOGITS_FIFO_SIZE = MTP_LOGITS_PAGE_SIZE_BYTES * 2
 # Combined logits + 64-byte metadata packet sent by the MTP kernel
 MTP_LOGITS_COMBINED_PAGE_SIZE = MTP_LOGITS_PAGE_SIZE_BYTES + 64
 MTP_LOGITS_COMBINED_FIFO_SIZE = MTP_LOGITS_COMBINED_PAGE_SIZE * 2
+
+# Core used for MTP logits D2D relay socket (must differ from PIPELINE_CORE_COORD)
+MTP_LOGITS_RELAY_CORE = ttnn.CoreCoord(11, 2)
 
 
 @dataclass
@@ -73,12 +71,6 @@ class StageKind(ABC):
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         """Post-creation setup (tensor allocation, etc). Default: no-op."""
-
-    def run_auxiliary_sockets(self) -> None:
-        """Start auxiliary d2d_exchange kernels. Default: no-op."""
-
-    def terminate_auxiliary(self) -> None:
-        """Terminate auxiliary sockets. Default: no-op."""
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         """Launch compute kernels after pipeline_block.run(). Default: no-op."""
@@ -210,21 +202,35 @@ class MTPVerificationLMHeadStage(StageKind):
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._mtp_logits_source_mesh_id = mtp_logits_source_mesh_id
-        self._mtp_logits_recv_interface: SocketInterface | None = None
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         my_mesh_id = ctx.my_mesh_id
         pipeline_config = ctx.pipeline_config
+        cls = MTPVerificationLMHeadStage
         entry_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].entry_node_coord,
-            MTPVerificationLMHeadStage.LMHEAD_INPUT_CORE,
+            cls.LMHEAD_INPUT_CORE,
         )
         exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord,
-            MTPVerificationLMHeadStage.ARGMAX_FINAL_CORE,
+            cls.ARGMAX_FINAL_CORE,
         )
+        mtp_logits_config = None
+        if self._mtp_logits_source_mesh_id is not None:
+            source_id = self._mtp_logits_source_mesh_id
+            mtp_logits_config = {
+                "direction": "recv",
+                "page_size": MTP_LOGITS_COMBINED_PAGE_SIZE,
+                "fifo_size": MTP_LOGITS_COMBINED_FIFO_SIZE,
+                "send_core": ttnn.MeshCoreCoord(pipeline_config[source_id].exit_node_coord, MTP_LOGITS_RELAY_CORE),
+                "recv_core": ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, MTP_LOGITS_RELAY_CORE),
+                "downstream_core": ttnn.MeshCoreCoord(
+                    pipeline_config[my_mesh_id].entry_node_coord, cls.LMHEAD_INPUT_CORE
+                ),
+                "source_mesh_id": source_id,
+            }
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -234,6 +240,7 @@ class MTPVerificationLMHeadStage(StageKind):
             downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             entry_node_downstream=entry_core,
             exit_node_upstream=exit_core,
+            mtp_logits_config=mtp_logits_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -438,33 +445,8 @@ class MTPVerificationLMHeadStage(StageKind):
         if self._persistent_mode:
             self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
 
-        if self._mtp_logits_source_mesh_id is not None:
-            source_id = self._mtp_logits_source_mesh_id
-            logits_send_core = ttnn.MeshCoreCoord(pipeline_config[source_id].exit_node_coord, MTP_LOGITS_D2D_CORE)
-            logits_recv_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].entry_node_coord, MTP_LOGITS_D2D_CORE)
-            logits_downstream_core = ttnn.MeshCoreCoord(
-                pipeline_config[my_mesh_id].entry_node_coord,
-                MTPVerificationLMHeadStage.LMHEAD_INPUT_CORE,
-            )
-            self._mtp_logits_recv_interface = SocketInterface(
-                page_size=MTP_LOGITS_COMBINED_PAGE_SIZE,
-                socket_fifo_size=MTP_LOGITS_COMBINED_FIFO_SIZE,
-                data_size_per_transfer=MTP_LOGITS_COMBINED_PAGE_SIZE,
-                send_core_coord=logits_send_core,
-                recv_core_coord=logits_recv_core,
-                downstream_core_coord=logits_downstream_core,
-                sender_mesh=MeshWrapper(mesh_id=source_id),
-                receiver_mesh=MeshWrapper(mesh_device),
-            )
-            self._state["lmhead_input_socket"] = self._mtp_logits_recv_interface.get_downstream_socket()
-
-    def run_auxiliary_sockets(self) -> None:
-        if self._mtp_logits_recv_interface is not None:
-            self._mtp_logits_recv_interface.run()
-
-    def terminate_auxiliary(self) -> None:
-        if self._mtp_logits_recv_interface is not None:
-            self._mtp_logits_recv_interface.terminate(False)
+        if pipeline_block.mtp_logits_socket_interface is not None:
+            self._state["lmhead_input_socket"] = pipeline_block.get_mtp_logits_receiver_socket()
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state
@@ -534,7 +516,6 @@ class LMHeadStage(StageKind):
         self._mtp_weights = mtp_weights
         self._enable_mtp = mtp_weights is not None
         self._mtp_logits_target_mesh_id = mtp_logits_target_mesh_id
-        self._mtp_logits_socket_interface: SocketInterface | None = None
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -547,6 +528,20 @@ class LMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
         )
+        mtp_logits_config = None
+        if self._mtp_logits_target_mesh_id is not None and self._enable_mtp:
+            target_id = self._mtp_logits_target_mesh_id
+            mtp_logits_config = {
+                "direction": "send",
+                "page_size": MTP_LOGITS_COMBINED_PAGE_SIZE,
+                "fifo_size": MTP_LOGITS_COMBINED_FIFO_SIZE,
+                "send_core": ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, MTP_LOGITS_RELAY_CORE),
+                "recv_core": ttnn.MeshCoreCoord(pipeline_config[target_id].entry_node_coord, MTP_LOGITS_RELAY_CORE),
+                "upstream_core": ttnn.MeshCoreCoord(
+                    pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
+                ),
+                "target_mesh_id": target_id,
+            }
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -556,6 +551,7 @@ class LMHeadStage(StageKind):
             downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
+            mtp_logits_config=mtp_logits_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -812,33 +808,8 @@ class LMHeadStage(StageKind):
             persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
             self._lmhead_state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
 
-        # [MTP LOGITS] Create sender socket for MTP logits to a downstream stage.
-        if self._mtp_logits_target_mesh_id is not None and self._enable_mtp:
-            target_id = self._mtp_logits_target_mesh_id
-            logits_send_core = ttnn.MeshCoreCoord(pipeline_config[my_mesh_id].exit_node_coord, MTP_LOGITS_D2D_CORE)
-            logits_recv_core = ttnn.MeshCoreCoord(pipeline_config[target_id].entry_node_coord, MTP_LOGITS_D2D_CORE)
-            logits_upstream_core = ttnn.MeshCoreCoord(
-                pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
-            )
-            self._mtp_logits_socket_interface = SocketInterface(
-                page_size=MTP_LOGITS_COMBINED_PAGE_SIZE,
-                socket_fifo_size=MTP_LOGITS_COMBINED_FIFO_SIZE,
-                data_size_per_transfer=MTP_LOGITS_COMBINED_PAGE_SIZE,
-                send_core_coord=logits_send_core,
-                recv_core_coord=logits_recv_core,
-                upstream_core_coord=logits_upstream_core,
-                sender_mesh=MeshWrapper(mesh_device),
-                receiver_mesh=MeshWrapper(mesh_id=target_id),
-            )
-            self._lmhead_state["mtp_logits_socket_output"] = self._mtp_logits_socket_interface.get_upstream_socket()
-
-    def run_auxiliary_sockets(self) -> None:
-        if self._mtp_logits_socket_interface is not None:
-            self._mtp_logits_socket_interface.run()
-
-    def terminate_auxiliary(self) -> None:
-        if self._mtp_logits_socket_interface is not None:
-            self._mtp_logits_socket_interface.terminate(False)
+        if pipeline_block.mtp_logits_socket_interface is not None:
+            self._lmhead_state["mtp_logits_socket_output"] = pipeline_block.get_mtp_logits_sender_socket()
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._lmhead_state
