@@ -225,7 +225,7 @@ class ColParallelLinear(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=6,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=24,
                 chunks=self.chunks if self.chunks is not None else 1,
             )
 

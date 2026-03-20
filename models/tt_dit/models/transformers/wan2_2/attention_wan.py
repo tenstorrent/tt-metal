@@ -258,7 +258,7 @@ class WanAttention(Module):
                 barrier_semaphore=None,
                 force_transpose=True,
                 num_workers_per_link=6,
-                num_buffers_per_channel=48,
+                num_buffers_per_channel=24,
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,
@@ -362,7 +362,7 @@ class WanAttention(Module):
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
-                spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,
                     v_BHNE,
@@ -390,6 +390,8 @@ class WanAttention(Module):
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),  # Place CCL in last column
                     use_column_major_ccl=True,  # WAN2.2 specific: use column-major CCL allocation
+                    num_workers_per_link=5,
+                    num_buffers_per_channel=32,
                 )
             else:
                 spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
