@@ -593,7 +593,7 @@ DeviceStorage write_to_mesh_buffer(
     std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
     mesh_buffer->device()->mesh_command_queue(cq_id_int).enqueue_write(
         mesh_buffer, distributed_host_buffer, /*blocking=*/false);
-    // DistributedHostBuffer may not cover the entire MeshDevice, must perserve coords here.
+    // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(distributed_host_buffer.shard_coords().size());
     std::copy(
