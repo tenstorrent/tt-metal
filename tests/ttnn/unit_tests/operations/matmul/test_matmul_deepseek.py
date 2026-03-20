@@ -1135,3 +1135,170 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         num_dram_banks=test_case.get("num_dram_banks", 12),
         expected_pcc=test_case["expected_pcc"],
     )
+
+
+@pytest.mark.parametrize(
+    "test_case",
+    [
+        {
+            "in0_shape": [1, 1, 3200, 512],  # [B=1, H=1, M=3200, K=512] - single activation
+            "in1_shape": [1, 32, 512, 128],  # [B=1, H=32, K=512, N=128] - 32 heads of weights
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.95,
+        },
+        {
+            "in0_shape": [1, 1, 1024, 256],  # Smaller test case
+            "in1_shape": [1, 8, 256, 128],
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.95,
+        },
+        {
+            "in0_shape": [1, 1, 3200, 512],  # All bfloat8 variant
+            "in1_shape": [1, 32, 512, 128],
+            "in0_dtype": ttnn.bfloat8_b,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.95,
+        },
+        {
+            "in0_shape": [1, 1, 6400, 512],  # Large M: Mt=200 > num_cores, forces per_core_M > 1
+            "in1_shape": [1, 32, 512, 128],
+            "in0_dtype": ttnn.bfloat16,
+            "in1_dtype": ttnn.bfloat8_b,
+            "out_dtype": ttnn.bfloat8_b,
+            "expected_pcc": 0.95,
+        },
+    ],
+    ids=[
+        "decode_3200x512_32heads_bf16act",
+        "decode_1024x256_8heads_bf16act",
+        "decode_3200x512_32heads_bf8act",
+        "decode_6400x512_32heads_per_core_M_gt_1",
+    ],
+)
+def test_KV_Wm_matmul(device, test_case):
+    torch.manual_seed(0)
+
+    in0_shape = test_case["in0_shape"]
+    in1_shape = test_case["in1_shape"]
+    in0_dtype = test_case["in0_dtype"]
+    in1_dtype = test_case["in1_dtype"]
+    out_dtype = test_case["out_dtype"]
+    expected_pcc = test_case["expected_pcc"]
+
+    _, in0_H, M, K = in0_shape
+    _, in1_H, _, N = in1_shape
+
+    # Validate preconditions for the optimization
+    assert in0_H == 1, "Optimization requires single activation batch (in0_H=1)"
+    assert in1_H > 1, "Optimization requires multiple weight batches (in1_H>1)"
+
+    logger.info(f"DeepSeek decode test: {in0_shape} @ {in1_shape}")
+    logger.info(f"Activation dtype: {in0_dtype}, Weight dtype: {in1_dtype}, Output dtype: {out_dtype}")
+
+    # Get device grid
+    compute_grid = device.compute_with_storage_grid_size()
+
+    # Calculate program config parameters
+    Mt = M // 32
+    Kt = K // 32
+    Nt = N // 32
+
+    # For 1D matmul: parallelize only across M dimension, each core processes full N
+    # Find maximum number of cores that evenly divides Mt to maximize parallelism
+    max_cores = compute_grid.x * compute_grid.y
+    num_cores = 1
+    for cores in range(min(max_cores, Mt), 0, -1):
+        if Mt % cores == 0:
+            num_cores = cores
+            break
+
+    # Calculate workload per core
+    per_core_M = Mt // num_cores
+    per_core_N = Nt  # 1D matmul: each core processes entire N dimension
+
+    logger.info(f"Mt={Mt}, num_cores={num_cores}, per_core_M={per_core_M}, per_core_N={per_core_N}")
+
+    # Calculate in0_block_w
+    in0_block_w = min(8, Kt)
+
+    out_block_h = per_core_M
+    out_block_w = per_core_N
+
+    # Find valid subblock dimensions (product <= 8)
+    out_subblock_h = min(2, out_block_h)
+    out_subblock_w = min(4, out_block_w)
+    while out_subblock_h * out_subblock_w > 8:
+        if out_subblock_w > out_subblock_h:
+            out_subblock_w //= 2
+        else:
+            out_subblock_h //= 2
+
+    # Configure 1D multicast program for batch optimization
+    prog_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid.x, compute_grid.y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=False,  # Critical: don't multicast in0, each core keeps its slice
+    )
+
+    # Memory configs
+    input_mem_config = ttnn.DRAM_MEMORY_CONFIG
+    output_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # Create input tensors
+    torch_input_a = torch.randn(in0_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    # Compute expected output (broadcast in0 to match in1's batch dimension)
+    torch_output = torch.matmul(torch_input_a.repeat(1, in1_H, 1, 1), torch_input_b)  # Broadcast [1,1,M,K] -> [1,H,M,K]
+
+    # Convert to TT tensors
+    tt_input_a = ttnn.from_torch(
+        torch_input_a,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in0_dtype,
+        memory_config=input_mem_config,
+    )
+
+    tt_input_b = ttnn.from_torch(
+        torch_input_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=in1_dtype,
+        memory_config=input_mem_config,
+    )
+
+    # Perform matmul with batch optimization
+    tt_output = ttnn.matmul(
+        tt_input_a,
+        tt_input_b,
+        memory_config=output_mem_config,
+        dtype=out_dtype,
+        program_config=prog_config,
+    )
+
+    # Convert back to torch and validate
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    # Verify output shape
+    assert (
+        tt_output_torch.shape == torch_output.shape
+    ), f"Output shape mismatch: {tt_output_torch.shape} vs {torch_output.shape}"
+
+    # Verify correctness with PCC
+    passed, pcc = comp_pcc(torch_output, tt_output_torch, expected_pcc)
+    logger.info(f"PCC: {pcc}")
+
+    assert passed, f"DeepSeek decode batch optimization test failed with PCC {pcc} < {expected_pcc}"
+    logger.info("✓ DeepSeek decode batch optimization test PASSED!")
