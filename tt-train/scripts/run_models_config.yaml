@@ -14,11 +14,11 @@ models:
     binary: "nano_gpt"
     args:
       - "-c"
-      - "{tt-train}/configs/training_configs/training_shakespeare_nanogpt.yaml"
+      - "{TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
 
   - name: "NanoLlama3 Shakespeare"
     filename: "nanollama"
     binary: "nano_gpt"
     args:
       - "-c"
-      - "{tt-train}/configs/training_configs/training_shakespeare_nanollama3.yaml"
+      - "{TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"

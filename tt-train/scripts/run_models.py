@@ -64,7 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_config",
         type=str,
-        default="tt-train/scripts/run_models_config.yaml",
+        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_config.yaml",
         help="Path to run_models_config.yaml",
     )
     parser.add_argument(
@@ -82,14 +82,13 @@ def main() -> int:
     output_dir = Path(parsed_args.output_dir)
 
     # Check for required environment variables
-    tt_metal_home = Path(require_env("TT_METAL_HOME"))
-    require_env("TT_METAL_RUNTIME_ROOT")
+    tt_metal_runtime_root = Path(get_env("TT_METAL_RUNTIME_ROOT", required=True))
     # Turn off tt-logger to reduce log noise
     os.environ["TT_LOGGER_LEVEL"] = "off"
 
     # Common parent directories
-    tt_train_path = tt_metal_home / "tt-train"
-    build_examples = tt_metal_home / "build" / "tt-train" / "sources" / "examples"
+    tt_train_path = tt_metal_runtime_root / "tt-train"
+    build_examples = tt_metal_runtime_root / "build" / "tt-train" / "sources" / "examples"
 
     # Quick sanity checks
     if not tt_train_path.is_dir():
@@ -111,7 +110,7 @@ def main() -> int:
         model_name = model["name"]
         model_filename = model["filename"]
         binary = str(build_examples / model["binary"] / model["binary"])
-        args = [arg.replace("{tt-train}", str(tt_train_path)) for arg in model["args"]]
+        args = [arg.replace("{TT_METAL_RUNTIME_ROOT}", str(tt_metal_runtime_root)) for arg in model["args"]]
 
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
         current_time = int(time.time() * 1_000_000)
