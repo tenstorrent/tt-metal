@@ -227,9 +227,11 @@ class WanAttentionBlock(Module):
             )
 
         # TODO: Use minimal_binary
-        out_BTHWC = ttnn.to_layout(out_BTHWC, ttnn.TILE_LAYOUT)
-        out_BTHWC = ttnn.add(out_BTHWC, residual_BTHWC)
-        out_BTHWC = ttnn.to_layout(out_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        # out_BTHWC = ttnn.to_layout(out_BTHWC, ttnn.TILE_LAYOUT)
+        # out_BTHWC = ttnn.add(out_BTHWC, residual_BTHWC)
+        out_BTHWC = ttnn.experimental.dit_minimal_rm_binary(out_BTHWC, residual_BTHWC, op="add")
+
+        # out_BTHWC = ttnn.to_layout(out_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         return out_BTHWC
 
 
@@ -669,8 +671,7 @@ class WanMidBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
-        assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanMidBlock expects TILE input, got {x_BTHWC.layout}"
-        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanMidBlock expects ROW_MAJOR input, got {x_BTHWC.layout}"
         x_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
         for i in range(len(self.attentions)):
             x_BTHWC = self.attentions[i](x_BTHWC, logical_h)
@@ -1048,7 +1049,8 @@ class WanUpBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> tuple[ttnn.Tensor, int]:
-        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanDecoder3d expects ROW_MAJOR input, got {x_BTHWC.layout}"
+
         for resnet in self.resnets:
             x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
         if self.upsamplers is not None:
@@ -1189,8 +1191,6 @@ class WanDecoder3d(Module):
         else:
             x_BTHWC = self.conv_in(x_BTHWC, logical_h)
 
-        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-
         ## middle
         x_BTHWC = self.mid_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
@@ -1199,9 +1199,7 @@ class WanDecoder3d(Module):
             x_BTHWC, logical_h = up_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
-        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
-        x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
-        x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x_BTHWC = self.norm_out(x_BTHWC)
 
         if feat_cache is not None:
             idx = feat_idx[0]

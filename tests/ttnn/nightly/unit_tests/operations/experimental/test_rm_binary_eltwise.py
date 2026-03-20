@@ -229,7 +229,7 @@ def test_rm_binary_add_single_stick(device, dtype):
 def test_rm_binary_mul_large(device, dtype):
     """Large tensor stressing multi-core distribution."""
     # shape = [1, 1, 32, 110, 96]  # 512 sticks
-    shape = [1, 1, 32, 220, 96]  # 512 sticks
+    shape = [1, 12, 32, 110, 96]  # 512 sticks
     tdtype = _torch_dtype(dtype)
 
     torch.manual_seed(0)
@@ -261,11 +261,11 @@ def test_rm_binary_mul_large(device, dtype):
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
 
-    pos = (0, 0, 0, 1, 9)
-    print(f"A[0, 0, 0, 1, 9] = {A_torch[pos]}")
-    print(f"B[0, 0, 0, 1, 9] = {B_torch[pos]}")
-    print(f"C_ref[0, 0, 0, 1, 9] = {C_ref[pos]}")
-    print(f"C_out[0, 0, 0, 1, 9] = {C_out[pos]}")
+    # pos = (0, 0, 0, 1, 9)
+    # print(f"A[0, 0, 0, 1, 9] = {A_torch[pos]}")
+    # print(f"B[0, 0, 0, 1, 9] = {B_torch[pos]}")
+    # print(f"C_ref[0, 0, 0, 1, 9] = {C_ref[pos]}")
+    # print(f"C_out[0, 0, 0, 1, 9] = {C_out[pos]}")
 
     assert_with_ulp(C_ref_cast, C_out, ulp_threshold=2)
 

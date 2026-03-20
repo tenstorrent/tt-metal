@@ -196,6 +196,17 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     // ----------------------------------------------------------------------
     uint32_t start_block = 0;
 
+    const uint32_t core_count = grid.x * grid.y;
+    const uint32_t num_banks = 12;
+    const uint32_t chunk_len = 32;
+    uint32_t chunk_stride = chunk_len * num_banks;  // number of rows in chunk
+    const uint32_t grid_stride = core_count * chunk_stride;
+
+    std::cout << "core_count: " << core_count << ", num_banks: " << num_banks << ", chunk_len: " << chunk_len
+              << ", chunk_stride: " << chunk_stride << ", grid_stride: " << grid_stride << std::endl;
+
+    uint32_t debug_sum_rows = 0;
+
     auto assign_rt_args = [&](const CoreRangeSet& group, uint32_t rows_for_core) {
         if (rows_for_core == 0) {
             return;
@@ -204,6 +215,33 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
             for (auto y = range.start_coord.y; y <= range.end_coord.y; ++y) {
                 for (auto x = range.start_coord.x; x <= range.end_coord.x; ++x) {
                     CoreCoord core{x, y};
+
+                    // Stried pattern
+                    // Core 0: tiles 0, 12, 24, ... 0 +chunk_len * (num_banks - 1)
+                    // Core 1: tiles 1, 13, 25, ... 1 + chunk_len * (num_banks - 1) + 1
+                    // Core 2: tiles 2, 14, 26, ... 2 + chunk_len * (num_banks - 1) + 2
+                    // ...
+                    // Core 11: tiles 11, 23, 35, ...
+
+                    // Core 12: tiles chunk_len * num_banks, 12 + chunk_len * num_banks, 24 + chunk_len * num_banks, ...
+                    // ...
+
+                    // Calculate the start tile for this core
+                    uint32_t core_id = y * grid.x + x;
+                    const uint32_t core_group = core_id / num_banks;
+                    const uint32_t local_core_id = core_id % num_banks;
+
+                    const uint32_t start_chunk = core_group;
+
+                    uint32_t start_stick = local_core_id + start_chunk * chunk_stride;
+
+                    const uint32_t num_rows = (total_rows - start_stick) / grid_stride * chunk_len;
+
+                    debug_sum_rows += num_rows;
+                    TT_FATAL(debug_sum_rows < total_rows, "Debug sum rows does not match total rows");
+
+                    std::cout << "core: " << core_id << ", start stick: " << start_stick << ", num rows: " << num_rows
+                              << std::endl;
 
                     const uint32_t start_row = start_block;
                     // Clamp to the actual number of rows for the last (possibly partial) block.
@@ -236,6 +274,9 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
 
     std::cout << "Assigning to core group 2" << std::endl;
     assign_rt_args(core_group_2, rows_per_cg2);
+
+    std::cout << "Debug sum rows: " << debug_sum_rows << ", total rows: " << total_rows << std::endl;
+    TT_FATAL(debug_sum_rows == total_rows, "Debug sum rows does not match total rows");
 
     return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, all_cores}};
 }

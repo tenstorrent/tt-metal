@@ -49,6 +49,55 @@ IMPL_ORDER = [
     "RMSNormFullFusion",
 ]
 
+DTYPE_BYTES = {
+    "bf16": 2,
+    "bfloat16": 2,
+    "fp16": 2,
+    "float16": 2,
+    "fp32": 4,
+    "float32": 4,
+    "int8": 1,
+    "uint8": 1,
+    "int16": 2,
+    "uint16": 2,
+    "int32": 4,
+    "uint32": 4,
+}
+
+
+def get_dtype_bytes(dtype_str: str) -> int:
+    """Return byte size for a dtype string, defaulting to 2 (bf16)."""
+    if not dtype_str:
+        return 2
+    return DTYPE_BYTES.get(dtype_str.lower().strip(), 2)
+
+
+def extract_dtype_from_config(config_name: str) -> Optional[str]:
+    """Extract dtype from config_name formatted as 'dtype/dims' (e.g. 'bf16/1x4x480x832x96')."""
+    if not config_name or "/" not in config_name:
+        return None
+    dtype_part = config_name.split("/", 1)[0].lower().strip()
+    if dtype_part in DTYPE_BYTES:
+        return dtype_part
+    return None
+
+
+def compute_bandwidth(
+    num_elements: int, duration_ms: float, bytes_per_element: int = 2
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Compute bandwidth metrics from element count and duration.
+
+    Returns:
+        Tuple of (bw_gelems_s, bw_gb_s), or (None, None) if inputs are invalid.
+    """
+    if duration_ms <= 0 or num_elements <= 0:
+        return None, None
+    duration_s = duration_ms / 1000.0
+    bw_gelems_s = num_elements / duration_s / 1e9
+    bw_gb_s = num_elements * bytes_per_element / duration_s / 1e9
+    return bw_gelems_s, bw_gb_s
+
 
 def get_all_tracy_csvs(search_dir: Optional[str] = None) -> List[Tuple[str, float]]:
     """
@@ -253,6 +302,46 @@ def format_shape(w: int, z: int, y: int, x: int) -> str:
     return "[]"
 
 
+def _num_elements_from_shape(shape_str: str) -> int:
+    """
+    Parse a shape string like '[4, 480, 832, 96]' and return the product of its dimensions.
+    Returns 0 if the shape cannot be parsed.
+    """
+    if not shape_str or shape_str == "[]":
+        return 0
+    try:
+        inner = shape_str.strip().lstrip("[").rstrip("]")
+        dims = [int(d.strip()) for d in inner.split(",") if d.strip()]
+        if not dims:
+            return 0
+        result = 1
+        for d in dims:
+            result *= d
+        return result
+    except (ValueError, AttributeError):
+        return 0
+
+
+def _parse_num_elements_from_config(config_name: str) -> int:
+    """
+    Parse element count from a config_name like 'bf16/1x4x480x832x96'.
+    Returns the product of all dimension values, or 0 if not parseable.
+    """
+    if not config_name or "/" not in config_name:
+        return 0
+    _, dims_str = config_name.split("/", 1)
+    try:
+        dims = [int(d) for d in dims_str.split("x")]
+        if not dims:
+            return 0
+        result = 1
+        for d in dims:
+            result *= d
+        return result
+    except (ValueError, AttributeError):
+        return 0
+
+
 def parse_shape_from_config_name(config_name: str):
     """
     If config_name is in benchmark format (e.g. "bf16/1x4x480x832x96"), parse it
@@ -437,6 +526,13 @@ def analyze_tracy_csv_aggregated(csv_path: str) -> pd.DataFrame:
 
             config_name, impl_type = parse_implementation(impl_name)
             shape = parse_shape_from_config_name(config_name) or all_ops[0]["shape"]
+
+            # Bandwidth: derive element count from shape and dtype from config_name
+            shape_dims = _parse_num_elements_from_config(config_name) or _num_elements_from_shape(all_ops[0]["shape"])
+            dtype_str = extract_dtype_from_config(config_name)
+            bpe = get_dtype_bytes(dtype_str)
+            bw_gelems_s, bw_gb_s = compute_bandwidth(shape_dims, avg_duration_ms, bpe)
+
             row_dict = {
                 "config_name": config_name,
                 "impl_type": impl_type,
@@ -448,6 +544,9 @@ def analyze_tracy_csv_aggregated(csv_path: str) -> pd.DataFrame:
                 "min_duration_ms": f"{min_duration_ms:.3f}",
                 "max_duration_ms": f"{max_duration_ms:.3f}",
             }
+            if bw_gelems_s is not None:
+                row_dict["bw_gelems_s"] = f"{bw_gelems_s:.3f}"
+                row_dict["bw_gb_s"] = f"{bw_gb_s:.3f}"
             if avg_cb_wait_pct is not None:
                 row_dict["cb_wait_pct"] = f"{avg_cb_wait_pct:.1f}"
             results.append(row_dict)
@@ -483,6 +582,15 @@ def analyze_tracy_csv_aggregated(csv_path: str) -> pd.DataFrame:
                 op_name = "+".join(unique_op_names)
                 config_name, impl_type = parse_implementation(impl_name)
                 shape = parse_shape_from_config_name(config_name) or all_ops[0]["shape"]
+
+                # Bandwidth
+                shape_dims = _parse_num_elements_from_config(config_name) or _num_elements_from_shape(
+                    all_ops[0]["shape"]
+                )
+                dtype_str = extract_dtype_from_config(config_name)
+                bpe = get_dtype_bytes(dtype_str)
+                bw_gelems_s, bw_gb_s = compute_bandwidth(shape_dims, avg_duration_ms, bpe)
+
                 row_dict = {
                     "config_name": config_name,
                     "impl_type": impl_type,
@@ -494,6 +602,9 @@ def analyze_tracy_csv_aggregated(csv_path: str) -> pd.DataFrame:
                     "min_duration_ms": f"{min_duration_ms:.3f}",
                     "max_duration_ms": f"{max_duration_ms:.3f}",
                 }
+                if bw_gelems_s is not None:
+                    row_dict["bw_gelems_s"] = f"{bw_gelems_s:.3f}"
+                    row_dict["bw_gb_s"] = f"{bw_gb_s:.3f}"
                 if avg_cb_wait_pct is not None:
                     row_dict["cb_wait_pct"] = f"{avg_cb_wait_pct:.1f}"
                 results.append(row_dict)
@@ -637,6 +748,22 @@ def analyze_tracy_csv(csv_path: str, include_signposts: bool = True) -> pd.DataF
         # Extract clean operation name
         op_name = extract_op_name(op_code)
 
+        # Bandwidth: try to get dtype from dedicated CSV columns, default to bf16
+        dtype_str = None
+        for dtype_col in ("OUTPUT_0_DATATYPE", "INPUT_0_DATATYPE", "DATATYPE"):
+            if dtype_col in df.columns:
+                raw = row.get(dtype_col)
+                if not pd.isna(raw) and raw != "":
+                    dtype_str = str(raw)
+                    break
+        bpe = get_dtype_bytes(dtype_str)
+        num_elements = (
+            output_w * output_z * output_y * output_x
+            if all(d > 0 for d in [output_w, output_z, output_y, output_x])
+            else 0
+        )
+        bw_gelems_s, bw_gb_s = compute_bandwidth(num_elements, avg_duration_ms, bpe)
+
         row_dict = {
             "op_name": op_name,
             "shape": shape_str,
@@ -644,6 +771,9 @@ def analyze_tracy_csv(csv_path: str, include_signposts: bool = True) -> pd.DataF
             "min_duration_ms": f"{min_duration_ms:.3f}",
             "max_duration_ms": f"{max_duration_ms:.3f}",
         }
+        if bw_gelems_s is not None:
+            row_dict["bw_gelems_s"] = f"{bw_gelems_s:.3f}"
+            row_dict["bw_gb_s"] = f"{bw_gb_s:.3f}"
 
         # Compute CB wait % when data is available
         if has_cb_wait:
@@ -709,8 +839,9 @@ def print_summary_table(df: pd.DataFrame):
     # Check if this is aggregated format (has implementation column)
     is_aggregated = "implementation" in df.columns
 
-    # Whether CB wait % column is present
+    # Whether optional columns are present
     has_cb_col = "cb_wait_pct" in df.columns
+    has_bw_col = "bw_gelems_s" in df.columns
 
     if is_aggregated:
         # Parse implementation strings to extract config_name and impl_type
@@ -741,6 +872,9 @@ def print_summary_table(df: pd.DataFrame):
             "min_duration_ms": max(len("Min (ms)"), max(len(str(x)) for x in df_copy["min_duration_ms"])),
             "max_duration_ms": max(len("Max (ms)"), max(len(str(x)) for x in df_copy["max_duration_ms"])),
         }
+        if has_bw_col:
+            col_widths["bw_gelems_s"] = max(len("GElems/s"), max(len(str(x)) for x in df_copy["bw_gelems_s"]))
+            col_widths["bw_gb_s"] = max(len("GB/s"), max(len(str(x)) for x in df_copy["bw_gb_s"]))
         if has_cb_col:
             col_widths["cb_wait_pct"] = max(len("CB Wait (%)"), max(len(str(x)) for x in df_copy["cb_wait_pct"]))
 
@@ -754,6 +888,8 @@ def print_summary_table(df: pd.DataFrame):
             f"{'Min (ms)':>{col_widths['min_duration_ms']}} | "
             f"{'Max (ms)':>{col_widths['max_duration_ms']}}"
         )
+        if has_bw_col:
+            header += f" | {'GElems/s':>{col_widths['bw_gelems_s']}} | {'GB/s':>{col_widths['bw_gb_s']}}"
         if has_cb_col:
             header += f" | {'CB Wait (%)':>{col_widths['cb_wait_pct']}}"
         separator = "=" * len(header)
@@ -776,6 +912,11 @@ def print_summary_table(df: pd.DataFrame):
                     f"{row['min_duration_ms']:>{col_widths['min_duration_ms']}} | "
                     f"{row['max_duration_ms']:>{col_widths['max_duration_ms']}}"
                 )
+                if has_bw_col:
+                    line += (
+                        f" | {str(row.get('bw_gelems_s', '-')):>{col_widths['bw_gelems_s']}}"
+                        f" | {str(row.get('bw_gb_s', '-')):>{col_widths['bw_gb_s']}}"
+                    )
                 if has_cb_col:
                     line += f" | {str(row.get('cb_wait_pct', '-')):>{col_widths['cb_wait_pct']}}"
                 print(line)
@@ -793,6 +934,9 @@ def print_summary_table(df: pd.DataFrame):
             "min_duration_ms": max(len("Min (ms)"), max(len(str(x)) for x in df["min_duration_ms"])),
             "max_duration_ms": max(len("Max (ms)"), max(len(str(x)) for x in df["max_duration_ms"])),
         }
+        if has_bw_col:
+            col_widths["bw_gelems_s"] = max(len("GElems/s"), max(len(str(x)) for x in df["bw_gelems_s"]))
+            col_widths["bw_gb_s"] = max(len("GB/s"), max(len(str(x)) for x in df["bw_gb_s"]))
         if has_cb_col:
             col_widths["cb_wait_pct"] = max(len("CB Wait (%)"), max(len(str(x)) for x in df["cb_wait_pct"]))
 
@@ -804,6 +948,8 @@ def print_summary_table(df: pd.DataFrame):
             f"{'Min (ms)':>{col_widths['min_duration_ms']}} | "
             f"{'Max (ms)':>{col_widths['max_duration_ms']}}"
         )
+        if has_bw_col:
+            header += f" | {'GElems/s':>{col_widths['bw_gelems_s']}} | {'GB/s':>{col_widths['bw_gb_s']}}"
         if has_cb_col:
             header += f" | {'CB Wait (%)':>{col_widths['cb_wait_pct']}}"
         separator = "-" * len(header)
@@ -824,6 +970,8 @@ def print_summary_table(df: pd.DataFrame):
                     f"{'-'*col_widths['min_duration_ms']:>{col_widths['min_duration_ms']}} | "
                     f"{'-'*col_widths['max_duration_ms']:>{col_widths['max_duration_ms']}}"
                 )
+                if has_bw_col:
+                    line += f" | {'-':>{col_widths['bw_gelems_s']}} | {'-':>{col_widths['bw_gb_s']}}"
                 if has_cb_col:
                     line += f" | {'-':>{col_widths['cb_wait_pct']}}"
                 print(line)
@@ -835,6 +983,11 @@ def print_summary_table(df: pd.DataFrame):
                     f"{row['min_duration_ms']:>{col_widths['min_duration_ms']}} | "
                     f"{row['max_duration_ms']:>{col_widths['max_duration_ms']}}"
                 )
+                if has_bw_col:
+                    line += (
+                        f" | {str(row.get('bw_gelems_s', '-')):>{col_widths['bw_gelems_s']}}"
+                        f" | {str(row.get('bw_gb_s', '-')):>{col_widths['bw_gb_s']}}"
+                    )
                 if has_cb_col:
                     line += f" | {str(row.get('cb_wait_pct', '-')):>{col_widths['cb_wait_pct']}}"
                 print(line)
