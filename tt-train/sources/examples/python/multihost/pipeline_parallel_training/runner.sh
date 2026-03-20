@@ -8,7 +8,7 @@ WORKLOAD="llama70b_16stage"
 
 # Common environmental variables
 if [ -z "${TT_METAL_HOME:-}" ]; then
-    TT_METAL_HOME="/data/${USER}/pr_review/tt-metal"
+    TT_METAL_HOME="/data/${USER}/tt-metal"
 fi
 export TT_METAL_HOME
 export PYTHONPATH="${TT_METAL_HOME}"
