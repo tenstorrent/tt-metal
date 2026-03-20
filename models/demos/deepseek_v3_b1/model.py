@@ -29,6 +29,7 @@ Interface vs real decoder:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable
 
 import torch
@@ -175,6 +176,91 @@ class DeepSeekV3:
         self._read_fn(self._output_buffer)
         self._position += 1
         return self._output_buffer
+
+    def prefill_with_trace(
+        self,
+        trace_dir: str | Path,
+        layer_idx: int,
+        pcc_threshold: float = 0.90,
+    ) -> dict:
+        """Run a single stage across all trace tokens and validate the output.
+
+        For each token in the trace, loads the previous layer's output as input,
+        pushes it through the pipeline, reads back the result, and collects all
+        outputs. After all tokens are processed, computes PCC across the full
+        concatenated sequence.
+
+        Args:
+            trace_dir: Path to the debug trace directory containing hidden_states.safetensors.
+            layer_idx: The decoder layer index this stage processes.
+            pcc_threshold: Minimum PCC to pass validation.
+
+        Returns:
+            Dict with keys: layer, pcc, passing, max_abs_diff, num_tokens.
+        """
+        from safetensors.torch import safe_open
+
+        from models.common.utility_functions import comp_pcc
+
+        trace_dir = Path(trace_dir)
+        trace_file = str(trace_dir / "hidden_states.safetensors")
+
+        output_buffer = ttnn.from_torch(
+            torch.zeros(1, ACTIVATION_DIM, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        prev_layer = layer_idx - 1
+        with safe_open(trace_file, framework="pt") as f:
+            all_trace_inputs = f.get_tensor(f"decoder_output_layer_{prev_layer}")
+            all_trace_expected = f.get_tensor(f"decoder_output_layer_{layer_idx}")
+
+        num_tokens = all_trace_inputs.shape[0]
+        logger.info(f"Layer {layer_idx}: running {num_tokens} tokens from trace")
+
+        all_device_outputs = []
+        for token_idx in range(num_tokens):
+            trace_input = all_trace_inputs[token_idx].unsqueeze(0)
+            input_tensor = ttnn.from_torch(
+                trace_input.to(torch.bfloat16).reshape(1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+            self._write_fn(input_tensor)
+            self._read_fn(output_buffer)
+            self._position += 1
+
+            if self._next_rank is not None:
+                ttnn.send_tensor(output_buffer, self._next_rank)
+
+            device_output = ttnn.to_torch(output_buffer).reshape(-1).float()
+            all_device_outputs.append(device_output)
+
+            if (token_idx + 1) % 50 == 0 or token_idx == num_tokens - 1:
+                logger.info(f"Layer {layer_idx}: completed token {token_idx + 1}/{num_tokens}")
+
+        device_flat = torch.cat(all_device_outputs)
+        trace_flat = all_trace_expected.float().reshape(-1)
+
+        passing, pcc = comp_pcc(trace_flat, device_flat, pcc_threshold)
+        max_abs_diff = (trace_flat - device_flat).abs().max().item()
+
+        logger.info(
+            f"Layer {layer_idx} PCC (all {num_tokens} tokens): {pcc} (threshold={pcc_threshold}, pass={passing})"
+        )
+        logger.info(f"Layer {layer_idx} max abs diff: {max_abs_diff}")
+        logger.info(f"Layer {layer_idx} trace max magnitude: {trace_flat.abs().max().item()}")
+        logger.info(f"Layer {layer_idx} device max magnitude: {device_flat.abs().max().item()}")
+
+        return {
+            "layer": layer_idx,
+            "pcc": pcc,
+            "passing": passing,
+            "max_abs_diff": max_abs_diff,
+            "num_tokens": num_tokens,
+        }
 
     @property
     def position(self) -> int:

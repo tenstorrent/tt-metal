@@ -14,14 +14,7 @@ from typing import Any, Callable
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.stage import (
-    EmbeddingStage,
-    LMHeadStage,
-    PassthroughPayload,
-    PassthroughStage,
-    StageContext,
-    StageKind,
-)
+from models.demos.deepseek_v3_b1.demo.stage import EmbeddingStage, LMHeadStage, StageContext, StageKind
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block_api import DecoderBlockStage, DenseBlockStage
@@ -61,10 +54,10 @@ def create_single_galaxy_pipeline_configuration(
 
     return PipelineConfiguration(
         {
-            0: stage_0,
-            1: _decoder_stage(0),
-            2: _decoder_stage(1),
-            3: stage_3,
+            0: _decoder_stage(0),
+            1: _decoder_stage(1),
+            2: _decoder_stage(2),
+            3: _decoder_stage(3),
         }
     )
 
@@ -102,7 +95,7 @@ def create_single_pod_pipeline_configuration(
 
     def _decoder_stage(layer_id: int):
         return lambda d: DecoderBlockStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id + 3, device=d),
             layer_idx=layer_id,
         )
 
@@ -110,13 +103,7 @@ def create_single_pod_pipeline_configuration(
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
-        0: stage_0,
-        1: _dense_stage(dense_ids[0]),
-        2: _dense_stage(dense_ids[1]),
-        3: _dense_stage(dense_ids[2]),
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
-        14: stage_14,
-        15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i) for i in range(0, 16)},
     }
     return PipelineConfiguration(stage_factories)
 
@@ -154,7 +141,7 @@ def create_sp4_pipeline_configuration(
 
     def _decoder_stage(layer_id: int):
         return lambda d: DecoderBlockStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id + 3, device=d),
             layer_idx=layer_id,
         )
 
@@ -162,13 +149,13 @@ def create_sp4_pipeline_configuration(
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
-        0: stage_0,
-        1: _dense_stage(dense_ids[0]),
-        2: _dense_stage(dense_ids[1]),
-        3: _dense_stage(dense_ids[2]),
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
-        62: stage_62,
-        63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i) for i in range(0, 58)},
+        58: _decoder_stage(57),
+        59: _decoder_stage(57),
+        60: _decoder_stage(57),
+        61: _decoder_stage(57),
+        62: _decoder_stage(57),
+        63: _decoder_stage(57),
     }
     return PipelineConfiguration(stage_factories)
 

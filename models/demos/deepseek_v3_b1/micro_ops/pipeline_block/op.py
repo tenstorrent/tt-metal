@@ -37,7 +37,6 @@ There are four distinct stage configurations:
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
 
 class PipelineBlock:
@@ -102,6 +101,8 @@ class PipelineBlock:
                 d2h_socket_fifo_size,
                 d2h_socket_page_size,
                 embedding_tensor,
+                entry_node_downstream,
+                exit_node_upstream,
             )
         else:
             print("Initialize Forwarding Stage")
@@ -131,20 +132,18 @@ class PipelineBlock:
         d2h_socket_fifo_size,
         d2h_socket_page_size,
         embedding_tensor,
+        entry_node_downstream=None,
+        exit_node_upstream=None,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
         assert d2h_socket_fifo_size is not None, "D2H Socket FIFO Size must be provided to first pipeline stage"
         assert d2h_socket_page_size is not None, "D2H Socket Page Size must be provided to first pipeline stage"
-        assert embedding_tensor is not None, "Embedding Tensor must be provided to first pipeline stage"
 
         h2d_device_coord = pipeline_config[self.my_mesh_id].entry_node_coord
         d2h_device_coord = pipeline_config[self.my_mesh_id].exit_node_coord
 
-        embedding_size_bytes = embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)
-
         assert h2d_socket_fifo_size >= token_size_bytes
         assert d2h_socket_fifo_size >= d2h_socket_page_size
-        assert downstream_d2d_socket_page_size == embedding_size_bytes
         assert upstream_d2d_socket_page_size == d2h_socket_page_size
 
         self.h2d_socket = ttnn.H2DSocket(
@@ -162,13 +161,11 @@ class PipelineBlock:
         self.host_io = HostInterface(
             self.h2d_socket,
             self.d2h_socket,
-            token_size_bytes,
+            d2h_socket_page_size,
             d2h_socket_page_size,
             core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
-            # h2d_downstream_core=ttnn.MeshCoreCoord(
-            #     pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord
-            # ),
-            # d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
+            h2d_downstream_core=entry_node_downstream,
+            d2h_upstream_core=exit_node_upstream,
             embedding_tensor=embedding_tensor,
         )
 

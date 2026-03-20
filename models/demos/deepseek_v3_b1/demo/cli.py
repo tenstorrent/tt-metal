@@ -107,6 +107,24 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
+    parser.add_argument(
+        "--trace-dir",
+        type=Path,
+        default=None,
+        help="Path to debug trace directory for per-stage validation (hidden_states.safetensors)",
+    )
+    parser.add_argument(
+        "--trace-start-layer",
+        type=int,
+        default=3,
+        help="Model layer index for stage 0 in trace validation (default: 3)",
+    )
+    parser.add_argument(
+        "--trace-pcc-threshold",
+        type=float,
+        default=0.90,
+        help="Minimum PCC for trace validation to pass (default: 0.90)",
+    )
     return parser
 
 
@@ -125,6 +143,9 @@ def run_demo(
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    trace_dir: Path | None = None,
+    trace_start_layer: int = 3,
+    trace_pcc_threshold: float = 0.90,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -157,6 +178,9 @@ def run_demo(
             max_new_tokens=iterations,
             eos_token_id=tokenizer.eos_token_id,
             return_generated_tokens=True,
+            trace_dir=trace_dir,
+            trace_start_layer=trace_start_layer,
+            pcc_threshold=trace_pcc_threshold,
         )
 
         model_pipeline.barrier()
@@ -178,6 +202,9 @@ def main(argv: list[str] | None = None) -> int:
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
+        trace_dir=args.trace_dir,
+        trace_start_layer=args.trace_start_layer,
+        trace_pcc_threshold=args.trace_pcc_threshold,
     )
     print(file=sys.stdout, flush=True)
     return 0

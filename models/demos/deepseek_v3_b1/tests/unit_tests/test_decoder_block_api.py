@@ -139,6 +139,9 @@ class DecoderBlockStage(StageKind):
             downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+            h2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
+            d2h_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
+            d2h_socket_page_size=self.EMBEDDING_SIZE_BYTES,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:

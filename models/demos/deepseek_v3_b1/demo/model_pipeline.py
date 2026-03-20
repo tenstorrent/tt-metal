@@ -80,9 +80,32 @@ class ModelPipeline:
         )
         logger.info(f"Created ModelPipeline for mesh id {my_rank} (prev={prev_rank}, next={next_rank}).")
 
-    def prefill_forward(self, tokens: list[int] | None) -> None:
-        """Prefill 1 user's prompt tokens. Rank 0 drives; others recv/fwd via MPI."""
+    def prefill_forward(
+        self,
+        tokens: list[int] | None,
+        trace_dir: str | Path | None = None,
+        trace_start_layer: int = 3,
+        pcc_threshold: float = 0.90,
+    ) -> dict | None:
+        """Prefill 1 user's prompt tokens, or validate against trace data.
+
+        When trace_dir is provided, each stage independently loads its trace
+        input/output and validates via PCC (no MPI communication between stages).
+        The trace layer for this stage is trace_start_layer + my_mesh_id.
+
+        When trace_dir is None, runs normal prefill with MPI token forwarding.
+        """
         assert self.model is not None
+
+        if trace_dir is not None:
+            layer_idx = trace_start_layer + self.pipeline.my_mesh_id
+            logger.info(f"Stage {self.pipeline.my_mesh_id}: trace validation for layer {layer_idx}")
+            return self.model.prefill_with_trace(
+                trace_dir=trace_dir,
+                layer_idx=layer_idx,
+                pcc_threshold=pcc_threshold,
+            )
+
         prompt_token_tensors = None
         num_iterations = None
         if self.pipeline.my_mesh_id == 0:
@@ -105,6 +128,7 @@ class ModelPipeline:
             if self.pipeline.my_mesh_id < num_procs - 1:
                 ttnn.send_token(num_iterations, ttnn.Rank(self.pipeline.my_mesh_id + 1))
         self.model.prefill(prompt_token_tensors, num_iterations=num_iterations)
+        return None
 
     def decode_forward(self, input_token: int) -> int:
         """Run 1 decode step and return the next token id."""
@@ -125,17 +149,29 @@ class ModelPipeline:
         on_token: Callable[[int], None] | None = None,
         eos_token_id: int | None = None,
         return_generated_tokens: bool = False,
+        trace_dir: str | Path | None = None,
+        trace_start_layer: int = 3,
+        pcc_threshold: float = 0.90,
     ) -> list[int] | None:
         """Run full inference: prefill the prompt then decode until EOS or max_new_tokens.
         Calls on_token(token_id) for each generated token (including the first
         one sampled after prefill). Optionally returns the list of all generated token IDs.
+
+        When trace_dir is provided, runs trace validation instead of normal prefill.
         """
         # if self.pipeline.my_mesh_id != 0:
         #     raise RuntimeError("run_inference() should only be called on mesh id 0")
         # assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
-        next_token_id = self.prefill_forward(prompt_token_ids)
+        result = self.prefill_forward(
+            prompt_token_ids,
+            trace_dir=trace_dir,
+            trace_start_layer=trace_start_layer,
+            pcc_threshold=pcc_threshold,
+        )
+        if trace_dir is not None:
+            return result
         return
 
         if on_token is not None:
