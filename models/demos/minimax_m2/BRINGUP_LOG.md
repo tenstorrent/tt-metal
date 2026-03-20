@@ -167,6 +167,51 @@ N300 (1×2 mesh) — BOTH CHIPS ACTIVE via FABRIC_1D
 - All models run sequentially without hangs
 - Whisper decoder trace released after warmup for model coexistence
 
+### Session 2026-03-20: Agentic Workflow Testing & Segfault Fix
+
+**Branch:** `ssinghal/agentic-workflow`
+
+**Commits:**
+1. `900b6c1f74` — feat(agentic): N300 multi-model agentic workflow with Llama 8B on full mesh
+2. `707a7e803d` — fix(agentic): improve system prompt and prevent tool call loops
+3. `3d4bdcb442` — fix(agentic): prevent segfault by releasing traces before device close
+
+**Key Fixes:**
+
+1. **Segfault Prevention:**
+   - Root cause: Python GC runs `__del__` after `ttnn.close_mesh_device()`, causing trace release to fail
+   - Fix: Added `cleanup_models()` function to explicitly release traces BEFORE device close
+   - Added `close()` method to `LLMTool` that deletes the generator to trigger trace release
+
+2. **Tool Call Loop Prevention:**
+   - LLM was repeatedly calling the same tool
+   - Added `called_tools` set to track used tools
+   - Reduced `_MAX_TOOL_TURNS` from 10 to 3
+   - On duplicate tool call, force final answer
+
+3. **System Prompt Improvements:**
+   - Clear rules: answer simple questions directly, only use tools for attachments
+   - Explicit "AFTER receiving tool results, respond with FINAL ANSWER"
+
+**Test Results:**
+```
+# LLM-only (simple math)
+Query: "What is 5 times 7?"
+→ Answer: 35 (correct, though LLM still tries to use tools)
+
+# Cleanup verified
+Cleaning up models (releasing traces)...
+LLMTool closed (traces released).
+Model cleanup complete.
+Device closed.  # No segfault!
+```
+
+**Files Modified:**
+- `loader.py` — Added `cleanup_models()` function
+- `llm_tool.py` — Added `close()` method, upgraded to Llama 3.1 8B
+- `orchestrator.py` — Added duplicate tool prevention, improved system prompt
+- `demo.py` — Call `cleanup_models()` before device close
+
 ### Shared N300 multi-model run — issues & blockers (detail)
 
 See **`models/demos/minimax_m2/agentic/SHARED_DEVICE_BLOCKERS.md`** for:
