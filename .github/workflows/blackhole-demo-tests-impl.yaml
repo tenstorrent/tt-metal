@@ -135,6 +135,23 @@ jobs:
           mkdir -p /localdev/blackhole_demos/huggingface_data/black-forest-labs
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
+      - name: Download Mochi model weights to local cache
+        if: ${{ inputs.regenerate-ttnn-cache && inputs.weights-cache-mode == 'local-disk' && contains(matrix.test-group.name, 'Mochi') }}
+        timeout-minutes: 120
+        run: |
+          set -e
+          mkdir -p /localdev/blackhole_demos/huggingface_data/genmo
+          python3 - <<'PY'
+          import os
+          from huggingface_hub import snapshot_download
+
+          snapshot_download(
+              repo_id="genmo/mochi-1-preview",
+              cache_dir="/localdev/blackhole_demos/huggingface_data/genmo",
+              token=os.environ.get("HF_TOKEN"),
+              resume_download=True,
+          )
+          PY
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
@@ -170,10 +187,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
