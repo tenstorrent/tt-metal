@@ -103,7 +103,7 @@ struct ExecuteExpRingJointAttention {
         ttnn::Tensor& persistent_output_buffer_v,
         const std::string& joint_strategy,
         std::size_t logical_n,
-        SDPAProgramConfig program_config,
+        operations::transformer::SDPAProgramConfig program_config,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         uint32_t num_links,
@@ -130,7 +130,7 @@ struct ExecuteFlashMLAPrefill {
         bool is_causal = true,
         std::optional<float> scale = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
