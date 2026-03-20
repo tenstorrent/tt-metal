@@ -5,11 +5,8 @@
 #include "polynorm_op.hpp"
 
 #include <array>
-#include <cctype>
 #include <cstdint>
-#include <cstdlib>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -123,18 +120,6 @@ ttnn::Tensor scalar_sum(const ttnn::Tensor& x) {
         /* compute_kernel_config */ core::ComputeKernelConfig::precise());
 }
 
-bool use_fused_forward_path() {
-    const char* env = std::getenv("TTML_POLYNORM_USE_FUSED_FW");
-    if (env == nullptr) {
-        return false;
-    }
-    std::string value(env);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return value == "1" || value == "true" || value == "yes" || value == "on";
-}
-
 }  // namespace
 
 autograd::TensorPtr polynorm(
@@ -148,42 +133,11 @@ autograd::TensorPtr polynorm(
     const auto b = extract_bias(bias);
 
     const auto x = tensor->get_value();
-    auto out_value = ttnn::Tensor{};
-    if (use_fused_forward_path()) {
-        if (x.logical_shape()[-1] % 32U != 0U) {
-            throw std::runtime_error(
-                "polynorm fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
-        }
-        out_value = metal::polynorm_fw(x, w[0], w[1], w[2], b, epsilon);
-    } else {
-        const auto x2 = ttnn::square(x);
-        const auto x3 = ttnn::multiply(x, x2, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
-
-        const auto [x_norm, _x_inv_rms] = rms_normalize_last_dim(x, epsilon);
-        const auto [x2_norm, _x2_inv_rms] = rms_normalize_last_dim(x2, epsilon);
-        const auto [x3_norm, _x3_inv_rms] = rms_normalize_last_dim(x3, epsilon);
-
-        out_value = ttnn::add(
-            ttnn::add(
-                ttnn::multiply(x3_norm, w[0], std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-                ttnn::multiply(x2_norm, w[1], std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                none,
-                none,
-                none,
-                false),
-            ttnn::multiply(x_norm, w[2], std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            false);
-        out_value = ttnn::add(out_value, b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    if (x.logical_shape()[-1] % 32U != 0U) {
+        throw std::runtime_error(
+            "polynorm fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
     }
+    const auto out_value = metal::polynorm_fw(x, w[0], w[1], w[2], b, epsilon);
 
     auto out = autograd::create_tensor(out_value);
 
