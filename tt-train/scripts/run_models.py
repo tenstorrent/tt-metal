@@ -20,10 +20,10 @@ import analyze_memory
 import analyze_steps
 
 
-def require_env(name: str) -> str:
-    """Require an environment variable to be set; exit with error if missing."""
+def get_env(name: str, required=False) -> str:
+    """Get an environment variable. Exit with error if missing and required is True."""
     value = os.environ.get(name)
-    if not value:
+    if required and not value:
         raise Exception(f"{name} is not set")
     return value
 
@@ -57,6 +57,7 @@ def run_and_save_log(args: list[str], log_path: Path):
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments"""
+    tt_metal_runtime_root = get_env("TT_METAL_RUNTIME_ROOT", required=True)
     parser = argparse.ArgumentParser(
         description="Run tt-train model binaries, capture logs, run analysis, and export to JSON."
     )
