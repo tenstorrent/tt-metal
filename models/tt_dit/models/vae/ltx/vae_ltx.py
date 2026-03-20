@@ -218,7 +218,10 @@ class LTXResnetBlock3D(Module):
             self.conv_shortcut = LTXCausalConv3d(
                 in_channels, out_channels, kernel_size=1, stride=1, mesh_device=mesh_device, dtype=dtype
             )
-            self.norm3 = LTXPixelNorm()  # Simplified: use PixelNorm instead of GroupNorm(1)
+            # norm3 is GroupNorm(1) in PyTorch = LayerNorm over channels
+            # We store the learned weight/bias as Parameters and apply manually
+            self.norm3_weight = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=dtype)
+            self.norm3_bias = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=dtype)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if not self.has_shortcut:
@@ -227,10 +230,11 @@ class LTXResnetBlock3D(Module):
             for k in keys_to_remove:
                 del state[k]
         else:
-            # norm3 is GroupNorm(1) in PyTorch — we use PixelNorm (no params), drop the weights
-            keys_to_remove = [k for k in state if k.startswith("norm3")]
-            for k in keys_to_remove:
-                del state[k]
+            # norm3 is GroupNorm(1) — remap weight/bias to norm3_weight/norm3_bias
+            if "norm3.weight" in state:
+                state["norm3_weight"] = state.pop("norm3.weight").unsqueeze(0)
+            if "norm3.bias" in state:
+                state["norm3_bias"] = state.pop("norm3.bias").unsqueeze(0)
 
         # Remove non_linearity, dropout (no params)
         keys_to_remove = [k for k in state if k.startswith("non_linearity") or k.startswith("dropout")]
@@ -260,7 +264,8 @@ class LTXResnetBlock3D(Module):
 
         # Skip connection
         if self.has_shortcut:
-            residual = self.norm3(residual)
+            # GroupNorm(1) = LayerNorm over channels: normalize, then scale + bias
+            residual = ttnn.layer_norm(residual, weight=self.norm3_weight.data, bias=self.norm3_bias.data)
             residual = (
                 ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
                 if residual.layout != ttnn.ROW_MAJOR_LAYOUT
