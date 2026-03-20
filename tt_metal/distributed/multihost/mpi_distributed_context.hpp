@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <mpi.h>
 #include <memory>
 #include "api/tt-metalium/distributed_context.hpp"
@@ -124,6 +125,7 @@ private:
     MPI_Group group_{MPI_GROUP_NULL};
     int rank_{0};
     int size_{0};
+    std::atomic<bool> revoked_{false};  // set when MPIX_Comm_revoke() is called
 
     // caching our own world communicator which is duplicator of MPI_COMM_WORLD
     inline static ContextPtr current_world_;

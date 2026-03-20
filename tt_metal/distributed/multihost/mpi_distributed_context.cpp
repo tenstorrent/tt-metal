@@ -7,9 +7,14 @@
 #include <mpi-ext.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <numeric>
+#include <string>
+#include <vector>
 #include <tt_stl/assert.hpp>
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
@@ -84,23 +89,131 @@ inline void check_size_fits_int(std::size_t n) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ULFM helpers: fast-fail with diagnostics when a remote rank dies.
+// ---------------------------------------------------------------------------
+
+#if OMPI_HAS_ULFM
+
+inline bool is_ulfm_failure(int rc) noexcept {
+    return rc == MPIX_ERR_PROC_FAILED || rc == MPIX_ERR_PROC_FAILED_PENDING || rc == MPIX_ERR_REVOKED;
+}
+
+// Identify which world-ranks have failed. Best-effort: returns "unknown" on
+// any secondary failure (comm may already be torn down).
+static std::string identify_failed_ranks(MPI_Comm comm) {
+    if (MPIX_Comm_failure_ack(comm) != MPI_SUCCESS) {
+        return "unknown";
+    }
+    MPI_Group failed_group = MPI_GROUP_NULL;
+    if (MPIX_Comm_failure_get_acked(comm, &failed_group) != MPI_SUCCESS) {
+        return "unknown";
+    }
+    int failed_size = 0;
+    MPI_Group_size(failed_group, &failed_size);
+    if (failed_size == 0) {
+        MPI_Group_free(&failed_group);
+        return "unknown (no acked failures)";
+    }
+    MPI_Group world_group = MPI_GROUP_NULL;
+    MPI_Comm_group(comm, &world_group);
+    std::vector<int> local_indices(failed_size);
+    std::iota(local_indices.begin(), local_indices.end(), 0);
+    std::vector<int> world_ranks(failed_size, MPI_UNDEFINED);
+    if (world_group != MPI_GROUP_NULL) {
+        MPI_Group_translate_ranks(
+            failed_group, failed_size, local_indices.data(), world_group, world_ranks.data());
+        MPI_Group_free(&world_group);
+    }
+    MPI_Group_free(&failed_group);
+
+    std::string result;
+    for (int i = 0; i < failed_size; ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += (world_ranks[i] == MPI_UNDEFINED) ? "?" : std::to_string(world_ranks[i]);
+    }
+    return result;
+}
+
+// Revoke the communicator (unblocking all surviving ranks from collectives),
+// print a clear diagnostic, then fast-exit via _exit() to avoid deadlock in
+// MPI_Finalize() on a revoked communicator.
+[[noreturn]] static void handle_rank_failure(
+    MPI_Comm comm, int cached_rank, int error_code, const char* operation) {
+    // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
+    std::string failed = "unknown";
+    if (error_code != MPIX_ERR_REVOKED) {
+        failed = identify_failed_ranks(comm);
+    }
+    // Revoke so all survivors unblock. Ignore return -- another rank may have revoked first.
+    MPIX_Comm_revoke(comm);
+
+    fprintf(
+        stderr,
+        "\n"
+        "================================================================\n"
+        "FATAL: MPI rank failure detected\n"
+        "  Detecting rank : %d\n"
+        "  Failed rank(s) : %s\n"
+        "  During         : %s\n"
+        "  MPI error code : %d\n"
+        "================================================================\n",
+        cached_rank,
+        failed.c_str(),
+        operation,
+        error_code);
+    fflush(stderr);
+
+    // Exit code 70 (EX_SOFTWARE) flags ULFM-initiated shutdown so ttrun.py
+    // can emit a targeted diagnostic.
+    _exit(70);
+}
+
+#endif  // OMPI_HAS_ULFM
+
+// ---------------------------------------------------------------------------
+// mpi_check variants
+// ---------------------------------------------------------------------------
+
+// Generic check: used outside MPIContext member functions (static methods,
+// constructors before comm_ is valid, MPIRequest methods).
 inline void mpi_check(int error_code, const char* call_text) {
     if (error_code != MPI_SUCCESS) {
         int rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        // throw with the textual form of the call
         throw MPIDistributedException(Rank{rank}, error_code, std::string(call_text) + " failed");
     }
 }
 
+// Context-aware check: used in MPIContext member functions. Detects ULFM rank
+// failures and aborts with a diagnostic instead of throwing -- throwing would
+// leave other threads blocked on collectives.
+inline void mpi_check_ctx(int error_code, const char* call_text, MPI_Comm comm, int cached_rank) {
+    if (error_code == MPI_SUCCESS) {
+        return;
+    }
+#if OMPI_HAS_ULFM
+    if (is_ulfm_failure(error_code)) {
+        handle_rank_failure(comm, cached_rank, error_code, call_text);
+        // [[noreturn]] -- never reaches here
+    }
+#endif
+    throw MPIDistributedException(Rank{cached_rank}, error_code, std::string(call_text) + " failed");
+}
+
 bool was_mpi_finalized() noexcept {
     int flag = 0;
-    /* Safe to call at any time—even before MPI_Init() */
-    MPI_Finalized(&flag);  // sets flag = 1 if MPI_Finalize has completed
+    /* Safe to call at any time -- even before MPI_Init() */
+    MPI_Finalized(&flag);  // sets flag = 1 if MPI_Finalize has completed
     return flag != 0;
 }
 
+// MPI_CHECK     -- generic, for static methods and non-MPIContext contexts
+// MPI_CHECK_CTX -- ULFM-aware, for MPIContext member functions
 #define MPI_CHECK(call) mpi_check((call), #call)
+#define MPI_CHECK_CTX(call) mpi_check_ctx((call), #call, comm_, rank_)
 
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
@@ -204,45 +317,45 @@ bool MPIContext::is_initialized() {
 
 MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
     MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
-    MPI_CHECK(MPI_Comm_group(comm_, &group_));
-    MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
-    MPI_CHECK(MPI_Comm_size(comm_, &size_));
+    MPI_CHECK_CTX(MPI_Comm_group(comm_, &group_));
+    MPI_CHECK_CTX(MPI_Comm_rank(comm_, &rank_));
+    MPI_CHECK_CTX(MPI_Comm_size(comm_, &size_));
     id_ = DistributedContext::generate_unique_id();
 }
 
 MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(group) {
     MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
-    MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
-    MPI_CHECK(MPI_Comm_size(comm_, &size_));
+    MPI_CHECK_CTX(MPI_Comm_rank(comm_, &rank_));
+    MPI_CHECK_CTX(MPI_Comm_size(comm_, &size_));
     id_ = DistributedContext::generate_unique_id();
 }
 
 Rank MPIContext::rank() const { return Rank(rank_); }
 Size MPIContext::size() const { return Size(size_); }
 bool MPIContext::supports_fault_tolerance() const { return OMPI_HAS_ULFM; }
-void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
+void MPIContext::barrier() const { MPI_CHECK_CTX(MPI_Barrier(comm_)); }
 
 /* ---- point‑to‑point ---------------------------------------------------- */
 
 void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+    MPI_CHECK_CTX(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
 void MPIContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+    MPI_CHECK_CTX(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
 void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
+    MPI_CHECK_CTX(MPI_Recv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, MPI_STATUS_IGNORE));
 }
 
 RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
-    MPI_CHECK(MPI_Isend(
+    MPI_CHECK_CTX(MPI_Isend(
         const_cast<std::byte*>(buf.data()), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_, &req));
     return std::make_shared<MPIRequest>(req);
 }
@@ -250,7 +363,7 @@ RequestPtr MPIContext::isend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) c
 RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_Request req{};
-    MPI_CHECK(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
+    MPI_CHECK_CTX(MPI_Irecv(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *src, *tag, comm_, &req));
     return std::make_shared<MPIRequest>(req);
 }
 
@@ -258,7 +371,7 @@ RequestPtr MPIContext::irecv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) co
 
 void MPIContext::broadcast(tt::stl::Span<std::byte> buf, Rank root) const {
     check_size_fits_int(buf.size());
-    MPI_CHECK(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
+    MPI_CHECK_CTX(MPI_Bcast(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *root, comm_));
 }
 
 void MPIContext::all_reduce(
@@ -283,7 +396,7 @@ void MPIContext::all_reduce(
     // allow in‑place (send == recv) by switching to MPI_IN_PLACE
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : static_cast<void*>(send_buf.data());
 
-    MPI_CHECK(MPI_Allreduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
+    MPI_CHECK_CTX(MPI_Allreduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
 }
 
 void MPIContext::reduce(
@@ -309,7 +422,7 @@ void MPIContext::reduce(
 
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK(MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, comm_));
+    MPI_CHECK_CTX(MPI_Reduce(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), *root, comm_));
 }
 
 void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
@@ -323,7 +436,7 @@ void MPIContext::gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::by
             recv_buf.size() == expected, "gather: root recv buffer {} bytes, expected {}", recv_buf.size(), expected);
     }
 
-    MPI_CHECK(MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, comm_));
+    MPI_CHECK_CTX(MPI_Gather(send_buf.data(), send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, *root, comm_));
 }
 
 void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf, Rank root) const {
@@ -336,7 +449,7 @@ void MPIContext::scatter(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::b
             send_buf.size() == expected, "scatter: root send buffer {} bytes, expected {}", send_buf.size(), expected);
     }
 
-    MPI_CHECK(MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, comm_));
+    MPI_CHECK_CTX(MPI_Scatter(send_buf.data(), recv_count, MPI_CHAR, recv_buf.data(), recv_count, MPI_CHAR, *root, comm_));
 }
 
 void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
@@ -354,7 +467,7 @@ void MPIContext::all_gather(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
     // allow MPI_IN_PLACE if caller wants to receive in the same buffer
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
+    MPI_CHECK_CTX(MPI_Allgather(send_ptr, send_count, MPI_CHAR, recv_buf.data(), send_count, MPI_CHAR, comm_));
 }
 
 void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std::byte> recv_buf) const {
@@ -376,7 +489,7 @@ void MPIContext::all_to_all(tt::stl::Span<std::byte> send_buf, tt::stl::Span<std
     const int block = static_cast<int>(send_buf.size() / world);
     check_size_fits_int(block);
 
-    MPI_CHECK(MPI_Alltoall(send_buf.data(), block, MPI_CHAR, recv_buf.data(), block, MPI_CHAR, comm_));
+    MPI_CHECK_CTX(MPI_Alltoall(send_buf.data(), block, MPI_CHAR, recv_buf.data(), block, MPI_CHAR, comm_));
 }
 
 void MPIContext::reduce_scatter(
@@ -410,7 +523,7 @@ void MPIContext::reduce_scatter(
     check_size_fits_int(recv_count);
 
     // --- fixed call -------------------------------------------------------
-    MPI_CHECK(MPI_Reduce_scatter_block(
+    MPI_CHECK_CTX(MPI_Reduce_scatter_block(
         send_buf.data(),      // sendbuf
         recv_buf.data(),      // recvbuf
         recv_count,           // elements per rank
@@ -436,13 +549,13 @@ void MPIContext::scan(
 
     void* send_ptr = (send_buf.data() == recv_buf.data()) ? MPI_IN_PLACE : send_buf.data();
 
-    MPI_CHECK(MPI_Scan(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
+    MPI_CHECK_CTX(MPI_Scan(send_ptr, recv_buf.data(), count, dtype_to_mpi(dtype), reduce_to_mpi(op), comm_));
 }
 /* ---- communicator management ------------------------------------------ */
 
 ContextPtr MPIContext::duplicate() const {
     MPI_Comm dup = MPI_COMM_NULL;
-    MPI_CHECK(MPI_Comm_dup(comm_, &dup));
+    MPI_CHECK_CTX(MPI_Comm_dup(comm_, &dup));
     return std::make_shared<MPIContext>(dup);
 }
 
@@ -451,7 +564,7 @@ ContextPtr MPIContext::split(Color color, Key key) const {
     if (*color == SPLIT_COLOR_UNDEFINED) {
         color = Color(MPI_UNDEFINED);
     }
-    MPI_CHECK(MPI_Comm_split(comm_, *color, *key, &split_comm));
+    MPI_CHECK_CTX(MPI_Comm_split(comm_, *color, *key, &split_comm));
     return std::make_shared<MPIContext>(split_comm);
 }
 
@@ -459,7 +572,7 @@ ContextPtr MPIContext::create_sub_context(tt::stl::Span<int> ranks) const {
     MPI_Group sub_grp = MPI_GROUP_NULL;
     MPI_Comm sub_comm = MPI_COMM_NULL;
 
-    MPI_CHECK(MPI_Group_incl(group_, static_cast<int>(ranks.size()), ranks.data(), &sub_grp));
+    MPI_CHECK_CTX(MPI_Group_incl(group_, static_cast<int>(ranks.size()), ranks.data(), &sub_grp));
     if (MPI_Comm_create_group(comm_, sub_grp, 0 /*tag*/, &sub_comm) != MPI_SUCCESS) {
         // sub_comm is not valid, we are not in the group
         MPI_Group_free(&sub_grp);
@@ -484,7 +597,7 @@ void MPIContext::translate_ranks_to_other_ctx(
     auto mpi_context = std::dynamic_pointer_cast<MPIContext>(other_ctx);
     TT_FATAL(mpi_context != nullptr, "translate_ranks_to_other_ctx: other_ctx is not a MPIContext");
 
-    MPI_CHECK(MPI_Group_translate_ranks(
+    MPI_CHECK_CTX(MPI_Group_translate_ranks(
         group_, static_cast<int>(ranks.size()), ranks.data(), mpi_context->group(), translated_ranks.data()));
 }
 
@@ -498,16 +611,17 @@ void MPIContext::revoke_and_shrink() {
     if (rc != MPI_SUCCESS && rc != MPI_ERR_REVOKED) {  // another rank may have revoked first
         abort(rc);
     }
+    revoked_.store(true, std::memory_order_release);
 
     MPI_Comm new_comm = MPI_COMM_NULL;
     MPI_Group new_group = MPI_GROUP_NULL;
-    MPI_CHECK(MPIX_Comm_shrink(comm_, &new_comm));
+    MPI_CHECK_CTX(MPIX_Comm_shrink(comm_, &new_comm));
     MPI_Comm_group(new_comm, &new_group);
 
     MPI_Comm_set_errhandler(new_comm, MPI_ERRORS_RETURN);
 
-    // overall probably I don't need MPI_CHECK, we are recovering here. If we cannot recover, we should abort
-    // and not throw an exception.
+    // Shrink succeeded: update internal state. If any step fails we abort rather
+    // than throw to avoid leaving the context in a partially updated state.
     int new_rank = 0;
     int new_size = 0;
     MPI_Comm_rank(new_comm, &new_rank);
@@ -524,26 +638,22 @@ void MPIContext::revoke_and_shrink() {
     this->group_ = new_group;
     this->rank_ = new_rank;
     this->size_ = new_size;
+    revoked_.store(false, std::memory_order_release);  // cleared: new communicator is healthy
 #endif
 }
 
 bool MPIContext::is_revoked() {
-#if (!OMPI_HAS_ULFM)
-    TT_THROW("is_revoked() requires MPI ULFM support which is not available in this build");
-#else
-    int flag = 0;
-    // MPI_Comm_test_inter is safe to call even if the communicator is revoked
-    // don't need to check error code
-    MPI_Comm_test_inter(comm_, &flag);
-    return flag != 0;
-#endif
+    // revoked_ is set atomically in revoke_and_shrink() and in handle_rank_failure().
+    // This is correct for both ULFM and non-ULFM builds: without ULFM, revocation
+    // never happens so the flag is always false.
+    return revoked_.load(std::memory_order_acquire);
 }
 
 std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
     int size_bytes = 0;
     MPI_Status status;
-    MPI_CHECK(MPI_Probe(*source, *tag, comm_, &status));
-    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    MPI_CHECK_CTX(MPI_Probe(*source, *tag, comm_, &status));
+    MPI_CHECK_CTX(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
     return static_cast<std::size_t>(size_bytes);
 }
 
