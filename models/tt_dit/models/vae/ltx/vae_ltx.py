@@ -586,8 +586,8 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
         sample_tt = self.conv_out(sample_tt)
 
-        # Convert back to host
-        result = ttnn.to_torch(sample_tt)  # (B, T_out, H_out, W_out, C_out)
+        # Convert back to host (take device 0's copy — output is replicated)
+        result = ttnn.to_torch(ttnn.get_device_tensors(sample_tt)[0])  # (B, T_out, H_out, W_out, C_out)
 
         # Unpatchify: (B, T, H/4, W/4, 48) → (B, T, H, W, 3) via depth-to-space
         result = result.permute(0, 4, 1, 2, 3)  # (B, C, T, H, W) — 48 channels
