@@ -84,7 +84,7 @@ jobs:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
