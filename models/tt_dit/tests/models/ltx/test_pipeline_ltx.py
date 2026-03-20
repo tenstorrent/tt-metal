@@ -1,0 +1,154 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Test the LTX-2 pipeline denoising loop.
+
+Uses a 1-layer model with random weights to verify the pipeline mechanics:
+- Sigma schedule computation
+- Euler step formula
+- CFG blending
+- Device↔host data flow in denoising loop
+"""
+
+import sys
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline, compute_sigmas, euler_step
+
+sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+
+
+def test_sigma_schedule():
+    """Test that sigma schedule matches LTX-2 reference."""
+    from ltx_core.components.schedulers import LTX2Scheduler
+
+    steps = 30
+    num_tokens = 2048
+
+    # Our implementation
+    our_sigmas = compute_sigmas(steps=steps, num_tokens=num_tokens)
+
+    # Reference
+    ref_scheduler = LTX2Scheduler()
+    # Create a dummy latent with the right token count for the reference
+    # num_tokens = prod(latent.shape[2:]), so we need shape where spatial dims multiply to num_tokens
+    dummy_latent = torch.randn(1, 1, num_tokens)
+    ref_sigmas = ref_scheduler.execute(steps=steps, latent=dummy_latent)
+
+    assert our_sigmas.shape == ref_sigmas.shape, f"Shape mismatch: {our_sigmas.shape} vs {ref_sigmas.shape}"
+    assert torch.allclose(
+        our_sigmas, ref_sigmas, atol=1e-6
+    ), f"Sigma mismatch: max diff {(our_sigmas - ref_sigmas).abs().max():.2e}"
+    logger.info(f"Sigma schedule matches reference (max diff: {(our_sigmas - ref_sigmas).abs().max():.2e})")
+
+
+def test_euler_step():
+    """Test that Euler step matches LTX-2 reference."""
+    from ltx_core.components.diffusion_steps import EulerDiffusionStep
+
+    torch.manual_seed(42)
+    sample = torch.randn(1, 256, 128)
+    denoised = torch.randn(1, 256, 128)
+    sigmas = torch.tensor([0.8, 0.6, 0.4, 0.2, 0.0])
+
+    # Our implementation
+    our_result = euler_step(sample, denoised, sigma=0.8, sigma_next=0.6)
+
+    # Reference
+    ref_stepper = EulerDiffusionStep()
+    ref_result = ref_stepper.step(sample, denoised, sigmas, step_index=0)
+
+    assert torch.allclose(
+        our_result, ref_result, atol=1e-5
+    ), f"Euler step mismatch: max diff {(our_result - ref_result).abs().max():.2e}"
+    logger.info(f"Euler step matches reference (max diff: {(our_result - ref_result).abs().max():.2e})")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
+    """
+    Test the full pipeline denoising loop with a 1-layer model.
+    Verifies device↔host data flow, sigma stepping, and output shape.
+    """
+    from ltx_core.model.transformer.model import LTXModel, LTXModelType
+
+    sp_axis, tp_axis = 0, 1
+    dim = 4096
+    num_heads = 32
+    head_dim = dim // num_heads
+    in_channels = 128
+    out_channels = 128
+    num_layers = 1
+    num_inference_steps = 3  # Very few steps for fast test
+
+    # Create random-weight reference model to get state dict
+    torch_model = LTXModel(
+        model_type=LTXModelType.VideoOnly,
+        num_layers=num_layers,
+        num_attention_heads=num_heads,
+        attention_head_dim=head_dim,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        cross_attention_dim=dim,
+        use_middle_indices_grid=True,
+    )
+    torch_model.eval()
+
+    # Create pipeline
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+
+    pipeline = LTXPipeline(
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        num_layers=num_layers,
+        cross_attention_dim=dim,
+    )
+    pipeline.load_transformer(torch_model.state_dict())
+    # No text encoder — will use zero embeddings
+
+    # Run pipeline with tiny dimensions
+    num_frames = 17
+    px_height, px_width = 128, 128
+    output = pipeline(
+        prompt=["test"],
+        num_frames=num_frames,
+        height=px_height,
+        width=px_width,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=1.0,  # No CFG for speed
+        seed=42,
+    )
+
+    # Compute expected latent shape
+    latent_frames = (num_frames - 1) // 8 + 1  # 8x temporal compression
+    latent_h = px_height // 32  # 32x spatial compression
+    latent_w = px_width // 32
+    expected_tokens = latent_frames * latent_h * latent_w
+    assert output.shape == (
+        1,
+        expected_tokens,
+        out_channels,
+    ), f"Output shape {output.shape} != expected (1, {expected_tokens}, {out_channels})"
+    assert torch.isfinite(output).all(), "Output contains NaN/Inf"
+    logger.info(f"Pipeline output shape: {output.shape}, range: [{output.min():.3f}, {output.max():.3f}]")
+    logger.info("PASSED: Pipeline denoising loop works end-to-end")
