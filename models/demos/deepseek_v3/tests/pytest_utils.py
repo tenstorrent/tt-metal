@@ -148,6 +148,8 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
         - Prefill cases:
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, includes one prefill case using
             prefill_seq_len: ("prefill", prefill_seq_len, users_per_row, None)
+          - `users_per_row` here is the configured row width for the row-batched prefill
+            kernels under test, not the number of prompts driven by the outer generator loop
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, replaces the prefill list with a single case:
             ("prefill", max_seq_len // users_per_row, users_per_row, None)
 
@@ -162,8 +164,9 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
         base_cases += [("prefill", prefill_seq_len, users_per_row, None)]
     else:
         # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, use it to expand decode coverage.
-        # For prefill, scale the sequence length by users_per_row so the total token
-        # budget stays roughly aligned with the historical single-user-row workload.
+        # For prefill, keep the configured row width fixed at users_per_row and scale
+        # the sequence length so the total token budget stays roughly aligned with the
+        # historical single-user-row workload.
         max_seq_len = int(max_seq_len_env)
         prefill_max_seq_len = max(1, max_seq_len // max(1, users_per_row))
         base_cases += [

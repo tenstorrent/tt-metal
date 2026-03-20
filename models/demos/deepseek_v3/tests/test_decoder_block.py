@@ -93,13 +93,20 @@ def run_test_forward_pass_decoder2d(
     state_dict,
     decode_position_ids: int | None = None,
 ):
+    configured_row_width = batch_size_per_row
+
     # Check params
     if mode == "prefill":
-        assert batch_size_per_row == USERS_PER_ROW, f"Prefill expects a full row batch of {USERS_PER_ROW}"
-        batch_size = batch_size_per_row
+        # Like the MLA module test, this helper targets the row-batched prefill
+        # layout directly. The selected user_id picks which global row is updated,
+        # while the underlying prefill kernels operate on one full configured row.
+        assert (
+            configured_row_width == USERS_PER_ROW
+        ), f"Prefill coverage exercises a full row-wide layout of {USERS_PER_ROW} users"
+        reference_batch_size = configured_row_width
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
-        batch_size = batch_size_per_row * mesh_device.shape[0]
+        reference_batch_size = configured_row_width * mesh_device.shape[0]
 
     state_dict, position_ids, torch_input, reference_output, input_cache, _ = generate_reference_io(
         model_path,
@@ -107,7 +114,7 @@ def run_test_forward_pass_decoder2d(
         hf_config_short,
         reference_layer_idx,
         seq_len,
-        batch_size,
+        reference_batch_size,
         mode,
         state_dict,
         decode_position_ids,
@@ -115,7 +122,7 @@ def run_test_forward_pass_decoder2d(
 
     # Set up page config
     logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
+    user_id = None if mode == "decode" else torch.randint(0, configured_row_width * mesh_device.shape[0], ()).item()
     paged_config = MLA1D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
@@ -139,7 +146,7 @@ def run_test_forward_pass_decoder2d(
         hf_config_short,
         mesh_device,
         fabric_config,
-        batch_size_per_row,
+        configured_row_width,
     )
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
@@ -176,7 +183,7 @@ def run_test_forward_pass_decoder2d(
     tt_page_table = MLA2D.create_page_table(
         page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
     )
-    rope_tensors = get_rope_tensors(hf_config_short, batch_size_per_row, seq_len, position_ids, mesh_device)
+    rope_tensors = get_rope_tensors(hf_config_short, configured_row_width, seq_len, position_ids, mesh_device)
     paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
 
     # Forward pass
