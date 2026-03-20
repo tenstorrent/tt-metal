@@ -18,7 +18,7 @@ from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
-DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
+DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
 
 def _fabric_config_for_num_procs(num_procs: int):
