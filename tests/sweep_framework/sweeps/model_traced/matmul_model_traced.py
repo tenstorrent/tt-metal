@@ -336,7 +336,10 @@ def run(
 
     start_time = start_measuring_time()
     output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    if is_mesh_device:
+        output_tensor = mesh_tensor_to_torch(output_tensor, device)
+    else:
+        output_tensor = ttnn.to_torch(output_tensor)
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)

@@ -1,0 +1,47 @@
+{
+  "description": "N150-safe DeepSeek-oriented MLP prefill matmul shapes",
+  "cases": [
+    {
+      "name": "deepseek_llm_7b_ff1_3_like",
+      "seq_len": 32,
+      "dim": 2048,
+      "hidden_dim": 4096,
+      "is_w2": false
+    },
+    {
+      "name": "deepseek_llm_7b_ff2_like",
+      "seq_len": 32,
+      "dim": 2048,
+      "hidden_dim": 4096,
+      "is_w2": true
+    },
+    {
+      "name": "phi3_mini_ff1_3_like",
+      "seq_len": 32,
+      "dim": 1536,
+      "hidden_dim": 3072,
+      "is_w2": false
+    },
+    {
+      "name": "phi3_mini_ff2_like",
+      "seq_len": 32,
+      "dim": 1536,
+      "hidden_dim": 3072,
+      "is_w2": true
+    },
+    {
+      "name": "qwen3_32b_ff1_3_like",
+      "seq_len": 32,
+      "dim": 1024,
+      "hidden_dim": 5120,
+      "is_w2": false
+    },
+    {
+      "name": "qwen3_32b_ff2_like",
+      "seq_len": 32,
+      "dim": 1024,
+      "hidden_dim": 5120,
+      "is_w2": true
+    }
+  ]
+}

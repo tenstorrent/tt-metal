@@ -1,0 +1,28 @@
+{
+  "protocol_version": "1",
+  "module_name": "model_traced.matmul_model_traced",
+  "suite_name": "model_traced",
+  "source_include_regex": "simple_text_demo.py",
+  "partition_params": {
+    "smoke_max": 4,
+    "train_fraction_of_remainder": 0.5
+  },
+  "smoke": [
+    "40dc8d308bb73acc511c5173296917876ce6b9305dfc742808945bb6",
+    "3ea350825a28dbb47e7d5e0209a5690ed4671a076e122f605a527046",
+    "7dfcfb65a2258df2626ac66de9863385d3df8b6aa4d0778dcf07c653",
+    "4c2a2b275378b6a2fb9f237a33b647e7ff9bf0b1caa3bf4ec0a6a6ce"
+  ],
+  "train": [
+    "38abf47aeef1b24a74c5c7a7549220bc61f6edae72dfb8d462a6e5cb",
+    "249ac9e32eea311e55e48e7086fc747e8f821e4cfa0d439d00a017cb",
+    "d16f391dcdf2801eded5e708d9a7d77ccdf6140028406ffca5410922",
+    "4d4ae76b7f086d8119f39d19e7db88411be98be6051897829aff4d23"
+  ],
+  "holdout": [
+    "855f979c7c2ec3d653d82e71852ef8521899fe5299b21ba395b7f722",
+    "88cd15b75e5e7ebc5f1b07dc1b137ee8fbca13b0f6b221887b327d84",
+    "e4fc91e7e5af28304a9e4639fd4402cd23fbc9a7c10d4f88841052d7",
+    "e59427eeb41d2702b3beb6f123b8d45d72aec6bd41f94cbb33748981"
+  ]
+}

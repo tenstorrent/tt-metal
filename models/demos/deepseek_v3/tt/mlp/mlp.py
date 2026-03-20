@@ -380,12 +380,19 @@ class MLP(AbstractModule):
         else:
             per_device_in_features, per_device_out_features = dim, even_int_div(hidden_dim, num_devices)
 
-        per_core_M_tiles = ttnn.core.divup(seq_len, ttnn.TILE_SIZE * core_grid_size.y)
+        m_tiles = ttnn.core.divup(seq_len, ttnn.TILE_SIZE)
+        n_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE)
+        effective_grid = ttnn.CoreCoord(
+            min(core_grid_size.x, max(1, n_tiles)),
+            min(core_grid_size.y, max(1, m_tiles)),
+        )
+
+        per_core_M_tiles = ttnn.core.divup(seq_len, ttnn.TILE_SIZE * effective_grid.y)
         K_tiles = ttnn.core.divup(per_device_in_features, ttnn.TILE_SIZE)
-        per_core_N_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE * core_grid_size.x)
+        per_core_N_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE * effective_grid.x)
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=core_grid_size,
+            compute_with_storage_grid_size=effective_grid,
             in0_block_w=find_largest_divisor(K_tiles),
             out_subblock_h=1,
             out_subblock_w=find_largest_divisor(
