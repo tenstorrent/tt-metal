@@ -29,16 +29,16 @@ namespace ttnn {
  * @return The result tensor
  */
 Tensor pow(
-    const Tensor& input_tensor,
+    const Tensor& input,
     int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 Tensor pow(
     const Tensor& input_a,
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 Tensor pow(
     float input_a,
@@ -52,7 +52,7 @@ Tensor pow(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor pow(
-    const Tensor& input_tensor,
+    const Tensor& input,
     const Tensor& exponent,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
@@ -83,7 +83,7 @@ Tensor div(
     const std::optional<std::string>& rounding_mode = std::nullopt,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-    std::optional<Tensor> output = std::nullopt,
+    std::optional<Tensor> output_tensor = std::nullopt,
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
@@ -131,7 +131,7 @@ Tensor fmod(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor fmod(
-    const Tensor& input_tensor,
+    const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
@@ -143,7 +143,7 @@ Tensor remainder(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor remainder(
-    const Tensor& input_tensor,
+    const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
@@ -218,16 +218,15 @@ Tensor prelu(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor prelu(
-    const Tensor& input_tensor,
+    const Tensor& input,
     const std::array<float, 1>& weight,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-Tensor prelu(
-    const Tensor& input_tensor, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor prelu(const Tensor& input, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor rsub(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -237,7 +236,7 @@ Tensor rsub(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor rsub(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_a,
     float input_b,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -248,8 +247,8 @@ Tensor rsub(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_and(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
@@ -258,7 +257,7 @@ Tensor bitwise_and(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_and(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_a,
     int32_t input_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -268,8 +267,8 @@ Tensor bitwise_and(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_or(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
@@ -278,7 +277,7 @@ Tensor bitwise_or(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_or(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_a,
     int32_t input_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -288,8 +287,8 @@ Tensor bitwise_or(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_xor(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
@@ -298,7 +297,7 @@ Tensor bitwise_xor(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_xor(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_a,
     int32_t input_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -308,8 +307,8 @@ Tensor bitwise_xor(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_left_shift(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
@@ -318,7 +317,7 @@ Tensor bitwise_left_shift(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_left_shift(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_a,
     int32_t input_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -328,8 +327,8 @@ Tensor bitwise_left_shift(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_right_shift(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
@@ -338,7 +337,7 @@ Tensor bitwise_right_shift(
     std::optional<bool> use_legacy = std::nullopt);
 
 Tensor bitwise_right_shift(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_a,
     int32_t input_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -359,48 +358,38 @@ Tensor bias_gelu(
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor atan2(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor nextafter(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor isclose(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
+    const Tensor& input_a,
+    const Tensor& input_b,
     float rtol,
     float atol,
     bool equal_nan,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor div_no_nan(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor div_no_nan(
-    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor floor_div(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor floor_div(
-    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor outer(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor polyval(
-    const Tensor& input_tensor_a,
+    const Tensor& input_a,
     const std::vector<float>& coeffs,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 Tensor logical_left_shift(
     const Tensor& input_tensor_a_arg,
