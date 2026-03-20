@@ -139,5 +139,72 @@ def test_embedding_forward_pass(
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": get_fabric_config()},
+    ],
+    indirect=True,
+)
+@pytest.mark.requires_device(["QUAD"])
+@pytest.mark.timeout(1800)
+def test_embedding2d_prefill_seq32_hang_repro(
+    hf_config,
+    mesh_device,
+    ccl,
+    cache_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    """
+    Repro test for QUAD demo hang at Embedding1D.forward_prefill START.
+
+    The demo path invokes Embedding2D.forward_prefill, which uses the same
+    Embedding1D.forward_prefill implementation and emits the same debug line.
+    """
+    mode = "prefill"
+    seq_len = 32
+    module_path = "model.embed_tokens"
+    embedding_state_dict = sub_state_dict(state_dict, module_path + ".")
+    torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, seq_len))
+
+    logger.info("Setting up Embedding2D prefill seq_len=32 hang repro")
+    weight_config = get_test_weight_config(
+        Embedding2D,
+        hf_config,
+        (embedding_state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_embedding",
+        real_weights=True,
+    )
+    model_config = get_model_config(Embedding2D, mode, hf_config, mesh_device)
+    model_state = Embedding2D.create_state(hf_config, mesh_device, ccl)
+    run_config = create_run_config(model_config, weight_config, model_state)
+
+    tt_input_ids = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    tt_output = None
+    try:
+        assert tuple(tt_input_ids.shape) == (1, 1, 32)
+        logger.info("Calling Embedding2D.forward_prefill with input shape [1, 1, 32]")
+        tt_output = Embedding2D.forward_prefill(tt_input_ids, run_config)
+        ttnn.synchronize_device(mesh_device)
+        assert tt_output is not None
+    finally:
+        if tt_output is not None:
+            ttnn.deallocate(tt_output)
+        ttnn.deallocate(tt_input_ids)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
