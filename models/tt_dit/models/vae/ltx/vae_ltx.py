@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 
-from ....layers.module import Module, Parameter
+from ....layers.module import Module, ModuleList, Parameter
 from ....utils.conv3d import _ntuple, aligned_channels, get_conv3d_config, prepare_conv3d_weights
 
 
@@ -394,6 +394,165 @@ class LTXSpaceToDepthDownsample(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pass
+
+
+class LTXVideoDecoder(Module):
+    """
+    LTX-2 Video VAE Decoder (TTNN).
+
+    Decodes latent representation to video:
+    (B, 128, F', H', W') → (B, 3, F, H, W)
+
+    Architecture:
+    1. Per-channel denormalization (learned mean/std)
+    2. conv_in: CausalConv3d 128 → 1024
+    3. up_blocks: sequence of DepthToSpaceUpsample/ResnetBlock3D
+    4. PixelNorm → SiLU → conv_out: CausalConv3d → 48
+    5. unpatchify: reshape 48 → 3 with 4x spatial expansion
+    """
+
+    def __init__(
+        self,
+        *,
+        decoder_blocks: list[tuple[str, dict]],
+        in_channels: int = 128,
+        out_channels: int = 3,
+        patch_size: int = 4,
+        base_channels: int = 128,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+
+        self.patch_size = patch_size
+        self.mesh_device = mesh_device
+        out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
+
+        feature_channels = base_channels * 8  # 1024
+
+        # Per-channel statistics (learned mean/std for denormalization)
+        self.per_channel_mean = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=ttnn.float32)
+        self.per_channel_std = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=ttnn.float32)
+
+        # conv_in: 128 → 1024
+        self.conv_in = LTXCausalConv3d(
+            in_channels, feature_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+        )
+
+        # Up blocks (decoder_blocks reversed)
+        self.up_blocks = ModuleList()
+        ch = feature_channels
+        for block_name, block_params in reversed(decoder_blocks):
+            block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
+
+            if block_name in ("compress_all", "compress_space", "compress_time"):
+                stride_map = {
+                    "compress_all": (2, 2, 2),
+                    "compress_space": (1, 2, 2),
+                    "compress_time": (2, 1, 1),
+                }
+                multiplier = block_config.get("multiplier", 1)
+                new_ch = ch // multiplier
+                self.up_blocks.append(
+                    LTXDepthToSpaceUpsample(
+                        in_channels=ch,
+                        stride=stride_map[block_name],
+                        out_channels_reduction_factor=multiplier,
+                        mesh_device=mesh_device,
+                        dtype=dtype,
+                    )
+                )
+                ch = new_ch
+            elif block_name == "res_x_y":
+                multiplier = block_config.get("multiplier", 2)
+                new_ch = ch // multiplier
+                self.up_blocks.append(
+                    LTXResnetBlock3D(in_channels=ch, out_channels=new_ch, mesh_device=mesh_device, dtype=dtype)
+                )
+                ch = new_ch
+            else:
+                raise ValueError(f"Unknown decoder block: {block_name}")
+
+        # Output: PixelNorm → SiLU → conv_out
+        self.norm_out = LTXPixelNorm()
+        self.conv_out = LTXCausalConv3d(
+            ch, out_channels_with_patch, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Map per_channel_statistics (keys use dashes: mean-of-means, std-of-means)
+        if "per_channel_statistics.mean-of-means" in state:
+            state["per_channel_mean"] = state.pop("per_channel_statistics.mean-of-means").unsqueeze(0)
+        if "per_channel_statistics.std-of-means" in state:
+            state["per_channel_std"] = state.pop("per_channel_statistics.std-of-means").unsqueeze(0)
+        # Remove timestep conditioning keys if present
+        keys_to_remove = [
+            k
+            for k in state
+            if k.startswith("timestep_scale_multiplier")
+            or k.startswith("last_time_embedder")
+            or k.startswith("last_scale_shift_table")
+        ]
+        for k in keys_to_remove:
+            del state[k]
+        # Remove conv_act (SiLU, no params) and conv_norm_out (PixelNorm, no params)
+        keys_to_remove = [k for k in state if k.startswith("conv_act") or k.startswith("conv_norm_out")]
+        for k in keys_to_remove:
+            del state[k]
+
+    def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
+        """
+        Decode latent tensor to video.
+
+        Args:
+            sample_BCTHW: (B, 128, F', H', W') torch tensor (latent space)
+
+        Returns:
+            (B, 3, F, H, W) torch tensor (pixel space)
+        """
+        B, C, T, H, W = sample_BCTHW.shape
+
+        # Denormalize using per-channel statistics
+        mean = self.per_channel_mean.data  # (1, C) on device
+        std = self.per_channel_std.data
+
+        # Convert to BTHWC and push to device
+        sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
+        sample_tt = ttnn.from_torch(sample, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+        # Denormalize: x = x * std + mean
+        sample_tt = ttnn.add(ttnn.multiply(sample_tt, std), mean)
+        sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
+
+        # conv_in
+        sample_tt = self.conv_in(sample_tt)
+
+        # Up blocks
+        for up_block in self.up_blocks:
+            sample_tt = up_block(sample_tt)
+
+        # Output: PixelNorm → SiLU → conv_out
+        sample_tt = self.norm_out(sample_tt)
+        sample_tt = ttnn.silu(sample_tt)
+        sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
+        sample_tt = self.conv_out(sample_tt)
+
+        # Convert back to host
+        result = ttnn.to_torch(sample_tt)  # (B, T_out, H_out, W_out, C_out)
+
+        # Unpatchify: (B, T, H/4, W/4, 48) → (B, T, H, W, 3) via depth-to-space
+        result = result.permute(0, 4, 1, 2, 3)  # (B, C, T, H, W) — 48 channels
+        from einops import rearrange
+
+        result = rearrange(
+            result,
+            "b (c p r q) f h w -> b c (f p) (h q) (w r)",
+            p=1,
+            q=self.patch_size,
+            r=self.patch_size,
+        )
+
+        return result
 
 
 # =============================================================================
