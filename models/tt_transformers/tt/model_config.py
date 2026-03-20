@@ -1107,17 +1107,30 @@ class ModelArgs:
             elif self.is_galaxy:
                 return ttnn.L1_MEMORY_CONFIG
             else:
-                residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
-                return ttnn.create_sharded_memory_config(
-                    (
-                        self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
-                    ),
-                    residual_grid,
-                    ttnn.ShardStrategy.WIDTH,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+                if special_case:
+                    residual_grid = self.dram_shard_core_grid_for_k(self.dim)
+                    return ttnn.create_sharded_memory_config(
+                        (
+                            self.tile_padded_batch_rows,
+                            self.dim // residual_grid.num_cores,
+                        ),
+                        residual_grid,
+                        ttnn.ShardStrategy.WIDTH,
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
+                    )
+                else:
+                    residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+                    return ttnn.create_sharded_memory_config(
+                        (
+                            self.tile_padded_batch_rows,
+                            self.dim // residual_grid.num_cores // self.num_devices,
+                        ),
+                        residual_grid,
+                        ttnn.ShardStrategy.WIDTH,
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                        use_height_and_width_as_shard_shape=True,
+                    )
         elif mode == Mode.PREFILL:
             return ttnn.DRAM_MEMORY_CONFIG
         else:
