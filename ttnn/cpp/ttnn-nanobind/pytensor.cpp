@@ -1473,6 +1473,29 @@ void pytensor_module(nb::module_& mod) {
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
+
+    mod.def(
+        "get_optimal_worker_cores_for_sharded_tensor",
+        &tt::tt_metal::get_optimal_worker_cores_for_sharded_tensor,
+        nb::arg("tensor"),
+        nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
+        R"doc(
+            Return the optimal worker cores on which to launch programs and kernels for a sharded tensor.
+
+            For L1-sharded tensors, returns the cores that hold shards in shard-orientation order.
+            For DRAM-sharded tensors, returns the optimal Tensix worker core for each DRAM bank
+            (in shard-orientation order) that holds shards.
+
+            Args:
+                tensor: A sharded device tensor (legacy 2D or ND sharded).
+                noc: Which NOC to use for optimal DRAM to worker core mapping (relevant only for DRAM-sharded tensors, default NOC_0).
+
+            Returns:
+                List of worker CoreCoords in shard-orientation order.
+
+            Example:
+                >>> cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded_tensor)
+        )doc");
 }
 
 }  // namespace ttnn::tensor
