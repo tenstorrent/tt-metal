@@ -143,8 +143,7 @@ private:
     std::optional<std::string> m_previous;
 };
 
-void CompareKernelVsReferenceWithShape(
-    const std::vector<uint32_t>& shape, float epsilon = 1e-5F, bool run_backward = true) {
+void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float epsilon = 1e-5F) {
     using namespace ttml;
     const auto data = make_case_data(shape);
     auto* device = &autograd::ctx().get_device();
@@ -183,39 +182,37 @@ void CompareKernelVsReferenceWithShape(
         out_composite_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "composite_forward_vs_xt_reference");
     expect_allclose_with_metrics(out_fused_xt, out_composite_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_composite");
 
-    if (run_backward) {
-        auto target_fused = autograd::create_tensor(core::zeros_like(out_fused->get_value()));
-        auto target_ref = autograd::create_tensor(core::zeros_like(out_composite->get_value()));
-        auto mse_fused = ops::mse_loss(out_fused, target_fused);
-        auto mse_ref = ops::mse_loss(out_composite, target_ref);
-        mse_fused->backward();
-        mse_ref->backward();
+    auto target_fused = autograd::create_tensor(core::zeros_like(out_fused->get_value()));
+    auto target_ref = autograd::create_tensor(core::zeros_like(out_composite->get_value()));
+    auto mse_fused = ops::mse_loss(out_fused, target_fused);
+    auto mse_ref = ops::mse_loss(out_composite, target_ref);
+    mse_fused->backward();
+    mse_ref->backward();
 
-        const auto grad_x_fused = core::to_xtensor(x_fused->get_grad());
-        const auto grad_w_fused = core::to_xtensor(w_fused->get_grad());
-        const auto grad_b_fused = core::to_xtensor(b_fused->get_grad());
-        const auto grad_x_ref = core::to_xtensor(x_ref->get_grad());
-        const auto grad_w_ref = core::to_xtensor(w_ref->get_grad());
-        const auto grad_b_ref = core::to_xtensor(b_ref->get_grad());
+    const auto grad_x_fused = core::to_xtensor(x_fused->get_grad());
+    const auto grad_w_fused = core::to_xtensor(w_fused->get_grad());
+    const auto grad_b_fused = core::to_xtensor(b_fused->get_grad());
+    const auto grad_x_ref = core::to_xtensor(x_ref->get_grad());
+    const auto grad_w_ref = core::to_xtensor(w_ref->get_grad());
+    const auto grad_b_ref = core::to_xtensor(b_ref->get_grad());
 
-        EXPECT_EQ(grad_x_fused.shape(), data.input.shape());
-        EXPECT_EQ(grad_w_fused.shape(), data.weight.shape());
-        EXPECT_EQ(grad_b_fused.shape(), data.bias.shape());
-        EXPECT_EQ(grad_x_ref.shape(), data.input.shape());
-        EXPECT_EQ(grad_w_ref.shape(), data.weight.shape());
-        EXPECT_EQ(grad_b_ref.shape(), data.bias.shape());
+    EXPECT_EQ(grad_x_fused.shape(), data.input.shape());
+    EXPECT_EQ(grad_w_fused.shape(), data.weight.shape());
+    EXPECT_EQ(grad_b_fused.shape(), data.bias.shape());
+    EXPECT_EQ(grad_x_ref.shape(), data.input.shape());
+    EXPECT_EQ(grad_w_ref.shape(), data.weight.shape());
+    EXPECT_EQ(grad_b_ref.shape(), data.bias.shape());
 
-        EXPECT_TRUE(xt::all(xt::isfinite(grad_x_fused)));
-        EXPECT_TRUE(xt::all(xt::isfinite(grad_w_fused)));
-        EXPECT_TRUE(xt::all(xt::isfinite(grad_b_fused)));
-        EXPECT_TRUE(xt::all(xt::isfinite(grad_x_ref)));
-        EXPECT_TRUE(xt::all(xt::isfinite(grad_w_ref)));
-        EXPECT_TRUE(xt::all(xt::isfinite(grad_b_ref)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_x_fused)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_w_fused)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_b_fused)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_x_ref)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_w_ref)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_b_ref)));
 
-        expect_allclose_with_metrics(grad_x_fused, grad_x_ref, 2.0e-2F, 2.0e-2F, "grad_x_fused_vs_composite");
-        expect_allclose_with_metrics(grad_w_fused, grad_w_ref, 2.0e-2F, 2.0e-2F, "grad_w_fused_vs_composite");
-        expect_allclose_with_metrics(grad_b_fused, grad_b_ref, 2.0e-2F, 2.0e-2F, "grad_b_fused_vs_composite");
-    }
+    expect_allclose_with_metrics(grad_x_fused, grad_x_ref, 2.0e-2F, 2.0e-2F, "grad_x_fused_vs_composite");
+    expect_allclose_with_metrics(grad_w_fused, grad_w_ref, 2.0e-2F, 2.0e-2F, "grad_w_fused_vs_composite");
+    expect_allclose_with_metrics(grad_b_fused, grad_b_ref, 2.0e-2F, 2.0e-2F, "grad_b_fused_vs_composite");
 
     autograd::ctx().reset_graph();
 }
@@ -248,17 +245,36 @@ TEST_F(PolyNormOpTest, PolyNorm_RepeatedRuns_NoHang) {
     }
 }
 
+TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
+    using namespace ttml;
+    const auto data = make_case_data({1, 1, 2, 100});
+    auto* device = &autograd::ctx().get_device();
+
+    auto x = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
+    auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
+    auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
+
+    ScopedPolyNormFusedForwardEnv env_guard(/*enabled=*/true);
+    EXPECT_THROW(
+        {
+            auto out = ops::polynorm(x, w, b, 1e-5F);
+            (void)out;
+        },
+        std::runtime_error);
+    autograd::ctx().reset_graph();
+}
+
 // ============================================================================
 // Section 2: Nightly Larger Shape Coverage
 // ============================================================================
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveSmall) {
-    CompareKernelVsReferenceWithShape({1, 1, 16, 128}, 1e-5F, /*run_backward=*/false);
+    CompareKernelVsReferenceWithShape({1, 1, 16, 128}, 1e-5F);
 }
 
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveMedium) {
-    CompareKernelVsReferenceWithShape({2, 1, 64, 512}, 1e-5F, /*run_backward=*/false);
+    CompareKernelVsReferenceWithShape({2, 1, 64, 512}, 1e-5F);
 }
 
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveLarge) {
-    CompareKernelVsReferenceWithShape({4, 1, 128, 768}, 1e-5F, /*run_backward=*/false);
+    CompareKernelVsReferenceWithShape({4, 1, 128, 768}, 1e-5F);
 }
