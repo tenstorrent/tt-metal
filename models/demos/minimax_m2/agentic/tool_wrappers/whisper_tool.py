@@ -2,15 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-WhisperTool: Wraps WhisperGenerator for transcription and translation.
+WhisperTool: Wraps WhisperGenerator for speech-to-text transcription.
 
-Uses a single TTNN-accelerated pipeline for both transcribe and translate.
+Uses distil-whisper/distil-large-v3 (English-only) with TTNN acceleration.
 The decoder trace is captured lazily on the first call and reused for all
 subsequent calls across agentic turns — no re-capture between turns.
-
-Note: distil-whisper/distil-large-v3 is an English-only model, so transcribe
-and translate produce the same English output.  A single pipeline is reused
-for both tasks to avoid allocating two generators on the same device.
 """
 
 from loguru import logger
@@ -97,14 +93,6 @@ class WhisperTool:
         gen = getattr(self, "_whisper_generator", None)
         if gen is not None:
             gen.cleanup()
-
-    def translate(self, path: str) -> str:
-        """Translate audio to English text.
-
-        distil-whisper/distil-large-v3 is English-only; this reuses the
-        transcription pipeline which already produces English output.
-        """
-        return self.transcribe(path)
 
     def close(self):
         """Explicitly release the pipeline generator before device close."""

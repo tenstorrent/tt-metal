@@ -38,29 +38,6 @@ TOOL_SCHEMAS: List[Dict] = [
     {
         "type": "function",
         "function": {
-            "name": "translate_audio",
-            "description": (
-                "Transcribes and translates audio to English. " "Use when the user attaches non-English audio."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Path to the audio file",
-                    },
-                    "source_language": {
-                        "type": "string",
-                        "description": "ISO 639-1 language code, e.g. 'fr', 'de'",
-                    },
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "text_to_speech",
             "description": (
                 "Converts text to speech and saves as a wav file. "
@@ -151,9 +128,6 @@ def dispatch_tool(name: str, args: Dict[str, Any], models) -> Any:
     """
     if name == "transcribe_audio":
         return models.whisper.transcribe(args["path"])
-
-    elif name == "translate_audio":
-        return models.whisper.translate(args["path"])
 
     elif name == "text_to_speech":
         output_path = args.get("output_path", "/tmp/response.wav")
