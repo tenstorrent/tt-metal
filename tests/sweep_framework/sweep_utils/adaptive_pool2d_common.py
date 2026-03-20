@@ -100,6 +100,10 @@ def run_adaptive_pool2d(
 
     ttnn_output = ttnn.to_torch(ttnn_output)
 
+    # DRAM slicing returns (N, H, W, C) while golden returns (1, 1, NHW, C) - normalize shape
+    if ttnn_output.shape != torch_output.shape:
+        ttnn_output = ttnn_output.reshape(1, 1, -1, in_c)
+
     # Test for equivalence with pool-type-specific tolerances
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if pool_type == "avg":

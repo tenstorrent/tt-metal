@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
+from ttnn.operations.pool import golden_grid_sample
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import skip_with_llk_assert
 
