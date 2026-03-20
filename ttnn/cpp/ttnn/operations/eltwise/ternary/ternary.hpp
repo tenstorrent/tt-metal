@@ -7,6 +7,7 @@
 #include <concepts>
 #include <optional>
 #include <variant>
+#include <reflect>
 
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 #include "ttnn/types.hpp"
