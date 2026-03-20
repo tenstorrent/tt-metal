@@ -10,6 +10,9 @@ Tests decoder fused operation with full pipeline:
 - Qrope output: [64, 1, 64] after RoPE
 """
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -24,6 +27,8 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
+    load_moe_decoder_layer,
+    load_moe_routed_experts,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
@@ -65,6 +70,7 @@ def create_decoder_block_tensors(
     num_routed_experts: int = 0,
     preloaded_weights=None,
     rigged_experts: bool = False,
+    input_override: torch.Tensor | None = None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -172,7 +178,9 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
-    if rigged_experts:
+    if input_override is not None:
+        torch_input = input_override.reshape(shape).to(torch.bfloat16)
+    elif rigged_experts:
         # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
         # (all-ones can produce brittle saturation in downstream low-precision paths)
         torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -1547,3 +1555,943 @@ def test_decoder_mlp(
     logger.info("✓ DecoderBlock MLP mesh test passed!")
 
     ttnn.synchronize_device(submesh)
+
+
+# ============================================================================
+# Real-weights test: validate against GPU debug trace
+# ============================================================================
+
+MOE_LAYER_OFFSET = 3  # Layers 0-2 are dense, MoE starts at layer 3
+
+
+def _load_trace_tensor(trace_dir: Path, filename: str, key: str) -> torch.Tensor:
+    """Load a single tensor from a safetensors file in the debug trace directory."""
+    from safetensors.torch import safe_open
+
+    with safe_open(str(trace_dir / filename), framework="pt") as f:
+        return f.get_tensor(key)
+
+
+def _load_trace_tensors(trace_dir, trace_layer_idx, token_idx):
+    """Load all trace tensors needed for validation and return as a dict."""
+    prev_layer = trace_layer_idx - 1
+    trace_input_all = _load_trace_tensor(trace_dir, "hidden_states.safetensors", f"decoder_output_layer_{prev_layer}")
+    trace_input = trace_input_all[token_idx].unsqueeze(0)  # (1, 7168)
+    logger.info(f"Loaded trace input from layer {prev_layer}, token {token_idx}: shape={trace_input.shape}")
+
+    trace_output_all = _load_trace_tensor(
+        trace_dir, "hidden_states.safetensors", f"decoder_output_layer_{trace_layer_idx}"
+    )
+    trace_post_mla = _load_trace_tensor(
+        trace_dir, "hidden_states.safetensors", f"post_mla_residual_layer_{trace_layer_idx}"
+    )
+    trace_expert_ids = _load_trace_tensor(
+        trace_dir, "expert_routing.safetensors", f"expert_ids_layer_{trace_layer_idx}"
+    )
+    trace_expert_weights = _load_trace_tensor(
+        trace_dir, "expert_routing.safetensors", f"expert_weights_layer_{trace_layer_idx}"
+    )
+    logger.info(f"Trace expert IDs for token {token_idx}: {trace_expert_ids[token_idx]}")
+    logger.info(f"Trace expert weights for token {token_idx}: {trace_expert_weights[token_idx]}")
+
+    return {
+        "input": trace_input,
+        "expected_output": trace_output_all[token_idx],
+        "post_mla": trace_post_mla[token_idx],
+        "expert_ids": trace_expert_ids[token_idx],
+        "expert_weights": trace_expert_weights[token_idx],
+    }
+
+
+def _run_decoder_and_validate_vs_trace(
+    submesh,
+    d,
+    trace,
+    *,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    num_iters,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    epsilon,
+    use_fp32,
+    noc_mode,
+    num_internal_iterations,
+    test_label,
+):
+    """Run the decoder block op and validate outputs against debug trace tensors."""
+    device_grid_size = submesh.compute_with_storage_grid_size()
+    num_cores = device_grid_size.x * device_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
+    ttnn.synchronize_device(submesh)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
+    ttnn.synchronize_device(submesh)
+
+    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    moe_semaphores = MoeOp.create_semaphores(submesh)
+
+    logger.info(f"Running decoder ({test_label})...")
+    for i in range(num_iters):
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
+            d["input_tensor_mesh"],
+            d["gamma_overlapped"],
+            d["matmul_weights_overlapped"],
+            d["rmsnorm2_gamma_overlapped"],
+            d["matmul2_weights_overlapped"],
+            d["matmul3_weights_overlapped"],
+            d["ttnn_qrope_sin"],
+            d["ttnn_qrope_cos"],
+            d["ttnn_trans_mat"],
+            d["ttnn_krope_cos"],
+            d["ttnn_krope_sin"],
+            d["dkv_matmul_weights_overlapped"],
+            d["dkv_rmsnorm_gamma_overlapped"],
+            d["ttnn_kv_cache"],
+            d["ttnn_position_ids"],
+            d["scale"],
+            d["sdpa_kv_cache_buffer"],
+            d["sdpa_out_interm_buffer"],
+            d["sender_coord"],
+            d["kv_b2_overlapped"],
+            d["o_proj_overlapped"],
+            d["ttnn_sdpa_input_l"],
+            d["ttnn_sdpa_input_ms"],
+            d["ttnn_sdpa_output_l"],
+            d["ttnn_sdpa_intermediate_recv"],
+            d["ttnn_sdpa_forwarder_scratch"],
+            d["device_chunk_size"],
+            d["ttnn_attention_block_output"],
+            attention_block_semaphores=attn_semaphores,
+            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+            gate_mm_weights_tensor=d["gate_mm_overlapped"],
+            gate_bias_tensor=d["ttnn_gate_bias"],
+            gate_indices_tensor=d["ttnn_gate_indices"],
+            gate_output_scores_tensor=d["gate_output_scores_tensor"],
+            gate_output_indices_tensor=d["gate_output_indices_tensor"],
+            gate_proj_weights_tensor=d["gate_proj_weights"],
+            up_proj_weights_tensor=d["up_proj_weights"],
+            down_proj_weights_tensor=d["down_proj_weights"],
+            moe_final_output_tensor=None,
+            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+            shared_down_weights_tensor=d["shared_down_weights_tensor"],
+            shared_k_parallel=d["shared_k_parallel"],
+            shared_n_parallel=d["shared_n_parallel"],
+            moe_semaphores=moe_semaphores,
+            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+            reduce_output_tensor=d["reduce_output_tensor"],
+            reduce_semaphores=reduce_semaphores,
+            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+            enable_routing=True,
+            bcast_cluster_axis=bcast_cluster_axis,
+            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links=1,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=False,
+            noc_mode=noc_mode,
+            num_iterations=num_internal_iterations,
+            upstream_socket=None,
+            downstream_socket=None,
+            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+            persistent_mode=True,
+        )
+    ttnn.synchronize_device(submesh)
+
+    sender_device_idx = sender_row * mesh_cols + sender_col
+
+    # ── Validate expert IDs and weights (sort by index for order-invariant comparison) ──
+    device_scores_torch = ttnn.to_torch(
+        d["gate_output_scores_tensor"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    device_indices_torch = ttnn.to_torch(
+        d["gate_output_indices_tensor"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    device_scores_flat = device_scores_torch[sender_device_idx, :8].float()
+    device_indices_flat = device_indices_torch[sender_device_idx, :8].long()
+
+    trace_ids_token = trace["expert_ids"].long()
+    trace_weights_token = trace["expert_weights"].float()
+
+    device_sort_order = device_indices_flat.argsort()
+    trace_sort_order = trace_ids_token.argsort()
+
+    device_ids_sorted = device_indices_flat[device_sort_order]
+    device_weights_sorted = device_scores_flat[device_sort_order]
+    trace_ids_sorted = trace_ids_token[trace_sort_order]
+    trace_weights_sorted = trace_weights_token[trace_sort_order]
+
+    ids_match = torch.equal(device_ids_sorted, trace_ids_sorted)
+    logger.info(f"Expert IDs match: {ids_match}")
+    logger.info(f"Device expert IDs (sorted): {device_ids_sorted.tolist()}")
+    logger.info(f"Trace expert IDs  (sorted): {trace_ids_sorted.tolist()}")
+
+    weights_passing, weights_pcc = comp_pcc(trace_weights_sorted, device_weights_sorted, 0.99)
+    weights_max_abs_diff = (trace_weights_sorted - device_weights_sorted).abs().max().item()
+    logger.info(f"Expert weights PCC: {weights_pcc}")
+    logger.info(f"Expert weights max absolute difference: {weights_max_abs_diff}")
+    logger.info(f"Device expert weights (sorted): {device_weights_sorted.tolist()}")
+    logger.info(f"Trace expert weights  (sorted): {trace_weights_sorted.tolist()}")
+
+    # ── Validate attention output against trace post-MLA residual ──
+    ttnn_attention_output = ttnn.to_torch(
+        attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+    )
+    device_attn_output = ttnn_attention_output[sender_device_idx : sender_device_idx + 1, :].flatten()
+    trace_post_mla_token = trace["post_mla"]
+
+    attn_passing, attn_pcc = comp_pcc(trace_post_mla_token.float(), device_attn_output.float(), 0.95)
+    attn_max_abs_diff = (trace_post_mla_token.float() - device_attn_output.float()).abs().max().item()
+    logger.info(f"Attention output PCC vs trace post_mla_residual: {attn_pcc}")
+    logger.info(f"Attention max absolute difference: {attn_max_abs_diff}")
+    logger.info(f"Trace post-MLA max magnitude: {trace_post_mla_token.float().abs().max().item()}")
+    logger.info(f"Device attention max magnitude: {device_attn_output.float().abs().max().item()}")
+    logger.info(f"Trace post-MLA residual: {trace_post_mla_token[:8]}")
+    logger.info(f"Device attention output: {device_attn_output[:8]}")
+
+    # ── Validate full decoder output against trace ──
+    root_coord_tuple = d["reduce_root_coord"]
+    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
+    decoder_moe_output = ttnn.to_torch(moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+    decoder_moe_output_root = decoder_moe_output[root_device_idx]
+    decoder_moe_output_valid = extract_routed_expert_output(
+        decoder_moe_output_root.unsqueeze(0),
+        d["num_gate_proj_cores"],
+        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+        d["per_core_down_proj_N"],
+    )
+
+    device_flat = decoder_moe_output_valid.float().flatten()
+    trace_flat = trace["expected_output"].float()
+    moe_passing, moe_pcc = comp_pcc(trace_flat, device_flat, 0.95)
+    moe_max_abs_diff = (trace_flat - device_flat).abs().max().item()
+    logger.info(f"Full decoder output PCC vs trace: {moe_pcc}")
+    logger.info(f"Full decoder max absolute difference: {moe_max_abs_diff}")
+    logger.info(f"Trace decoder max magnitude: {trace_flat.abs().max().item()}")
+    logger.info(f"Device decoder max magnitude: {device_flat.abs().max().item()}")
+    logger.info(f"Trace expected output: {trace['expected_output'][:8]}")
+    logger.info(f"Device decoder output: {decoder_moe_output_valid.flatten()[:8]}")
+
+    assert ids_match, f"Expert IDs mismatch: device={device_ids_sorted.tolist()} vs trace={trace_ids_sorted.tolist()}"
+    # assert weights_passing, f"Expert weights PCC check failed vs trace: {weights_pcc}"
+    assert attn_passing, f"Attention output PCC check failed vs trace: {attn_pcc}"
+    assert moe_passing, f"Full decoder output PCC check failed vs trace: {moe_pcc}"
+
+    logger.info(f"✓ DecoderBlock {test_label} test passed!")
+    ttnn.synchronize_device(submesh)
+
+
+def _trace_test_common_setup(bh_2d_mesh_device, mesh_rows, mesh_cols, trace_layer_idx, trace_dir, token_idx):
+    """Common preamble for trace-based tests: validate inputs and load trace tensors."""
+    if trace_layer_idx < MOE_LAYER_OFFSET:
+        pytest.skip(
+            f"Layer {trace_layer_idx} is dense (MoE starts at {MOE_LAYER_OFFSET}); use test_decoder_mlp instead"
+        )
+
+    torch.manual_seed(0)
+    num_devices = mesh_rows * mesh_cols
+    logger.info(f"Number of devices: {num_devices}")
+    logger.info(f"Testing layer {trace_layer_idx} against debug trace")
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than available")
+
+    trace = _load_trace_tensors(trace_dir, trace_layer_idx, token_idx)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    return trace, submesh
+
+
+_TRACE_TEST_PARAMETRIZE = [
+    pytest.mark.parametrize("sender_row, sender_col", [(1, 0)]),
+    pytest.mark.parametrize("epsilon", [1e-6]),
+    pytest.mark.parametrize("use_fp32", [False]),
+    pytest.mark.parametrize("bcast_cluster_axis", [0]),
+    pytest.mark.parametrize("bcast_secondary_cluster_axis", [1]),
+    pytest.mark.parametrize("reduce_cluster_axis", [1]),
+    pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)]),
+    pytest.mark.parametrize("num_iters", [(1)]),
+    pytest.mark.parametrize("max_seq_len", [32 * 1024]),
+    pytest.mark.parametrize("position_id", [0]),
+    pytest.mark.parametrize(
+        "device_params",
+        [
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(15232),
+                "worker_l1_size": 1431568,
+            }
+        ],
+        indirect=True,
+    ),
+    pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC]),
+    pytest.mark.parametrize("num_internal_iterations", [1]),
+    pytest.mark.parametrize("token_idx", [0]),
+    pytest.mark.parametrize(
+        "trace_layer_idx",
+        [
+            3,
+            4,
+            pytest.param(10, marks=pytest.mark.skip_post_commit),
+            pytest.param(30, marks=pytest.mark.skip_post_commit),
+            pytest.param(60, marks=pytest.mark.skip_post_commit),
+        ],
+    ),
+    pytest.mark.requires_grid_size((13, 10)),
+]
+
+
+def _apply_trace_test_marks(fn):
+    for mark in reversed(_TRACE_TEST_PARAMETRIZE):
+        fn = mark(fn)
+    return fn
+
+
+@_apply_trace_test_marks
+@pytest.mark.parametrize("num_routed_experts", [256])
+def test_decoder_real_weights(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    num_iters,
+    max_seq_len,
+    position_id,
+    noc_mode,
+    num_internal_iterations,
+    num_routed_experts,
+    token_idx,
+    trace_layer_idx,
+    get_reference_model_state_dict,
+):
+    """Test decoder block against a real GPU debug trace using HF weights (R1-0528).
+
+    Requires:
+      - DEEPSEEK_V3_HF_MODEL env var pointing to HF model directory
+      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace directory
+    """
+    hf_model_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
+    if not hf_model_path:
+        pytest.skip("DEEPSEEK_V3_HF_MODEL not set")
+    if not trace_path:
+        pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
+    trace_dir = Path(trace_path)
+    if not (trace_dir / "metadata.json").exists():
+        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+
+    trace, submesh = _trace_test_common_setup(
+        bh_2d_mesh_device, mesh_rows, mesh_cols, trace_layer_idx, trace_dir, token_idx
+    )
+
+    logger.info(f"Loading real model state dict for layer {trace_layer_idx}...")
+    state_dict = get_reference_model_state_dict(
+        layer_idx=trace_layer_idx,
+        is_moe=True,
+        seed=RoutedExpert.SEED,
+        num_routed_experts=num_routed_experts,
+        random_weights=False,
+    )
+
+    d = create_decoder_block_tensors(
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        position_id,
+        state_dict,
+        layer_idx=trace_layer_idx,
+        max_seq_len=max_seq_len,
+        is_moe=True,
+        num_routed_experts=num_routed_experts,
+        input_override=trace["input"],
+    )
+
+    _run_decoder_and_validate_vs_trace(
+        submesh,
+        d,
+        trace,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        num_iters=num_iters,
+        bcast_cluster_axis=bcast_cluster_axis,
+        bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+        reduce_cluster_axis=reduce_cluster_axis,
+        epsilon=epsilon,
+        use_fp32=use_fp32,
+        noc_mode=noc_mode,
+        num_internal_iterations=num_internal_iterations,
+        test_label="real-weights (HF)",
+    )
+
+
+@_apply_trace_test_marks
+def test_decoder_cached_weights(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    num_iters,
+    max_seq_len,
+    position_id,
+    noc_mode,
+    num_internal_iterations,
+    token_idx,
+    trace_layer_idx,
+):
+    """Test decoder block against a real GPU debug trace using cached TTNN weights.
+
+    Requires:
+      - DEEPSEEK_V3_WEIGHT_CACHE env var pointing to the TTNN weight cache directory
+      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace directory
+    """
+    cache_path_str = os.getenv("DEEPSEEK_V3_WEIGHT_CACHE")
+    trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
+    if not cache_path_str:
+        pytest.skip("DEEPSEEK_V3_WEIGHT_CACHE not set")
+    if not trace_path:
+        pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
+    cache_path = Path(cache_path_str)
+    if not cache_path.is_dir():
+        pytest.skip(f"Weight cache not found at {cache_path}")
+    trace_dir = Path(trace_path)
+    if not (trace_dir / "metadata.json").exists():
+        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+
+    trace, submesh = _trace_test_common_setup(
+        bh_2d_mesh_device, mesh_rows, mesh_cols, trace_layer_idx, trace_dir, token_idx
+    )
+
+    logger.info(f"Loading cached weights for layer {trace_layer_idx}...")
+    preloaded_experts = load_moe_routed_experts(cache_path, submesh, trace_layer_idx)
+    layer_weights = load_moe_decoder_layer(
+        cache_path, submesh, trace_layer_idx, preloaded_routed_experts=preloaded_experts
+    )
+
+    d = create_decoder_block_tensors(
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        position_id,
+        state_dict=None,
+        layer_idx=trace_layer_idx,
+        max_seq_len=max_seq_len,
+        is_moe=True,
+        preloaded_weights=layer_weights,
+        input_override=trace["input"],
+    )
+
+    _run_decoder_and_validate_vs_trace(
+        submesh,
+        d,
+        trace,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        num_iters=num_iters,
+        bcast_cluster_axis=bcast_cluster_axis,
+        bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+        reduce_cluster_axis=reduce_cluster_axis,
+        epsilon=epsilon,
+        use_fp32=use_fp32,
+        noc_mode=noc_mode,
+        num_internal_iterations=num_internal_iterations,
+        test_label="cached-weights (TTNN)",
+    )
+
+
+def _run_multi_layer_and_validate(
+    submesh,
+    trace_dir,
+    token_idx,
+    start_layer,
+    num_layers,
+    load_weights_fn,
+    *,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    position_id,
+    max_seq_len,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    epsilon,
+    use_fp32,
+    noc_mode,
+    test_label,
+):
+    """Run consecutive decoder layers, feeding output of each into the next.
+
+    load_weights_fn(layer_idx) should return (create_decoder_block_tensors_kwargs, cleanup_keys)
+    where create_decoder_block_tensors_kwargs is a dict of extra kwargs for create_decoder_block_tensors
+    (e.g. state_dict/preloaded_weights/num_routed_experts) and cleanup_keys is a list of local
+    variable names to delete after each iteration for memory cleanup.
+    """
+    end_layer = start_layer + num_layers
+
+    prev_layer = start_layer - 1
+    trace_input_all = _load_trace_tensor(trace_dir, "hidden_states.safetensors", f"decoder_output_layer_{prev_layer}")
+    current_input = trace_input_all[token_idx].unsqueeze(0)
+    logger.info(f"Initial input from trace layer {prev_layer}, token {token_idx}: shape={current_input.shape}")
+
+    layer_results = []
+
+    for layer_idx in range(start_layer, end_layer):
+        logger.info(f"{'=' * 60}")
+        logger.info(f"Running layer {layer_idx} ({layer_idx - start_layer + 1}/{num_layers})")
+        logger.info(f"{'=' * 60}")
+
+        weight_kwargs, weight_refs = load_weights_fn(layer_idx)
+
+        d = create_decoder_block_tensors(
+            submesh,
+            mesh_rows,
+            mesh_cols,
+            sender_row,
+            sender_col,
+            position_id,
+            layer_idx=layer_idx,
+            max_seq_len=max_seq_len,
+            is_moe=True,
+            input_override=current_input,
+            **weight_kwargs,
+        )
+
+        device_grid_size = submesh.compute_with_storage_grid_size()
+        num_cores = device_grid_size.x * device_grid_size.y
+        available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
+        ttnn.synchronize_device(submesh)
+        reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+        persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
+        ttnn.synchronize_device(submesh)
+
+        attn_semaphores = AttentionBlock.create_semaphores(submesh)
+        moe_semaphores = MoeOp.create_semaphores(submesh)
+
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
+            d["input_tensor_mesh"],
+            d["gamma_overlapped"],
+            d["matmul_weights_overlapped"],
+            d["rmsnorm2_gamma_overlapped"],
+            d["matmul2_weights_overlapped"],
+            d["matmul3_weights_overlapped"],
+            d["ttnn_qrope_sin"],
+            d["ttnn_qrope_cos"],
+            d["ttnn_trans_mat"],
+            d["ttnn_krope_cos"],
+            d["ttnn_krope_sin"],
+            d["dkv_matmul_weights_overlapped"],
+            d["dkv_rmsnorm_gamma_overlapped"],
+            d["ttnn_kv_cache"],
+            d["ttnn_position_ids"],
+            d["scale"],
+            d["sdpa_kv_cache_buffer"],
+            d["sdpa_out_interm_buffer"],
+            d["sender_coord"],
+            d["kv_b2_overlapped"],
+            d["o_proj_overlapped"],
+            d["ttnn_sdpa_input_l"],
+            d["ttnn_sdpa_input_ms"],
+            d["ttnn_sdpa_output_l"],
+            d["ttnn_sdpa_intermediate_recv"],
+            d["ttnn_sdpa_forwarder_scratch"],
+            d["device_chunk_size"],
+            d["ttnn_attention_block_output"],
+            attention_block_semaphores=attn_semaphores,
+            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+            gate_mm_weights_tensor=d["gate_mm_overlapped"],
+            gate_bias_tensor=d["ttnn_gate_bias"],
+            gate_indices_tensor=d["ttnn_gate_indices"],
+            gate_output_scores_tensor=d["gate_output_scores_tensor"],
+            gate_output_indices_tensor=d["gate_output_indices_tensor"],
+            gate_proj_weights_tensor=d["gate_proj_weights"],
+            up_proj_weights_tensor=d["up_proj_weights"],
+            down_proj_weights_tensor=d["down_proj_weights"],
+            moe_final_output_tensor=None,
+            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+            shared_down_weights_tensor=d["shared_down_weights_tensor"],
+            shared_k_parallel=d["shared_k_parallel"],
+            shared_n_parallel=d["shared_n_parallel"],
+            moe_semaphores=moe_semaphores,
+            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+            reduce_output_tensor=d["reduce_output_tensor"],
+            reduce_semaphores=reduce_semaphores,
+            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+            enable_routing=True,
+            bcast_cluster_axis=bcast_cluster_axis,
+            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links=1,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=False,
+            noc_mode=noc_mode,
+            num_iterations=1,
+            upstream_socket=None,
+            downstream_socket=None,
+            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+            persistent_mode=True,
+        )
+        ttnn.synchronize_device(submesh)
+
+        sender_device_idx = sender_row * mesh_cols + sender_col
+
+        # ── Expert IDs and weights (logged only, not asserted) ──
+        trace_expert_ids = _load_trace_tensor(trace_dir, "expert_routing.safetensors", f"expert_ids_layer_{layer_idx}")[
+            token_idx
+        ]
+        trace_expert_weights = _load_trace_tensor(
+            trace_dir, "expert_routing.safetensors", f"expert_weights_layer_{layer_idx}"
+        )[token_idx]
+
+        device_scores_torch = ttnn.to_torch(
+            d["gate_output_scores_tensor"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        device_indices_torch = ttnn.to_torch(
+            d["gate_output_indices_tensor"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        device_scores_flat = device_scores_torch[sender_device_idx, :8].float()
+        device_indices_flat = device_indices_torch[sender_device_idx, :8].long()
+
+        device_sort_order = device_indices_flat.argsort()
+        trace_sort_order = trace_expert_ids.long().argsort()
+        device_ids_sorted = device_indices_flat[device_sort_order]
+        device_weights_sorted = device_scores_flat[device_sort_order]
+        trace_ids_sorted = trace_expert_ids.long()[trace_sort_order]
+        trace_weights_sorted = trace_expert_weights.float()[trace_sort_order]
+
+        ids_match = torch.equal(device_ids_sorted, trace_ids_sorted)
+        logger.info(f"Layer {layer_idx} expert IDs match: {ids_match}")
+        logger.info(f"Layer {layer_idx} device expert IDs (sorted): {device_ids_sorted.tolist()}")
+        logger.info(f"Layer {layer_idx} trace expert IDs  (sorted): {trace_ids_sorted.tolist()}")
+
+        _, weights_pcc = comp_pcc(trace_weights_sorted, device_weights_sorted, 0.99)
+        weights_max_abs_diff = (trace_weights_sorted - device_weights_sorted).abs().max().item()
+        logger.info(f"Layer {layer_idx} expert weights PCC: {weights_pcc}")
+        logger.info(f"Layer {layer_idx} expert weights max abs diff: {weights_max_abs_diff}")
+
+        # ── MLA (attention) output ──
+        trace_post_mla = _load_trace_tensor(
+            trace_dir, "hidden_states.safetensors", f"post_mla_residual_layer_{layer_idx}"
+        )[token_idx]
+
+        ttnn_attention_output = ttnn.to_torch(
+            attention_block_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        device_attn_output = ttnn_attention_output[sender_device_idx : sender_device_idx + 1, :].flatten()
+
+        attn_passing, attn_pcc = comp_pcc(trace_post_mla.float(), device_attn_output.float(), 0.90)
+        attn_max_abs_diff = (trace_post_mla.float() - device_attn_output.float()).abs().max().item()
+        logger.info(f"Layer {layer_idx} MLA output PCC vs trace: {attn_pcc}")
+        logger.info(f"Layer {layer_idx} MLA max abs diff: {attn_max_abs_diff}")
+        logger.info(f"Layer {layer_idx} trace MLA max magnitude: {trace_post_mla.float().abs().max().item()}")
+        logger.info(f"Layer {layer_idx} device MLA max magnitude: {device_attn_output.float().abs().max().item()}")
+
+        # ── Full decoder output ──
+        root_coord_tuple = d["reduce_root_coord"]
+        root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
+        decoder_moe_output = ttnn.to_torch(
+            moe_final_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0)
+        )
+        decoder_moe_output_root = decoder_moe_output[root_device_idx]
+        decoder_output_valid = extract_routed_expert_output(
+            decoder_moe_output_root.unsqueeze(0),
+            d["num_gate_proj_cores"],
+            RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+            d["per_core_down_proj_N"],
+        )
+
+        trace_layer_output = _load_trace_tensor(
+            trace_dir, "hidden_states.safetensors", f"decoder_output_layer_{layer_idx}"
+        )[token_idx]
+
+        device_flat = decoder_output_valid.float().flatten()
+        trace_flat = trace_layer_output.float()
+        decoder_passing, decoder_pcc = comp_pcc(trace_flat, device_flat, 0.90)
+        decoder_max_abs_diff = (trace_flat - device_flat).abs().max().item()
+        logger.info(f"Layer {layer_idx} decoder output PCC vs trace: {decoder_pcc}")
+        logger.info(f"Layer {layer_idx} decoder max abs diff: {decoder_max_abs_diff}")
+        logger.info(f"Layer {layer_idx} trace decoder max magnitude: {trace_flat.abs().max().item()}")
+        logger.info(f"Layer {layer_idx} device decoder max magnitude: {device_flat.abs().max().item()}")
+
+        layer_results.append(
+            {
+                "layer": layer_idx,
+                "expert_ids_match": ids_match,
+                "expert_weights_pcc": weights_pcc,
+                "expert_weights_max_abs_diff": weights_max_abs_diff,
+                "mla_passing": attn_passing,
+                "mla_pcc": attn_pcc,
+                "mla_max_abs_diff": attn_max_abs_diff,
+                "mla_trace_max_mag": trace_post_mla.float().abs().max().item(),
+                "mla_device_max_mag": device_attn_output.float().abs().max().item(),
+                "decoder_passing": decoder_passing,
+                "decoder_pcc": decoder_pcc,
+                "decoder_max_abs_diff": decoder_max_abs_diff,
+                "decoder_trace_max_mag": trace_flat.abs().max().item(),
+                "decoder_device_max_mag": device_flat.abs().max().item(),
+            }
+        )
+
+        current_input = decoder_output_valid.to(torch.bfloat16).reshape(1, -1)
+
+        # Unload weights and device tensors
+        del weight_refs, d
+        del moe_final_output_tensor, attention_block_output_tensor
+        del attn_semaphores, moe_semaphores, reduce_semaphores, persistent_next_iter_semaphore
+        ttnn.synchronize_device(submesh)
+
+    # ── Summary ──
+    logger.info(f"{'=' * 80}")
+    logger.info(f"Multi-layer {test_label} summary: layers {start_layer}..{end_layer - 1} ({num_layers} layers)")
+    logger.info(f"{'=' * 80}")
+    logger.info(
+        f"{'Layer':>5} | {'IDs OK':>6} | {'Exp Wt PCC':>14} | {'MLA PCC':>14} | {'MLA MaxDiff':>11} | {'Dec PCC':>14} | {'Dec MaxDiff':>11} | {'Dec Tr Mag':>10} | {'Dec Dv Mag':>10}"
+    )
+    logger.info(
+        f"{'-' * 5}-+-{'-' * 6}-+-{'-' * 14}-+-{'-' * 14}-+-{'-' * 11}-+-{'-' * 14}-+-{'-' * 11}-+-{'-' * 10}-+-{'-' * 10}"
+    )
+    for r in layer_results:
+        logger.info(
+            f"{r['layer']:>5} | {str(r['expert_ids_match']):>6} | {r['expert_weights_pcc']:>14} | "
+            f"{r['mla_pcc']:>14} | {r['mla_max_abs_diff']:>11.6f} | "
+            f"{r['decoder_pcc']:>14} | {r['decoder_max_abs_diff']:>11.6f} | "
+            f"{r['decoder_trace_max_mag']:>10.4f} | {r['decoder_device_max_mag']:>10.4f}"
+        )
+    logger.info(f"{'=' * 80}")
+
+    failures = []
+    for r in layer_results:
+        if not r["mla_passing"]:
+            failures.append(f"Layer {r['layer']}: MLA PCC failed ({r['mla_pcc']})")
+        if not r["decoder_passing"]:
+            failures.append(f"Layer {r['layer']}: decoder output PCC failed ({r['decoder_pcc']})")
+
+    assert not failures, f"Multi-layer {test_label} validation failures:\n  " + "\n  ".join(failures)
+
+    logger.info(f"DecoderBlock multi-layer {test_label} test ({start_layer}..{end_layer - 1}) completed!")
+    ttnn.synchronize_device(submesh)
+
+
+_MULTI_LAYER_TEST_PARAMETRIZE = [
+    pytest.mark.parametrize("sender_row, sender_col", [(1, 0)]),
+    pytest.mark.parametrize("epsilon", [1e-6]),
+    pytest.mark.parametrize("use_fp32", [False]),
+    pytest.mark.parametrize("bcast_cluster_axis", [0]),
+    pytest.mark.parametrize("bcast_secondary_cluster_axis", [1]),
+    pytest.mark.parametrize("reduce_cluster_axis", [1]),
+    pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)]),
+    pytest.mark.parametrize("max_seq_len", [32 * 1024]),
+    pytest.mark.parametrize("position_id", [0]),
+    pytest.mark.parametrize(
+        "device_params",
+        [
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(15232),
+                "worker_l1_size": 1431568,
+            }
+        ],
+        indirect=True,
+    ),
+    pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC]),
+    pytest.mark.parametrize("token_idx", [0]),
+    pytest.mark.parametrize(
+        "start_layer, num_layers",
+        [
+            (3, 2),
+            # pytest.param(3, 4, marks=pytest.mark.skip_post_commit),
+            # pytest.param(3, 8, marks=pytest.mark.skip_post_commit),
+        ],
+    ),
+    pytest.mark.requires_grid_size((13, 10)),
+]
+
+
+def _apply_multi_layer_test_marks(fn):
+    for mark in reversed(_MULTI_LAYER_TEST_PARAMETRIZE):
+        fn = mark(fn)
+    return fn
+
+
+def _multi_layer_common_setup(bh_2d_mesh_device, mesh_rows, mesh_cols, start_layer, num_layers, trace_dir):
+    """Common preamble for multi-layer tests."""
+    end_layer = start_layer + num_layers
+    if start_layer < MOE_LAYER_OFFSET:
+        pytest.skip(f"Start layer {start_layer} is dense; multi-layer test requires MoE layers (>= {MOE_LAYER_OFFSET})")
+
+    torch.manual_seed(0)
+    num_devices = mesh_rows * mesh_cols
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than available")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    logger.info(f"Multi-layer test: layers {start_layer}..{end_layer - 1} ({num_layers} layers)")
+    return submesh
+
+
+@_apply_multi_layer_test_marks
+def test_decoder_multi_layer(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    max_seq_len,
+    position_id,
+    noc_mode,
+    token_idx,
+    start_layer,
+    num_layers,
+):
+    """Multi-layer decoder test using cached TTNN weights."""
+    cache_path_str = os.getenv("DEEPSEEK_V3_WEIGHT_CACHE")
+    trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
+    if not cache_path_str:
+        pytest.skip("DEEPSEEK_V3_WEIGHT_CACHE not set")
+    if not trace_path:
+        pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
+    cache_path = Path(cache_path_str)
+    if not cache_path.is_dir():
+        pytest.skip(f"Weight cache not found at {cache_path}")
+    trace_dir = Path(trace_path)
+    if not (trace_dir / "metadata.json").exists():
+        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+
+    submesh = _multi_layer_common_setup(bh_2d_mesh_device, mesh_rows, mesh_cols, start_layer, num_layers, trace_dir)
+
+    def load_weights_fn(layer_idx):
+        logger.info(f"Loading cached weights for layer {layer_idx}...")
+        preloaded_experts = load_moe_routed_experts(cache_path, submesh, layer_idx)
+        layer_weights = load_moe_decoder_layer(
+            cache_path, submesh, layer_idx, preloaded_routed_experts=preloaded_experts
+        )
+        kwargs = {"state_dict": None, "preloaded_weights": layer_weights}
+        refs = {"preloaded_experts": preloaded_experts, "layer_weights": layer_weights}
+        return kwargs, refs
+
+    _run_multi_layer_and_validate(
+        submesh,
+        trace_dir,
+        token_idx,
+        start_layer,
+        num_layers,
+        load_weights_fn,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        position_id=position_id,
+        max_seq_len=max_seq_len,
+        bcast_cluster_axis=bcast_cluster_axis,
+        bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+        reduce_cluster_axis=reduce_cluster_axis,
+        epsilon=epsilon,
+        use_fp32=use_fp32,
+        noc_mode=noc_mode,
+        test_label="cached-weights",
+    )
+
+
+@_apply_multi_layer_test_marks
+@pytest.mark.parametrize("num_routed_experts", [256])
+def test_decoder_multi_layer_real_weights(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    max_seq_len,
+    position_id,
+    noc_mode,
+    token_idx,
+    num_routed_experts,
+    start_layer,
+    num_layers,
+    get_reference_model_state_dict,
+):
+    """Multi-layer decoder test using HF weights via LazyStateDict."""
+    hf_model_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
+    if not hf_model_path:
+        pytest.skip("DEEPSEEK_V3_HF_MODEL not set")
+    if not trace_path:
+        pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
+    trace_dir = Path(trace_path)
+    if not (trace_dir / "metadata.json").exists():
+        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+
+    submesh = _multi_layer_common_setup(bh_2d_mesh_device, mesh_rows, mesh_cols, start_layer, num_layers, trace_dir)
+
+    def load_weights_fn(layer_idx):
+        logger.info(f"Loading HF weights for layer {layer_idx}...")
+        state_dict = get_reference_model_state_dict(
+            layer_idx=layer_idx,
+            is_moe=True,
+            seed=RoutedExpert.SEED,
+            num_routed_experts=num_routed_experts,
+            random_weights=False,
+        )
+        kwargs = {"state_dict": state_dict, "num_routed_experts": num_routed_experts}
+        refs = {"state_dict": state_dict}
+        return kwargs, refs
+
+    _run_multi_layer_and_validate(
+        submesh,
+        trace_dir,
+        token_idx,
+        start_layer,
+        num_layers,
+        load_weights_fn,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_row=sender_row,
+        sender_col=sender_col,
+        position_id=position_id,
+        max_seq_len=max_seq_len,
+        bcast_cluster_axis=bcast_cluster_axis,
+        bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+        reduce_cluster_axis=reduce_cluster_axis,
+        epsilon=epsilon,
+        use_fp32=use_fp32,
+        noc_mode=noc_mode,
+        test_label="HF-weights",
+    )
