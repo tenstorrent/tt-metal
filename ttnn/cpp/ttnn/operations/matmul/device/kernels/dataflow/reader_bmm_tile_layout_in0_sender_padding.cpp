@@ -188,6 +188,11 @@ void kernel_main() {
                 }
             }
 
+            // this is an optimization for the case when in0 is [1, 1, M, K] and in1 is [1, H, K, N], i.e. when in0_B ==
+            // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this
+            // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
+            // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
+            // CB so compute kernel thinks it has new data
             if (in0_B == 1 && in1_B > 1 && b > 0) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);

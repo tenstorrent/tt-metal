@@ -38,7 +38,8 @@ create_program_dram_sharded(
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
-    uint32_t B,
+    uint32_t in0_B,
+    uint32_t in1_B,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -195,13 +196,13 @@ create_program_dram_sharded(
 
     uint32_t in0_block_tiles = per_core_M * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (B * num_blocks > 1) {
+    if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     uint32_t in1_block_tiles = per_core_N_in1_sender * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (B * num_blocks > 1) {
+    if (in1_B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 3;  // triple buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
@@ -444,7 +445,8 @@ create_program_dram_sharded(
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        B,                       // batch
+        in0_B,                   // in0_batch
+        in1_B,                   // in1_batch
         out_block_tiles,         // out_block_num_tiles
 
         untilize_out,  // untilize_out
@@ -1016,7 +1018,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    uint32_t B = 1;
+    uint32_t in0_B = 1;
+    uint32_t in1_B = 1;
     uint32_t Mt = get_batch_size(ashape) * ashape[-2] / in0_tile_shape[0];
     uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     uint32_t Nt = bshape[-1] / in1_tile_shape[1];
@@ -1041,7 +1044,8 @@ matmul_multi_core_reuse_dram_sharded_optimized_(
         fp32_dest_acc_en,
         math_approx_mode,
         packer_l1_acc,
-        B,
+        in0_B,
+        in1_B,
         Mt,
         Nt,
         Kt,
