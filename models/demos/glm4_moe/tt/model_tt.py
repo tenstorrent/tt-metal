@@ -1943,12 +1943,23 @@ class Glm4MoeTT:
             # deallocates its residual input (layer 0's x). embed_tt must survive
             # for copy_host_to_device_tensor updates between trace replays.
             x = ttnn.clone(embed_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Start prefetcher before layer loop (if enabled)
+        _gcb = self.prefetcher.global_circular_buffer if self.prefetcher else None
+        _sdid = self.prefetcher.worker_sub_device_id if self.prefetcher else None
+        _pf_garbage = None
+        if self.prefetcher:
+            _pf_garbage = self.prefetcher.start_prefetch()
+
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
-                                active_batch=active)
+                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid)
             ttnn.deallocate(x, force=False)
             x = x_next
+
+        if _pf_garbage is not None:
+            self.prefetcher.stop_prefetch(_pf_garbage)
+            _pf_garbage = None
 
         # MTP compile warm-up: clone hidden state and run MTP in SAME sequence as trace
         # This ensures all programs are compiled with the same op sequence as trace capture.
@@ -2122,7 +2133,7 @@ class Glm4MoeTT:
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
             x_next = dl.forward(x, tt_positions, rot_mats, page_table_tt, kv_cache[layer_idx], mode="decode",
-                                active_batch=active)
+                                active_batch=active, global_cb=_gcb, sub_device_id=_sdid)
             ttnn.deallocate(x, force=False)
             x = x_next
 
