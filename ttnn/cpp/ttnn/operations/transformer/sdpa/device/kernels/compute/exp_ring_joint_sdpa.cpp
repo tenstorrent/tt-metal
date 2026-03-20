@@ -194,6 +194,8 @@ void kernel_main() {
                 scale_fp32,
                 qk_subblock_h,
                 qk_subblock_w,
+                out_subblock_h,  // qktv_subblock_h
+                out_subblock_w,  // qktv_subblock_w
                 cb_q_in,
                 cb_k_in,
                 cb_v_in,
@@ -231,7 +233,7 @@ void kernel_main() {
                 q_per_core,
                 lw_mask);
         } else {
-            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, DHt, scale_fp32>(
+            sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, DHt, scale_fp32>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -246,10 +248,12 @@ void kernel_main() {
                 out_num_blocks,
                 global_q_start,
                 global_q_end,
-                0,
-                num_kv_chunks,
+                0,              // q_num_chunks
+                0,              // iter_k_chunk_start
+                num_kv_chunks,  // iter_k_chunk_end
                 q_chunk_tiles,
                 k_chunk_tiles,
+                k_chunk_tiles,  // v_chunk_tiles = k_chunk_tiles (vDHt = DHt)
                 qk_chunk_tiles,
                 out_chunk_tiles,
                 ring_iter,
@@ -279,7 +283,9 @@ void kernel_main() {
                 cb_lse_out,
                 cb_prev_out,
                 cb_out,
-                lw_mask);
+                lw_mask,
+                false,  // is_causal
+                false); // is_balanced
         }
     }
 }
