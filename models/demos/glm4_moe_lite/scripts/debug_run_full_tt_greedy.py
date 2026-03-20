@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import statistics
 import time
@@ -155,6 +156,21 @@ def main() -> int:
         "Cache is zero-filled; decode runs at this context length for fast decode-only benchmarking. "
         "Incompatible with phase=prefill.",
     )
+    ap.add_argument(
+        "--input-tokens-json",
+        default=None,
+        metavar="PATH",
+        help="Load pre-tokenized input_ids from a JSON file (skips tokenizer entirely). "
+        "JSON must have an 'input_ids' key with a list of integer token IDs. "
+        "Overrides --prompt, --prompt-file, and --simulate-context-len.",
+    )
+    ap.add_argument(
+        "--warmup",
+        action="store_true",
+        default=False,
+        help="Run a warmup prefill+decode before the timed run to exclude compilation "
+        "overhead from measurements (matches Llama 70B methodology).",
+    )
     args = ap.parse_args()
 
     model_id = str(args.model_id)
@@ -169,20 +185,31 @@ def main() -> int:
     if batch_size < 1:
         raise ValueError("--batch-size must be >= 1")
 
-    prompt_text = str(args.prompt)
-    if getattr(args, "prompt_file", None):
-        path = Path(os.path.expanduser(str(args.prompt_file)))
-        if not path.is_file():
-            raise SystemExit(f"--prompt-file not found: {path}")
-        prompt_text = path.read_text(encoding="utf-8", errors="replace").strip()
-        print(f"[DEBUG] Loaded prompt from {path} ({len(prompt_text)} chars)", flush=True)
+    tok = None
+    if getattr(args, "input_tokens_json", None):
+        json_path = Path(os.path.expanduser(str(args.input_tokens_json)))
+        if not json_path.is_file():
+            raise SystemExit(f"--input-tokens-json not found: {json_path}")
+        with open(json_path) as f:
+            data = json.load(f)
+        prompt_ids_single = torch.tensor([data["input_ids"]], dtype=torch.int32)  # [1, S]
+        prompt_len = int(prompt_ids_single.shape[1])
+        print(f"[DEBUG] Loaded {prompt_len} pre-tokenized tokens from {json_path}", flush=True)
+    else:
+        prompt_text = str(args.prompt)
+        if getattr(args, "prompt_file", None):
+            path = Path(os.path.expanduser(str(args.prompt_file)))
+            if not path.is_file():
+                raise SystemExit(f"--prompt-file not found: {path}")
+            prompt_text = path.read_text(encoding="utf-8", errors="replace").strip()
+            print(f"[DEBUG] Loaded prompt from {path} ({len(prompt_text)} chars)", flush=True)
 
-    tok = AutoTokenizer.from_pretrained(snap, local_files_only=True, use_fast=True)
-    enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
-    prompt_ids_single = enc["input_ids"].to(dtype=torch.int32)  # [1, S]
-    if prompt_ids_single.ndim != 2 or int(prompt_ids_single.shape[0]) != 1:
-        raise ValueError(f"expected prompt input_ids [1,S], got {tuple(prompt_ids_single.shape)}")
-    prompt_len = int(prompt_ids_single.shape[1])
+        tok = AutoTokenizer.from_pretrained(snap, local_files_only=True, use_fast=True)
+        enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
+        prompt_ids_single = enc["input_ids"].to(dtype=torch.int32)  # [1, S]
+        if prompt_ids_single.ndim != 2 or int(prompt_ids_single.shape[0]) != 1:
+            raise ValueError(f"expected prompt input_ids [1,S], got {tuple(prompt_ids_single.shape)}")
+        prompt_len = int(prompt_ids_single.shape[1])
 
     fake_context_len = int(args.fake_context_len)
     if fake_context_len > 0:
@@ -312,6 +339,19 @@ def main() -> int:
                 )
             prefill_s = time.perf_counter() - t0
         elif phase in ("prefill", "both"):
+            if args.warmup:
+                print(f"\n=== Warmup prefill (compile) ===", flush=True)
+                t_wu = time.perf_counter()
+                _ = runner.prefill(
+                    tokens=prompt_ids,
+                    prompt_lens=prompt_lens,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    seq_pad_multiple=block_size,
+                )
+                warmup_prefill_s = time.perf_counter() - t_wu
+                print(f"warmup_prefill_s={warmup_prefill_s:.3f}", flush=True)
+
             t0 = time.perf_counter()
             logits = runner.prefill(
                 tokens=prompt_ids,
@@ -383,6 +423,32 @@ def main() -> int:
         for b in range(batch_size):
             generated[b].append(tokens_in[b])
 
+        # Warmup decode: run one decode step to compile/capture trace before timing.
+        if args.warmup and use_trace:
+            print(f"\n=== Warmup decode (trace capture) ===", flush=True)
+            t_wu_dec = time.perf_counter()
+            wu_pos = torch.tensor([prompt_len] * batch_size, dtype=torch.int32)
+            wu_tok = torch.tensor([[t] for t in tokens_in], dtype=torch.int32)
+            if use_sampling:
+                _ = runner.decode(
+                    tokens=wu_tok,
+                    start_pos=wu_pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    sampling_params=True,
+                )
+            else:
+                _ = runner.decode(
+                    tokens=wu_tok,
+                    start_pos=wu_pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=use_trace,
+                )
+            warmup_decode_s = time.perf_counter() - t_wu_dec
+            print(f"warmup_decode_s={warmup_decode_s:.3f}", flush=True)
+
         step_times: list[float] = []
         t_decode0 = time.perf_counter()
         # When using fake context, bootstrap already wrote at prompt_len; start loop at prompt_len+1.
@@ -421,6 +487,8 @@ def main() -> int:
         decode_s = time.perf_counter() - t_decode0
 
         full_ids = torch.cat([prompt_ids[0:1], torch.tensor([generated[0]], dtype=torch.int32)], dim=1)
+        if tok is None:
+            tok = AutoTokenizer.from_pretrained(snap, local_files_only=True, use_fast=True)
         text = tok.decode(full_ids[0].tolist(), skip_special_tokens=True)
         print("", flush=True)
         print(f"=== TT greedy decode ({mode_label}) ===", flush=True)
