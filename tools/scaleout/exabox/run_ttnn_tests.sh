@@ -5,26 +5,30 @@ show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> --image <docker-image> [OPTIONS]
 
-Runs ttnn validation tests across multiple hosts using a specified Docker image.
+Runs ttnn ops tests across multiple hosts using a specified Docker image.
+Dispatches the command via Slurm's srun and logs output to a timestamped file.
 
 Required Options:
-    --hosts <host-list>                     Comma-separated list of hosts
+    --hosts <host-list>                     Comma-separated list of hosts available in Slurm
+    --partition <slurm-partition>           Slurm partition to use with srun
     --image <docker-image>                  Docker image to use
 
 Optional:
-    --output <directory>                    Output directory for log files (default: validation_output)
+    --output <directory>                    Output directory for log files (default: ttnn_tests_output)
     --help                                  Display this help message and exit
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
        --image ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest \\
+       --partition bh_sp5_aisle_c
 EOF
 }
 
 # Parse command line arguments
 HOSTS=""
 DOCKER_IMAGE=""
-OUTPUT_DIR="ttnn_validation_output"
+PARTITION=""
+OUTPUT_DIR="ttnn_tests_output"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -34,6 +38,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             HOSTS="$2"
+            shift 2
+            ;;
+        --partition)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --partition requires a non-empty value"
+                exit 1
+            fi
+            PARTITION="$2"
             shift 2
             ;;
         --image)
@@ -73,6 +85,13 @@ if [[ -z "$HOSTS" ]]; then
     exit 1
 fi
 
+if [[ -z "$PARTITION" ]]; then
+    echo "Error: --partition is required"
+    echo ""
+    show_help
+    exit 1
+fi
+
 if [[ -z "$DOCKER_IMAGE" ]]; then
     echo "Error: --image is required"
     echo ""
@@ -95,6 +114,9 @@ LOG_FILE="$OUTPUT_DIR/ttnn_tests_$(date +%Y%m%d_%H%M%S).log"
 WORK_DIR=/workspace
 
 {
+    echo "Running tt-smi -glx_reset..."
+    srun -p $PARTITION -w $HOSTS tt-smi -glx_reset
+
     echo "Starting ttnn tests at $(date)"
     srun \
     --partition=$PARTITION \
