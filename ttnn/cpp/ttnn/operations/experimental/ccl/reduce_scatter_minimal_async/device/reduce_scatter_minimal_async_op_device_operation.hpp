@@ -7,6 +7,7 @@
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_tree_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/decorators.hpp"
@@ -18,7 +19,10 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
     using tensor_args_t = ReduceScatterMinimalAsyncInputs;
     using spec_return_value_t = std::vector<ttnn::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<RingReduceScatterMeshWorkloadFactory, LineReduceScatterMeshWorkloadFactory>;
+    using program_factory_t = std::variant<
+        RingReduceScatterMeshWorkloadFactory,
+        LineReduceScatterMeshWorkloadFactory,
+        TreeReduceScatterMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

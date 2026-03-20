@@ -1743,7 +1743,8 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     const MeshCoordinate& /*src_device_coord*/,
     const std::optional<MeshCoordinate>& forward_device_coord,
     const std::optional<MeshCoordinate>& backward_device_coord,
-    MeshDevice* mesh_device) {
+    MeshDevice* mesh_device,
+    uint32_t distance_in_hops) {
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
 
@@ -1762,12 +1763,12 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
         }
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
         if (forward_device_coord) {
-            forward_args[0] = 0;  // dst_mesh_id, unused
-            forward_args[1] = 1;  // distance_in_hops
+            forward_args[0] = 0;                 // dst_mesh_id, unused
+            forward_args[1] = distance_in_hops;  // distance_in_hops
         }
         if (backward_device_coord) {
-            backward_args[0] = 0;  // dst_mesh_id, unused
-            backward_args[1] = 1;  // distance_in_hops
+            backward_args[0] = 0;                 // dst_mesh_id, unused
+            backward_args[1] = distance_in_hops;  // distance_in_hops
         }
     } else {
         TT_THROW("Unsupported fabric config");

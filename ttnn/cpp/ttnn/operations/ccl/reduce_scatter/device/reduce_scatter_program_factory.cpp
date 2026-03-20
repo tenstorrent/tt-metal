@@ -13,12 +13,15 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_line_program_factory.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_tree_program_factory.hpp"
 
 // Import functions from the new namespace
 using ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts;
 using ttnn::experimental::prim::build_ring_reduce_scatter_minimal_async_program_artifacts;
+using ttnn::experimental::prim::build_tree_reduce_scatter_minimal_async_program_artifacts;
 using ttnn::experimental::prim::line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 using ttnn::experimental::prim::ring_reduce_scatter_minimal_async_helper_override_runtime_arguments;
+using ttnn::experimental::prim::tree_reduce_scatter_minimal_async_helper_override_runtime_arguments;
 
 namespace ttnn::operations::ccl {
 
@@ -107,8 +110,12 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> no_fuse = std::nullopt;
 
+    // Use tree algorithm for Ring topology (original ring commented out)
+    // auto builder = operation_attributes.topology == ttnn::ccl::Topology::Ring
+    //                    ? build_ring_reduce_scatter_minimal_async_program_artifacts
+    //                    : build_line_reduce_scatter_minimal_async_program_artifacts;
     auto builder = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                       ? build_ring_reduce_scatter_minimal_async_program_artifacts
+                       ? build_tree_reduce_scatter_minimal_async_program_artifacts
                        : build_line_reduce_scatter_minimal_async_program_artifacts;
     auto reduce_scatter_program_artifacts = builder(
         program,
@@ -147,8 +154,12 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    // Use tree algorithm for Ring topology (original ring commented out)
+    // auto update_runtime_arguments = operation_attributes.topology == ttnn::ccl::Topology::Ring
+    //                                     ? ring_reduce_scatter_minimal_async_helper_override_runtime_arguments
+    //                                     : line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
     auto update_runtime_arguments = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                                        ? ring_reduce_scatter_minimal_async_helper_override_runtime_arguments
+                                        ? tree_reduce_scatter_minimal_async_helper_override_runtime_arguments
                                         : line_reduce_scatter_minimal_async_helper_override_runtime_arguments;
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = range.start_coord();
