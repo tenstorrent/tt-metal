@@ -133,10 +133,11 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
         auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
             input_mesh_buffer->global_config(), input_mesh_buffer->device_local_config(), submesh.get(), input_address);
 
-        DeviceStorage device_storage(std::move(mesh_buffer));
-        TT_ASSERT(
+        DeviceStorage device_storage(mesh_buffer);
+        TT_FATAL(
             device_storage.get_coords().size() == 1 &&
-            device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0));
+                device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
+            "mesh_buffer is not on a unit submesh");
 
         result.push_back(Tensor(std::move(device_storage), reference_spec, TensorTopology{}));
     }
