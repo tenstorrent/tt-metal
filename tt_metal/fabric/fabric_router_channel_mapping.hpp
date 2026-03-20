@@ -131,6 +131,7 @@ private:
     void initialize_mappings();
     void initialize_vc0_mappings();
     void initialize_vc1_mappings();
+    void initialize_vc2_mappings();
 };
 
 }  // namespace tt::tt_fabric
