@@ -7,6 +7,7 @@
 #include "ternary_composite_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn {
 
