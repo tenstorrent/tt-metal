@@ -2484,9 +2484,12 @@ def speaker_encoder_forward(
     # Convert to float32 for computation
     hidden = mel_spectrogram.float()
 
-    # Transpose if input is [batch, time, n_mels] (official expects this)
-    # Detect based on dimensions: mel_dim is typically 128, time is usually larger
-    if hidden.shape[1] > hidden.shape[2]:
+    # Transpose if input is [batch, time, n_mels] to [batch, n_mels, time]
+    # Conv expects [batch, 128, time] where 128 is n_mels
+    # Detect based on which dimension is 128 (n_mels), not size comparison
+    # (size comparison fails when time < 128 for short audio)
+    n_mels = 128  # Fixed mel bin count
+    if hidden.shape[-1] == n_mels and hidden.shape[1] != n_mels:
         # Input is [batch, time, n_mels], transpose to [batch, n_mels, time]
         hidden = hidden.transpose(1, 2)
 
