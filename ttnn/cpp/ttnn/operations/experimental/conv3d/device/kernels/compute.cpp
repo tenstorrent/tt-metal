@@ -270,21 +270,22 @@ void kernel_main() {
                             } else {
                                 // We are a reducer core. Note that num_workers can be 0, in which case there is no
                                 // reduction.
+                                if constexpr (use_fp32_partials) {
+                                    // SFPU path for fp32: copy both to DST, add via SFPU, pack fp32.
+                                    // Init once before the worker loop — both CBs are Float32.
+                                    reconfig_data_format_srca(cb_matmul_interm_tiled);
+                                    pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                    copy_tile_init(cb_matmul_interm_tiled);
+                                    add_binary_tile_init();
+                                }
                                 for (uint32_t i = 0; i < num_workers; i++) {
                                     // Wait for writer to populate reduction buffer
                                     cb_wait_front(cb_reduction_tiled, output_tiles);
 
                                     if constexpr (use_fp32_partials) {
-                                        // SFPU path for fp32: copy both to DST, add via SFPU, pack fp32
-                                        reconfig_data_format_srca(cb_matmul_interm_tiled);
-                                        pack_reconfig_data_format(cb_matmul_interm_tiled);
-                                        add_binary_tile_init();
-
                                         for (uint32_t t = 0; t < output_tiles; t++) {
                                             tile_regs_acquire();
-                                            copy_tile_init(cb_matmul_interm_tiled);
                                             copy_tile(cb_matmul_interm_tiled, 0, 0);
-                                            copy_tile_init(cb_reduction_tiled);
                                             copy_tile(cb_reduction_tiled, 0, 1);
                                             add_binary_tile(0, 1, 0);
                                             tile_regs_commit();
