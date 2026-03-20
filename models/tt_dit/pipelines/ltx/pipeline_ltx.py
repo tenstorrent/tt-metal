@@ -184,6 +184,7 @@ class LTXPipeline:
 
         self.transformer: LTXTransformerModel | None = None
         self.text_encoder: GemmaTokenizerEncoderPair | None = None
+        self.vae_decoder = None  # LTXVideoDecoder or LTXVideoDecoderTorch
 
         # Cached device tensors (computed once, reused across steps)
         self._cached_rope_cos: ttnn.Tensor | None = None
@@ -223,6 +224,70 @@ class LTXPipeline:
             hidden_layer_index=hidden_layer_index,
         )
         logger.info(f"Loaded Gemma text encoder from {checkpoint}")
+
+    def load_vae_decoder(
+        self,
+        state_dict: dict[str, torch.Tensor],
+        decoder_blocks: list[tuple[str, dict]],
+        *,
+        use_ttnn: bool = True,
+        patch_size: int = 4,
+        base_channels: int = 128,
+    ) -> None:
+        """Load VAE decoder weights.
+
+        Args:
+            state_dict: PyTorch state dict for the decoder
+            decoder_blocks: Block configuration list
+            use_ttnn: If True, use TTNN decoder; if False, use torch-only wrapper
+        """
+        if use_ttnn:
+            from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+
+            self.vae_decoder = LTXVideoDecoder(
+                decoder_blocks=decoder_blocks,
+                in_channels=self.in_channels,
+                out_channels=3,
+                patch_size=patch_size,
+                base_channels=base_channels,
+                mesh_device=self.mesh_device,
+            )
+            self.vae_decoder.load_torch_state_dict(state_dict)
+            logger.info("Loaded TTNN VAE decoder")
+        else:
+            from ...models.vae.ltx.vae_ltx import LTXVideoDecoderTorch
+
+            self.vae_decoder = LTXVideoDecoderTorch.from_config(
+                decoder_blocks, in_channels=self.in_channels, patch_size=patch_size, base_channels=base_channels
+            )
+            self.vae_decoder.load_state_dict(state_dict)
+            logger.info("Loaded torch-only VAE decoder")
+
+    def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
+        """Decode latent tensor to video pixels.
+
+        Args:
+            latent: (B, num_tokens, C) flat latent from denoising loop
+            latent_frames, latent_h, latent_w: Spatial dimensions
+
+        Returns:
+            (B, 3, F, H, W) decoded video
+        """
+        if self.vae_decoder is None:
+            logger.warning("No VAE decoder loaded, returning raw latent")
+            return latent
+
+        B = latent.shape[0]
+        # Reshape flat tokens to spatial: (B, num_tokens, C) -> (B, C, F', H', W')
+        latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
+        latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
+
+        from ...models.vae.ltx.vae_ltx import LTXVideoDecoder
+
+        if isinstance(self.vae_decoder, LTXVideoDecoder):
+            return self.vae_decoder(latent_spatial)
+        else:
+            return self.vae_decoder.decode(latent_spatial)
 
     def _prepare_rope(
         self, num_frames: int, latent_height: int, latent_width: int
@@ -408,4 +473,11 @@ class LTXPipeline:
                 )
 
         logger.info(f"Denoising complete. Output latent shape: {latent.shape}")
+
+        # Optionally decode latents to video
+        if self.vae_decoder is not None:
+            video = self.decode_latents(latent, latent_frames, latent_height, latent_width)
+            logger.info(f"Decoded video shape: {video.shape}")
+            return video
+
         return latent

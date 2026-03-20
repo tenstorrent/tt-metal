@@ -152,3 +152,109 @@ def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
     assert torch.isfinite(output).all(), "Output contains NaN/Inf"
     logger.info(f"Pipeline output shape: {output.shape}, range: [{output.min():.3f}, {output.max():.3f}]")
     logger.info("PASSED: Pipeline denoising loop works end-to-end")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
+    """
+    Test pipeline with TTNN VAE decoder: denoise → decode to video.
+    """
+    from ltx_core.model.transformer.model import LTXModel, LTXModelType
+
+    sp_axis, tp_axis = 0, 1
+    dim = 4096
+    num_heads = 32
+    head_dim = dim // num_heads
+    in_channels = 128
+    out_channels = 128
+    num_layers = 1
+    num_inference_steps = 2
+
+    # Create transformer
+    torch_model = LTXModel(
+        model_type=LTXModelType.VideoOnly,
+        num_layers=num_layers,
+        num_attention_heads=num_heads,
+        attention_head_dim=head_dim,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        cross_attention_dim=dim,
+        use_middle_indices_grid=True,
+    )
+    torch_model.eval()
+
+    # Create VAE decoder
+    from ltx_core.model.video_vae.enums import NormLayerType
+    from ltx_core.model.video_vae.video_vae import VideoDecoder
+
+    decoder_blocks = [
+        ("compress_all", {"multiplier": 2}),
+        ("compress_all", {"multiplier": 2}),
+        ("compress_time", {"multiplier": 2}),
+        ("compress_space", {"multiplier": 2}),
+    ]
+    torch_decoder = VideoDecoder(
+        convolution_dimensions=3,
+        in_channels=128,
+        out_channels=3,
+        decoder_blocks=decoder_blocks,
+        patch_size=4,
+        norm_layer=NormLayerType.PIXEL_NORM,
+        causal=True,
+        timestep_conditioning=False,
+        base_channels=128,
+    )
+    torch_decoder.eval()
+    dec_state = torch_decoder.state_dict()
+    dec_state["per_channel_statistics.mean-of-means"] = torch.zeros(128)
+    dec_state["per_channel_statistics.std-of-means"] = torch.ones(128)
+    torch_decoder.load_state_dict(dec_state)
+
+    # Create pipeline
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
+        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
+    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+
+    pipeline = LTXPipeline(
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+        num_layers=num_layers,
+        cross_attention_dim=dim,
+    )
+    pipeline.load_transformer(torch_model.state_dict())
+    pipeline.load_vae_decoder(
+        state_dict=torch_decoder.state_dict(),
+        decoder_blocks=decoder_blocks,
+        use_ttnn=True,
+    )
+
+    # Run pipeline — output should be decoded video
+    num_frames = 17
+    px_height, px_width = 128, 128
+    output = pipeline(
+        prompt=["test"],
+        num_frames=num_frames,
+        height=px_height,
+        width=px_width,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=1.0,
+        seed=42,
+    )
+
+    # Output should be video (B, 3, F, H, W) not latent
+    assert output.shape[1] == 3, f"Expected 3 channels (RGB), got {output.shape[1]}"
+    assert output.shape[2] == num_frames, f"Expected {num_frames} frames, got {output.shape[2]}"
+    assert output.shape[3] == px_height, f"Expected height {px_height}, got {output.shape[3]}"
+    assert output.shape[4] == px_width, f"Expected width {px_width}, got {output.shape[4]}"
+    logger.info(f"Pipeline+VAE output: {output.shape}")
+    logger.info("PASSED: Pipeline with TTNN VAE decoder")

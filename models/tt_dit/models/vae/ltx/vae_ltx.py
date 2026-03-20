@@ -673,3 +673,62 @@ class LTXVideoDecoderTorch:
             (B, 3, F, H, W) decoded video
         """
         return self.decoder(latent)
+
+
+class LTXVideoEncoderTorch:
+    """
+    Torch-only wrapper for the LTX-2 Video VAE encoder.
+
+    Runs on CPU/GPU. Used for image conditioning (i2v) or testing.
+
+    Usage:
+        encoder = LTXVideoEncoderTorch.from_config(encoder_blocks)
+        latent = encoder.encode(video)  # (B, 3, F, H, W) → (B, 128, F', H', W')
+    """
+
+    def __init__(self, torch_encoder):
+        self.encoder = torch_encoder
+        self.encoder.eval()
+
+    @classmethod
+    def from_config(
+        cls,
+        encoder_blocks: list,
+        *,
+        in_channels: int = 3,
+        out_channels: int = 128,
+        patch_size: int = 4,
+    ) -> "LTXVideoEncoderTorch":
+        """Create encoder from block config."""
+        import sys
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType
+        from ltx_core.model.video_vae.video_vae import VideoEncoder
+
+        encoder = VideoEncoder(
+            convolution_dimensions=3,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            encoder_blocks=encoder_blocks,
+            patch_size=patch_size,
+            norm_layer=NormLayerType.PIXEL_NORM,
+            latent_log_var=LogVarianceType.UNIFORM,
+        )
+        return cls(encoder)
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
+        self.encoder.load_state_dict(state_dict)
+
+    @torch.no_grad()
+    def encode(self, video: torch.Tensor) -> torch.Tensor:
+        """
+        Encode video to latent.
+
+        Args:
+            video: (B, 3, F, H, W) video tensor
+
+        Returns:
+            (B, 128, F', H', W') latent tensor
+        """
+        return self.encoder(video)
