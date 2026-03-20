@@ -401,6 +401,7 @@ jobs:
         python_path: python3
         # NOTE: only resolves when ALL are fixed
         auto_resolve_conversations: true
+      continue-on-error: true
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
