@@ -12,7 +12,7 @@ struct l1_allocator {
 #define ROUND_UP(x, a) ((((x) + (a) - 1) / (a)) * (a))
 #define ROUND_DOWN(x, a) (((x) / (a)) * (a))
 
-#define ALIGNMENT (tt::tt_metal::hal::get_l1_alignment())
+#define ALIGNMENT 64  // TODO
 
 static inline struct l1_allocator new_tensix_allocator() {
     using namespace tt::tt_metal;

@@ -21,6 +21,7 @@ static inline void prepare_sender(
     uint32_t num_bytes_per_send,
     uint32_t recv_l1_address,
     tt_metal::Program* send_program) {
+    /* ==================== */
     *send_delta_addr = l1_alloc(send_allocator, sizeof(uint64_t));
     uint32_t send_l1_address = l1_alloc(send_allocator, transfer_size);
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -60,6 +61,7 @@ static inline void prepare_receiver(
     DataMovementProcessor processor,
     uint32_t* recv_l1_address,
     tt_metal::Program* recv_program) {
+    /* ==================== */
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
     *recv_l1_address = l1_alloc(recv_allocator, transfer_size);
@@ -94,6 +96,7 @@ static void wait_to_finish(
     const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
     const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
     distributed::MeshCoordinateRange& device_range) {
+    /* ==================== */
     bool same_device = send_mesh_device == recv_mesh_device;
 
     distributed::MeshWorkload send_workload;
@@ -121,6 +124,7 @@ static bool data_check(
     const CoreCoord& recv_core,
     uint32_t recv_l1_address,
     std::vector<uint32_t>& inputs) {
+    /* ==================== */
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         recv_device->id(),
         recv_device->ethernet_core_from_logical_core(recv_core),
@@ -146,6 +150,7 @@ static bool bandwidth_check(
     uint32_t send_delta_addr,
     uint64_t total_transferred,
     double threshold) {
+    /* ==================== */
     uint64_t delta = read_l1_u64(send_device, send_core, send_delta_addr);
     double deltas = delta / 1.35e9; /* Assuming fixed max frequency */
     double bandwidth = 8 * total_transferred / 1e9 / deltas;
@@ -154,6 +159,42 @@ static bool bandwidth_check(
     bool pass = bandwidth >= threshold;
     if (!pass) {
         log_critical(tt::LogTest, "      Expected at least: {} Gbps, got {:.2f} Gbps", threshold, bandwidth);
+    }
+
+    return pass;
+}
+
+static bool data_dram_check(
+    tt::tt_metal::IDevice* const recv_device,
+    uint32_t dram_start_addr,
+    uint32_t dram_end_addr,
+    uint32_t dram_bank_id,
+    std::vector<uint32_t>& inputs) {
+    /* ==================== */
+    uint64_t total_transferred = dram_end_addr - dram_start_addr;
+    std::vector<uint32_t> outputs;
+
+    detail::ReadFromDeviceDRAMChannel(recv_device, dram_bank_id, dram_start_addr, total_transferred, outputs);
+    log_info(tt::LogTest, "      Read {} bytes", outputs.size() * sizeof(uint32_t));
+    TT_FATAL(inputs.size() == outputs.size(), "Input and output vector sizes must match");
+    bool pass = inputs == outputs;
+
+    if (!pass) {
+        uint64_t total_mismatches = 0;
+        for (long i = 0; i < inputs.size(); i++) {
+            if (inputs[i] != outputs[i]) {
+                if (!total_mismatches) {
+                    log_critical(
+                        tt::LogTest,
+                        "      Input and output data don't match starting at: {:x}",
+                        dram_start_addr + i * sizeof(uint32_t));
+                }
+                total_mismatches++;
+                // log_critical(tt::LogTest, "      Input and output data don't match at {}: {} {}", i, inputs[i],
+                // outputs[i]);
+            }
+        }
+        log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);
     }
 
     return pass;
