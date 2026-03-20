@@ -13,7 +13,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.vae.ltx.vae_ltx import LTXCausalConv3d, LTXDepthToSpaceUpsample, LTXResnetBlock3D
+from models.tt_dit.models.vae.ltx.vae_ltx import (
+    LTXCausalConv3d,
+    LTXDepthToSpaceUpsample,
+    LTXResnetBlock3D,
+    LTXVideoDecoder,
+)
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_in_channels
 
@@ -196,3 +201,67 @@ def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, st
     logger.info(f"Upsample stride={stride}: {x.shape} -> torch {torch_out.shape}, tt {tt_out_torch.shape}")
     assert_quality(torch_out, tt_out_torch, pcc=0.999)
     logger.info(f"PASSED: DepthToSpaceUpsample stride={stride}")
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=["mesh_device"],
+)
+def test_ltx_video_decoder(mesh_device: ttnn.MeshDevice):
+    """
+    Test full LTXVideoDecoder against PyTorch VideoDecoder reference.
+    Uses small dimensions for fast testing.
+    """
+    from ltx_core.model.video_vae.enums import NormLayerType
+    from ltx_core.model.video_vae.video_vae import VideoDecoder as TorchVideoDecoder
+
+    B = 1
+    torch.manual_seed(42)
+
+    decoder_blocks = [
+        ("compress_all", {"multiplier": 2}),
+        ("compress_all", {"multiplier": 2}),
+        ("compress_time", {"multiplier": 2}),
+        ("compress_space", {"multiplier": 2}),
+    ]
+
+    # PyTorch reference
+    torch_decoder = TorchVideoDecoder(
+        convolution_dimensions=3,
+        in_channels=128,
+        out_channels=3,
+        decoder_blocks=decoder_blocks,
+        patch_size=4,
+        norm_layer=NormLayerType.PIXEL_NORM,
+        causal=False,
+        timestep_conditioning=False,
+        base_channels=128,
+    )
+    torch_decoder.eval()
+
+    # TT decoder
+    tt_decoder = LTXVideoDecoder(
+        decoder_blocks=decoder_blocks,
+        in_channels=128,
+        out_channels=3,
+        patch_size=4,
+        base_channels=128,
+        mesh_device=mesh_device,
+    )
+    tt_decoder.load_torch_state_dict(torch_decoder.state_dict())
+
+    # Small latent input
+    latent = torch.randn(B, 128, 3, 4, 4, dtype=torch.float32)
+
+    # PyTorch forward
+    with torch.no_grad():
+        torch_out = torch_decoder(latent)
+
+    # TT forward
+    tt_out = tt_decoder(latent)
+
+    logger.info(f"Decoder: {latent.shape} -> torch {torch_out.shape}, tt {tt_out.shape}")
+    assert_quality(torch_out, tt_out, pcc=0.99)
+    logger.info("PASSED: LTXVideoDecoder matches PyTorch reference")
