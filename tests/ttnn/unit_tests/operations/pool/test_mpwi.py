@@ -7,7 +7,7 @@ import ttnn
 import math
 import pytest
 
-from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
+from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices
 from models.common.utility_functions import skip_with_llk_assert
 
 
