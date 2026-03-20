@@ -639,4 +639,10 @@ void kernel_main() {
             }
         }
     }
+
+    // Ensure all NOC writes (KV chain forwarding, semaphore signals) have completed
+    // before the kernel exits, to avoid inter-kernel data races.
+    if constexpr (!is_causal) {
+        noc_async_write_barrier();
+    }
 }
