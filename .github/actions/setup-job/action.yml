@@ -95,6 +95,13 @@ runs:
         echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+        # Dispatch firmware (brisc/ncrisc/trisc) has fixed memory region size limits. When watcher is
+        # enabled, NOC sanitization, CB bounds checking, and other instrumentation code is compiled into
+        # dispatch firmware, causing it to exceed these limits (e.g. brisc needs ~8KB vs 6KB limit).
+        # WATCHER_NOINLINE alone is insufficient to bring size within limits. This flag injects
+        # FORCE_WATCHER_OFF=1 into dispatch firmware builds, hard-disabling all watcher instrumentation
+        # there via !defined(FORCE_WATCHER_OFF) guards, while leaving watcher active for user kernels.
+        echo "TT_METAL_WATCHER_DISABLE_DISPATCH=1" >> $GITHUB_ENV
       shell: bash
 
     - name: Set up env vars for lightweight kernel asserts
