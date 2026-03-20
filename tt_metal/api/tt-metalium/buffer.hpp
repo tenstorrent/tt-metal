@@ -261,7 +261,7 @@ public:
     bool per_core_allocation() const { return per_core_allocation_; }
     DeviceAddr per_core_address(CoreCoord core) const;
     const std::unordered_map<CoreCoord, DeviceAddr>& per_core_addresses() const { return per_core_addresses_; }
-    void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
+    void copy_per_core_addresses_from(const Buffer& other);
 
     // Returns the buffer that owns the underlying device memory.
     // Typically returns itself unless the buffer was created with a view method.
@@ -298,7 +298,10 @@ private:
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     void deallocate_impl();
+    friend class AllocatorImpl;
     friend void DeallocateBuffer(Buffer& buffer);
+
+    void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
 
     DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 

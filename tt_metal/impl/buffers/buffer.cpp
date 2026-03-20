@@ -577,6 +577,8 @@ void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> ad
     per_core_addresses_ = std::move(addrs);
 }
 
+void Buffer::copy_per_core_addresses_from(const Buffer& other) { per_core_addresses_ = other.per_core_addresses_; }
+
 ShardSpecBuffer Buffer::shard_spec() const {
     TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
     TT_FATAL(shard_spec_.has_value(), "Buffer is sharded, but no shard parameters specified");

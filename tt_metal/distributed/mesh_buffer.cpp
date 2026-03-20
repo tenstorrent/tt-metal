@@ -136,7 +136,7 @@ void MeshBuffer::initialize_device_buffers() {
         // For per-core allocation, propagate per-core addresses from the backing buffer.
         if (buffer->per_core_allocation()) {
             auto& owned = std::get<OwnedBufferState>(state_);
-            buffer->set_per_core_addresses(owned.backing_buffer->per_core_addresses());
+            buffer->copy_per_core_addresses_from(*owned.backing_buffer);
         }
         return buffer;
     };
