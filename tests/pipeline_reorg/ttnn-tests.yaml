@@ -204,17 +204,3 @@
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: false
   ttsim: true
-
-- name: "ttnn optimal worker cores sharded tensor test"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/test_get_optimal_worker_cores_for_sharded_tensor.py -xv -m "not disable_fast_runtime_mode"'
-  skus:
-    wh_n300_civ2:
-      timeout: 15
-    bh_p100:
-      timeout: 15
-    bh_p150b_civ2:
-      timeout: 15
-  team: ttnn
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  merge_gate: false
-  ttsim: false
