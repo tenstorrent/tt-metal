@@ -338,7 +338,8 @@ Tensor where_tss(
     const operations::unary::ScalarVariant& value_true,
     const operations::unary::ScalarVariant& value_false,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor selu(
     const Tensor& input_tensor,
