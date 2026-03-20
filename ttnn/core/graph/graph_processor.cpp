@@ -552,17 +552,15 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
             // buffer.
         buffer = mesh_buffer->get_backing_buffer();
-                for (const auto& coord : t.device_storage().coords) {
-                    auto* device_buffer = mesh_buffer->get_device_buffer(coord);
-                    if (device_buffer != nullptr) {
-                        device_tensors_json.push_back(
-                            {{"device_id", device_buffer->device()->id()},
-                             {kMeshDeviceId,
-                              buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
-                             {"address", device_buffer->address()}});
-                    }
-                }
-
+        for (const auto& coord : t.device_storage().get_coords()) {
+            auto* device_buffer = mesh_buffer->get_device_buffer(coord);
+            if (device_buffer != nullptr) {
+                device_tensors_json.push_back(
+                    {{"device_id", device_buffer->device()->id()},
+                     {kMeshDeviceId, buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
+                     {"address", device_buffer->address()}});
+            }
+        }
     }
 
     node_id tensor_counter = graph.size();
