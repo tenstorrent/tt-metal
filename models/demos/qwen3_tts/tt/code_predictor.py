@@ -192,6 +192,10 @@ class CodePredictor(LightweightModule):
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         start_pos: int = 0,
         mode: str = "prefill",
+        cur_pos_tensor: Optional[ttnn.Tensor] = None,
+        decode_attn_mask: Optional[ttnn.Tensor] = None,
+        cp_prefill_mask: Optional[ttnn.Tensor] = None,
+        return_hidden_state: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Single forward step for autoregressive generation.
@@ -206,10 +210,17 @@ class CodePredictor(LightweightModule):
             kv_caches: Optional list of (k_cache, v_cache) tuples, one per layer
             start_pos: Starting position in sequence (for KV cache)
             mode: "prefill" for full sequence or "decode" for single token
+            cur_pos_tensor: Optional int32 device tensor [1] for trace-compatible decode.
+            decode_attn_mask: Optional float32 device tensor [1,1,1,max_seq] for decode.
+            cp_prefill_mask: Optional float32 device tensor [1,1,seq,max_seq] for trace-
+                compatible CP prefill (writes K/V at constant positions 0,1).
+            return_hidden_state: If True, return hidden_states instead of applying lm_head.
+                Used for trace paths where the lm_head is applied outside the trace.
 
         Returns:
-            Tuple of (logits, updated_kv_caches) where:
-            - logits: Logits for the current code group [batch, 1, seq_len, vocab_size]
+            Tuple of (output, updated_kv_caches) where:
+            - output: logits [batch, 1, seq_len, vocab_size] when return_hidden_state=False,
+                      or hidden_states [batch, 1, seq_len, hidden_size] when True.
             - updated_kv_caches: list of (k_cache, v_cache) tuples or None
         """
         hidden_states = inputs_embeds
@@ -237,9 +248,15 @@ class CodePredictor(LightweightModule):
                 kv_cache=layer_kv_cache,
                 start_pos=start_pos,
                 mode=mode,
+                cur_pos_tensor=cur_pos_tensor,
+                decode_attn_mask=decode_attn_mask,
+                cp_prefill_mask=cp_prefill_mask,
             )
             if updated_kv_caches is not None:
                 updated_kv_caches.append(updated_kv_cache)
+
+        if return_hidden_state:
+            return hidden_states, updated_kv_caches
 
         # Use the appropriate LM head for this generation step
         # generation_step is 1-indexed (1 for code 1, 15 for code 15)
