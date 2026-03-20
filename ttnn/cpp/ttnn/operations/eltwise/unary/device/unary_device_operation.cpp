@@ -14,43 +14,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-using ttnn::operations::unary::UnaryOpType;
-
-namespace {
-void validate_supported_arch_dtype(DataType input_datatype, DataType output_datatype, UnaryOpType op_type) {
-    switch (op_type) {
-        case UnaryOpType::BITWISE_XOR:
-        case UnaryOpType::BITWISE_NOT:
-        case UnaryOpType::BITWISE_AND:
-        case UnaryOpType::BITWISE_OR:
-            TT_FATAL(
-                input_datatype == DataType::INT32,
-                "Unsupported input data type '{}' for UnaryOpType '{}' (Bitwise operation).",
-                static_cast<int>(input_datatype),
-                static_cast<int>(op_type));
-            TT_FATAL(
-                output_datatype == DataType::INT32,
-                "Unsupported output data type '{}' for UnaryOpType '{}' (Bitwise operation).",
-                static_cast<int>(output_datatype),
-                static_cast<int>(op_type));
-            break;
-        case UnaryOpType::FMOD:
-            TT_FATAL(
-                (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::FLOAT32),
-                "Unsupported input data type '{}' for UnaryOpType '{}' (FMOD operation).",
-                static_cast<int>(input_datatype),
-                static_cast<int>(op_type));
-            TT_FATAL(
-                (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
-                "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
-                static_cast<int>(output_datatype),
-                static_cast<int>(op_type));
-            break;
-        default: return;
-    }
-}
-}  // namespace
-
 UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.input.is_sharded()) {
@@ -68,15 +31,8 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
     auto out_memory_config = args.output_memory_config;
-    auto output_datatype = args.output_dtype;
     if (preallocated_output_tensor.has_value()) {
         out_memory_config = preallocated_output_tensor->memory_config();
-        output_datatype = preallocated_output_tensor->dtype();
-    }
-
-    auto input_datatype = input_tensor.dtype();
-    for (const auto& unary_op : args.op_chain) {
-        validate_supported_arch_dtype(input_datatype, output_datatype, unary_op.type());
     }
 
     TT_FATAL(
