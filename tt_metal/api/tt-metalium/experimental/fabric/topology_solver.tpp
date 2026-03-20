@@ -55,6 +55,11 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& n
 }
 
 template <typename NodeId>
+const typename AdjacencyGraph<NodeId>::AdjacencyMap& AdjacencyGraph<NodeId>::get_adjacency_map() const {
+    return adj_map_;
+}
+
+template <typename NodeId>
 void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, bool quiet_mode) const {
     // Build degree histogram (counting unique neighbors only)
     std::map<size_t, size_t> degree_hist;
@@ -426,8 +431,12 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
         oss << "  Target nodes with valid mappings: " << (valid_mappings_.size() - conflicted_targets.size()) << "\n";
         oss << "  Overconstrained target nodes: " << conflicted_targets.size() << "\n";
 
-        // Log info message instead of throwing
-        log_info(tt::LogFabric, "{}", oss.str());
+        // Log message - use debug level in quiet mode, info level otherwise
+        if (quiet_mode_) {
+            log_debug(tt::LogFabric, "{}", oss.str());
+        } else {
+            log_info(tt::LogFabric, "{}", oss.str());
+        }
         return false;
     }
 
@@ -440,6 +449,11 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
     }
 
     return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::set_quiet_mode(bool quiet_mode) const {
+    quiet_mode_ = quiet_mode;
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -558,19 +572,14 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
     std::map<TargetNode, std::set<GlobalNode>> saved_state;
     for (const auto& target_node : target_nodes) {
+        forbidden_pairs_.insert({target_node, global_node});
         auto it = valid_mappings_.find(target_node);
-        if (it == valid_mappings_.end()) {
-            forbidden_pairs_.insert({target_node, global_node});
-        } else {
+        if (it != valid_mappings_.end()) {
             saved_state[target_node] = it->second;
             it->second.erase(global_node);
         }
     }
-
-    if (!saved_state.empty()) {
-        return validate(&saved_state);
-    }
-    return true;
+    return saved_state.empty() ? true : validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -765,6 +774,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 
     auto start_time = std::chrono::steady_clock::now();
 
+    // Set quiet mode on constraints to suppress verbose validation messages
+    constraints.set_quiet_mode(quiet_mode);
+
     // Build indexed graph representation
     GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
 
@@ -838,7 +850,7 @@ namespace tt::tt_fabric::detail {
 constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
 
 // DFS call limit to prevent excessive search for complex topologies
-constexpr size_t DFS_CALL_LIMIT = 1000000;  // 1 million calls
+constexpr size_t DFS_CALL_LIMIT = 10000000;  // 10 million calls
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
@@ -1169,7 +1181,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                     missing_nodes_str << fmt::format("{}", node);
                 }
 
-                log_warning(
+                log_debug(
                     tt::LogFabric,
                     "Topology solver: {} constraint node(s) for target node {} are not present in the global graph. "
                     "These nodes will be ignored. Missing nodes: {}",
@@ -1179,7 +1191,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
                 // Warn if all constraint nodes are missing (empty restricted_indices)
                 if (restricted_indices.empty()) {
-                    log_warning(
+                    log_debug(
                         tt::LogFabric,
                         "Topology solver: All constraint nodes for target node {} are missing from the global graph. "
                         "This target node will have no restrictions.",
@@ -1219,7 +1231,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                     missing_nodes_str << fmt::format("{}", node);
                 }
 
-                log_warning(
+                log_debug(
                     tt::LogFabric,
                     "Topology solver: {} preferred constraint node(s) for target node {} are not present in the global "
                     "graph. These nodes will be ignored. Missing nodes: {}",
@@ -1848,7 +1860,10 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
                 graph_data.target_nodes[selection.target_idx],
                 remaining_targets,
                 remaining_global);
-            log_debug(tt::LogFabric, "{}", error_msg);
+            // Suppress verbose debug messages in quiet mode to avoid spam
+            if (!quiet_mode_) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            }
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -1857,7 +1872,10 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             std::string error_msg = fmt::format(
                 "Search error: no unassigned target nodes found, but {} nodes still need to be placed",
                 graph_data.n_target - pos);
-            log_debug(tt::LogFabric, "{}", error_msg);
+            // Suppress verbose debug messages in quiet mode to avoid spam
+            if (!quiet_mode_) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            }
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -1927,6 +1945,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
     state_.used.resize(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
 
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging
