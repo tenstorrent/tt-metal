@@ -113,7 +113,7 @@ def main() -> int:
         args = [arg.replace("{TT_METAL_RUNTIME_ROOT}", str(tt_metal_runtime_root)) for arg in model["args"]]
 
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
-        current_time = int(time.time() * 1_000_000)
+        current_time = int(time.time_ns() // 1_000)
 
         log_basename = f"{model_filename}_memory_analysis_{current_time}"
         log_path = output_dir / f"{log_basename}.log"
