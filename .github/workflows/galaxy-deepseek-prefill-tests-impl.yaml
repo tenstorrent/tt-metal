@@ -12,14 +12,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      extra-tag:
-        required: false
+      enabled-skus:
+        required: true
         type: string
-        default: "in-service"
-      topology:
-        required: false
-        type: string
-        default: "topology-6u"
       test-type:
         required: false
         type: string
@@ -27,56 +22,69 @@ on:
   workflow_dispatch:
 
 jobs:
-  generate-matrix:
+  load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.generate.outputs.matrix }}
+      matrix: ${{ steps.apply-test-type-filter.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml
     steps:
-      - name: Generate test matrix
-        id: generate
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
         run: |
-          all_tests=$(jq -n '[
-            { "name": "(Galaxy) DeepSeek Prefill module tests", "arch": "blackhole", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U08RL15T4N8" }
-          ]')
-
-          # Filter matrix based on test-type selection
+          pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "demo"
+      - name: Build unified test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+      - name: Apply test-type filter
+        id: apply-test-type-filter
+        run: |
+          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           if [ "${{ inputs.test-type }}" = "all" ]; then
-            matrix="$all_tests"
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$MATRIX" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"${{ inputs.test-type }}\")]")
+            FILTERED=$(echo "$MATRIX" | jq -c --arg t "${{ inputs.test-type }}" '[.[] | select(.test_type == $t)]')
+            if [ "$FILTERED" = "[]" ]; then
+              echo "::error::No tests found for test-type '${{ inputs.test-type }}'. Ensure the test-type is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              exit 1
+            fi
+            echo "matrix<<EOF" >> $GITHUB_OUTPUT
+            echo "$FILTERED" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
           fi
-
-          # Fail fast if the matrix is empty (invalid test-type selected)
-          if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
-            echo "Error: Invalid test-type selected: '${{ inputs.test-type }}'"
-            exit 1
-          fi
-          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   galaxy-deepseek-tests:
-    needs: generate-matrix
-    name: ${{ matrix.test-group.name }}
+    needs: load-test-matrix
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    runs-on:
-      - arch-blackhole
-      - ${{ inputs.topology }}
-      - bare-metal
-      - pipeline-functional
-      - ${{ inputs.extra-tag }}
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
-        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
-        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
-        MESH_DEVICE: TG
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -92,29 +100,29 @@ jobs:
         with:
           submodules: recursive
           path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-
-      - name: Run DeepSeek Prefill module tests
-        if: ${{ matrix.test-group.test-type == 'module' }}
+      - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
-
+          echo "${{ matrix.test-group.cmd }}"
+          ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
