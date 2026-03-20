@@ -12,7 +12,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
     setup_conv3d_test,
     create_conv3d_config,
-    prepare_weights,
     reshape_output,
     run_conv3d_test,
     ALIGNMENT,
