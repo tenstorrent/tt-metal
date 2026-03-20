@@ -11,7 +11,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -402,6 +402,7 @@ def test_ttnn_moe(
         # weights_dtype=ttnn.bfloat4_b,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        combine_output_buffer_memory_config=ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
