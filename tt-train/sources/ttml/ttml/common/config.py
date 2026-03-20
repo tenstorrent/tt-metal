@@ -32,9 +32,6 @@ class DeviceConfig:
         # Based on current configs, DDP and TP cannot be both enabled
         assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
 
-        # we currently support only [1, N] mesh shapes
-        assert self.mesh_shape[0] == 1, f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
-
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
 
@@ -262,7 +259,7 @@ def get_model_config(
 ) -> TransformerConfig:
     """Load model configuration given its filename."""
     if configs_root is None:
-        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/"
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/"
 
     model_config = load_config(model_config_src, configs_root)
     model_config = TransformerConfig(model_config)
