@@ -356,6 +356,22 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
 
+    // Validate no unimplemented compiler options are used
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            kernel.compiler_options.include_paths.empty(),
+            "KernelSpec '{}' specifies include_paths -- this feature is not yet implemented. (Coming soon!)",
+            kernel.unique_id);
+    }
+
+    // Validate no per-node thread maps are used (not yet implemented)
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            !kernel.thread_node_map.has_value(),
+            "KernelSpec '{}' specifies thread_node_map, but per-node thread counts are not implemented.",
+            kernel.unique_id);
+    }
+
     // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(kernel.num_threads > 0, "KernelSpec '{}' has no threads!", kernel.unique_id);
@@ -429,6 +445,22 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         TT_FATAL(!dfb.producer_consumer_map || dfb.producer_consumer_map->empty(), "Remote DFBs are not supported yet");
     }
 
+    // Borrowed memory is not supported yet
+    for (const auto& dfb : spec.dataflow_buffers) {
+        TT_FATAL(
+            !dfb.uses_borrowed_memory,
+            "DFB '{}' uses borrowed memory, but this feature is not yet implemented",
+            dfb.unique_id);
+    }
+
+    // DFB aliasing is not supported yet
+    for (const auto& dfb : spec.dataflow_buffers) {
+        TT_FATAL(
+            !dfb.alias_with.has_value() || dfb.alias_with->empty(),
+            "DFB '{}' specifies alias_with, but DFB aliasing is not yet implemented",
+            dfb.unique_id);
+    }
+
     // Data format metadata (optional param) MUST be specified for a DFB with a compute endpoint
     for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
         if ((endpoint_info.producer && endpoint_info.producer->is_compute_kernel()) ||
@@ -447,6 +479,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 
     // Semaphores aren't supported yet for Quasar
     TT_FATAL(spec.semaphores.empty(), "Semaphores are not supported yet");
+
+    // Validate no semaphore bindings are used (semaphores not yet implemented)
+    for (const auto& kernel : spec.kernels) {
+        TT_FATAL(
+            kernel.semaphore_bindings.empty(),
+            "KernelSpec '{}' has semaphore bindings, but semaphores are not yet implemented",
+            kernel.unique_id);
+    }
 
     //////////////////////////////
     // Validate WorkerSpecs
