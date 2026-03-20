@@ -25,38 +25,40 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     }
 
     const auto& input_tensors = tensor_args.input_tensors;
-    const bool is_sharded = input_tensors[0].is_sharded();
+    const bool input_is_sharded = input_tensors[0].is_sharded();
 
-    if (!is_sharded) {
+    if (!input_is_sharded) {
         return ConcatProgramFactory{};
     }
 
     // Sharded cases - determine which specific factory to use
     const bool output_is_sharded = args.output_mem_config.is_sharded();
+    if (!output_is_sharded) {
+        return ConcatS2IProgramFactory{};
+    }
 
-    if (output_is_sharded) {
-        // ND sharded
-        if (args.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-            return ConcatProgramFactory{};
-        }
+    if (args.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        return ConcatProgramFactory{};
+    }
 
-        // Sharded-to-sharded (s2s) cases
-        if (input_tensors.size() == 2) {
-            // Optimized 2-tensor case
-            TT_FATAL(
-                input_tensors[0].layout() == input_tensors[1].layout(),
-                "Expected all input tensors to have the same layout for 2-tensor sharded concat");
-
-            if (input_tensors[0].layout() == Layout::ROW_MAJOR) {
+    // Sharded-to-sharded (s2s) cases
+    if (input_tensors.size() == 2) {
+        if (input_tensors[0].layout() == input_tensors[1].layout()) {
+            if (3 == args.dim && input_tensors[0].layout() == Layout::ROW_MAJOR &&
+                0 == input_tensors[0].padded_shape()[-1] % args.groups &&
+                0 == input_tensors[1].padded_shape()[-1] % args.groups) {
                 return ConcatS2SRMProgramFactory{};
             }
-            return ConcatS2STiledProgramFactory{};
 
-        }  // Multi-tensor s2s case
+            return ConcatS2STiledProgramFactory{};
+        }
+
+    }  // Multi-tensor s2s case
+
+    if (2 == args.dim || 3 == args.dim) {
         return ConcatS2SMultiProgramFactory{};
     }
-    // Sharded-to-interleaved (s2i) case
-    return ConcatS2IProgramFactory{};
+    return ConcatProgramFactory{};
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
