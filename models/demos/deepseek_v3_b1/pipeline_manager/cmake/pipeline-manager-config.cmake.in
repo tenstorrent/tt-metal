@@ -1,0 +1,12 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+# If the Full target was installed, it needs TT::Metalium at find_package time.
+# The consumer must have TT::Metalium in scope (via add_subdirectory or find_package)
+# before calling find_package(pipeline-manager).
+
+include("${CMAKE_CURRENT_LIST_DIR}/pipeline-manager-targets.cmake")
+
+check_required_components(pipeline-manager)

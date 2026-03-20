@@ -10,6 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
@@ -160,6 +161,24 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     H2DMode: The transfer mode (HOST_PUSH or DEVICE_PULL).
+            )doc")
+        .def(
+            "export_descriptor",
+            &tt::tt_metal::distributed::H2DSocket::export_descriptor,
+            nb::arg("socket_id"),
+            R"doc(
+                Exports a descriptor file for cross-process socket attachment.
+
+                Args:
+                    socket_id (str): A user-provided identifier used in the descriptor filename.
+            )doc")
+        .def_static(
+            "connect",
+            &tt::tt_metal::distributed::H2DSocket::connect,
+            nb::arg("socket_id"),
+            nb::arg("timeout_ms") = nb::none(),
+            R"doc(
+                Connects to an existing H2DSocket from another process.
             )doc");
 
     nb::class_<tt::tt_metal::distributed::D2HSocket>(mod, "D2HSocket")
@@ -281,6 +300,21 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     MeshDevice: The mesh device this socket is bound to.
+            )doc")
+        .def(
+            "export_descriptor",
+            &tt::tt_metal::distributed::D2HSocket::export_descriptor,
+            nb::arg("socket_id"),
+            R"doc(
+                Exports a descriptor file for cross-process socket attachment.
+            )doc")
+        .def_static(
+            "connect",
+            &tt::tt_metal::distributed::D2HSocket::connect,
+            nb::arg("socket_id"),
+            nb::arg("timeout_ms") = nb::none(),
+            R"doc(
+                Connects to an existing D2HSocket from another process.
             )doc");
 }
 

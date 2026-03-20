@@ -83,7 +83,7 @@ class DecoderBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 2
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
@@ -280,7 +280,7 @@ class DenseBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 2
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
