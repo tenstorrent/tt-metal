@@ -233,7 +233,7 @@ def _build_all_gather_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config, batch_size_per_row=USERS_PER_ROW)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
