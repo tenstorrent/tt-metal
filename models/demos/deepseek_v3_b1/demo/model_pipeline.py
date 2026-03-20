@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import torch
 from loguru import logger
@@ -15,6 +16,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_num_procs
 from models.demos.deepseek_v3_b1.demo.weight_provider import (
     CacheWeightProvider,
+    StateDictWeightProvider,
     SyntheticWeightProvider,
     WeightProvider,
 )
@@ -25,8 +27,10 @@ class ModelPipeline:
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
-        cache_path: Path,
-        use_real_weights: bool,
+        *,
+        weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
+        cache_path: Path | None = None,
+        model_path: Path | None = None,
         lm_head_fp32_dest_acc_en: bool = True,
         lm_head_persistent_mode: bool = True,
         dense_layer_id_override: int | None = None,
@@ -34,7 +38,7 @@ class ModelPipeline:
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
-            "real" if use_real_weights else "synthetic",
+            weights_mode,
             lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode,
         )
@@ -49,7 +53,18 @@ class ModelPipeline:
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
 
         # Each host loads/creates only the weights for its stage via the provider.
-        provider: WeightProvider = CacheWeightProvider(cache_path) if use_real_weights else SyntheticWeightProvider()
+        if weights_mode == "real":
+            if cache_path is None:
+                raise ValueError("weights_mode='real' requires cache_path")
+            provider: WeightProvider = CacheWeightProvider(cache_path)
+        elif weights_mode == "state_dict":
+            if model_path is None:
+                raise ValueError("weights_mode='state_dict' requires model_path")
+            provider = StateDictWeightProvider(model_path)
+        elif weights_mode == "synthetic":
+            provider = SyntheticWeightProvider()
+        else:
+            raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
             provider,
