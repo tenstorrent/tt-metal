@@ -609,7 +609,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        GTEST_SKIP();
+                        continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -645,7 +645,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        GTEST_SKIP();
+                        continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -685,7 +685,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                 }
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        GTEST_SKIP();
+                        continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -724,7 +724,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        GTEST_SKIP();
+                        continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -760,7 +760,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        GTEST_SKIP();
+                        continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
@@ -800,7 +800,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                 }
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        GTEST_SKIP();
+                        continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
