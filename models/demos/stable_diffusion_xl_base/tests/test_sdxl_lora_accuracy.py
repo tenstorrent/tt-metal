@@ -8,6 +8,7 @@ import os
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_lora import run_demo_inference
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
@@ -125,8 +126,8 @@ def test_accuracy_sdxl_lora(
     sigmas,
     lora_path,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("Accuracy target not available for 512x512 image resolution")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 
@@ -171,7 +172,7 @@ def test_accuracy_sdxl_lora(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = "sdxl-lora" + ("-tp" if use_cfg_parallel else "")
+    model_name = f"sdxl-lora-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),

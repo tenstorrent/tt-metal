@@ -1,5 +1,5 @@
 {
-  "sdxl": {
+  "sdxl-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -21,7 +21,29 @@
       "warning": 25
     }
   },
-  "sdxl-inpaint": {
+  "sdxl-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "fid_valid_range_full_dataset": [49, 54],
+      "clip_valid_range_full_dataset": [29.38, 31],
+      "clip_valid_range_100": [28.5, 30.8],
+      "fid_valid_range_100": [195, 233]
+    },
+    "clip_score_thresholds": {
+      "error": 19,
+      "warning": 25
+    }
+  },
+  "sdxl-inpaint-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -43,7 +65,29 @@
       "warning": 25
     }
   },
-  "sdxl-img2img": {
+  "sdxl-inpaint-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "fid_valid_range_full_dataset": [40, 43],
+      "clip_valid_range_full_dataset": [30, 30.5],
+      "clip_valid_range_100": [29.8, 31.4],
+      "fid_valid_range_100": [190, 199]
+    },
+    "clip_score_thresholds": {
+      "error": 19.5,
+      "warning": 25
+    }
+  },
+  "sdxl-img2img-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -59,7 +103,23 @@
       "clip_valid_range_100": [0.111, 0.1188]
     }
   },
-  "sdxl-base-refiner": {
+  "sdxl-img2img-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "clip_valid_range_full_dataset": [0.112, 0.122],
+      "clip_valid_range_100": [0.12, 0.14]
+    }
+  },
+  "sdxl-base-refiner-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -81,7 +141,29 @@
       "warning": 25
     }
   },
-  "sdxl-lora": {
+  "sdxl-base-refiner-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "fid_valid_range_full_dataset": [46, 52],
+      "clip_valid_range_full_dataset": [29.2, 30],
+      "clip_valid_range_100": [28.7, 30.5],
+      "fid_valid_range_100": [195, 226]
+    },
+    "clip_score_thresholds": {
+      "error": 19.5,
+      "warning": 25
+    }
+  },
+  "sdxl-lora-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -97,6 +179,28 @@
       "clip_valid_range_full_dataset": [34.4303, 35.2303],
       "clip_valid_range_100": [34.6343, 35.4343],
       "fid_valid_range_100": [264.3848, 280.3848]
+    },
+    "clip_score_thresholds": {
+      "error": 20,
+      "warning": 28
+    }
+  },
+  "sdxl-lora-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "fid_valid_range_full_dataset": [155, 165],
+      "clip_valid_range_full_dataset": [32.8, 33.3],
+      "clip_valid_range_100": [33, 34.5],
+      "fid_valid_range_100": [285, 296]
     },
     "clip_score_thresholds": {
       "error": 20,
