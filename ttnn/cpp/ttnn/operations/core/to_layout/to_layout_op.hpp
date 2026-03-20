@@ -23,6 +23,6 @@ Tensor to_layout(
     const std::optional<DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const float pad_value = 0.0f);
+    float pad_value = 0.0f);
 
 }  // namespace ttnn

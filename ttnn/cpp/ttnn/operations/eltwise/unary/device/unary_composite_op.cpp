@@ -469,7 +469,7 @@ Tensor tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
         DataType::BFLOAT16,
         Layout::TILE,
         input_a.device(),
-        output_mem_config.value());
+        output_mem_config.value_or(input_a.memory_config()));
     return ttnn::multiply(input_a, index_l, std::nullopt, output_mem_config);
 }
 
@@ -482,7 +482,7 @@ Tensor triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfi
         DataType::BFLOAT16,
         Layout::TILE,
         input_a.device(),
-        output_mem_config.value());
+        output_mem_config.value_or(input_a.memory_config()));
     return ttnn::multiply(input_a, index_u, std::nullopt, output_mem_config);
 }
 
