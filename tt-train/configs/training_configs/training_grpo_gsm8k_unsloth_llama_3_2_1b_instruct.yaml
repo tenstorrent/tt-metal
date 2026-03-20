@@ -1,0 +1,29 @@
+training_config:
+  batch_size: 2                # 2 prompts * 8 group_size = 16 total completions
+  num_epochs: 1
+  model_config: "model_configs/llama3_2_1B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-7                 # Dropped LR slightly because updates are very frequent
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+grpo_config:
+  group_size: 8                # Keep this at 8 if possible for better math
+  micro_batch_size: 8          # One full group per optimizer step
+  warmup_steps: 100            # Increased warmup because the signal is noisier
+  max_tokens_to_complete: 512
+  prompts_to_train: 1536
+  clip_eps: 0.2
+
+eval_config:
+  temperature: 0.8
+
+device_config:
+  enable_ddp: false
+  mesh_shape: [1, 1]
