@@ -127,5 +127,5 @@ class DistributedNorm(LightweightModule):
                 num_buffers_per_channel=2,
             )
         if residual is not None:
-            return x, residual
+            return (x, residual)
         return x

@@ -233,13 +233,16 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
-        attn_in, residual = self.attention_norm(
+        attn_in = self.attention_norm(
             x,
             mode,
             norm_config=attn_norm_config,
             residual=residual if self.pre_ff_norm else None,
             skip_allgather=not self.first_layer,
         )
+
+        if type(attn_in) is tuple:
+            attn_in, residual = attn_in
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
