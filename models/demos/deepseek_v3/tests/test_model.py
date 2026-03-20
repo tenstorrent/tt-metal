@@ -479,13 +479,15 @@ def run_test_forward_pass_dpmodel(
         test_name="test_model",
         real_weights=True,
     )
-    config_batch_size_per_row = batch_size_per_row if mode == "decode" else USERS_PER_ROW
+    # The generator still drives prefill one prompt at a time, but the underlying
+    # row-batched prefill kernels/cache layout are configured for a full row.
+    configured_row_width = batch_size_per_row if mode == "decode" else USERS_PER_ROW
     model_config = get_model_config(
         RowBatchedModel,
         mode,
         hf_config_short,
         mesh_device,
-        config_batch_size_per_row,
+        configured_row_width,
     )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
