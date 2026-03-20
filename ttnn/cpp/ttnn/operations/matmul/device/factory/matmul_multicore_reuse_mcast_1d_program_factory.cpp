@@ -1168,7 +1168,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (in0_B * num_blocks > 1) {
+    if (in1_B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
@@ -1240,7 +1240,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // in0 block args
         (std::uint32_t)in0_block_w,                // in0_block_w
         (std::uint32_t)in0_block_h,                // in0_block_h
-        (std::uint32_t)in0_block_h * in0_block_w,  // in0_block_num_tiles
+        (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
         (std::uint32_t)in0_last_ktile_h,
 
