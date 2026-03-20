@@ -344,11 +344,14 @@ def run_ring_joint_sdpa(
 
     if not skip_check:
         # Only use main tensors for host reference (no joint tensors since joint_seq_len=0)
-        logger.debug("Running on host...")
-        gt_out = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
-        logger.debug("Done running on host...")
-        logger.debug("Host output shape: ", gt_out.shape)
+        # Do check with host on unit not determinism tests
+        if n_iters == 1:
+            logger.debug("Running on host...")
+            gt_out = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=is_causal)
+            logger.debug("Done running on host...")
+            logger.debug("Host output shape: ", gt_out.shape)
 
+        expected_output = None
         for i in range(n_iters):
             logger.debug("Synchronize call...")
             ttnn.synchronize_device(submesh)
@@ -371,33 +374,55 @@ def run_ring_joint_sdpa(
                 # Slice out any tile-padding
                 tt_out = tt_out[:, :, :base_seq_len, :]
 
+            if n_iters > 1:
+                if expected_output is None:
+                    expected_output = tt_out
+                elif not torch.equal(expected_output, tt_out):
+                    diff_mask = expected_output != tt_out
+                    num_diffs = diff_mask.sum().item()
+                    max_diff = (expected_output - tt_out).abs().max().item()
+                    pytest.fail(
+                        f"Ring joint SDPA output at iteration {i} differs from iteration 0: "
+                        f"{num_diffs} differing elements, max diff = {max_diff}"
+                    )
+                else:
+                    logger.debug(f"Iteration {i} passed determinism check")
+
             logger.debug(f"tt_out: {tt_out.shape}")
 
-            passing = True
-            out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
-            logger.debug(f"{out_pcc}")
-            mse = ((gt_out - tt_out) ** 2).mean()
-            logger.debug(f"mse: {mse}")
-            if max_mse is not None and mse > max_mse:
-                passing = False
-            passing = passing and out_pass
+            if n_iters == 1:
+                passing = True
+                out_pass, out_pcc = comp_pcc(tt_out, gt_out, pcc_threshold)
+                logger.debug(f"{out_pcc}")
+                mse = ((gt_out - tt_out) ** 2).mean()
+                logger.debug(f"mse: {mse}")
+                if max_mse is not None and mse > max_mse:
+                    passing = False
+                passing = passing and out_pass
 
-            assert passing
+                assert passing
 
 
+#  Note: seq_len and nhq_v will be scaled down to the hw test runs on, inputs are for 32x4 devices configuration
 @pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
 @pytest.mark.parametrize(
-    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
+    "seq_len, q_chunk_size, k_chunk_size",
     [
-        (1, 64, 1, 64, 4 * 4 * 1024, 576, 576, 128),
+        (128 * 1024, 256, 128),
+        (100 * 1024, 320, 64),
     ],
 )
-@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
-@pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
 @pytest.mark.parametrize(
-    "n_iters, trace_enabled, skip_check",
+    "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
     [
-        (1, False, False),
+        (1, 128, 1, 576, 128),
+    ],
+)
+@pytest.mark.parametrize("n_iters", [1, 3], ids=["single_run", "determinism_check"])
+@pytest.mark.parametrize(
+    "trace_enabled, skip_check",
+    [
+        (False, False),
     ],
     ids=["no_trace"],
 )
@@ -406,7 +431,7 @@ def run_ring_joint_sdpa(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
             ttnn.Topology.Linear,
         ),
     ],
@@ -417,30 +442,28 @@ def run_ring_joint_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(2, 4)],
-    ids=["2x4"],
+    [(4, 2), (2, 2)],
+    ids=["4x2", "2x2"],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "rp_axis, rp_factor, up_axis, up_factor",
+    "rp_axis, up_axis",
     [
-        [1, 4, 0, 2],
+        [0, 1],
     ],
     ids=[
-        "4rpx2p",
+        "rpxup",
     ],
 )
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
 def test_mla_sdpa(
     mesh_device,
     b,
-    nhq,
+    nhq_v,
     nhk,
-    nhv,
-    base_seq_len,
-    head_dim_q,
-    head_dim_k,
+    head_dim_q_k,
     head_dim_v,
+    seq_len,
     q_chunk_size,
     k_chunk_size,
     q_dtype,
@@ -449,20 +472,24 @@ def test_mla_sdpa(
     trace_enabled,
     num_links,
     rp_axis,
-    rp_factor,
     up_axis,
-    up_factor,
     all_gather_topology,
     skip_check,
     is_balanced,
     reset_seeds,
 ):
+    production_shape = [32, 4]  # hardcoded for now
+
     mesh_device_shape = list(mesh_device.shape)
-    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
+
+    rp_factor = mesh_device_shape[rp_axis]
+    up_factor = mesh_device_shape[up_axis]
 
     submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
 
-    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
+    seq_len = (seq_len // production_shape[0]) * rp_factor
+    nhq_v = (nhq_v // production_shape[1]) * up_factor
+    padded_seq_len = get_padded_vision_seq_len(seq_len, mesh_device_shape[rp_axis])
 
     logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
     logger.debug(f"submesh: {submesh.shape}")
@@ -472,14 +499,14 @@ def test_mla_sdpa(
     run_ring_joint_sdpa(
         submesh,
         b,
-        nhq,
+        nhq_v,
         nhk,
-        nhv,
-        base_seq_len,
+        nhq_v,
+        seq_len,
         padded_seq_len,
         joint_seq_len,
-        head_dim_q,
-        head_dim_k,
+        head_dim_q_k,
+        head_dim_q_k,
         head_dim_v,
         q_chunk_size,
         k_chunk_size,

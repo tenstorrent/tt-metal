@@ -15,6 +15,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 .github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+.github/workflows/ttsim.yaml @mcraigheadTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -30,6 +31,7 @@ conftest.py @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/pipeline_reorg/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tests/pipeline_reorg/ttsim-skip-list.yaml @mcraigheadTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
@@ -298,7 +300,7 @@ tests/sweep_framework/sweeps/losses/ @tenstorrent/metalium-developers-eltwise @t
 tests/sweep_framework/sweep_utils/adaptive_pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/conv2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 tests/sweep_framework/sweep_utils/conv_transpose2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
-tests/sweep_framework/sweep_utils/max_pool2d_with_indices_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
+tests/sweep_framework/sweep_utils/pool2d_common.py @tenstorrent/metalium-developers-convolutions @tenstorrent/codeowner-bypass
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass

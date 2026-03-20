@@ -339,8 +339,9 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    if is_blackhole():
-        pytest.skip("Skipping because VAE is not working and optimized on full grid")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
+
     if isinstance(images_or_path, str):
         images = [Image.open(images_or_path).convert("RGB")]
     else:

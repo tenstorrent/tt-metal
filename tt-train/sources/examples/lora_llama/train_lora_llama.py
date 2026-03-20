@@ -21,7 +21,7 @@ from ttml.common.data import (
 )
 from ttml.common.utils import (
     set_seed,
-    get_tt_metal_home,
+    get_tt_metal_runtime_root,
     summary,
     get_loss_over_devices,
 )

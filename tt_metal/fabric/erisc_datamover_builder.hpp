@@ -160,6 +160,12 @@ struct StreamRegAssignments {
         // Local tensix relay free slots stream ID (UDM mode only)
         // Dual-use: also used as scratch for eth_retrain (see Scratch::eth_retrain_link_sync_stream_id)
         static constexpr uint32_t tensix_relay_local_free_slots_stream_id = 30;
+        // VC2 sender flow control: free-slots from worker (dual-use with tensix_relay at ID 30; VC2 and UDM/mux
+        // mutually exclusive)
+        static constexpr uint32_t vc2_sender_free_slots_stream_id = 30;
+        // VC2 receiver flow control: free-slots from sender (non-Z routers only; dual-use with scratch
+        // multi_risc_teardown at ID 31)
+        static constexpr uint32_t vc2_receiver_free_slots_stream_id = 31;
     };
 
     // Stream registers used as scratch/overlay storage. Writing overwrites the register value.
@@ -204,7 +210,9 @@ struct StreamRegAssignments {
             IncrementOnWrite::sender_channel_5_free_slots_stream_id,
             IncrementOnWrite::sender_channel_6_free_slots_stream_id,
             IncrementOnWrite::sender_channel_7_free_slots_stream_id,
-            IncrementOnWrite::tensix_relay_local_free_slots_stream_id};
+            IncrementOnWrite::tensix_relay_local_free_slots_stream_id,
+            IncrementOnWrite::vc2_sender_free_slots_stream_id,
+            IncrementOnWrite::vc2_receiver_free_slots_stream_id};
         return inc_on_write_ids;
     }
 
@@ -329,8 +337,10 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc =
+        {};  // Per-VC sender channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc =
+        {};  // Per-VC receiver channel counts
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
