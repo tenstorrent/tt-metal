@@ -104,11 +104,7 @@ echo "Using script: $SCRIPT_PATH"
 echo "Output directory: $OUTPUT_DIR"
 echo ""
 
-PARTITION=$(SLURM_JOB_PARTITION)
-NODELIST=$(SLURM_NODELIST)
-
 echo "Slurm partition: $PARTITION"
-echo "Slurm nodelist: $NODELIST"
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
@@ -118,16 +114,15 @@ LOG_FILE="$OUTPUT_DIR/ttnn_tests_$(date +%Y%m%d_%H%M%S).log"
 WORK_DIR=/workspace
 
 {
-    # mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
-    # sleep 1
     echo "Starting ttnn tests at $(date)"
     srun \
     --partition=$PARTITION \
+    --nodelist=$HOSTS \
     docker run \
     --rm --device /dev/tenstorrent \
     -v $(pwd):/workspace \
     --entrypoint="" \
     $DOCKER_IMAGE \
-    pytest -o cache_dir=/tmp/.pytest_cache /workspace/${SCRIPT_PATH}
+    python /workspace/ttnn/ttnn/examples/usage/run_op_on_device.py
 } 2>&1 | tee "$LOG_FILE"
 echo "Done."
