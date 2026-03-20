@@ -307,7 +307,7 @@ metadata_len = 5
 |------|-------------|
 | `tt/moe/tt_dispatch.py` | `TtDispatchModule` - TTNN wrapper for dispatch |
 | `tt/moe/tt_combine.py` | `TtCombineModule` - TTNN wrapper for combine |
-| `tt/moe/init_helpers.py` | `MeshConfig`, `create_expert_dispatch_table`, `get_gate_outputs` |
+| `tt/moe/init_helpers.py` | `MeshConfig`, `ExpertMapping`, `get_gate_outputs` |
 | `reference/moe/dispatch.py` | `TorchDispatchModule` - PyTorch reference |
 | `reference/moe/combine.py` | `TorchCombineModule` - PyTorch reference |
 

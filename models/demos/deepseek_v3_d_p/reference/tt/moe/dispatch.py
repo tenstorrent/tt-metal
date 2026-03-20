@@ -18,6 +18,8 @@ Goals:
 import torch
 from loguru import logger
 
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
+
 
 class TorchDispatchModule(torch.nn.Module):
     """Expert-centric MoE dispatch module."""
@@ -156,9 +158,13 @@ class TorchDispatchModule(torch.nn.Module):
                         dst_index = offset_copy[chip, routed_expert]
 
                         dispatched_buffer[group, expert_chip, expert_index_within_chip, dst_index] = x[chip, token]
+                        # Compute linearized mesh coord for combine module
+                        linearized_coord = ExpertMapping.compute_linearized_mesh_coord(
+                            chip, group, self.num_dispatch_groups
+                        )
                         dispatched_metadata[group, expert_chip, expert_index_within_chip, dst_index] = torch.tensor(
                             [
-                                chip,
+                                linearized_coord,
                                 token,
                                 topk_idx,
                                 routed_expert,

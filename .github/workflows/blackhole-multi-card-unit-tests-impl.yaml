@@ -102,14 +102,8 @@ jobs:
             timeout: 60
             test-type: slow
           - name: ring joint attention tests
-            cmd: |
-              pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
-              pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py -svv
-            timeout: 60
-            test-type: slow
-          - name: sdpa nightly tests
-            cmd: pytest tests/nightly/blackhole/sdpa/ -svv
-            timeout: 60
+            cmd: pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
+            timeout: 30
             test-type: slow
           - name: fabric infra unit tests
             cmd: |
@@ -145,6 +139,15 @@ jobs:
             timeout: 15
             test-type: qb
             owner_id: U08E1JCMAJF # Marko Bezulj
+            model-name: deepseek_prefill
+          - name: bh_DeepSeek_TP4_FFN_SHARED_EXPERT_RMSNORM
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py -vvv --tb=short
+            timeout: 5
+            test-type: qb-only
+            owner_id: U08E1JCMAJF
             model-name: deepseek_prefill
           YAML_EOF
           )

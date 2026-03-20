@@ -59,55 +59,205 @@ def extract_mesh_config(mesh_device) -> MeshConfig:
     )
 
 
-def create_expert_dispatch_table(
-    num_routed_experts: int,
-    dispatch_group_size: int,
-    num_dispatch_groups: int = 1,
-) -> torch.Tensor:
+class ExpertMapping:
     """
-    Create expert dispatch table mapping experts to destination chips in dispatch axis.
+    Encapsulates expert-to-device mapping logic for MoE weight distribution.
 
-    This table translates expert ID to logical location of the expert in the dispatch axis.
-    -1 means the expert is not present in that dispatch group and should be ignored.
+    All methods in this class must stay in sync - they implement the same underlying
+    mapping between global expert indices and mesh device positions:
 
-    The chip mapping uses the same formula as the kernel: chip_id = expert_id // experts_per_chip
-    where experts_per_chip = num_routed_experts // dispatch_group_size.
+    - `get_global_expert_idx()`: Computes global expert index from (group, chip, local_expert)
+    - `gather_weights_for_mesh_distribution()`: Gathers weights in mesh order using the above
+    - `create_dispatch_table()`: Creates runtime dispatch table for token routing
+    - `get_weights_mesh_mapper()`: Returns mesh mapper with dims=(0, 1) for weight distribution
 
-    Args:
-        num_routed_experts: Total number of routed experts
-        dispatch_group_size: Number of chips in each dispatch group
-        num_dispatch_groups: Number of parallel dispatch groups
-
-    Returns:
-        expert_dispatch_table: Shape (num_dispatch_groups, num_routed_experts)
-            Values are logical chip IDs (0 to dispatch_group_size-1) or -1 if not present
-
-    Example:
-        # num_chips=8, dispatch_group_size=4, num_dispatch_groups=2, num_routed_experts=16
-        # experts_per_group = 16/2 = 8, experts_per_chip = 8/4 = 2
-        # Group 0 handles experts 0-7, Group 1 handles experts 8-15
-        # chip_id = local_expert_id // 2 (local within each group)
-        expert_dispatch_table = [
-            [ 0, 0, 1, 1,  2, 2, 3, 3, -1,-1,-1,-1, -1,-1,-1,-1], # group 0: experts 0-7 → chips 0-3
-            [-1,-1,-1,-1, -1,-1,-1,-1,  0, 0, 1, 1,  2, 2, 3, 3], # group 1: experts 8-15 → chips 0-3
-        ]
+    The default layout is column-major: experts 0..N are placed in group 0, then N+1..2N in group 1, etc.
+    Within each group, experts are distributed across chips sequentially.
     """
-    # Each dispatch group handles a subset of experts, distributed across chips
-    experts_per_group = num_routed_experts // num_dispatch_groups
-    experts_per_chip = experts_per_group // dispatch_group_size  # Experts per chip within each group
 
-    table = torch.full((num_dispatch_groups, num_routed_experts), -1, dtype=torch.int32)
-    for group in range(num_dispatch_groups):
-        group_start = group * experts_per_group
-        group_end = group_start + experts_per_group
-        for expert_id in range(group_start, group_end):
-            # Use local expert ID within the group to compute chip mapping
-            local_expert_id = expert_id - group_start
-            chip_id = local_expert_id // experts_per_chip
-            table[group, expert_id] = chip_id
+    @staticmethod
+    def get_global_expert_idx(
+        group: int,
+        chip: int,
+        local_expert: int,
+        experts_per_chip: int,
+        dispatch_group_size: int,
+        num_dispatch_groups: int,
+        is_col_major: bool = True,
+    ) -> int:
+        """
+        Get global expert index for a given (group, chip, local_expert) position.
 
-    logger.info(f"[create_expert_dispatch_table] OUTPUT: table.shape={table.shape}")
-    return table
+        Args:
+            group: Dispatch group index (corresponds to mesh column)
+            chip: Chip index within dispatch group (corresponds to mesh row)
+            local_expert: Local expert index on the chip
+            experts_per_chip: Number of experts per chip
+            dispatch_group_size: Number of chips per dispatch group (mesh rows)
+            num_dispatch_groups: Number of dispatch groups (mesh columns)
+            is_col_major: If True, column-major (group-first): experts 0-N in group 0
+                         If False, row-major (chip-first): experts interleaved across groups
+
+        Returns:
+            Global expert index
+        """
+        if is_col_major:
+            device_idx = group * dispatch_group_size + chip
+        else:
+            device_idx = chip * num_dispatch_groups + group
+        return device_idx * experts_per_chip + local_expert
+
+    @staticmethod
+    def compute_linearized_mesh_coord(
+        logical_chip_id: int,
+        dispatch_group_idx: int,
+        num_dispatch_groups: int,
+    ) -> int:
+        """
+        Convert logical chip ID to linearized mesh coordinate.
+
+        The linearized coord encodes both the chip and dispatch group:
+        linearized = logical_chip * num_dispatch_groups + dispatch_group_idx
+
+        TorchCombineModule extracts:
+        - dispatch_group = linearized % num_dispatch_groups
+        - logical_chip = linearized // num_dispatch_groups
+
+        Args:
+            logical_chip_id: Chip index within dispatch group (corresponds to mesh row)
+            dispatch_group_idx: Dispatch group index (corresponds to mesh column)
+            num_dispatch_groups: Number of dispatch groups (mesh columns)
+
+        Returns:
+            Linearized mesh coordinate
+        """
+        return logical_chip_id * num_dispatch_groups + dispatch_group_idx
+
+    @staticmethod
+    def gather_weights_for_mesh_distribution(
+        torch_weights: list[dict],
+        local_expert_idx: int,
+        mesh_rows: int,
+        mesh_cols: int,
+        experts_per_chip: int,
+        is_col_major: bool = True,
+    ) -> tuple[list, list, list]:
+        """
+        Gather gate/up/down weights for a local expert, ordered for mesh distribution.
+
+        Uses row-major iteration (for row: for col:) to match `get_weights_mesh_mapper()`.
+        The returned lists are ordered so that after stacking and reshaping to
+        (mesh_rows, mesh_cols, ...), position [row, col] contains weights for the device
+        at mesh position (row, col).
+
+        Args:
+            torch_weights: List of weight dicts indexed by global expert ID
+            local_expert_idx: Local expert index on each chip (0 to experts_per_chip-1)
+            mesh_rows: Number of mesh rows (= dispatch_group_size = chips per group)
+            mesh_cols: Number of mesh cols (= num_dispatch_groups)
+            experts_per_chip: Number of experts per chip
+            is_col_major: Expert ordering (True=column-major, False=row-major)
+
+        Returns:
+            (gate_weights, up_weights, down_weights) - each a list of tensors in mesh order
+        """
+        gate_weights = []
+        up_weights = []
+        down_weights = []
+
+        # Row-major iteration matches mesh mapper dims=(0, 1)
+        for row in range(mesh_rows):
+            for col in range(mesh_cols):
+                global_idx = ExpertMapping.get_global_expert_idx(
+                    group=col,
+                    chip=row,
+                    local_expert=local_expert_idx,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=mesh_rows,
+                    num_dispatch_groups=mesh_cols,
+                    is_col_major=is_col_major,
+                )
+                gate_weights.append(torch_weights[global_idx]["gate_proj"])
+                up_weights.append(torch_weights[global_idx]["up_proj"])
+                down_weights.append(torch_weights[global_idx]["down_proj"])
+
+        return gate_weights, up_weights, down_weights
+
+    @staticmethod
+    def create_dispatch_table(
+        num_routed_experts: int,
+        dispatch_group_size: int,
+        num_dispatch_groups: int = 1,
+    ) -> torch.Tensor:
+        """
+        Create expert dispatch table mapping experts to destination chips in dispatch axis.
+
+        This table translates expert ID to logical location of the expert in the dispatch axis.
+        -1 means the expert is not present in that dispatch group and should be ignored.
+
+        The chip mapping uses the same formula as the kernel: chip_id = expert_id // experts_per_chip
+        where experts_per_chip = num_routed_experts // dispatch_group_size.
+
+        Args:
+            num_routed_experts: Total number of routed experts
+            dispatch_group_size: Number of chips in each dispatch group
+            num_dispatch_groups: Number of parallel dispatch groups
+
+        Returns:
+            expert_dispatch_table: Shape (num_dispatch_groups, num_routed_experts)
+                Values are logical chip IDs (0 to dispatch_group_size-1) or -1 if not present
+
+        Example:
+            # num_chips=8, dispatch_group_size=4, num_dispatch_groups=2, num_routed_experts=16
+            # experts_per_group = 16/2 = 8, experts_per_chip = 8/4 = 2
+            # Group 0 handles experts 0-7, Group 1 handles experts 8-15
+            # chip_id = local_expert_id // 2 (local within each group)
+            expert_dispatch_table = [
+                [ 0, 0, 1, 1,  2, 2, 3, 3, -1,-1,-1,-1, -1,-1,-1,-1], # group 0: experts 0-7 -> chips 0-3
+                [-1,-1,-1,-1, -1,-1,-1,-1,  0, 0, 1, 1,  2, 2, 3, 3], # group 1: experts 8-15 -> chips 0-3
+            ]
+        """
+        # Each dispatch group handles a subset of experts, distributed across chips
+        experts_per_group = num_routed_experts // num_dispatch_groups
+        experts_per_chip = experts_per_group // dispatch_group_size  # Experts per chip within each group
+
+        table = torch.full((num_dispatch_groups, num_routed_experts), -1, dtype=torch.int32)
+        for group in range(num_dispatch_groups):
+            group_start = group * experts_per_group
+            group_end = group_start + experts_per_group
+            for expert_id in range(group_start, group_end):
+                # Use local expert ID within the group to compute chip mapping
+                local_expert_id = expert_id - group_start
+                chip_id = local_expert_id // experts_per_chip
+                table[group, expert_id] = chip_id
+
+        logger.debug(f"[ExpertMapping.create_dispatch_table] OUTPUT: table.shape={table.shape}")
+        return table
+
+    @staticmethod
+    def get_weights_mesh_mapper(mesh_device):
+        """
+        Create mesh mapper for routed expert weight tensors.
+
+        Each device gets its own unique expert weights, sharded across both mesh dimensions.
+        The input tensor should have shape (mesh_rows, mesh_cols, in_features, out_features).
+
+        This mapper uses dims=(0, 1) which means:
+        - Tensor dim 0 is sharded across mesh rows
+        - Tensor dim 1 is sharded across mesh cols
+        - Device at mesh[row, col] receives tensor[row, col, :, :]
+
+        Args:
+            mesh_device: TTNN mesh device
+
+        Returns:
+            ShardTensor2dMesh mapper configured for routed expert weights
+        """
+        return ttnn.ShardTensor2dMesh(
+            mesh_device,
+            mesh_shape=mesh_device.shape,
+            dims=(0, 1),  # Shard dim 0 across mesh rows, dim 1 across mesh cols
+        )
 
 
 def get_gate_outputs(
@@ -157,16 +307,18 @@ def get_gate_outputs(
         .view(num_routed_experts // experts_per_chip // dispatch_group_size, dispatch_group_size, experts_per_chip)
         .to(torch.int32)
     )
-
-    logger.info(f"[get_gate_outputs] OUTPUT SHAPES:")
-    logger.info(f"  expert_counter.shape={expert_counter.shape}")
-    logger.info(f"  expert_offsets.shape={expert_offsets.shape}")
-    logger.info(f"  expert_token_counts.shape={expert_token_counts.shape}")
-    logger.info(f"  cum_sum.shape={cum_sum.shape}")
+    # expert_token_counts = expert_token_counts.permute(1, 0, 2)
+    logger.debug(f"[get_gate_outputs] OUTPUT SHAPES:")
+    logger.debug(f"  expert_counter.shape={expert_counter.shape}")
+    logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
+    logger.debug(f"  expert_token_counts.shape={expert_token_counts.shape}")
+    logger.debug(f"  cum_sum.shape={cum_sum.shape}")
     return expert_offsets, expert_token_counts, cum_sum
 
 
-def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor):
+def compute_constants(
+    seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+):
     """
     Compute derived constants for MoE configuration.
 
@@ -174,7 +326,8 @@ def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok,
         seq_len_per_chip: Sequence length per chip
         num_routed_experts: Total number of routed experts across all chips
         num_experts_per_tok: Number of experts each token is routed to
-        dispatch_group_size: Number of chips in each dispatch group
+        num_devices: Number of devices across which experts are distributed
+        dispatch_group_size: Number of devices in each dispatch group
         capacity_factor: Capacity factor for load balancing
 
     Returns:
@@ -182,9 +335,10 @@ def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok,
         metadata_len: Length of metadata per token
         max_dispatched_tokens_per_expert: Maximum tokens per expert
     """
-    experts_per_chip = num_routed_experts // dispatch_group_size
+    experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
-    balanced_load = dispatch_group_size * seq_len_per_chip * num_experts_per_tok // num_routed_experts
+    # total number of tokens in group times x distribution ratio (8/256 == 2/64)
+    balanced_load = (dispatch_group_size * seq_len_per_chip) * num_experts_per_tok // num_routed_experts
     max_dispatched_tokens_per_expert = int(balanced_load * capacity_factor)
     return experts_per_chip, metadata_len, max_dispatched_tokens_per_expert
 
@@ -199,6 +353,7 @@ def initialize_test_inputs(
     seed: int = 42,
     validate: bool = True,
     num_dispatch_groups: int = 1,
+    skip_x_initialization: bool = False,
 ):
     """
     Initialize test inputs (x, weights, indices) with random data.
@@ -222,7 +377,7 @@ def initialize_test_inputs(
     torch.manual_seed(seed)
 
     input_shape = (dispatch_group_size, seq_len_per_chip, hidden_dim)
-    x = torch.randn(input_shape, dtype=torch.bfloat16)
+    x = torch.randn(input_shape, dtype=torch.bfloat16) if not skip_x_initialization else None
 
     weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
@@ -238,7 +393,7 @@ def initialize_test_inputs(
                 for k in range(indices.shape[2]):
                     expert_activations[indices[c, t, k]] += 1
         checksum = expert_activations.sum().item()
-        logger.info(f"{expert_activations.shape=}")
+        logger.debug(f"{expert_activations.shape=}")
         assert (
             checksum == dispatch_group_size * seq_len_per_chip * num_experts_per_tok
         ), f"Expected checksum {dispatch_group_size * seq_len_per_chip * num_experts_per_tok}, got {checksum}"
@@ -246,10 +401,10 @@ def initialize_test_inputs(
             expert_activations.max().item() <= max_dispatched_tokens_per_expert
         ), f"Expected max activations per expert to be <= {max_dispatched_tokens_per_expert}, got {expert_activations.max().item()}"
 
-    logger.info(f"[initialize_test_inputs] OUTPUT SHAPES:")
-    logger.info(f"  x.shape={x.shape}")
-    logger.info(f"  weights.shape={weights.shape}")
-    logger.info(f"  indices.shape={indices.shape}")
+    logger.debug(f"[initialize_test_inputs] OUTPUT SHAPES:")
+    logger.debug(f"  x.shape={x.shape if x is not None else None}")
+    logger.debug(f"  weights.shape={weights.shape}")
+    logger.debug(f"  indices.shape={indices.shape}")
     return x, weights, indices
 
 
@@ -321,10 +476,10 @@ def initialize_predictable_test_inputs(
                     )  # reverse order
                 expert_idx += 1
 
-    logger.info(f"[initialize_predictable_test_inputs] OUTPUT SHAPES:")
-    logger.info(f"  x.shape={x.shape}")
-    logger.info(f"  weights.shape={weights.shape}")
-    logger.info(f"  indices.shape={indices.shape}")
+    logger.debug(f"[initialize_predictable_test_inputs] OUTPUT SHAPES:")
+    logger.debug(f"  x.shape={x.shape}")
+    logger.debug(f"  weights.shape={weights.shape}")
+    logger.debug(f"  indices.shape={indices.shape}")
     return x, weights, indices
 
 
@@ -341,3 +496,124 @@ def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
+    """
+    Create mesh mapper for dispatch input tensors (x, weights, indices).
+
+    These tensors are sharded across the SP axis and replicated across EP ranks.
+
+    Args:
+        mesh_device: TTNN mesh device
+        sp_axis: Sequence parallel axis (0 or 1)
+
+    Returns:
+        ShardTensor2dMesh mapper configured for dispatch inputs
+    """
+    return ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(sp_axis, None),
+    )
+
+
+def get_combine_counter_mesh_mapper(mesh_device):
+    """
+    Create mesh mapper for combine counter tensor (expert_token_counts).
+
+    The counter tensor is sharded across both mesh dimensions.
+
+    Args:
+        mesh_device: TTNN mesh device
+
+    Returns:
+        ShardTensor2dMesh mapper configured for counter tensor
+    """
+    return ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
+    )
+
+
+def get_tp_mesh_composer(mesh_device):
+    """
+    Create mesh composer for TP sharded tensors; TP embedding dim over columns
+    """
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            dims=[0, -1],
+        ),
+    )
+
+
+def get_dispatch_output_mesh_composer(mesh_device):
+    """
+    Create mesh composer for gathering dispatch output back to torch.
+
+    Args:
+        mesh_device: TTNN mesh device
+    """
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            dims=[1, 0],
+        ),
+    )
+
+
+def get_combine_output_mesh_composer(mesh_device):
+    """
+    Create mesh composer for gathering combine output back to torch.
+
+    Args:
+        mesh_device: TTNN mesh device
+
+    Returns:
+        MeshComposer configured for combine output
+    """
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            dims=[1, 0],
+        ),
+    )
+
+
+def get_routed_expert_buffer_mesh_mapper(mesh_device):
+    """
+    Create mesh mapper for routed expert dispatched buffer.
+
+    The buffer is sharded across both mesh dimensions.
+
+    Args:
+        mesh_device: TTNN mesh device
+
+    Returns:
+        ShardTensor2dMesh mapper configured for routed expert buffer
+    """
+    return ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(1, 0),
+    )
+
+
+def get_routed_expert_output_mesh_composer(mesh_device):
+    """
+    Create mesh composer for gathering routed expert output back to torch.
+
+    Args:
+        mesh_device: TTNN mesh device
+
+    Returns:
+        MeshComposer configured for routed expert output
+    """
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            dims=[1, 0],
+        ),
+    )
