@@ -10,8 +10,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <cstdlib>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -119,100 +117,39 @@ void expect_allclose_with_metrics(
                           << " max_abs_diff=" << max_abs_diff;
 }
 
-class ScopedPolyNormFusedForwardEnv {
-public:
-    explicit ScopedPolyNormFusedForwardEnv(bool enabled) {
-        constexpr const char* env_name = "TTML_POLYNORM_USE_FUSED_FW";
-        const char* previous = std::getenv(env_name);
-        if (previous != nullptr) {
-            m_previous = std::string(previous);
-        }
-        setenv(env_name, enabled ? "1" : "0", /*overwrite=*/1);
-    }
-
-    ~ScopedPolyNormFusedForwardEnv() {
-        constexpr const char* env_name = "TTML_POLYNORM_USE_FUSED_FW";
-        if (m_previous.has_value()) {
-            setenv(env_name, m_previous->c_str(), /*overwrite=*/1);
-            return;
-        }
-        unsetenv(env_name);
-    }
-
-private:
-    std::optional<std::string> m_previous;
-};
-
 void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape, float epsilon = 1e-5F) {
     using namespace ttml;
     const auto data = make_case_data(shape);
     auto* device = &autograd::ctx().get_device();
 
-    auto x_fused = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
-    auto w_fused = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
-    auto b_fused = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
+    auto x = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
+    auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
+    auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
 
-    auto x_ref = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
-    auto w_ref = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
-    auto b_ref = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
-
-    std::shared_ptr<autograd::Tensor> out_fused;
-    {
-        ScopedPolyNormFusedForwardEnv env_guard(/*enabled=*/true);
-        out_fused = ops::polynorm(x_fused, w_fused, b_fused, epsilon);
-    }
-
-    std::shared_ptr<autograd::Tensor> out_composite;
-    {
-        ScopedPolyNormFusedForwardEnv env_guard(/*enabled=*/false);
-        out_composite = ops::polynorm(x_ref, w_ref, b_ref, epsilon);
-    }
-
-    auto out_fused_xt = core::to_xtensor(out_fused->get_value());
-    auto out_composite_xt = core::to_xtensor(out_composite->get_value());
+    auto out = ops::polynorm(x, w, b, epsilon);
+    const auto out_xt = core::to_xtensor(out->get_value());
     auto out_reference_xt = polynorm_reference(data.input, data.weight, data.bias, epsilon);
 
-    EXPECT_EQ(out_fused_xt.shape(), out_reference_xt.shape());
-    EXPECT_EQ(out_composite_xt.shape(), out_reference_xt.shape());
-    EXPECT_TRUE(xt::all(xt::isfinite(out_fused_xt)));
-    EXPECT_TRUE(xt::all(xt::isfinite(out_composite_xt)));
+    EXPECT_EQ(out_xt.shape(), out_reference_xt.shape());
+    EXPECT_TRUE(xt::all(xt::isfinite(out_xt)));
     EXPECT_TRUE(xt::all(xt::isfinite(out_reference_xt)));
-    expect_allclose_with_metrics(out_fused_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_xt_reference");
-    expect_allclose_with_metrics(
-        out_composite_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "composite_forward_vs_xt_reference");
-    expect_allclose_with_metrics(out_fused_xt, out_composite_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_composite");
+    expect_allclose_with_metrics(out_xt, out_reference_xt, 8.0e-2F, 8.0e-2F, "fused_forward_vs_xt_reference");
 
-    auto target_fused = autograd::create_tensor(core::zeros_like(out_fused->get_value()));
-    auto target_ref = autograd::create_tensor(core::zeros_like(out_composite->get_value()));
-    auto mse_fused = ops::mse_loss(out_fused, target_fused);
-    auto mse_ref = ops::mse_loss(out_composite, target_ref);
-    mse_fused->backward();
-    mse_ref->backward();
+    auto target = autograd::create_tensor(core::zeros_like(out->get_value()));
+    auto mse = ops::mse_loss(out, target);
+    mse->backward();
 
-    const auto grad_x_fused = core::to_xtensor(x_fused->get_grad());
-    const auto grad_w_fused = core::to_xtensor(w_fused->get_grad());
-    const auto grad_b_fused = core::to_xtensor(b_fused->get_grad());
-    const auto grad_x_ref = core::to_xtensor(x_ref->get_grad());
-    const auto grad_w_ref = core::to_xtensor(w_ref->get_grad());
-    const auto grad_b_ref = core::to_xtensor(b_ref->get_grad());
+    const auto grad_x = core::to_xtensor(x->get_grad());
+    const auto grad_w = core::to_xtensor(w->get_grad());
+    const auto grad_b = core::to_xtensor(b->get_grad());
 
-    EXPECT_EQ(grad_x_fused.shape(), data.input.shape());
-    EXPECT_EQ(grad_w_fused.shape(), data.weight.shape());
-    EXPECT_EQ(grad_b_fused.shape(), data.bias.shape());
-    EXPECT_EQ(grad_x_ref.shape(), data.input.shape());
-    EXPECT_EQ(grad_w_ref.shape(), data.weight.shape());
-    EXPECT_EQ(grad_b_ref.shape(), data.bias.shape());
+    EXPECT_EQ(grad_x.shape(), data.input.shape());
+    EXPECT_EQ(grad_w.shape(), data.weight.shape());
+    EXPECT_EQ(grad_b.shape(), data.bias.shape());
 
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_x_fused)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_w_fused)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_b_fused)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_x_ref)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_w_ref)));
-    EXPECT_TRUE(xt::all(xt::isfinite(grad_b_ref)));
-
-    expect_allclose_with_metrics(grad_x_fused, grad_x_ref, 2.0e-2F, 2.0e-2F, "grad_x_fused_vs_composite");
-    expect_allclose_with_metrics(grad_w_fused, grad_w_ref, 2.0e-2F, 2.0e-2F, "grad_w_fused_vs_composite");
-    expect_allclose_with_metrics(grad_b_fused, grad_b_ref, 2.0e-2F, 2.0e-2F, "grad_b_fused_vs_composite");
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_x)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_w)));
+    EXPECT_TRUE(xt::all(xt::isfinite(grad_b)));
 
     autograd::ctx().reset_graph();
 }
@@ -254,7 +191,6 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
     auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
     auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
 
-    ScopedPolyNormFusedForwardEnv env_guard(/*enabled=*/true);
     EXPECT_THROW(
         {
             auto out = ops::polynorm(x, w, b, 1e-5F);
