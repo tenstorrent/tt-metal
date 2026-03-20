@@ -12,6 +12,14 @@ from tracy.process_model_log import post_process_ops_log, run_device_profiler
 
 import ttnn
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
+
+
+def create_fabric_router_config(max_payload_size=8192):
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
@@ -49,9 +57,8 @@ def torch_sdpa(q, k, v, joint_q, joint_k, joint_v, num_devices):
     return out, lse_list
 
 
-def create_global_semaphores(mesh_device, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+def create_global_semaphores(mesh_device, cores, initial_value, num_links=2):
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(num_links)]
     return ccl_semaphore_handles
 
 
@@ -118,8 +125,8 @@ def run_ring_joint_sdpa_model_config(
     submesh.load_sub_device_manager(sub_device_manager)
     submesh.set_sub_device_stall_group(sub_device_stall_group)
 
-    # --- Global semaphores ---
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(2)]
+    # --- Global semaphores: one per link for per-chunk sync ---
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(submesh, ccl_sub_device_crs, 0) for _ in range(num_links)]
 
     # --- Persistent output buffers for all-gather K/V ---
     kv_shard_dims = [None, None]
@@ -165,9 +172,9 @@ def run_ring_joint_sdpa_model_config(
         )
 
     # --- Create input tensors ---
-    Q = fa_rand(b, nh, base_seq_len, d)
-    K = fa_rand(b, nh, base_seq_len, d)
-    V = fa_rand(b, nh, base_seq_len, d)
+    Q = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    K = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    V = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
 
     padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
     padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
@@ -326,10 +333,18 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    sdpa_grid_override=None,
+    ccl_offset_override=None,
+    use_column_major_ccl=False,
+    ccl_worker_cores=None,
+    num_workers_per_link=5,
+    num_buffers_per_channel=32,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
-    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+    sdpa_compute_grid = (
+        sdpa_grid_override if sdpa_grid_override is not None else (full_compute_grid.x, full_compute_grid.y - 1)
+    )
+    ccl_core_grid_offset = ccl_offset_override if ccl_offset_override is not None else (0, full_compute_grid.y - 1)
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -347,8 +362,10 @@ def run_ring_joint_sdpa(
     submesh.load_sub_device_manager(sub_device_manager)
     submesh.set_sub_device_stall_group(sub_device_stall_group)
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(submesh, ccl_sub_device_crs, 0) for _ in range(n_iters)]
+    # create global semaphore handles: one per link for per-chunk sync
+    ccl_semaphore_handles = [
+        create_global_semaphores(submesh, ccl_sub_device_crs, 0, num_links=num_links) for _ in range(n_iters)
+    ]
 
     kv_shard_dims = [None, None]
     kv_shard_dims[rp_axis] = None  # Output of AllGather is not sharded on RP axis
@@ -387,9 +404,17 @@ def run_ring_joint_sdpa(
         packer_l1_acc=False,
     )
 
-    Q = fa_rand(b, nh, base_seq_len, d)
-    K = fa_rand(b, nh, base_seq_len, d)
-    V = fa_rand(b, nh, base_seq_len, d)
+    rp_factor = list(submesh.shape)[rp_axis]
+    slice_seq_len = base_seq_len // rp_factor
+
+    Q = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    K = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    V = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
+    # K = torch.zeros(b, nh, base_seq_len, d)
+    # V = torch.zeros(b, nh, base_seq_len, d)
+    # for rp_id in range(rp_factor):
+    #     K[:, :, rp_id * slice_seq_len : (rp_id + 1) * slice_seq_len, :] = rp_id + 1
+    #     V[:, :, rp_id * slice_seq_len : (rp_id + 1) * slice_seq_len, :] = rp_id + 1
 
     padded_Q = torch.cat([Q, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
     padded_K = torch.cat([K, torch.zeros(b, nh, padded_seq_len - base_seq_len, d)], dim=2)
@@ -466,7 +491,9 @@ def run_ring_joint_sdpa(
 
     def run_iters(tt_out_list, tt_joint_out_list):
         for i in range(n_iters):
-            tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            if not trace_enabled:
+                ttnn.synchronize_device(submesh)
+            tt_out, tt_joint_out, tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
                 tt_V,
@@ -487,6 +514,14 @@ def run_ring_joint_sdpa(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
+                **({"use_column_major_ccl": True} if use_column_major_ccl else {}),
+                **(
+                    {"ccl_worker_cores": [ttnn.CoreCoord(x, y) for x, y in ccl_worker_cores]}
+                    if ccl_worker_cores is not None
+                    else {}
+                ),
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -577,6 +612,9 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    ccl_worker_cores=None,
+    num_workers_per_link=5,
+    num_buffers_per_channel=48,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -616,6 +654,9 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        ccl_worker_cores=ccl_worker_cores,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
 
@@ -694,7 +735,12 @@ all_parallel_config_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -840,7 +886,12 @@ model_input_ids = [
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -951,7 +1002,12 @@ wh_t3k_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1029,7 +1085,12 @@ bh_qb_ge_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1070,6 +1131,7 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        ccl_worker_cores=[(11, 1), (11, 2)],
     )
 
 
@@ -1107,7 +1169,12 @@ wh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1185,7 +1252,12 @@ bh_glx_unit_test_params = pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(8192),
+            },
             ttnn.Topology.Linear,
         ),
     ],
@@ -1226,4 +1298,85 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        ccl_worker_cores=[(11, 1), (11, 2), (11, 6), (11, 7)],
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                # "fabric_router_config": create_fabric_router_config(8192),
+            },
+            ttnn.Topology.Ring,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["ring"],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [((4, 32), 2)], ids=["4x32"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_bh_glx_custom(
+    mesh_device,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    import os
+
+    import torch
+    from loguru import logger
+
+    num_torch_threads = max(1, os.cpu_count())
+    logger.info(f"Setting torch num_threads to {num_torch_threads}")
+    torch.set_num_threads(num_torch_threads)
+    dtype = ttnn.bfloat16
+    b, nh, base_seq_len, joint_seq_len, d = (1, 40, 75600, 0, 128)
+    rp_axis, rp_factor, up_axis, up_factor = (
+        1,
+        32,
+        0,
+        4,
+    )  # parallel_config_map["bh_glx"]["wan_14b_720p"]  # (0, 8, 1, 4)
+    q_chunk_size = 224
+    k_chunk_size = 512
+    n_iters = 5
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold = 0.9993
+    max_mse = 8e-5
+
+    if nh % up_factor != 0:
+        nh = math.ceil(nh / up_factor) * up_factor
+    # submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+    submesh = mesh_device
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, list(mesh_device.shape)[rp_axis])
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+        max_mse=max_mse,
+        sdpa_grid_override=(11, 10),
+        ccl_offset_override=(11, 0),
+        use_column_major_ccl=True,
+        ccl_worker_cores=[(11, 1), (11, 2), (11, 6), (11, 7)],
     )
