@@ -863,8 +863,23 @@ def _core_range_set_from_list(lst: list[list[list[int]]]) -> ttnn.CoreRangeSet:
     return ttnn.CoreRangeSet(ranges)
 
 
+_OVERLAPPED_SERIALIZED_FIELDS = {
+    "tensor_shape",
+    "shard_shape",
+    "core_range_set",
+    "dtype",
+    "tile_shape",
+    "byte_offset",
+    "total_size",
+}
+_OVERLAPPED_SKIP_FIELDS = {"fused_tensor"}
+
+
 def _overlapped_tensor_to_json(ot: OverlappedTensor) -> dict:
     """Serialize one OverlappedTensor's metadata to a JSON-serializable dict."""
+    all_fields = {f.name for f in fields(OverlappedTensor)}
+    missing = all_fields - _OVERLAPPED_SERIALIZED_FIELDS - _OVERLAPPED_SKIP_FIELDS
+    assert not missing, f"OverlappedTensor has new fields not serialized: {missing}"
     dtype_str = _DTYPE_TO_STR.get(ot.dtype)
     if dtype_str is None:
         dtype_str = str(ot.dtype)
@@ -875,6 +890,7 @@ def _overlapped_tensor_to_json(ot: OverlappedTensor) -> dict:
         "dtype": dtype_str,
         "tile_shape": list(ot.tile_shape),
         "byte_offset": ot.byte_offset,
+        "total_size": ot.total_size,
     }
 
 
@@ -886,6 +902,9 @@ def _overlapped_tensor_from_dict(
     dtype = _STR_TO_DTYPE.get(d["dtype"])
     if dtype is None:
         raise ValueError(f"Unknown dtype in manifest: {d['dtype']}")
+    total_size = d.get("total_size", 0)
+    if total_size == 0:
+        raise ValueError("manifest is missing 'total_size' for OverlappedTensor — regenerate the weight cache")
     return OverlappedTensor(
         fused_tensor=fused_tensor,
         tensor_shape=tuple(d["tensor_shape"]),
@@ -894,6 +913,7 @@ def _overlapped_tensor_from_dict(
         dtype=dtype,
         tile_shape=tuple(d["tile_shape"]),
         byte_offset=d["byte_offset"],
+        total_size=total_size,
     )
 
 

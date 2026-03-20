@@ -14,9 +14,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine {
 struct CombineSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id = 0;
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    CoreCoord worker_core;
+    std::vector<CoreCoord> cores;
     GlobalSemaphore init_semaphore;       // Initialized in create_at()
     uint32_t zero_init_semaphore_id = 0;  // Local semaphore ID for reader->writer sync
+    uint32_t zero_init_barrier_semaphore_id = 0;  // Barrier: writer signals reader after global init
 };
 
 struct CombineProgramFactory {
