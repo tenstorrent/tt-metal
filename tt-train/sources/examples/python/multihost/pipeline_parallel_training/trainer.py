@@ -11,9 +11,7 @@ from ttml.common.data import get_batch, build_causal_mask
 from ttml.common.utils import PerformanceMeter, no_grad
 
 
-def get_batch_ttml(
-    ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False
-):
+def get_batch_ttml(ids: np.ndarray, seq_len: int, batch_size: int, use_ddp: bool = False):
     """Prepare a batch of data for TTML training.
 
     Args:
@@ -37,18 +35,14 @@ def get_batch_ttml(
             ttnn.DataType.UINT32,
             mapper,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     else:
         tt_x = ttml.autograd.Tensor.from_numpy(
             x_u32.reshape(batch_size, 1, 1, seq_len),
             ttnn.Layout.ROW_MAJOR,
             ttnn.DataType.UINT32,
         )
-        tt_y = ttml.autograd.Tensor.from_numpy(
-            y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32
-        )
+        tt_y = ttml.autograd.Tensor.from_numpy(y_u32, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
     return tt_x, tt_y
 
 
@@ -85,9 +79,7 @@ def train(
     reduce = ttml.ops.ReduceType.MEAN
 
     causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(
-        causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-    )
+    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
@@ -100,9 +92,7 @@ def train(
     is_first_stage = rank == 0
     is_final_stage = rank == world_size - 1
 
-    assert (
-        world_size > 1
-    ), f"Pipeline parallel requires world_size > 1, got {world_size}"
+    assert world_size > 1, f"Pipeline parallel requires world_size > 1, got {world_size}"
 
     # Create composer for distributed tensors if using DDP or TP
     composer = None

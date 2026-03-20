@@ -77,9 +77,7 @@ def run_ttnn_fabric_verification(num_rows: int = 4, num_cols: int = 8) -> None:
             ttnn.synchronize_device(device)
             t_end = time.time()
 
-            logger.info(
-                f"Rank {rank} send completed in {(t_end - t_start)*1000:.2f} ms"
-            )
+            logger.info(f"Rank {rank} send completed in {(t_end - t_start)*1000:.2f} ms")
             del send_socket
             del tt_tensor
 
@@ -108,13 +106,9 @@ def run_ttnn_fabric_verification(num_rows: int = 4, num_cols: int = 8) -> None:
             ttnn.synchronize_device(device)
             t_end = time.time()
 
-            logger.info(
-                f"Rank {rank} receive completed in {(t_end - t_start)*1000:.2f} ms"
-            )
+            logger.info(f"Rank {rank} receive completed in {(t_end - t_start)*1000:.2f} ms")
 
-            received_torch = ttnn.to_torch(
-                recv_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)
-            )[0]
+            received_torch = ttnn.to_torch(recv_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))[0]
 
             if torch.allclose(received_torch, torch_tensor, rtol=1e-2, atol=1e-2):
                 logger.success(f"Data verification PASSED - tensor matches!")
