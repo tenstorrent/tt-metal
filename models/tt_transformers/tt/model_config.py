@@ -1087,7 +1087,7 @@ class ModelArgs:
     # RESIDUAL MEMORY CONFIGS
     # =========================================================================
     @lru_cache(maxsize=None)
-    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
+    def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None, residual_replicated: bool = False):
         """Get the memory config for decode residual tensors."""
         if mode == Mode.DECODE:
             if prefetcher is not None:
@@ -1107,7 +1107,7 @@ class ModelArgs:
             elif self.is_galaxy:
                 return ttnn.L1_MEMORY_CONFIG
             else:
-                if special_case:
+                if residual_replicated:
                     residual_grid = self.dram_shard_core_grid_for_k(self.dim)
                     return ttnn.create_sharded_memory_config(
                         (

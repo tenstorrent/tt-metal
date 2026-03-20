@@ -218,7 +218,9 @@ class TransformerBlock(LightweightModule):
         residual = x
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
-        skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher, special_case=True)
+        skip_mem_cfg = self.args.get_residual_mem_config(
+            mode, self.prefetcher, residual_replicated=self.post_ff_norm is not None
+        )
 
         # assert (
         #     x.memory_config() == skip_mem_cfg
@@ -232,7 +234,11 @@ class TransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in, residual = self.attention_norm(
-            x, mode, norm_config=attn_norm_config, residual=residual, first_layer=self.first_layer
+            x,
+            mode,
+            norm_config=attn_norm_config,
+            residual=residual if self.pre_ff_norm else None,
+            skip_allgather=not self.first_layer,
         )
 
         # Attention takes replicated inputs and produces fractured outputs
@@ -272,13 +278,12 @@ class TransformerBlock(LightweightModule):
             #         dim=3,
             #         cluster_axis=1,
             #     )
-
-            hidden_states = self.pre_ff_norm(
-                hidden_states, mode, norm_config=pre_ff_norm_config, special_case_gather=True
+            hidden_states = ttnn.add(
+                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
             pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
-            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
+            hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config, skip_allgather=True)
 
         ttnn.deallocate(attn_out)
 

@@ -599,7 +599,9 @@ class Transformer(LightweightModule):
             if mode == Mode.DECODE and not self.args.is_galaxy:
                 x = ttnn.to_memory_config(
                     x,
-                    self.args.get_residual_mem_config(mode, self.prefetcher, special_case=i > 0),
+                    self.args.get_residual_mem_config(
+                        mode, self.prefetcher, residual_replicated=i > 0
+                    ),  # Optimization for models that use replicated residuals in decode - for now models that use pre and post ff norms in decoder (Gemam3 only)
                     activation_dtype,
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:

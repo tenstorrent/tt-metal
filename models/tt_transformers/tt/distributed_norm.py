@@ -51,7 +51,7 @@ class DistributedNorm(LightweightModule):
             )
         self.TG = TG
 
-    def forward(self, x, mode: Mode, norm_config=None, special_case_gather=False, residual=None, first_layer=True):
+    def forward(self, x, mode: Mode, norm_config=None, skip_allgather=False, residual=None):
         """Apply a norm, possibly gathering inputs if required."""
 
         sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
@@ -81,12 +81,7 @@ class DistributedNorm(LightweightModule):
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
         # Distributed norm already performs a gather
-        if (
-            self.args.is_multichip
-            and not self.args.is_distributed_norm(mode)
-            and not special_case_gather
-            and first_layer
-        ):
+        if self.args.is_multichip and not self.args.is_distributed_norm(mode) and not skip_allgather:
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
