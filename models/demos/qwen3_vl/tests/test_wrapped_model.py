@@ -73,7 +73,15 @@ def test_wrapped_vision_model_inference(
 
     # Run reference model
     reference_output, deepstack_visual_embeds = reference_model(pt_pixel_values, image_grid_thw)
-    tt_output_torch, tt_deepstack_visual_embeds = torch_model(pt_pixel_values, image_grid_thw)
+    tt_output, tt_deepstack_visual_embeds = torch_model(pt_pixel_values, image_grid_thw)
+
+    # Convert ttnn tensor to torch, concatenating replicated outputs along dim 0
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+    # Take only the first device's output (the rest are duplicates due to replication)
+    tt_output_torch = tt_output_torch[: reference_output.shape[0], :]
 
     # Compare outputs
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
