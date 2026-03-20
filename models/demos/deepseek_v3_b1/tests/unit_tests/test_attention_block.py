@@ -10,6 +10,9 @@ Tests pre-SDPA fused operation with full pipeline:
 - Qrope output: [64, 1, 64] after RoPE
 """
 
+import os
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
@@ -25,6 +28,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.prepare_weights import prepare_attention_weights
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import generate_mm_weights
@@ -1120,3 +1124,790 @@ def test_attention_block(
     # Clean up trace and sub-device state before fixture teardown
     # This ensures profiler data is properly flushed before close_mesh_device
     ttnn.synchronize_device(submesh)
+
+
+# ============================================================================
+# Real-weights trace test: validate attention block against GPU debug trace
+# ============================================================================
+
+MOE_LAYER_OFFSET = 3  # Layers 0-2 are dense, MoE starts at layer 3
+
+
+def _load_trace_tensor(trace_dir: Path, filename: str, key: str) -> torch.Tensor:
+    """Load a single tensor from a safetensors file in the debug trace directory."""
+    from safetensors.torch import safe_open
+
+    with safe_open(str(trace_dir / filename), framework="pt") as f:
+        return f.get_tensor(key)
+
+
+def _load_attention_trace_tensors(trace_dir, trace_layer_idx, token_idx):
+    """Load trace tensors needed for attention block validation."""
+    prev_layer = trace_layer_idx - 1
+    trace_input_all = _load_trace_tensor(trace_dir, "hidden_states.safetensors", f"decoder_output_layer_{prev_layer}")
+    trace_input = trace_input_all[token_idx].unsqueeze(0)  # (1, 7168)
+    logger.info(f"Loaded trace input from layer {prev_layer}, token {token_idx}: shape={trace_input.shape}")
+
+    trace_post_mla = _load_trace_tensor(
+        trace_dir, "hidden_states.safetensors", f"post_mla_residual_layer_{trace_layer_idx}"
+    )
+    logger.info(f"Trace post_mla_residual shape: {trace_post_mla.shape}")
+
+    return {
+        "input": trace_input,
+        "expected_post_mla": trace_post_mla[token_idx],
+    }
+
+
+def _create_attention_block_tensors_from_weights(
+    submesh,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    position_id,
+    attn_weights,
+    max_seq_len,
+):
+    """Create all tensors required by AttentionBlock.op() from prepared attention weights.
+
+    This mirrors the attention-related tensor setup from create_decoder_block_tensors
+    in test_decoder_block.py, but uses pre-prepared AttentionWeights directly.
+    """
+    torch.manual_seed(0)
+    num_devices = mesh_rows * mesh_cols
+    device_grid_size = submesh.compute_with_storage_grid_size()
+    mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
+
+    QNOPE_HEAD_DIM = 128
+    QROPE_HEAD_DIM = 64
+    QNOPE_OUT_DIM = 512
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
+
+    M = 1
+    K = 7168
+    output_size = 7168
+    shape = (1, K)
+    scale = (QNOPE_HEAD_DIM + QROPE_HEAD_DIM) ** -0.5
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
+
+    QNOPE_GRID_COLS = 8
+    QROPE_GRID_COLS = 4
+    matmul2_grid_y = 8
+    qrope_num_cores = QROPE_GRID_COLS * matmul2_grid_y
+
+    NUM_SDPA_WORKERS = 8
+    SDPA_L_HEIGHT = 8
+    SDPA_L_WIDTH = 512 * NUM_SDPA_WORKERS
+    SDPA_MS_WIDTH = 32 * NUM_SDPA_WORKERS
+
+    mcast_core_x = device_grid_size.x - 1
+    mcast_core_y = 9
+    mcast_core = ttnn.CoreCoord(mcast_core_x, mcast_core_y)
+    tile = ttnn.Tile([1, 32])
+
+    kv_cache_branch_start_offset = (0, 8)
+    kv_cache_branch_rope_crs = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(8 + kv_cache_branch_start_offset[0], kv_cache_branch_start_offset[1]),
+                ttnn.CoreCoord(8 + kv_cache_branch_start_offset[0], 1 + kv_cache_branch_start_offset[1]),
+            )
+        }
+    )
+
+    # ── SDPA KV cache buffer ──
+    kv_cache_num_cores_x = device_grid_size.x
+    kv_cache_num_cores_y = device_grid_size.y
+    kv_cache_num_cores = kv_cache_num_cores_x * kv_cache_num_cores_y
+    kv_cache_shard_height = 256
+    kv_cache_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(kv_cache_num_cores_x - 1, kv_cache_num_cores_y - 1))}
+        ),
+        (kv_cache_shard_height, kvpe_dim),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_kv_cache_buffer = ttnn.from_torch(
+        torch.randn((kv_cache_shard_height * kv_cache_num_cores, kvpe_dim), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, kv_cache_shard_spec
+        ),
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── SDPA output intermediate buffer ──
+    sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
+    sdpa_out_interm_num_slots = 3
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8
+    sdpa_out_interm_shard_width = 17 * 32
+    sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
+    sdpa_out_interm_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))}
+        ),
+        (sdpa_out_interm_shard_height, sdpa_out_interm_shard_width),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sdpa_out_interm_buffer = ttnn.from_torch(
+        torch.zeros((sdpa_out_interm_total_height, sdpa_out_interm_shard_width), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_out_interm_shard_spec
+        ),
+        mesh_mapper=mesh_mapper,
+        tile=ttnn.Tile([8, 32]),
+    )
+
+    # ── RoPE TTNN tensors ──
+    qrope_dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    base = 10000.0
+    inv_freq = 1.0 / (base ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)
+    torch_cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
+    torch_sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
+    torch_trans_mat = get_rot_transformation_mat()
+
+    ttnn_qrope_cos = ttnn.from_torch(
+        torch_cos.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_qrope_sin = ttnn.from_torch(
+        torch_sin.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_krope_cos = ttnn.from_torch(
+        torch_cos.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_krope_sin = ttnn.from_torch(
+        torch_sin.unsqueeze(0).unsqueeze(0),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=qrope_dram_mem,
+        tile=tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── Trans mat ──
+    qrope_grid = ttnn.CoreRange(
+        ttnn.CoreCoord(QNOPE_GRID_COLS, 0), ttnn.CoreCoord(QNOPE_GRID_COLS + QROPE_GRID_COLS - 1, matmul2_grid_y - 1)
+    )
+    trans_mat_crs = kv_cache_branch_rope_crs.merge(ttnn.CoreRangeSet({qrope_grid}))
+    trans_tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE))
+    trans_shard_spec = ttnn.ShardSpec(trans_mat_crs, (ttnn.TILE_SIZE, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR)
+    trans_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, trans_shard_spec)
+    trans_mat_replicated = torch_trans_mat.repeat(1, 1, qrope_num_cores + kv_cache_branch_rope_crs.num_cores(), 1)
+    ttnn_trans_mat = ttnn.from_torch(
+        trans_mat_replicated,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=trans_mem,
+        tile=trans_tile,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── Position IDs ──
+    pos_core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+    )
+    pos_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(pos_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn_position_ids = ttnn.from_torch(
+        torch.full((device_grid_size.x * device_grid_size.y, 1), position_id, dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=submesh,
+        memory_config=pos_mem,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # ── KV Cache (ND sharded DRAM) ──
+    program_config = FlashMLADecode.ProgramConfig(k_chunk_size=128, exp_approx_mode=False)
+    grid = program_config.grid
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, program_config.k_chunk_size, kvpe_dim],
+        grid=grid.optimal_dram_grid(),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=kv_nd_shard_spec)
+    num_sp = mesh_rows
+    dcs = program_config.device_chunk_size
+    torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
+    kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
+    ttnn_kv_cache = ttnn.from_torch(
+        torch_kv_cache_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=kv_mem,
+        mesh_mapper=kv_cache_2d_mesh_mapper,
+    )
+
+    # ── SDPA output tensor ──
+    s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
+    sdpa_input_output_grid_crs = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in s1_cores]
+    )
+    HEADS_PER_ROW = 8
+    SDPA_INPUT_NUM_CORES = len(s1_cores)
+    sdpa_tile = ttnn.Tile([8, 32])
+    sdpa_input_output_shard_spec = ttnn.ShardSpec(
+        sdpa_input_output_grid_crs, (HEADS_PER_ROW, QNOPE_OUT_DIM), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    sdpa_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, sdpa_input_output_shard_spec
+    )
+    ttnn_sdpa_output = ttnn.from_torch(
+        torch.zeros((SDPA_INPUT_NUM_CORES * HEADS_PER_ROW, QNOPE_OUT_DIM), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=sdpa_mem,
+        mesh_mapper=mesh_mapper,
+        tile=sdpa_tile,
+    )
+
+    # ── Post-SDPA tensors ──
+    a_tile = ttnn.Tile([M, 32])
+    shard_mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
+    gather_core = ttnn.CoreCoord(12, 9)
+    gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
+
+    output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
+    ttnn_attention_block_output = ttnn.from_torch(
+        mesh_output_torch,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=output_mem_config,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    # ── SDPA worker/forwarder tensors ──
+    sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
+    sdpa_worker_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
+    )
+    sdpa_l_per_worker = SDPA_L_WIDTH // NUM_SDPA_WORKERS
+    sdpa_ms_per_worker = SDPA_MS_WIDTH // NUM_SDPA_WORKERS
+
+    sdpa_recv_per_worker = sdpa_l_per_worker + sdpa_ms_per_worker
+    sdpa_recv_shard_shape = (2 * SDPA_L_HEIGHT, sdpa_recv_per_worker)
+    sdpa_recv_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sdpa_worker_grid, sdpa_recv_shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    sdpa_recv_full_width = sdpa_recv_per_worker * NUM_SDPA_WORKERS
+    mesh_recv = torch.cat(
+        [torch.zeros((2 * SDPA_L_HEIGHT, sdpa_recv_full_width), dtype=torch.bfloat16)] * num_devices, dim=0
+    )
+    ttnn_sdpa_intermediate_recv = ttnn.from_torch(
+        mesh_recv,
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sdpa_recv_mem,
+        tile=sdpa_tile,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    sdpa_forwarder_cores = [ttnn.CoreCoord(9, 8), ttnn.CoreCoord(10, 8)]
+    sdpa_forwarder_grid = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sdpa_forwarder_cores])
+    sdpa_fwd_buffer_bytes = compute_forwarder_scratch_size(
+        batch_size=SDPA_L_HEIGHT,
+        l_width=sdpa_l_per_worker,
+        num_cores=NUM_SDPA_WORKERS,
+    )
+    sdpa_fwd_total_elements = sdpa_fwd_buffer_bytes // 2
+    sdpa_fwd_per_forwarder = sdpa_fwd_total_elements // 2
+    sdpa_forwarder_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(sdpa_forwarder_grid, (1, sdpa_fwd_per_forwarder), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    mesh_fwd_scratch = torch.cat([torch.zeros((1, sdpa_fwd_total_elements), dtype=torch.bfloat16)] * num_devices, dim=0)
+    ttnn_sdpa_forwarder_scratch = ttnn.from_torch(
+        mesh_fwd_scratch,
+        device=submesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=sdpa_forwarder_mem,
+        mesh_mapper=shard_mesh_mapper,
+    )
+
+    # ── Input tensor mesh (sender has real input, others zeros) ──
+    sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    return {
+        "shape": shape,
+        "tile": tile,
+        "mem_config": mem_config,
+        "sender_coord": sender_coord,
+        "gamma_overlapped": attn_weights.attn_norm,
+        "matmul_weights_overlapped": attn_weights.q_a_proj,
+        "rmsnorm2_gamma_overlapped": attn_weights.q_norm,
+        "matmul2_weights_overlapped": attn_weights.q_b_proj,
+        "matmul3_weights_overlapped": attn_weights.kv_b1_proj,
+        "dkv_matmul_weights_overlapped": attn_weights.kv_a_proj,
+        "dkv_rmsnorm_gamma_overlapped": attn_weights.kv_norm,
+        "kv_b2_overlapped": attn_weights.kv_b2_proj,
+        "o_proj_overlapped": attn_weights.o_proj,
+        "ttnn_qrope_sin": ttnn_qrope_sin,
+        "ttnn_qrope_cos": ttnn_qrope_cos,
+        "ttnn_trans_mat": ttnn_trans_mat,
+        "ttnn_krope_cos": ttnn_krope_cos,
+        "ttnn_krope_sin": ttnn_krope_sin,
+        "ttnn_kv_cache": ttnn_kv_cache,
+        "ttnn_position_ids": ttnn_position_ids,
+        "scale": scale,
+        "sdpa_kv_cache_buffer": sdpa_kv_cache_buffer,
+        "sdpa_out_interm_buffer": sdpa_out_interm_buffer,
+        "ttnn_sdpa_output": ttnn_sdpa_output,
+        "ttnn_sdpa_intermediate_recv": ttnn_sdpa_intermediate_recv,
+        "ttnn_sdpa_forwarder_scratch": ttnn_sdpa_forwarder_scratch,
+        "device_chunk_size": program_config.device_chunk_size,
+        "ttnn_attention_block_output": ttnn_attention_block_output,
+        "torch_kv_cache": torch_kv_cache,
+        "torch_cos": torch_cos,
+        "torch_sin": torch_sin,
+    }
+
+
+def _build_input_tensor_mesh(
+    submesh, mesh_rows, mesh_cols, sender_row, sender_col, torch_input, shape, tile, mem_config
+):
+    """Build the mesh input tensor with real data on sender device and zeros elsewhere."""
+    device_tensors = []
+    for row in range(mesh_rows):
+        for col in range(mesh_cols):
+            if row == sender_row and col == sender_col:
+                device_tensors.append(torch_input.reshape(shape).to(torch.bfloat16))
+            else:
+                device_tensors.append(torch.zeros(shape, dtype=torch.bfloat16))
+    return ttnn.from_torch(
+        torch.cat(device_tensors, dim=0),
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        dtype=ttnn.bfloat16,
+        memory_config=mem_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(submesh, dim=0),
+    )
+
+
+_ATTN_TRACE_TEST_PARAMETRIZE = [
+    pytest.mark.parametrize("sender_row, sender_col", [(1, 0)]),
+    pytest.mark.parametrize("epsilon", [1e-6]),
+    pytest.mark.parametrize("use_fp32", [False]),
+    pytest.mark.parametrize("bcast_cluster_axis", [0]),
+    pytest.mark.parametrize("bcast_secondary_cluster_axis", [1]),
+    pytest.mark.parametrize("reduce_cluster_axis", [1]),
+    pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)]),
+    pytest.mark.parametrize("num_iters", [(1)]),
+    pytest.mark.parametrize("max_seq_len", [32 * 1024]),
+    pytest.mark.parametrize("position_id", [1]),
+    pytest.mark.parametrize(
+        "device_params",
+        [
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+                "fabric_router_config": create_fabric_router_config(15232),
+                "trace_region_size": 573440,
+                "worker_l1_size": 1374544,
+            }
+        ],
+        indirect=True,
+    ),
+    pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC]),
+    pytest.mark.parametrize("num_internal_iterations", [1]),
+    pytest.mark.parametrize("token_idx", [1]),
+    pytest.mark.parametrize(
+        "trace_layer_idx",
+        [
+            3,
+            4,
+            pytest.param(10, marks=pytest.mark.skip_post_commit),
+            pytest.param(30, marks=pytest.mark.skip_post_commit),
+            pytest.param(60, marks=pytest.mark.skip_post_commit),
+        ],
+    ),
+    pytest.mark.requires_grid_size((13, 10)),
+]
+
+
+def _apply_attn_trace_test_marks(fn):
+    for mark in reversed(_ATTN_TRACE_TEST_PARAMETRIZE):
+        fn = mark(fn)
+    return fn
+
+
+@_apply_attn_trace_test_marks
+def test_attention_block_real_weights(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    num_iters,
+    max_seq_len,
+    position_id,
+    noc_mode,
+    num_internal_iterations,
+    token_idx,
+    trace_layer_idx,
+    get_reference_model_state_dict,
+):
+    """Test attention block against a real GPU debug trace using HF weights.
+
+    Validates the attention block (pre-SDPA + SDPA + post-SDPA + residual) output
+    against the trace's post_mla_residual using real model weights. Uses the golden
+    model with the same KV cache state for comparison.
+
+    Requires:
+      - DEEPSEEK_V3_HF_MODEL env var pointing to HF model directory
+      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace directory
+    """
+    hf_model_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
+    if not hf_model_path:
+        pytest.skip("DEEPSEEK_V3_HF_MODEL not set")
+    if not trace_path:
+        pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
+    trace_dir = Path(trace_path)
+    if not (trace_dir / "metadata.json").exists():
+        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+
+    if trace_layer_idx < MOE_LAYER_OFFSET:
+        pytest.skip(f"Layer {trace_layer_idx} is dense (MoE starts at {MOE_LAYER_OFFSET})")
+
+    torch.manual_seed(0)
+    num_devices = mesh_rows * mesh_cols
+    logger.info(f"Testing attention block for layer {trace_layer_idx}, token {token_idx}, position {position_id}")
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than available")
+
+    # ── Load trace tensors ──
+    trace = _load_attention_trace_tensors(trace_dir, trace_layer_idx, token_idx)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+
+    # ── Load real weights ──
+    logger.info(f"Loading real model state dict for layer {trace_layer_idx}...")
+    state_dict = get_reference_model_state_dict(
+        layer_idx=trace_layer_idx,
+        is_moe=True,
+        random_weights=False,
+    )
+
+    bdw = BlitzDecodeWeights(submesh)
+    attn_weights = prepare_attention_weights(
+        bdw,
+        state_dict,
+        trace_layer_idx,
+        is_moe=True,
+        move_to_device=True,
+    )
+
+    # ── Create attention block tensors ──
+    d = _create_attention_block_tensors_from_weights(
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        position_id,
+        attn_weights,
+        max_seq_len,
+    )
+
+    # ── Build input tensor mesh from trace input ──
+    input_tensor_mesh = _build_input_tensor_mesh(
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        trace["input"],
+        d["shape"],
+        d["tile"],
+        d["mem_config"],
+    )
+
+    # ── Extract golden tensors from state dict for golden model ──
+    def _sd_key(suffix):
+        return f"model.layers.{trace_layer_idx}.{suffix}"
+
+    golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
+    golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
+    golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
+    golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
+    golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
+    golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
+    golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+
+    V_HEAD_DIM = 128
+    KV_B_PROJ_HEAD_DIM = 128 + V_HEAD_DIM  # 256
+    kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
+    kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
+    total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
+    kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
+    KNOPE_DIM = 512
+    golden_kv_b1 = kv_b_3d[:, :128, :].reshape(-1, kv_lora_rank)
+    golden_kv_b2 = kv_b_3d[:, 128:, :].reshape(-1, kv_lora_rank).T.contiguous()
+    golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, 128, kv_lora_rank)
+
+    # ── Run attention block ──
+    attention_block_semaphores = AttentionBlock.create_semaphores(submesh)
+
+    logger.info(f"Running attention block with position_id={position_id}...")
+    for i in range(num_iters):
+        ttnn_output_result = AttentionBlock.op(
+            input_tensor_mesh,
+            d["gamma_overlapped"],
+            d["matmul_weights_overlapped"],
+            d["rmsnorm2_gamma_overlapped"],
+            d["matmul2_weights_overlapped"],
+            d["matmul3_weights_overlapped"],
+            d["ttnn_qrope_sin"],
+            d["ttnn_qrope_cos"],
+            d["ttnn_trans_mat"],
+            d["ttnn_krope_cos"],
+            d["ttnn_krope_sin"],
+            d["dkv_matmul_weights_overlapped"],
+            d["dkv_rmsnorm_gamma_overlapped"],
+            d["ttnn_kv_cache"],
+            d["ttnn_position_ids"],
+            d["scale"],
+            d["ttnn_sdpa_output"],
+            d["sdpa_kv_cache_buffer"],
+            d["sdpa_out_interm_buffer"],
+            d["sender_coord"],
+            d["kv_b2_overlapped"],
+            d["o_proj_overlapped"],
+            None,  # sdpa_input_l_mesh
+            None,  # sdpa_input_ms_mesh
+            None,  # sdpa_output_l_mesh
+            d["ttnn_sdpa_intermediate_recv"],
+            d["ttnn_sdpa_forwarder_scratch"],
+            d["device_chunk_size"],
+            d["ttnn_attention_block_output"],
+            attention_block_semaphores,
+            bcast_cluster_axis,
+            bcast_secondary_cluster_axis,
+            reduce_cluster_axis,
+            0,  # sdpa_cluster_axis
+            1,  # num_links
+            epsilon,
+            use_fp32,
+            False,  # skip_ccl
+            noc_mode,
+            num_iterations=num_internal_iterations,
+        )
+    ttnn.synchronize_device(submesh)
+
+    # ── Read back output ──
+    output_torch = ttnn.to_torch(ttnn_output_result, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+
+    # ── Compute golden reference ──
+    logger.info("Computing golden reference...")
+    torch_input = trace["input"]
+    position_ids = torch.tensor([position_id])
+
+    _, _, torch_output_expected = AttentionBlock.golden(
+        torch_input,
+        golden_torch_gamma,
+        golden_torch_matmul_weights,
+        golden_torch_rmsnorm2_gamma,
+        golden_torch_matmul2_weights,
+        golden_torch_matmul3_weights,
+        d["torch_sin"],
+        d["torch_cos"],
+        position_ids,
+        golden_torch_dkv_matmul_weights,
+        golden_torch_dkv_rmsnorm_gamma,
+        d["torch_kv_cache"],
+        d["scale"],
+        golden_kv_b2,
+        golden_torch_o_proj_weights,
+        epsilon=epsilon,
+        num_qnope_heads=total_kv_heads,
+        num_qrope_heads=total_kv_heads,
+        qnope_head_dim=128,
+        qrope_head_dim=64,
+        heads_per_row=8,
+        nope_dim=KNOPE_DIM,
+        rope_dim=64,
+    )
+
+    # ── Validate: all devices should produce the same output ──
+    ref_device_idx = 0
+    ref_device_output = output_torch[ref_device_idx : ref_device_idx + 1, :]
+    for device_idx in range(num_devices):
+        received = output_torch[device_idx : device_idx + 1, :]
+        if device_idx != ref_device_idx:
+            dev_eq = torch.equal(received, ref_device_output)
+            assert dev_eq, f"Device {device_idx} output differs from device {ref_device_idx}"
+
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.95)
+        max_diff = torch.max(torch.abs(torch_output_expected - received)).item()
+        logger.info(f"Device {device_idx} Attention Block Output PCC vs golden: {pcc} Max Diff: {max_diff}")
+        assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
+
+    # ── Also compare against trace post_mla_residual (informational) ──
+    trace_post_mla = trace["expected_post_mla"]
+    device_output_flat = ref_device_output.flatten()
+    trace_passing, trace_pcc = comp_pcc(trace_post_mla.float(), device_output_flat.float(), 0.90)
+    trace_max_diff = (trace_post_mla.float() - device_output_flat.float()).abs().max().item()
+    logger.info(f"Attention output PCC vs trace post_mla_residual: {trace_pcc}")
+    logger.info(f"Attention vs trace max absolute difference: {trace_max_diff}")
+    logger.info(f"Trace post-MLA max magnitude: {trace_post_mla.float().abs().max().item()}")
+    logger.info(f"Device attention max magnitude: {device_output_flat.float().abs().max().item()}")
+
+    logger.info("✓ Attention Block real-weights test passed!")
+    ttnn.synchronize_device(submesh)
+
+
+@pytest.mark.parametrize("trace_layer_idx", [4])
+@pytest.mark.parametrize("position_id", [1])
+def test_attention_golden_vs_trace(trace_layer_idx, position_id, get_reference_model_state_dict):
+    """Pure CPU test: compare AttentionBlock.golden() against GPU debug trace.
+
+    Requires:
+      - DEEPSEEK_V3_HF_MODEL env var pointing to HF model directory
+      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace step directory (e.g. step_0/)
+    """
+    from safetensors.torch import safe_open
+
+    hf_model_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
+    trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
+    if not hf_model_path:
+        pytest.skip("DEEPSEEK_V3_HF_MODEL not set")
+    if not trace_path:
+        pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
+    trace_dir = Path(trace_path)
+    if not (trace_dir / "hidden_states.safetensors").exists():
+        pytest.skip(f"Debug trace not found at {trace_dir}")
+
+    def load_tensor(filename, key):
+        with safe_open(str(trace_dir / filename), framework="pt") as f:
+            return f.get_tensor(key)
+
+    # ── Load trace tensors ──
+    prev_layer = trace_layer_idx - 1
+    trace_input = load_tensor("hidden_states.safetensors", f"decoder_output_layer_{prev_layer}")[0].unsqueeze(0)
+    trace_post_mla = load_tensor("hidden_states.safetensors", f"post_mla_residual_layer_{trace_layer_idx}")[0]
+    trace_kv_cache = load_tensor("kv_cache.safetensors", f"kv_post_transform_layer_{trace_layer_idx}")
+
+    # ── Load weights from state dict ──
+    state_dict = get_reference_model_state_dict(
+        layer_idx=trace_layer_idx, is_moe=True, seed=0, num_routed_experts=256, random_weights=False
+    )
+
+    def sd(suffix):
+        return f"model.layers.{trace_layer_idx}.{suffix}"
+
+    gamma = state_dict[sd("input_layernorm.weight")].unsqueeze(0)
+    q_a_proj = state_dict[sd("self_attn.q_a_proj.weight")].T.contiguous()
+    q_norm = state_dict[sd("self_attn.q_a_layernorm.weight")].unsqueeze(0)
+    q_b_proj = state_dict[sd("self_attn.q_b_proj.weight")].T.contiguous()
+    kv_a_proj = state_dict[sd("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
+    kv_norm = state_dict[sd("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
+    o_proj = state_dict[sd("self_attn.o_proj.weight")].T.contiguous()
+
+    V_HEAD_DIM = 128
+    KV_B_PROJ_HEAD_DIM = 128 + V_HEAD_DIM
+    kv_b_raw = state_dict[sd("self_attn.kv_b_proj.weight")]
+    n_heads = kv_b_raw.shape[0] // KV_B_PROJ_HEAD_DIM
+    kv_b_3d = kv_b_raw.reshape(n_heads, KV_B_PROJ_HEAD_DIM, -1)
+    kv_b1 = kv_b_3d[:, :128, :].reshape(n_heads, 128, -1)  # matmul3 weights
+    kv_b2 = kv_b_3d[:, 128:, :].reshape(-1, kv_b_3d.shape[-1]).T.contiguous()
+
+    # ── Build RoPE tables ──
+    QROPE_HEAD_DIM = 64
+    max_seq_len = 32 * 1024
+    inv_freq = 1.0 / (10000.0 ** (torch.arange(0, QROPE_HEAD_DIM, 2, dtype=torch.float32) / QROPE_HEAD_DIM))
+    t = torch.arange(max_seq_len, dtype=torch.float32)
+    freqs = torch.outer(t, inv_freq)
+    cos_table = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
+    sin_table = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
+
+    # ── Build KV cache with trace history up to position_id ──
+    KNOPE_DIM, KROPE_DIM = 512, 64
+    kvpe_dim = KNOPE_DIM + KROPE_DIM
+    kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
+    kv_cache[:, :, :position_id, :] = trace_kv_cache[:position_id].unsqueeze(0).unsqueeze(0)
+
+    scale = (KNOPE_DIM + KROPE_DIM) ** -0.5
+    position_ids = torch.tensor([position_id])
+
+    # ── Run golden ──
+    _, _, golden_output = AttentionBlock.golden(
+        trace_input.float(),
+        gamma.float(),
+        q_a_proj.float(),
+        q_norm.float(),
+        q_b_proj.float(),
+        kv_b1.float(),
+        sin_table,
+        cos_table,
+        position_ids,
+        kv_a_proj.float(),
+        kv_norm.float(),
+        kv_cache.float(),
+        scale,
+        kv_b2.float(),
+        o_proj.float(),
+        epsilon=1e-6,
+        num_qnope_heads=n_heads,
+        num_qrope_heads=n_heads,
+        nope_dim=KNOPE_DIM,
+    )
+
+    # ── Compare against trace ──
+    passing, pcc = comp_pcc(trace_post_mla.float(), golden_output.flatten().float(), 0.95)
+    max_diff = (trace_post_mla.float() - golden_output.flatten().float()).abs().max().item()
+    logger.info(f"AttentionBlock.golden vs trace post_mla_residual: PCC={pcc}, max_diff={max_diff}")
+    assert passing, f"AttentionBlock.golden PCC check failed vs trace: {pcc}"

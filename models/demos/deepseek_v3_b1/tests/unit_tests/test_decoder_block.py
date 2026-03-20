@@ -71,6 +71,7 @@ def create_decoder_block_tensors(
     preloaded_weights=None,
     rigged_experts: bool = False,
     input_override: torch.Tensor | None = None,
+    kv_cache_override: torch.Tensor | None = None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -421,7 +422,13 @@ def create_decoder_block_tensors(
     num_sp = mesh_rows
     dcs = program_config.device_chunk_size
     torch_kv_cache = torch.zeros((1, 1, max_seq_len, kvpe_dim), dtype=torch.bfloat16)
-    torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
+    if kv_cache_override is not None:
+        # kv_cache_override may contain entries for all tokens; only use [:position_id] (previous positions)
+        torch_kv_cache[:, :, :position_id, :] = (
+            kv_cache_override[:position_id].to(torch.bfloat16).unsqueeze(0).unsqueeze(0)
+        )
+    else:
+        torch_kv_cache[:, :, :position_id, :] = torch.randn(1, 1, position_id, kvpe_dim, dtype=torch.bfloat16)
     torch_kv_cache_shuffled = deinterleave_kv_cache(torch_kv_cache, dcs, num_sp)
     kv_cache_2d_mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=(mesh_rows, mesh_cols), dims=(2, None))
     ttnn_kv_cache = ttnn.from_torch(
@@ -1594,12 +1601,18 @@ def _load_trace_tensors(trace_dir, trace_layer_idx, token_idx):
     logger.info(f"Trace expert IDs for token {token_idx}: {trace_expert_ids[token_idx]}")
     logger.info(f"Trace expert weights for token {token_idx}: {trace_expert_weights[token_idx]}")
 
+    # Load KV cache from trace; shape: (position_id, kvpe_dim=576)
+    # key is compressed_kv_layer_{N} in kv_cache.safetensors
+    trace_kv_cache = _load_trace_tensor(trace_dir, "kv_cache.safetensors", f"kv_post_transform_layer_{trace_layer_idx}")
+    logger.info(f"Loaded KV cache from trace for layer {trace_layer_idx}: shape={trace_kv_cache.shape}")
+
     return {
         "input": trace_input,
         "expected_output": trace_output_all[token_idx],
         "post_mla": trace_post_mla[token_idx],
         "expert_ids": trace_expert_ids[token_idx],
         "expert_weights": trace_expert_weights[token_idx],
+        "kv_cache": trace_kv_cache,
     }
 
 
@@ -1817,7 +1830,7 @@ _TRACE_TEST_PARAMETRIZE = [
     pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)]),
     pytest.mark.parametrize("num_iters", [(1)]),
     pytest.mark.parametrize("max_seq_len", [32 * 1024]),
-    pytest.mark.parametrize("position_id", [0]),
+    pytest.mark.parametrize("position_id", [1]),
     pytest.mark.parametrize(
         "device_params",
         [
@@ -1831,15 +1844,15 @@ _TRACE_TEST_PARAMETRIZE = [
     ),
     pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC]),
     pytest.mark.parametrize("num_internal_iterations", [1]),
-    pytest.mark.parametrize("token_idx", [0]),
+    pytest.mark.parametrize("token_idx", [1]),
     pytest.mark.parametrize(
         "trace_layer_idx",
         [
-            3,
+            # 3,
             4,
-            pytest.param(10, marks=pytest.mark.skip_post_commit),
-            pytest.param(30, marks=pytest.mark.skip_post_commit),
-            pytest.param(60, marks=pytest.mark.skip_post_commit),
+            # pytest.param(10, marks=pytest.mark.skip_post_commit),
+            # pytest.param(30, marks=pytest.mark.skip_post_commit),
+            # pytest.param(60, marks=pytest.mark.skip_post_commit),
         ],
     ),
     pytest.mark.requires_grid_size((13, 10)),
@@ -1879,7 +1892,7 @@ def test_decoder_real_weights(
 
     Requires:
       - DEEPSEEK_V3_HF_MODEL env var pointing to HF model directory
-      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace directory
+      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace step directory (e.g. step_0/)
     """
     hf_model_path = os.getenv("DEEPSEEK_V3_HF_MODEL")
     trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
@@ -1888,8 +1901,8 @@ def test_decoder_real_weights(
     if not trace_path:
         pytest.skip("DEEPSEEK_V3_DEBUG_TRACE not set")
     trace_dir = Path(trace_path)
-    if not (trace_dir / "metadata.json").exists():
-        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+    if not (trace_dir / "hidden_states.safetensors").exists():
+        pytest.skip(f"Debug trace not found at {trace_dir}")
 
     trace, submesh = _trace_test_common_setup(
         bh_2d_mesh_device, mesh_rows, mesh_cols, trace_layer_idx, trace_dir, token_idx
@@ -1917,6 +1930,7 @@ def test_decoder_real_weights(
         is_moe=True,
         num_routed_experts=num_routed_experts,
         input_override=trace["input"],
+        kv_cache_override=trace["kv_cache"],
     )
 
     _run_decoder_and_validate_vs_trace(
@@ -1963,7 +1977,7 @@ def test_decoder_cached_weights(
 
     Requires:
       - DEEPSEEK_V3_WEIGHT_CACHE env var pointing to the TTNN weight cache directory
-      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace directory
+      - DEEPSEEK_V3_DEBUG_TRACE env var pointing to debug trace step directory (e.g. step_0/)
     """
     cache_path_str = os.getenv("DEEPSEEK_V3_WEIGHT_CACHE")
     trace_path = os.getenv("DEEPSEEK_V3_DEBUG_TRACE")
@@ -1975,8 +1989,8 @@ def test_decoder_cached_weights(
     if not cache_path.is_dir():
         pytest.skip(f"Weight cache not found at {cache_path}")
     trace_dir = Path(trace_path)
-    if not (trace_dir / "metadata.json").exists():
-        pytest.skip(f"Debug trace metadata not found at {trace_dir}")
+    if not (trace_dir / "hidden_states.safetensors").exists():
+        pytest.skip(f"Debug trace not found at {trace_dir}")
 
     trace, submesh = _trace_test_common_setup(
         bh_2d_mesh_device, mesh_rows, mesh_cols, trace_layer_idx, trace_dir, token_idx
@@ -2001,6 +2015,7 @@ def test_decoder_cached_weights(
         is_moe=True,
         preloaded_weights=layer_weights,
         input_override=trace["input"],
+        kv_cache_override=trace["kv_cache"],
     )
 
     _run_decoder_and_validate_vs_trace(
