@@ -5,7 +5,7 @@
 """
 PCC test for TtFFN module (TP=4).
 
-Compares TorchSharedExpert (reference) against TtFFN (multi-chip TTNN)
+Compares TorchExpert (reference) against TtFFN (multi-chip TTNN)
 to verify correctness with DeepSeek 671B FFN dimensions.
 """
 
@@ -15,7 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.tt.moe.shared_expert import TorchSharedExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import EMB_DIM, HIDDEN_DIM, TtFfn
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -52,7 +52,7 @@ def test_ffn_pcc(
     topology: ttnn.Topology,
 ):
     """
-    Test TtFfn PCC against TorchSharedExpert reference.
+    Test TtFfn PCC against TorchExpert reference.
 
     Uses DeepSeek 671B dimensions:
         - emb_dim: 7168
@@ -76,8 +76,8 @@ def test_ffn_pcc(
     logger.debug(f"Using num_links={num_links}, topology={topology}")
 
     # Create PyTorch reference model with FFN dimensions
-    logger.debug("Creating TorchSharedExpert reference with FFN dimensions")
-    torch_model = TorchSharedExpert(emb_dim=EMB_DIM, hidden_dim=HIDDEN_DIM)
+    logger.debug("Creating TorchExpert reference with FFN dimensions")
+    torch_model = TorchExpert(EMB_DIM, HIDDEN_DIM)
 
     torch_weights = {
         "gate_proj": torch_model.gate_proj.data,

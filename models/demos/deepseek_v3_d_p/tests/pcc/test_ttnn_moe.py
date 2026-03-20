@@ -299,17 +299,9 @@ def test_ttnn_moe(
             hidden_dim=emb_dim,
             expert_dispatch_table=expert_dispatch_table,
             num_dispatch_groups=num_dispatch_groups,
+            routed_expert_weights=all_routed_weights,
+            shared_expert_weights=shared_weights_torch,
         )
-
-        # Override weights with our controlled random weights
-        for i, expert in enumerate(torch_moe.routed_experts):
-            expert.gate_proj = torch.nn.Parameter(all_routed_weights[i]["gate_proj"].float())
-            expert.up_proj = torch.nn.Parameter(all_routed_weights[i]["up_proj"].float())
-            expert.down_proj = torch.nn.Parameter(all_routed_weights[i]["down_proj"].float())
-
-        torch_moe.shared_expert_module.expert.gate_proj = torch.nn.Parameter(shared_weights_torch["gate_proj"].float())
-        torch_moe.shared_expert_module.expert.up_proj = torch.nn.Parameter(shared_weights_torch["up_proj"].float())
-        torch_moe.shared_expert_module.expert.down_proj = torch.nn.Parameter(shared_weights_torch["down_proj"].float())
 
         torch_output, torch_intermediates = torch_moe(
             x.float(),

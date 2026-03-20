@@ -66,32 +66,6 @@ def load_moe_weights_from_hf(
     return routed_expert_weights, shared_expert_weights
 
 
-class TorchSharedExpertModule(nn.Module):
-    """Wrapper module for shared expert execution."""
-
-    def __init__(self, expert: TorchExpert):
-        """
-        Initialize shared expert module.
-
-        Args:
-            expert: The expert FFN to use for shared expert computation
-        """
-        super().__init__()
-        self.expert = expert
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Run shared expert on input.
-
-        Args:
-            x: Input tensor (dispatch_group_size, seq_len_per_chip, hidden_dim)
-
-        Returns:
-            Shared expert output (dispatch_group_size, seq_len_per_chip, hidden_dim)
-        """
-        return self.expert(x)
-
-
 class TorchMoe(nn.Module):
     """
     Minimal MoE module connecting dispatch -> experts -> combine -> split connection.
@@ -119,6 +93,8 @@ class TorchMoe(nn.Module):
         model_id: str = None,
         layer_idx: int = None,
         num_dispatch_groups: int = 1,
+        routed_expert_weights: list = None,
+        shared_expert_weights: dict = None,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -138,6 +114,8 @@ class TorchMoe(nn.Module):
             model_id: Optional HuggingFace model ID to load real weights from
             layer_idx: Optional layer index for weight loading (required if model_id is set)
             num_dispatch_groups: Number of dispatch groups (default: 1)
+            routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj per expert
+            shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj for shared expert
         """
         super().__init__()
         self.dispatch_group_size = dispatch_group_size
@@ -168,23 +146,31 @@ class TorchMoe(nn.Module):
             num_dispatch_groups=num_dispatch_groups,
         )
 
-        # Create routed and shared experts (with real weights if model_id provided)
-        if model_id is not None and layer_idx is not None:
+        # Determine weights source
+        if routed_expert_weights is not None and shared_expert_weights is not None:
+            routed_weights, shared_weights = routed_expert_weights, shared_expert_weights
+        elif model_id is not None and layer_idx is not None:
             logger.debug(f"Loading MoE weights from {model_id}, layer {layer_idx}")
             routed_weights, shared_weights = load_moe_weights_from_hf(model_id, layer_idx, num_routed_experts)
-            self.routed_experts = nn.ModuleList(
-                [TorchExpert(hidden_dim, hidden_dim, torch_weights=w) for w in routed_weights]
-            )
-            shared_expert = TorchExpert(hidden_dim, hidden_dim, torch_weights=shared_weights)
         else:
-            # Identity weights (flow testing)
-            self.routed_experts = nn.ModuleList(
-                [TorchExpert(hidden_dim, hidden_dim, use_identity=True) for _ in range(num_routed_experts)]
-            )
-            shared_expert = TorchExpert(hidden_dim, hidden_dim, use_identity=True)
+            routed_weights, shared_weights = None, None
 
-        # Create shared expert module
-        self.shared_expert_module = TorchSharedExpertModule(shared_expert)
+        # Create experts
+        use_identity = routed_weights is None
+        self.routed_experts = nn.ModuleList(
+            [
+                TorchExpert(
+                    hidden_dim,
+                    hidden_dim,
+                    torch_weights=routed_weights[i] if routed_weights else None,
+                    use_identity=use_identity,
+                )
+                for i in range(num_routed_experts)
+            ]
+        )
+        self.shared_expert = TorchExpert(
+            hidden_dim, hidden_dim, torch_weights=shared_weights, use_identity=use_identity
+        )
 
         # Create reduce module (sums over topk dimension)
         # topk_dim=1 because combined_output shape is (dispatch_group_size, seq_len, topk, hidden)
@@ -216,7 +202,7 @@ class TorchMoe(nn.Module):
         """
         # Step 1: Run shared expert on original input
         with torch.no_grad():
-            shared_output = self.shared_expert_module(x.float())
+            shared_output = self.shared_expert(x.float())
 
         # Step 2: Dispatch tokens to expert buffers
         dispatched_buffer, metadata = self.dispatch_module(x, weights, indices, expert_offsets)

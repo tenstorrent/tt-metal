@@ -5,7 +5,7 @@
 """
 PCC test for TtSharedExpert module (TP=4).
 
-Compares TorchSharedExpert (reference) against TtSharedExpert (multi-chip TTNN)
+Compares TorchExpert (reference) against TtSharedExpert (multi-chip TTNN)
 to verify correctness of multi-chip sharding and CCL operations.
 """
 
@@ -15,7 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.reference.tt.moe.shared_expert import TorchSharedExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
 from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -61,7 +61,7 @@ def test_shared_expert_pcc(
     topology: ttnn.Topology,
 ):
     """
-    Test TtSharedExpert PCC against TorchSharedExpert reference.
+    Test TtSharedExpert PCC against TorchExpert reference.
 
     This test verifies:
     1. Correct weight sharding (gate_proj/up_proj on -1, down_proj on -2)
@@ -90,8 +90,8 @@ def test_shared_expert_pcc(
     # ========================================
     # Step 1: Create PyTorch reference model
     # ========================================
-    logger.debug("Creating TorchSharedExpert reference")
-    torch_model = TorchSharedExpert(emb_dim=emb_dim, hidden_dim=hidden_dim)
+    logger.debug("Creating TorchExpert reference")
+    torch_model = TorchExpert(emb_dim, hidden_dim)
 
     # Extract weights for TTNN model
     torch_weights = {

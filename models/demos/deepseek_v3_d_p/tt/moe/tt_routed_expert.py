@@ -343,7 +343,7 @@ class TtRoutedExpert(LightweightModule):
 
         expert_outputs_list = []
         for local_expert in range(self.experts_per_chip):
-            signpost(f"Expert {local_expert}/{self.experts_per_chip}")
+            signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
             # Extract tokens for this expert
             # Shape: (max_tokens, emb_dim)
