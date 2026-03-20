@@ -46,7 +46,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .global_circular_buffer = nullptr};
 }
 
-std::vector<CoreCoord> get_optimal_worker_cores_in_sharded_tensor(const Tensor& tensor, NOC noc) {
+std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {
     /**
     This function takes in a sharded device tensor (can be legacy 2D sharded or ND sharded) and returns the optimal
     worker cores to launch programs on for the tensor.

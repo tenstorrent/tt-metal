@@ -33,7 +33,7 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
 
     uint32_t tensor_width_in_pages = output.buffer()->shard_spec().tensor2d_shape_in_pages[1];
 
-    std::vector<CoreCoord> runtime_cores = get_optimal_worker_cores_in_sharded_tensor(output);
+    std::vector<CoreCoord> runtime_cores = get_optimal_worker_cores_for_sharded_tensor(output);
     const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
 
     const auto& aligned_page_size = output.buffer()->aligned_page_size();

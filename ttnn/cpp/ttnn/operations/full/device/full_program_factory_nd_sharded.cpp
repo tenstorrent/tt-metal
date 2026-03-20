@@ -33,7 +33,7 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
     uint32_t num_shards = distribution_spec.num_shards();
     uint32_t num_compute_cores = distribution_spec.cores_with_data().size();
 
-    std::vector<CoreCoord> ordered_cores_with_data = get_optimal_worker_cores_in_sharded_tensor(output);
+    std::vector<CoreCoord> ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(output);
     const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
