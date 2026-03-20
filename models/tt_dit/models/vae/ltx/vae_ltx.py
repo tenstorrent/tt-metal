@@ -533,17 +533,17 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
 
         # conv_in
-        sample_tt = self.conv_in(sample_tt, causal=False)
+        sample_tt = self.conv_in(sample_tt)
 
         # Up blocks
         for up_block in self.up_blocks:
-            sample_tt = up_block(sample_tt, causal=False)
+            sample_tt = up_block(sample_tt)
 
         # Output: PixelNorm → SiLU → conv_out
         sample_tt = self.norm_out(sample_tt)
         sample_tt = ttnn.silu(sample_tt)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-        sample_tt = self.conv_out(sample_tt, causal=False)
+        sample_tt = self.conv_out(sample_tt)
 
         # Convert back to host
         result = ttnn.to_torch(sample_tt)  # (B, T_out, H_out, W_out, C_out)
