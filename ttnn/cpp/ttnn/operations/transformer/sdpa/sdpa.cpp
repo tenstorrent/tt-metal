@@ -217,7 +217,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
-    SDPAProgramConfig program_config,
+    operations::transformer::SDPAProgramConfig program_config,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -298,6 +298,30 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val);
+}
+
+ttnn::Tensor flash_mla_prefill(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const uint32_t head_dim_v,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& attn_mask,
+    bool is_causal,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    return ExecuteFlashMLAPrefill::invoke(
+        input_tensor_q,
+        input_tensor_k,
+        head_dim_v,
+        input_tensor_v,
+        attn_mask,
+        is_causal,
+        scale,
+        memory_config,
+        std::move(program_config),
+        compute_kernel_config);
 }
 
 ttnn::Tensor chunked_flash_mla_prefill(
