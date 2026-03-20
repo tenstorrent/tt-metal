@@ -304,3 +304,18 @@ pytest models/demos/minimax_m2/tests/test_minimax_m2_tt.py -v
   - [x] Prefill Trace infrastructure
   - [x] Decode Trace (Metal trace capture/replay)
   - [x] ISL verification (up to 32k tokens)
+
+## Session Update (2026-03-20, Prefill Trace Device-to-Device Copy)
+
+- Status: Fixed prefill trace to use device-to-device copy.
+  - `tt/generator.py`:
+    - Changed `_execute_prefill_trace()` to use `ttnn.copy(embeddings, input_buffer)` for device-to-device transfer
+    - Removed host round-trip via `ttnn.to_torch` + `ttnn.from_torch`
+  - Attempted device-resident argmax in decode trace but reverted:
+    - `ttnn.untilize` allocates intermediate tensors during trace capture
+    - Error: "Writes are not supported during trace capture"
+    - Solution: Use separate sampling trace (see `SamplingGenerator` in `models/common/sampling/generator.py`)
+    - For now, keeping argmax on host (small overhead for scalar read)
+- Tests: `test_trace_generation` passes with 100% token match.
+- Block Hash: `tt/generator.py` prefill device-to-device copy
+- Next: For device-resident sampling, integrate `SamplingGenerator` pattern from gpt_oss.

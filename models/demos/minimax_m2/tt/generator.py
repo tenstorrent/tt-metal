@@ -177,7 +177,12 @@ class TtMiniMaxGenerator:
     # ------------------------------------------------------------------
 
     def _capture_trace(self):
-        """Capture Metal trace of one decode step."""
+        """Capture Metal trace of one decode step.
+
+        The trace includes only the forward pass. Argmax is done on host after
+        trace replay. To add device-resident argmax, use a separate sampling
+        trace (see SamplingGenerator in models/common/sampling/generator.py).
+        """
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
 
         logits = self.model.forward_decode_trace(
@@ -280,6 +285,9 @@ class TtMiniMaxGenerator:
     def _execute_prefill_trace(self, input_ids: torch.Tensor, seq_len: int):
         """Execute prefill using cached trace.
 
+        Device-resident: embeddings stay on device, copied directly to the
+        trace input buffer without host round-trip.
+
         Args:
             input_ids: [B, S] token IDs
             seq_len: Sequence length (must match traced length)
@@ -289,7 +297,7 @@ class TtMiniMaxGenerator:
         """
         trace_id, input_buffer, output_logits = self._get_prefill_trace(seq_len)
 
-        # Embed tokens to get input embeddings
+        # Embed tokens to get input embeddings (on device)
         B, S = input_ids.shape
         rep = _mesh_mapper(self.device)
         ids_tt = ttnn.from_torch(
@@ -305,15 +313,10 @@ class TtMiniMaxGenerator:
         embeddings = ttnn.reshape(embeddings, (B, S, self.model.config.hidden_size))
         ids_tt.deallocate(True)
 
-        # Copy embeddings to input buffer
-        embeddings_host = ttnn.to_torch(embeddings)
+        # Device-to-device copy: embeddings → input_buffer
+        # Use ttnn.copy for device-resident transfer (no host round-trip)
+        ttnn.copy(embeddings, input_buffer)
         embeddings.deallocate(True)
-        embeddings_host_tt = ttnn.from_torch(
-            embeddings_host,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        ttnn.copy_host_to_device_tensor(embeddings_host_tt, input_buffer)
 
         # Execute trace
         ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=False)
