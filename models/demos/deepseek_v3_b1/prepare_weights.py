@@ -250,9 +250,37 @@ _NUM_HEADS = 64
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = 256
 _QK_NOPE_HEAD_DIM = 128
+_QK_ROPE_HEAD_DIM = 64
 _V_HEAD_DIM = 128
 _KV_LORA_RANK = 512
 _KV_B_PROJ_HEAD_DIM = _QK_NOPE_HEAD_DIM + _V_HEAD_DIM  # 256
+_Q_HEAD_DIM = _QK_NOPE_HEAD_DIM + _QK_ROPE_HEAD_DIM  # 192
+
+
+def deinterleave_q_b_proj(q_b_transposed: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
+    """Convert q_b_proj.weight.T from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
+
+    HF stores q_b_proj with out_features = num_heads * q_head_dim, where each head's
+    nope and rope dims are contiguous: [h0_nope|h0_rope|h1_nope|h1_rope|...].
+    After .T the columns follow this interleaved order.
+
+    The b1 pipeline expects columns grouped as [ALL_NOPE | ALL_ROPE]:
+    [h0_nope|h1_nope|...|hN_nope|h0_rope|h1_rope|...|hN_rope].
+
+    Args:
+        q_b_transposed: q_b_proj.weight.T with shape (K, num_heads * q_head_dim).
+        num_heads: Number of attention heads.  If None, inferred from the width.
+
+    Returns:
+        Tensor of the same shape with columns reordered to [ALL_NOPE | ALL_ROPE].
+    """
+    K, N = q_b_transposed.shape
+    if num_heads is None:
+        num_heads = N // _Q_HEAD_DIM
+    heads = q_b_transposed.reshape(K, num_heads, _Q_HEAD_DIM)
+    nope = heads[:, :, :_QK_NOPE_HEAD_DIM].reshape(K, -1)
+    rope = heads[:, :, _QK_NOPE_HEAD_DIM:].reshape(K, -1)
+    return torch.cat([nope, rope], dim=1).contiguous()
 
 
 def _key(layer_idx: int, suffix: str) -> str:
@@ -391,7 +419,7 @@ def _get_layer_raw_tensors(
 
         Weight        | HF key (under model.layers.{i}.)     | HF shape      | Transform   | To blitz
         --------------|-------------------------------------|---------------|-------------|------------------
-        q_b_proj      | self_attn.q_b_proj.weight            | (24576, 1536) | .T          | (1536, 24576)
+        q_b_proj      | self_attn.q_b_proj.weight            | (24576, 1536) | .T + deinterleave | (1536, 24576) [ALL_NOPE|ALL_ROPE]
         o_proj        | self_attn.o_proj.weight              | (7168, 16384) | .T          | (16384, 7168)
         kv_b_proj     | self_attn.kv_b_proj.weight           | (32768, 512)  | split       | kv_b1, kv_b2
         q_a_proj      | self_attn.q_a_proj.weight            | (1536, 7168)  | .T          | (7168, 1536)
@@ -405,7 +433,7 @@ def _get_layer_raw_tensors(
         (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
     """
     q_a = state_dict[_key(layer_idx, "self_attn.q_a_proj.weight")].T.contiguous()
-    q_b = state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T.contiguous()
+    q_b = deinterleave_q_b_proj(state_dict[_key(layer_idx, "self_attn.q_b_proj.weight")].T.contiguous())
     kv_a = state_dict[_key(layer_idx, "self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
     kv_b1, kv_b2 = _split_kv_b_proj(state_dict[_key(layer_idx, "self_attn.kv_b_proj.weight")])
     o_proj = state_dict[_key(layer_idx, "self_attn.o_proj.weight")].T.contiguous()
