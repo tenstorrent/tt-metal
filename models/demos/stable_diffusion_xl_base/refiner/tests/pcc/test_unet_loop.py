@@ -13,7 +13,6 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_TRACE_REGION_SIZE,
     allocate_input_tensors,
     create_user_tensors,
     get_timesteps,
@@ -372,7 +371,7 @@ def run_unet_inference(
         (512, 512),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),

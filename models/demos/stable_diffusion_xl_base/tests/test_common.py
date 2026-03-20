@@ -24,7 +24,6 @@ from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 # space left in base variant as well.
 SDXL_L1_SMALL_SIZE = 30800
 SDXL_L1_SMALL_SIZE_BH = 38000
-SDXL_TRACE_REGION_SIZE = 42000000
 SDXL_BASE_REFINER_TRACE_REGION_SIZE = 51429376
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
