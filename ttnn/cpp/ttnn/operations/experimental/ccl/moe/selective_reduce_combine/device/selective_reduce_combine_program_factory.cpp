@@ -213,7 +213,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const GlobalSemaphore& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
     const uint32_t compute_sync_semaphore_id,
-    const uint32_t compute_cores_per_combine_cores) {
+    const uint32_t compute_cores_per_combine_core,
+    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -443,7 +444,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"topology", static_cast<uint32_t>(topology)},
         {"num_mux_workers_per_link", neighbors.size()},
         {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
-        {"compute_cores_per_combine_core", compute_cores_per_combine_cores}};
+        {"compute_cores_per_combine_core", compute_cores_per_combine_core},
+        {"double_buffer_source", compute_cores_by_ring_id.has_value()}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -490,6 +492,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     uint32_t link_worker_idx = 0, token_parallel_idx = 0, dest_token_segment_offset_bytes = 0;
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
+    auto compute_cores_by_ring_iter =
+        (compute_cores_by_ring_id.has_value()) ? std::make_optional(compute_cores_by_ring_id->cbegin()) : std::nullopt;
     for (const auto& sender_core : sender_cores) {
         const bool is_init_sync_core = sender_core == sender_cores.at(0);
         std::vector<uint32_t> reader_runtime_args = {
@@ -509,6 +513,19 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             cross_device_semaphore.address(),   // global_semaphore_addr
             is_init_sync_core                   // is_init_sync_core
         };
+
+        // if the input is double buffered, coming from fused moe_compute, add the core coordinates of the compute cores
+        // which get semaphore increments upon release of buffer segment.
+        if (compute_cores_by_ring_iter.has_value()) {
+            auto coords =
+                std::ranges::subrange(
+                    *compute_cores_by_ring_iter, (*compute_cores_by_ring_iter) + compute_cores_per_combine_core) |
+                std::views::transform([&](const auto& c) { return mesh_device->worker_core_from_logical_core(c); }) |
+                std::ranges::views::transform([](const auto& c) { return std::array{c.x, c.y}; }) |
+                std::ranges::views::join;
+
+            std::ranges::copy(coords, std::back_inserter(writer_runtime_args));
+        }
 
         const bool is_termination_master = (sender_core == *termination_master_core_iter);
         for (const auto& neighbor_coordinate : neighbors) {
@@ -540,8 +557,15 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
             dest_token_segment_offset_bytes = 0;
             ++token_parallel_idx;
+            if (compute_cores_by_ring_iter.has_value()) {
+                compute_cores_by_ring_iter = std::make_optional(compute_cores_by_ring_id->cbegin());
+            }
+
         } else {
             dest_token_segment_offset_bytes += source_token_segment_size_bytes;
+            if (compute_cores_by_ring_iter.has_value()) {
+                (*compute_cores_by_ring_iter) += compute_cores_per_combine_core;
+            }
         }
 
         if (++link_worker_idx == num_workers_per_link) {

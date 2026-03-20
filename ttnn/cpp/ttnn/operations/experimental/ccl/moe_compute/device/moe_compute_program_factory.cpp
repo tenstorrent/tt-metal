@@ -46,6 +46,7 @@ std::tuple<
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
     CoreRangeSet,            // Combine CoreRangeSet
+    CoreRangeSet,            // C + MM CoreRangeSet
     std::vector<CoreCoord>,  // Combine vector of CoreCoord
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
@@ -87,6 +88,9 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         return ca.y < cb.y;
     });
 
+    // MatMul + combine CoreRangeSet, needed for semaphores
+    const auto combine_matmul_core_range_set = combine_core_range_set.merge(matmul_core_range_set);
+
     TT_FATAL(!combine_bounding_box.intersects(tilize_bounding_box), "combine and tilize bounding boxes cannot overlap");
     TT_FATAL(!combine_bounding_box.intersects(matmul_bounding_box), "combine and matmul bounding boxes cannot overlap");
 
@@ -97,6 +101,7 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         matmul_core_range_set,
         tilize_matmul_core_range_set,
         combine_core_range_set,
+        combine_matmul_core_range_set,
         combine_cores,
         tilize_bounding_box,
         matmul_bounding_box};
@@ -120,7 +125,7 @@ namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
-    constexpr auto combine_cores_return_index = 6;
+    constexpr auto combine_cores_return_index = 7;
 
     const auto get_cores_return = get_cores(mesh_device);
 
@@ -135,17 +140,12 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, MoEComputeMeshWorkloadFactory::shared_variables_t> shared_variables;
 
+    constexpr auto combine_core_range_set_return_index = 5;
+
     auto* mesh_device = tensor_args.tilize_input_tensor.device();
-    const auto
-        [tilize_cores_mw,
-         matmul_cores_mw,
-         tilize_core_range_set_mw,
-         matmul_core_range_set_mw,
-         tilize_matmul_core_range_set_mw,
-         combine_core_range_set,
-         combine_cores_mw,
-         tilize_bounding_box_mw,
-         matmul_bounding_box_mw] = get_cores(mesh_device);
+    const auto core_ret = get_cores(mesh_device);
+
+    const auto& combine_core_range_set = std::get<combine_core_range_set_return_index>(core_ret);
 
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
@@ -275,6 +275,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          matmul_core_range_set,
          tilize_matmul_core_range_set,
          combine_core_range_set,
+         combine_matmul_core_range_set,
          combine_cores,
          tilize_bounding_box,
          matmul_bounding_box] = get_cores(mesh_device);
@@ -355,8 +356,9 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
 
     // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
+    // For double buffering, combine cores will also use this semaphore to signal matmul when buffer segments are free
     const auto matmul_combine_sync_semaphore_id =
-        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
+        tt::tt_metal::CreateSemaphore(program, combine_matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split
@@ -1073,6 +1075,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     matmul_runtime_args.push_back(0);                  // Neighbor physical x
     matmul_runtime_args.push_back(0);                  // Neighbor physical y
 
+    // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
+    std::vector<CoreCoord> ring_pos2core(matmul_num_cores);
     std::vector<uint32_t> vchannels;
     uint32_t dram_bank = 0;
     for (auto core : matmul_cores) {
@@ -1095,6 +1099,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         // Use the optimized ring neighbor mapping
         const auto [ring_pos, next_bank] = bank2ring_pos[dram_bank];
         const auto& next_physical = mesh_device->worker_core_from_logical_core(matmul_cores[next_bank]);
+
+        ring_pos2core[ring_pos] = core;
 
         matmul_runtime_args[0] = dram_bank++;
         matmul_runtime_args[1] = vchannel;
@@ -1145,7 +1151,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         final_barrier_semaphore,
         tilize_combine_sync_semaphore_id,
         matmul_combine_sync_semaphore_id,
-        compute_cores_per_combine_core);
+        compute_cores_per_combine_core,
+        ring_pos2core);
 
     auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
     auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;

@@ -188,12 +188,16 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
+    bool output_buffer_idx = 0;
+    auto* combine_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(combine_semaphore_addr);
+    // both sections of the double buffer are initially free
+    uint32_t combine_semaphore_val = 0;
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         const uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         const uint32_t active_tokens = NUM_TOKENS_PER_EXPERT[expert_id];
         const uint32_t tokens_per_height_shard_chunk = active_tokens / height_shard_dim;
         const uint32_t tokens_per_height_shard_rem = active_tokens % height_shard_dim;
-        const uint32_t expert_offset_bytes = shard_offset_per_expert_bytes * expert_id;
+        const uint32_t output_buffer_offset_bytes = shard_offset_per_expert_bytes * output_buffer_idx;
 
         uint32_t dest_height_shard_start = 0;
         uint32_t shard_row_start = 0;
@@ -252,6 +256,7 @@ void kernel_main() {
             const uint32_t num_tokens_block = std::min(tile_height, active_tokens - chunk * tile_height);
 
             cb_wait_front(cb_c2s_out, num_w0_w1_tiles_h);
+
             const uint32_t source_base_l1_addr = get_read_ptr(cb_c2s_out);
             const uint32_t elts_per_page = source_width_tiles * tile_width;
 
@@ -265,6 +270,9 @@ void kernel_main() {
                 const uint32_t width_transfer_tiles = std::min(
                     combine_shard_width_tiles - dest_width_offset_tiles, output_width_tiles_core - width_tiles_sent);
                 const uint32_t width_transfer_bytes = width_transfer_tiles * tile_width_size_bytes;
+
+                // wait for combine to signal that the buffer segment is available
+                noc_semaphore_wait(combine_semaphore_ptr, combine_semaphore_val);
 
                 uint32_t dest_height_shard = dest_height_shard_start;
                 uint32_t shard_row = shard_row_start;
@@ -281,8 +289,8 @@ void kernel_main() {
                     noc_async_write_one_packet_set_state</*posted=*/true>(
                         dest_noc_addr_base, width_transfer_bytes, /*noc=*/1, vchannel);
 
-                    const uint32_t dest_l1_addr =
-                        output_base_l1_addr + expert_offset_bytes + dest_width_offset_bytes + shard_row_offset_bytes;
+                    const uint32_t dest_l1_addr = output_base_l1_addr + output_buffer_offset_bytes +
+                                                  dest_width_offset_bytes + shard_row_offset_bytes;
 
                     const uint32_t source_l1_addr =
                         source_base_l1_addr + (bt * source_width_tiles + width_tiles_sent) * tile_width_size_bytes;
@@ -313,6 +321,9 @@ void kernel_main() {
                 matmul_chunk_available_semaphore_noc_addr, /*incr=*/1, /*noc_id=*/1, /*vc=*/vchannel);
         }
         combine_semaphore_inc();
+        output_buffer_idx = !output_buffer_idx;
+        combine_semaphore_val += height_shard_dim;
     }
+    noc_semaphore_set(combine_semaphore_ptr, 0);
     noc_async_posted_writes_flushed(/*noc=*/1);
 }
