@@ -128,6 +128,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.all_gather_operation_attributes.cluster_axis);
 
     log_debug(tt::LogOp, "device index: {}", device_index);
+    log_debug(tt::LogOp, "CCL cluster axis: {}", args.all_gather_operation_attributes.cluster_axis.value_or(-1));
     log_debug(tt::LogOp, "is_causal: {}", args.is_causal);
     log_debug(tt::LogOp, "is_balanced: {}", args.is_balanced);
 
@@ -198,7 +199,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !args.is_causal;
+    const bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) && !args.is_causal;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
@@ -286,7 +288,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -329,7 +331,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
     const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1 && !args.is_causal;
+                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1 &&
+                                       !args.is_causal;
     log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     auto [out_out_subblock_h, out_out_subblock_w] =
@@ -601,8 +604,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
                                 .set_page_size(tt::CB::c_in3, mask_tile_size);
         CreateCircularBuffer(program, core_grid, c_in3_config);
-    }
-    else {
+    } else {
         // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
         if (needs_lightweight_mask) {
             auto c_in3_config =

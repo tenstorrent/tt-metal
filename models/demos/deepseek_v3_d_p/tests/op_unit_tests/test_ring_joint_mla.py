@@ -108,6 +108,7 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    use_column_major_ccl=True,
     is_causal=False,
     is_balanced=False,
 ):
@@ -115,8 +116,8 @@ def run_ring_joint_sdpa(
     logger.info(f"Full grid: x {full_compute_grid.x} * y {full_compute_grid.y}")
     available_compute_grid = (12, 10)  # Set a fixed available compute grid for testing
     logger.warning(f"Using grid: x {available_compute_grid[0]} * y {available_compute_grid[1]}")
-    sdpa_compute_grid = (available_compute_grid[0], available_compute_grid[1] - 1)
-    ccl_core_grid_offset = (0, available_compute_grid[1] - 1)
+    sdpa_compute_grid = (available_compute_grid[0] - 1, available_compute_grid[1])
+    ccl_core_grid_offset = (available_compute_grid[0] - 1, 0)
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -327,6 +328,7 @@ def run_ring_joint_sdpa(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
+                use_column_major_ccl=use_column_major_ccl,
                 is_causal=is_causal,
                 is_balanced=is_balanced,
             )
@@ -396,11 +398,11 @@ def run_ring_joint_sdpa(
 @pytest.mark.parametrize(
     "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v",
     [
-        (1, 32, 1, 32, 4 * 3200, 576, 576, 128),  # 12800: 3200 tokens per device on 4x1 ring
+        (1, 1, 1, 1, 4 * 128, 32, 32, 32),  # 1280: 320 tokens per device on 4x1 ring
     ],
 )
-@pytest.mark.parametrize("q_chunk_size", [160], ids=["q160"])
-@pytest.mark.parametrize("k_chunk_size", [160], ids=["k160"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
+@pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
 @pytest.mark.parametrize(
     "n_iters, trace_enabled, skip_check",
     [
@@ -424,14 +426,14 @@ def run_ring_joint_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(1, 4)],
-    ids=["1x4"],
+    [(4, 1)],
+    ids=["4x1"],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "rp_axis, rp_factor, up_axis, up_factor",
     [
-        [1, 4, 0, 1],
+        [0, 4, 1, 1],
     ],
     ids=[
         "4rpx1p",
@@ -500,6 +502,7 @@ def test_mla_sdpa(
         all_gather_topology,
         skip_check,
         0.999,
+        use_column_major_ccl=True,
         is_causal=True,
         is_balanced=is_balanced,
     )

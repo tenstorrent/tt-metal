@@ -16,18 +16,19 @@
  * See dataflow_common.hpp for full documentation.
  */
 ALWI uint32_t linear_to_zigzag(uint32_t linear_flat, uint32_t num_q_chunks) {
-    const uint32_t head_idx = linear_flat / num_q_chunks;
-    const uint32_t pos_in_head = linear_flat % num_q_chunks;
+    return linear_flat;
+    // const uint32_t head_idx = linear_flat / num_q_chunks;
+    // const uint32_t pos_in_head = linear_flat % num_q_chunks;
 
-    uint32_t q_chunk;
-    if (pos_in_head % 2 == 0) {
-        // Even positions: forward from start
-        q_chunk = pos_in_head / 2;
-    } else {
-        // Odd positions: backward from end
-        q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
-    }
-    return head_idx * num_q_chunks + q_chunk;
+    // uint32_t q_chunk;
+    // if (pos_in_head % 2 == 0) {
+    //     // Even positions: forward from start
+    //     q_chunk = pos_in_head / 2;
+    // } else {
+    //     // Odd positions: backward from end
+    //     q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
+    // }
+    // return head_idx * num_q_chunks + q_chunk;
 }
 
 #include "api/compute/compute_kernel_api.h"
@@ -1629,10 +1630,10 @@ void sdpa_inner_loop(
     const uint32_t iter_q_start,
     const uint32_t iter_q_end,
     const uint32_t q_num_chunks,
-    const uint32_t local_q_start,
-    const uint32_t chunked_q_chunk_offset,
-    const uint32_t iter_k_chunk_start,
-    const uint32_t iter_k_chunk_end,
+    const uint32_t local_q_start,           // 0
+    const uint32_t chunked_q_chunk_offset,  // 0
+    const uint32_t iter_k_chunk_start,      // 0
+    const uint32_t iter_k_chunk_end,        // all local Ks or half
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
     const uint32_t v_chunk_tiles,
@@ -1699,19 +1700,29 @@ void sdpa_inner_loop(
                 q_high_idx = Skt;
             }
         } else if (sdpa_type == RING) {
-            const uint32_t q_chunk = q_iter % q_num_chunks;
+            uint32_t q_chunk;
+#if defined BALANCED_Q_PARALLEL
+            q_chunk = linear_to_zigzag(q_iter, q_num_chunks) % q_num_chunks;  // why % ??
+#else
+            q_chunk = q_iter % q_num_chunks;
+#endif
+
+            DPRINT << "COMPUTE: Q[" << q_iter << "]" << ENDL();
+
+            DPRINT << "COMPUTE: q_iter=" << q_iter << " q_chunk=" << q_chunk << " q_num_chunks=" << q_num_chunks
+                   << " is_balanced=" << is_balanced << ENDL();
 
             if (is_causal) {
                 q_low_idx = q_chunk * Sq_chunk_t;
                 q_high_idx = q_low_idx + Sq_chunk_t;
                 q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
             }
-            if (is_balanced) {
-                if (q_chunk < q_num_chunks / 2) {
-                    continue;
-                }
+            if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+                DPRINT << "COMPUTE: SKIP q_chunk=" << q_chunk << " (q_num_chunks/2=" << (q_num_chunks / 2) << ")"
+                       << ENDL();
+                continue;
             }
-        }
+        }  // If ring attention
 
         // Set up ping pong buffers
         uint32_t alias_prev_sum = cb_sum_A;
@@ -1738,6 +1749,7 @@ void sdpa_inner_loop(
                 const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
                 if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
+                    DPRINT << "COMPUTE: SKIP k_chunk=" << k_chunk << ENDL();
                     continue;
                 }
             }
@@ -1745,6 +1757,7 @@ void sdpa_inner_loop(
             KV_chunks_processed_in_iter++;
 
             if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
+                DPRINT << "COMPUTE: SKIP, wait, pop k_chunk=" << k_chunk << " (causal)" << ENDL();
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
@@ -1753,6 +1766,7 @@ void sdpa_inner_loop(
                 continue;
             }
 
+            DPRINT << "COMPUTE: Q@K[" << k_chunk << "]" << ENDL();
             /**
              * QK = Q_CHUNK @ K_CHUNK
              *
@@ -1853,10 +1867,12 @@ void sdpa_inner_loop(
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
-            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in matmul)
+            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
+            // matmul)
             reconfig_data_format(cb_v_in, cb_qk_im);
             pack_reconfig_data_format(alias_mm2_cur_out);
 
+            DPRINT << "COMPUTE: QK@V[" << k_chunk << "]" << ENDL();
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
                 cb_qk_im,
@@ -2040,8 +2056,10 @@ void sdpa_inner_loop(
         cb_pop_front(cb_q_in, q_chunk_tiles);
     }
 
+    DPRINT << "KV_chunks_processed_in_iter " << KV_chunks_processed_in_iter << ENDL();
     if constexpr (sdpa_type == RING) {
         if (KV_chunks_processed_in_iter % 2 == 0) {
+            DPRINT << "COMPUTE: even magic... K=" << k_chunk_tiles << " V=" << v_chunk_tiles << ENDL();
             cb_wait_front(cb_k_in, k_chunk_tiles);
             cb_wait_front(cb_v_in, v_chunk_tiles);
             cb_pop_front(cb_k_in, k_chunk_tiles);

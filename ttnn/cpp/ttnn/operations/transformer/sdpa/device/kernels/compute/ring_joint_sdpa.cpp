@@ -61,7 +61,8 @@ void kernel_main() {
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    constexpr bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
+    constexpr bool needs_lightweight_mask =
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) && !is_causal;
 
     constexpr uint32_t neginf_tile_idx = 0;
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? 1 : 0;
@@ -140,6 +141,9 @@ void kernel_main() {
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        DPRINT << "COMPUTE: ring " << ring_iter + 1 << "/" << ring_size << " (ring_index=" << ring_index << ")"
+               << ENDL();
+
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
@@ -153,6 +157,7 @@ void kernel_main() {
                                          !(is_causal && ring_index < ring_id && !is_balanced);
 
         if (!ring_iter_does_work) {
+            DPRINT << "COMPUTE: no work " << ENDL();
             continue;
         }
 

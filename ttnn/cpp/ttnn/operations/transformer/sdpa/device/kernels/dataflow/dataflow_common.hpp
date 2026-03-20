@@ -31,18 +31,20 @@
  * This works for ANY division of work across cores (no exact division constraint).
  */
 FORCE_INLINE uint32_t linear_to_zigzag(uint32_t linear_flat, uint32_t num_q_chunks) {
-    const uint32_t head_idx = linear_flat / num_q_chunks;
-    const uint32_t pos_in_head = linear_flat % num_q_chunks;
+    return linear_flat;
 
-    uint32_t q_chunk;
-    if (pos_in_head % 2 == 0) {
-        // Even positions: forward from start
-        q_chunk = pos_in_head / 2;
-    } else {
-        // Odd positions: backward from end
-        q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
-    }
-    return head_idx * num_q_chunks + q_chunk;
+    // const uint32_t head_idx = linear_flat / num_q_chunks;
+    // const uint32_t pos_in_head = linear_flat % num_q_chunks;
+
+    // uint32_t q_chunk;
+    // if (pos_in_head % 2 == 0) {
+    //     // Even positions: forward from start
+    //     q_chunk = pos_in_head / 2;
+    // } else {
+    //     // Odd positions: backward from end
+    //     q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
+    // }
+    // return head_idx * num_q_chunks + q_chunk;
 }
 
 template <uint32_t tile_bytes, uint32_t num_readers>

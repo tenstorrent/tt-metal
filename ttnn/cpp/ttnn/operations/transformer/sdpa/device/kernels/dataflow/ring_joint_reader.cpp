@@ -164,6 +164,9 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        DPRINT << "READER: ring " << ring_iter + 1 << "/" << ring_size << " (ring_index=" << ring_index << ")"
+               << ENDL();
+
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
@@ -183,6 +186,7 @@ void kernel_main() {
 
         uint32_t KV_chunks_processed_in_iter = 0;
         if (!ring_iter_does_work) {
+            DPRINT << "READER: no work " << ENDL();
             continue;
         }
 
@@ -198,10 +202,11 @@ void kernel_main() {
         // - both chunks preced 2nd part of the sequence in received KV
         // Indexes are updated accordingly; compute is skipped
         if (is_causal && is_balanced && ring_index > ring_id) {
+            DPRINT << "READER: will ignore half KV chunks " << ENDL();
             iter_num_kv_chunks /= 2;
         }
 
-        for (uint32_t q_iter = 0; q_iter < (global_q_end - global_q_start); ++q_iter) {
+        for (uint32_t q_iter = 0; global_q_start + q_iter < global_q_end; ++q_iter) {
             // Linear flat index for this iteration
             uint32_t linear_flat = global_q_start + q_iter;
 
@@ -212,6 +217,8 @@ void kernel_main() {
             uint32_t global_q_chunk = linear_flat;
 #endif
 
+            DPRINT << "READER: Q[" << global_q_chunk << "]" << ENDL();
+
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
@@ -219,7 +226,12 @@ void kernel_main() {
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
+            DPRINT << "READER: q_iter=" << q_iter << " linear_flat=" << linear_flat
+                   << " global_q_chunk=" << global_q_chunk << " q_chunk=" << q_chunk << " num_q_chunks=" << num_q_chunks
+                   << " ring_index=" << ring_index << " ring_id=" << ring_id << ENDL();
+
             if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                DPRINT << "READER: SKIP q_chunk=" << q_chunk << " (half_sequence=" << half_sequence << ")" << ENDL();
                 continue;
             }
 
@@ -255,6 +267,7 @@ void kernel_main() {
 
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
+                    DPRINT << "READER: SKIP k_chunk=" << k_chunk << " (beyond logical N)" << ENDL();
                     continue;
                 }
                 KV_chunks_processed_in_iter++;
@@ -289,6 +302,7 @@ void kernel_main() {
                     }
                 }
 
+                DPRINT << "READER: reserve " << k_chunk_tiles << " tiles" << ENDL();
                 // K: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
@@ -308,6 +322,7 @@ void kernel_main() {
                         k_tile_bytes,
                         true /*transpose*/
                     );
+                    DPRINT << "READER: after reading k slice " << ENDL();
                 }
 
                 // Forward K chunk to next core(s): initiate async write (NOC write channel)
@@ -339,6 +354,7 @@ void kernel_main() {
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (k_chunk == 0) {
                     if constexpr (use_q_subblock_push) {
+                        DPRINT << "READER: Q subblocks..." << ENDL();
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
                             const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
@@ -353,6 +369,7 @@ void kernel_main() {
                             );
                         }
                     } else {
+                        DPRINT << "READER: Q..." << ENDL();
                         read_block(
                             is_joint_q ? joint_q_generator : q_generator,
                             q_slice,
@@ -365,6 +382,8 @@ void kernel_main() {
                 }
 
                 // V: either read locally (injector or not participant) or receive from previous core
+
+                DPRINT << "READER: reserve V..." << ENDL();
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                 if (should_receive) {
@@ -374,6 +393,7 @@ void kernel_main() {
                     noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_v_in, v_chunk_tiles);
                 } else {
+                    DPRINT << "READER: reading V..." << ENDL();
                     read_block(
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
@@ -408,7 +428,9 @@ void kernel_main() {
                 }
             }
         }
+        DPRINT << "KV_chunks_processed_in_iter " << KV_chunks_processed_in_iter << ENDL();
         if (KV_chunks_processed_in_iter % 2 == 0) {
+            DPRINT << "READER: even magic... K=" << k_chunk_tiles << " V=" << v_chunk_tiles << ENDL();
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
