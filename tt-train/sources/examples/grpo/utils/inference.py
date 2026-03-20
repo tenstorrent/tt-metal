@@ -1,24 +1,9 @@
-from dataclasses import dataclass
-from typing import List, TypeAlias, Tuple
-
+from typing import List
 import ttnn
 import ttml
 import numpy as np
-
-
-@dataclass
-class InferenceCtx:
-    tt_model: object
-    tokenizer: object
-    transformer_config: object
-    pad_token: int
-    max_tokens_to_complete: int
-    temperature: float
-    tile_size: int = 32
-    group_size: int = 1
-    sample_seed: int = 42
-    _B: int = None
-    _N: int = None
+from ttml.common.utils import no_grad
+from .setup import InferenceCtx
 
 
 def round_up(ctx: InferenceCtx, x: int) -> int:
@@ -56,6 +41,23 @@ def debug_print_prompt_completion(
 
     print(f"prompt_text: {prompt_text!r}")
     print(f"completion_text: {completion_text!r}")
+
+
+def _get_kv_cache(ctx: InferenceCtx, B: int) -> ttml.models.KvCache:
+    head_dim = getattr(ctx.transformer_config, "head_dim", None) or (
+        ctx.transformer_config.embedding_dim // ctx.transformer_config.num_heads
+    )
+    if ctx._kv_cache is None or ctx._kv_cache_B != B:
+        ctx._kv_cache = ttml.models.KvCache(
+            ctx.transformer_config.num_blocks,
+            B,
+            ctx.transformer_config.num_groups,
+            ctx.transformer_config.max_sequence_length,
+            head_dim,
+        )
+        ctx._kv_cache_B = B
+    ctx._kv_cache.reset()
+    return ctx._kv_cache
 
 
 def create_causal_mask(
@@ -126,23 +128,13 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
     assert prompt_tokens_np.shape == (B, N)
     assert len(pad_lengths) == B
 
-    ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
-    ctx.tt_model.eval()
-
     V = len(ctx.tokenizer)
     padded_V = round_up(ctx, V)
 
     head_dim = getattr(ctx.transformer_config, "head_dim", None) or (
         ctx.transformer_config.embedding_dim // ctx.transformer_config.num_heads
     )
-    kv_cache = ttml.models.KvCache(
-        ctx.transformer_config.num_blocks,
-        B,
-        ctx.transformer_config.num_groups,
-        ctx.transformer_config.max_sequence_length,
-        head_dim,
-    )
-    kv_cache.reset()
+    kv_cache = _get_kv_cache(ctx, B)
 
     logits_mask_tensor = build_logits_mask(V, padded_V) if padded_V != V else None
 
@@ -193,6 +185,10 @@ def _completion_batched_impl(ctx: InferenceCtx, prompt_tokens_np, pad_lengths: L
         completions_np[:, j] = column.to_numpy().reshape(
             B,
         )
+        deallocate_tensors([column])
+
+    deallocate_tensors([logits_mask_tensor])
+    kv_cache.reset()
 
     stop_ids = get_stop_ids(ctx)
 
@@ -214,13 +210,16 @@ def completion_batched_one_prompt(ctx: InferenceCtx, prompt_tokens: List[int]) -
     N = ctx._N = len(prompt_tokens)
     prompt_tokens_np = np.tile(prompt_tokens, (B, 1))
 
-    pad_lengths = [0]  # no padding
-    return _completion_batched_impl(ctx, prompt_tokens_np, pad_lengths)
+    pad_lengths = [0] * ctx.group_size  # no padding
+
+    ctx.tt_model.eval()
+    with no_grad():
+        return _completion_batched_impl(ctx, prompt_tokens_np, pad_lengths)
 
 
 def completion_batched_multiple_prompts(ctx: InferenceCtx, prompts: List[List[int]]) -> List[List[int]]:
     max_len = max(len(row) for row in prompts)
-    pad_lengths = [max_len - len(row) for row in prompts]
+    pad_lengths = [max_len - len(row) for row in prompts for _ in range(ctx.group_size)]
     prompts_cnt = len(prompts)
     B = ctx._B = ctx.group_size * prompts_cnt
     N = ctx._N = max_len
@@ -230,7 +229,9 @@ def completion_batched_multiple_prompts(ctx: InferenceCtx, prompts: List[List[in
     for i, row in enumerate(prompts):
         prompt_tokens_np[i * ctx.group_size : (i + 1) * ctx.group_size, max_len - len(row) :] = np.asarray(row)
 
-    return _completion_batched_impl(ctx, prompt_tokens_np, pad_lengths)
+    ctx.tt_model.eval()
+    with no_grad():
+        return _completion_batched_impl(ctx, prompt_tokens_np, pad_lengths)
 
 
 def generate_answers_one_prompt(ctx: InferenceCtx, prompt_str: str) -> List[str]:
