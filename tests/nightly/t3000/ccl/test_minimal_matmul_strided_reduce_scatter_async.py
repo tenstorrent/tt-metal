@@ -606,7 +606,7 @@ def test_minimal_matmul_strided_reduce_scatter_async(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Optional-feature tests: fused_activation, bias, persistent_buffers
+# Optional-feature tests: addcmul, fused_activation, bias, persistent_buffers
 # ──────────────────────────────────────────────────────────────────────────────
 
 _FEATURE_BASE_CFG = MinimalMatmulStridedReduceScatterTestConfig(
@@ -711,9 +711,45 @@ def _run_optional_feature_test(mesh_device, topology, cluster_axis, feature):
         rs_input_per_device = [mm_out + torch_bias for mm_out in mm_golds]
         extra_kwargs = {"bias": bias_mesh}
 
+    elif feature == "addcmul":
+        # The reader reads only the first N/num_devices columns from each tensor (b=0 in the kernel
+        # batch loop). ternary_a must be full [M, N] and ternary_b must be [1, N] to pass validation
+        # in minimal_matmul_device_operation.cpp (N is derived from the weight shape). Replicate the
+        # full tensors; every device reads the same first-N/num_devices slice from its local copy.
+        scalar = 0.5
+        torch_addcmul_a = torch.randn([1, 1, cfg.M, cfg.N])
+        torch_addcmul_b = torch.randn([1, 1, 1, cfg.N])
+        addcmul_a_mesh = ttnn.from_torch(
+            torch_addcmul_a,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        addcmul_b_mesh = ttnn.from_torch(
+            torch_addcmul_b,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        extra_kwargs = {
+            "fused_ternary_scalar": scalar,
+            "addcmul_input_tensor1": addcmul_a_mesh,
+            "addcmul_input_tensor2": addcmul_b_mesh,
+        }
+
     # Golden: reduce-scatter over rs_input_per_device
     torch_rs_reduced = torch.sum(torch.stack(rs_input_per_device), dim=0)
     torch_rs_scattered = list(torch.chunk(torch_rs_reduced, num_devices, dim=cfg.dim))
+    if feature == "addcmul":
+        # Each device reads the first N/num_devices columns of the replicated tensors.
+        slice_n = cfg.N // num_devices
+        addcmul_a_slice = torch_addcmul_a[..., :slice_n]  # [1, 1, M, N/num_devices]
+        addcmul_b_slice = torch_addcmul_b[..., :slice_n]  # [1, 1, 1, N/num_devices] broadcast
+        torch_rs_scattered = [addcmul_a_slice + scalar * chunk * addcmul_b_slice for chunk in torch_rs_scattered]
 
     # Run the op
     mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
@@ -766,7 +802,7 @@ def _run_optional_feature_test(mesh_device, topology, cluster_axis, feature):
 )
 @pytest.mark.parametrize(
     "feature",
-    ["fused_activation_relu", "bias"],
+    ["fused_activation_relu", "bias", "addcmul"],
 )
 def test_minimal_matmul_strided_reduce_scatter_async_optional_features(mesh_device, topology, cluster_axis, feature):
     _run_optional_feature_test(mesh_device, topology, cluster_axis, feature)
