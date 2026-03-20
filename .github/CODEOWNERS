@@ -109,7 +109,7 @@ tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema @tenstorrent/codeowner-b
 tt_metal/test @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/tools/* @kmabeeTT @mo-tenstorrent @ihamer-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/codeowner-bypass
-tt_metal/tools/mem_bench @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
+tt_metal/tools/mem_bench @abhullar-tt @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
 tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/ @mo-tenstorrent @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
