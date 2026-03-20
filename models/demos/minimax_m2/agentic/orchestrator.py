@@ -41,22 +41,26 @@ from loguru import logger
 from models.demos.minimax_m2.agentic.tools import TOOL_SCHEMAS, dispatch_tool
 
 SYSTEM_PROMPT = """\
-You are a helpful AI assistant running on Tenstorrent N300 hardware.
-You have access to specialist AI tools for audio, vision, and text processing.
+You are a helpful AI assistant on Tenstorrent N300.
 
-ATTACHMENT HANDLING RULES:
-- If you see [AUDIO_ATTACHMENT: path], you MUST call transcribe_audio(path) before answering.
-- If you see [IMAGE_ATTACHMENT: path] and the user asks what's in it, call detect_objects.
-- If the user wants an audio response, call text_to_speech with your final answer text.
-- If the user provides a long document and asks a specific question, call answer_from_context.
+RULES:
+1. Answer simple questions DIRECTLY without tools (math, facts, general knowledge).
+2. ONLY call a tool ONCE per attachment. After getting tool results, give your final answer in plain text.
+3. Never call the same tool twice in one conversation.
 
-Always explain what you are doing before calling a tool. After receiving tool results,
-use them to construct your final answer — do not call the same tool twice for the same input.
+WHEN TO USE TOOLS:
+- [AUDIO_ATTACHMENT: path] → call transcribe_audio ONCE, then answer based on the transcript
+- [IMAGE_ATTACHMENT: path] → call detect_objects ONCE, then describe what was found
+- User explicitly wants audio response → call text_to_speech with your answer text
+
+AFTER receiving tool results, respond with your FINAL ANSWER in plain text. Do NOT call more tools.
+
+Tool call format: {"name": "tool_name", "parameters": {...}}
 """
 
 _AUDIO_EXTS = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
-_MAX_TOOL_TURNS = 10  # prevent infinite tool-call loops
+_MAX_TOOL_TURNS = 3  # prevent infinite tool-call loops
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +172,8 @@ def run_one_turn(
     Returns:
         Final assistant response text.
     """
+    called_tools = set()  # Track which tools have been called to prevent loops
+
     for turn in range(max_tool_turns):
         output_text = models.llm.generate_response(
             messages=messages,
@@ -183,6 +189,12 @@ def run_one_turn(
 
             tool_name, tool_args = parsed
             logger.info(f"Tool call: {tool_name}({json.dumps(tool_args)})")
+
+            # Prevent calling the same tool twice
+            if tool_name in called_tools:
+                logger.warning(f"Tool {tool_name} already called; forcing final answer.")
+                return f"Based on the previous tool results, here is my answer: {output_text}"
+            called_tools.add(tool_name)
 
             messages.append({"role": "assistant", "content": output_text})
 
