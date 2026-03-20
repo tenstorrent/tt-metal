@@ -545,13 +545,13 @@ void PrefetchKernel::CreateKernel() {
         }
     }
 
-    if (device_->sysmem_manager().is_dram_backed()) {
-        const auto& soc_descriptor = descriptor_.cluster().get_soc_desc(device_id_);
-        CoreCoord dram_core = soc_descriptor.get_preferred_worker_core_for_dram_view(0, tt_metal::NOC::NOC_0);
-        auto dram_noc_coords = device_->virtual_noc0_coordinate(0, dram_core);
-        defines["CQ_DRAM_NOC_X"] = std::to_string(dram_noc_coords.x);
-        defines["CQ_DRAM_NOC_Y"] = std::to_string(dram_noc_coords.y);
-    }
+    // if (device_->sysmem_manager().is_dram_backed()) {
+    //     const auto& soc_descriptor = descriptor_.cluster().get_soc_desc(device_id_);
+    //     CoreCoord dram_core = soc_descriptor.get_preferred_worker_core_for_dram_view(0, tt_metal::NOC::NOC_0);
+    //     auto dram_noc_coords = device_->virtual_noc0_coordinate(0, dram_core);
+    //     defines["CQ_DRAM_NOC_X"] = std::to_string(dram_noc_coords.x);
+    //     defines["CQ_DRAM_NOC_Y"] = std::to_string(dram_noc_coords.y);
+    // }
 
     // Runtime args offsets
     defines["OFFSETOF_MY_DEV_ID"] = std::to_string(static_config_.offsetof_my_dev_id.value_or(0));
