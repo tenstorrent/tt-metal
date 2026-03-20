@@ -201,24 +201,26 @@ jobs:
             --master-trace "$MODEL_TRACE"
 
           # Step 2: Discover generated vector files and run each module under the tracer
+          FAILED_MODULES=()
+          TOTAL_MODULES=0
+
           for VECTOR_FILE in tests/sweep_framework/vectors_export/model_traced.*__*.json; do
             [ -f "$VECTOR_FILE" ] || continue
             BASENAME=$(basename "$VECTOR_FILE" .json)
-            # Extract module name: model_traced.add_model_traced__mesh_4x8 -> model_traced.add_model_traced
             MODULE_NAME=$(echo "$BASENAME" | sed 's/__.*$//')
 
-            # Derive sweep trace output path from module basename
             MODULE_TAIL="${MODULE_NAME#model_traced.}"
             SWEEP_TRACE="model_tracer/traced_operations/sweep_trace_${MODULE_TAIL}.json"
             SWEEP_TRACE_SPLIT="${SWEEP_TRACE%.json}_split"
+
+            TOTAL_MODULES=$((TOTAL_MODULES + 1))
 
             echo "========================================"
             echo " Running: $MODULE_NAME"
             echo " Sweep trace: $SWEEP_TRACE"
             echo "========================================"
 
-            # Run sweep under tracer
-            python3 model_tracer/generic_ops_tracer.py \
+            if ! python3 model_tracer/generic_ops_tracer.py \
               tests/sweep_framework/sweeps_runner.py \
               -o "$SWEEP_TRACE" \
               -- \
@@ -226,16 +228,28 @@ jobs:
               --suite-name model_traced \
               --vector-source vectors_export \
               --result-dest results_export \
-              --main-proc-verbose || {
+              --main-proc-verbose; then
                 echo "WARNING: Module $MODULE_NAME failed, continuing..."
+                FAILED_MODULES+=("$MODULE_NAME")
                 continue
-              }
+            fi
 
-            # Split sweep trace
-            python3 model_tracer/traced_operations/split_model_trace.py \
+            if ! python3 model_tracer/traced_operations/split_model_trace.py \
               "$SWEEP_TRACE" \
-              -o "$SWEEP_TRACE_SPLIT" || true
+              -o "$SWEEP_TRACE_SPLIT"; then
+                echo "WARNING: Split failed for $MODULE_NAME"
+                FAILED_MODULES+=("${MODULE_NAME}:split")
+            fi
           done
+
+          echo "========================================"
+          echo " Pipeline summary: ${#FAILED_MODULES[@]}/${TOTAL_MODULES} modules failed"
+          echo "========================================"
+          if [ ${#FAILED_MODULES[@]} -gt 0 ]; then
+            echo "Failed modules:"
+            printf '  - %s\n' "${FAILED_MODULES[@]}"
+            exit 1
+          fi
 
       - name: Upload sweep traces
         if: always()

@@ -30,7 +30,6 @@ Usage (single operation):
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import sys
 from dataclasses import dataclass, field
@@ -690,7 +689,6 @@ def generate_report(
     for r in op_results:
         exact_count = len(r.exact_matches)
         close_count = len(r.close_matches)
-        total_matched = exact_count + close_count
 
         lines.append(f"--- Operation: {r.op_name} ---")
         lines.append(f"  Model configs: {r.model_config_count} | Sweep configs: {r.sweep_config_count}")
@@ -856,8 +854,8 @@ def run_validation(
     )
 
     if not pairs:
-        print("WARNING: No matching operation pairs found.", file=sys.stderr)
-        return []
+        print("ERROR: No matching operation pairs found.", file=sys.stderr)
+        raise SystemExit(1)
 
     op_results: list[OpResult] = []
 
@@ -991,8 +989,9 @@ def main() -> int:
     else:
         print(report)
 
-    any_unmatched = any(r.unmatched_sweep for r in op_results)
-    return 1 if any_unmatched else 0
+    any_unmatched_sweep = any(r.unmatched_sweep for r in op_results)
+    any_unmatched_model = any(r.unmatched_model for r in op_results)
+    return 1 if (any_unmatched_sweep or any_unmatched_model) else 0
 
 
 if __name__ == "__main__":

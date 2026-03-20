@@ -95,17 +95,22 @@ def step_clean_previous_outputs(
     else:
         print(f"  Sweep trace split dir already absent: {sweep_trace_split_dir}")
 
-    # 3. Vector export files matching this module
-    pattern = str(VECTORS_EXPORT_DIR / f"{module_name}__*")
-    matches = sorted(glob.glob(pattern))
-    if matches:
-        for path in matches:
+    # 3. Vector export files matching this module (mesh-qualified and exact-match)
+    patterns = [
+        VECTORS_EXPORT_DIR / f"{module_name}__*",
+        VECTORS_EXPORT_DIR / f"{module_name}.json",
+    ]
+    all_matches: list[Path] = []
+    for pat in patterns:
+        all_matches.extend(sorted(Path(p) for p in glob.glob(str(pat))))
+    if all_matches:
+        for path in all_matches:
             print(f"  Removing vector file: {path}")
             if not dry_run:
-                os.remove(path)
-        removed += len(matches)
+                path.unlink()
+        removed += len(all_matches)
     else:
-        print(f"  No existing vector files matching: {module_name}__*")
+        print(f"  No existing vector files matching: {module_name}*")
 
     print(f"  Cleaned {removed} artifact(s)")
 
