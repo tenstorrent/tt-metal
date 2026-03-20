@@ -599,28 +599,28 @@ def inspector_run_args():
     }
 
 
-def _mock_rpc_unavailable_with_logs_present(monkeypatch):
+def _mock_rpc_unavailable_with_logs_present(monkeypatch, log_directory):
     monkeypatch.setattr(
         inspector_data,
         "InspectorRpcController",
         lambda host, port: (_ for _ in ()).throw(inspector_data.InspectorException("rpc unavailable")),
     )
-    monkeypatch.setattr(inspector_data, "get_log_directory", lambda directory: "/tmp/tt-triage-test")
-    monkeypatch.setattr(inspector_data.os.path, "exists", lambda path: True)
+    # Ensure run() sees an existing log directory by returning a real temp path
+    monkeypatch.setattr(inspector_data, "get_log_directory", lambda directory: str(log_directory))
 
 
-def test_inspector_data_run_falls_back_to_serialized_when_rpc_unavailable(monkeypatch, inspector_run_args):
+def test_inspector_data_run_falls_back_to_serialized_when_rpc_unavailable(monkeypatch, inspector_run_args, tmp_path):
     sentinel = object()
 
-    _mock_rpc_unavailable_with_logs_present(monkeypatch)
+    _mock_rpc_unavailable_with_logs_present(monkeypatch, tmp_path)
     monkeypatch.setattr(inspector_data, "InspectorRpcSerialized", lambda directory: sentinel)
 
     result = inspector_data.run(inspector_run_args, context=None)
     assert result is sentinel
 
 
-def test_inspector_data_run_reports_both_rpc_and_serialized_failures(monkeypatch, inspector_run_args):
-    _mock_rpc_unavailable_with_logs_present(monkeypatch)
+def test_inspector_data_run_reports_both_rpc_and_serialized_failures(monkeypatch, inspector_run_args, tmp_path):
+    _mock_rpc_unavailable_with_logs_present(monkeypatch, tmp_path)
     monkeypatch.setattr(
         inspector_data,
         "InspectorRpcSerialized",

@@ -871,6 +871,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Note: Currently, only FPU counters are supported
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             ::sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            // Currently only FPU counters (bit 0) are supported
+            if (this->profiler_perf_counter_mode & ~0x1U) {
+                TT_THROW(
+                    "Unsupported perf counter mode {}. Currently only FPU counters (mode=1) are supported.",
+                    this->profiler_perf_counter_mode);
+            }
             if (this->profiler_perf_counter_mode != 0) {
                 this->profiler_enabled = true;
             }
