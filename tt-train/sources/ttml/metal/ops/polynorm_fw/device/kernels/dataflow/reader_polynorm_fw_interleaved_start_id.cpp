@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// Reader kernel: emits constants and three input streams in compute-consumption order.
 void kernel_main() {
     uint32_t arg_idx = 0U;
     const uint32_t input_address = get_arg_val<uint32_t>(arg_idx++);

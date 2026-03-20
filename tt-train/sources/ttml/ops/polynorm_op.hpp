@@ -8,6 +8,7 @@
 
 namespace ttml::ops {
 
+// PolyNorm activation with trainable coefficients for x^3, x^2, x terms plus bias.
 autograd::TensorPtr polynorm(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,

@@ -86,12 +86,14 @@ ttml::metal::ops::polynorm_fw::device::PolyNormForwardDeviceOperation::tensor_re
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::polynorm_fw::device::PolyNormForwardDeviceOperation;
 
-    auto operation_attributes = OperationType::operation_attributes_t{.epsilon = epsilon};
-    operation_attributes.w0 = w0;
-    operation_attributes.w1 = w1;
-    operation_attributes.w2 = w2;
-    operation_attributes.bias = bias;
-    auto tensor_args = OperationType::tensor_args_t{
+    const auto operation_attributes = OperationType::operation_attributes_t{
+        .epsilon = epsilon,
+        .w0 = w0,
+        .w1 = w1,
+        .w2 = w2,
+        .bias = bias,
+    };
+    const auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .preallocated_output = preallocated_output,
     };
