@@ -96,13 +96,66 @@ class DenseRoutedExpertWeights:
     routed_down_proj: ttnn.Tensor
 
 
+# Must match MoeRoutedExpertOp.setup_dram_matmul(..., num_subblocks_k=4) for stride checks.
+_MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K = 4
+
+
+def _moe_routed_expert_stride_bytes(weights_tensor: ttnn.Tensor) -> int:
+    """Packed DRAM size of one routed expert tensor (bytes), per DRAMStreamingMatmul indexing."""
+    shard_spec = weights_tensor.memory_config().shard_spec
+    if shard_spec is None:
+        raise ValueError("MoE routed expert weights must be sharded (WIDTH_SHARDED DRAM).")
+    weights_shard_shape = shard_spec.shape
+    K = weights_shard_shape[0]
+    tile = weights_tensor.tile
+    th, tw = tile.tile_shape[0], tile.tile_shape[1]
+    per_core_n = weights_shard_shape[1] // tw
+    Kt = K // th
+    if Kt % _MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K != 0:
+        raise AssertionError(
+            f"Kt ({Kt}) must be divisible by num_subblocks_k ({_MOE_DRAM_MATMUL_NUM_SUBBLOCKS_K}) "
+            "for MoE DRAM matmul stride check."
+        )
+    weights_tile_size = tile.get_tile_size(weights_tensor.dtype)
+    return Kt * per_core_n * weights_tile_size
+
+
+def _assert_moe_routed_expert_list_contiguous(tensors: list[ttnn.Tensor], name: str) -> None:
+    """Experts must be contiguous in DRAM; see MoERoutedExpertWeights.validate_contiguous_dram."""
+    if len(tensors) < 2:
+        return
+    if not ttnn.is_tensor_storage_on_device(tensors[0]):
+        return
+    stride = _moe_routed_expert_stride_bytes(tensors[0])
+    base = tensors[0].buffer_address()
+    for i, t in enumerate(tensors):
+        expected = base + i * stride
+        actual = t.buffer_address()
+        if actual != expected:
+            raise AssertionError(
+                f"{name}[{i}] DRAM layout not contiguous for DRAMStreamingMatmul: "
+                f"expected buffer_address {expected}, got {actual} (stride {stride} bytes per expert). "
+                "Allocate all experts of one projection in one batch before the next projection."
+            )
+
+
 @dataclass
 class MoERoutedExpertWeights:
-    """Routed expert weights for MoE layers (list of tensors, one per expert)."""
+    """Routed expert weights for MoE layers (list of tensors, one per expert).
+
+    When on device, each of ``routed_gate_proj``, ``routed_up_proj``, and ``routed_down_proj`` must
+    be allocated contiguously in DRAM (see :meth:`validate_contiguous_dram`).
+    """
 
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
+
+    def validate_contiguous_dram(self) -> None:
+        """Assert experts are contiguous in DRAM for each projection (DRAMStreamingMatmul base+stride)."""
+        _assert_moe_routed_expert_list_contiguous(self.routed_gate_proj, "routed_gate_proj")
+        _assert_moe_routed_expert_list_contiguous(self.routed_up_proj, "routed_up_proj")
+        _assert_moe_routed_expert_list_contiguous(self.routed_down_proj, "routed_down_proj")
 
 
 @dataclass
@@ -550,11 +603,14 @@ def prepare_routed_expert_weights(
             gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
         )
         logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
-        return MoERoutedExpertWeights(
+        routed = MoERoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
             routed_up_proj=routed_up_proj,
             routed_down_proj=routed_down_proj,
         )
+        if move_to_device:
+            routed.validate_contiguous_dram()
+        return routed
     else:
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
@@ -1220,11 +1276,15 @@ def load_moe_routed_experts(
 ) -> MoERoutedExpertWeights:
     """Load only the routed expert weights for an MoE layer from cache.
 
-    Reads experts/e_NNN/{gate,up,down}_proj.tensorbin. Since setup_fast_dispatch can
-    only be used once per program, call this under setup_fast_dispatch and pass the
-    result to load_moe_decoder_layer(..., preloaded_routed_experts=...). If you do
-    not use fast dispatch, omit preloaded_routed_experts and load_moe_decoder_layer
-    will load experts from disk in the current dispatch mode.
+    Reads experts/e_NNN/{gate,up,down}_proj.tensorbin. Loads all gate experts, then all
+    up, then all down, so DRAM allocation order matches ``get_tt_moe_routed_expert_weights``
+    (required for DRAMStreamingMatmul expert indexing).
+
+    Since setup_fast_dispatch can only be used once per program, call this under
+    setup_fast_dispatch and pass the result to load_moe_decoder_layer(...,
+    preloaded_routed_experts=...). If you do not use fast dispatch, omit
+    preloaded_routed_experts and load_moe_decoder_layer will load experts from disk in the
+    current dispatch mode.
     """
     path = Path(path)
     layer_dir = path / f"layer_{layer_idx:03d}"
@@ -1244,29 +1304,28 @@ def load_moe_routed_experts(
     routed_down_proj = []
     for e in range(num_experts):
         if e > 0 and e % 64 == 0:
-            logger.debug("  loaded experts 0..{}", e - 1)
+            logger.debug("  loaded gate experts 0..{}", e - 1)
         expert_dir = experts_dir / f"e_{e:03d}"
-        t_load_gate_t0 = time.perf_counter()
         routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=device))
-        t_load_gate = time.perf_counter() - t_load_gate_t0
-
-        t_load_up_t0 = time.perf_counter()
+    for e in range(num_experts):
+        if e > 0 and e % 64 == 0:
+            logger.debug("  loaded up experts 0..{}", e - 1)
+        expert_dir = experts_dir / f"e_{e:03d}"
         routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=device))
-        t_load_up = time.perf_counter() - t_load_up_t0
-
-        t_load_down_t0 = time.perf_counter()
+    for e in range(num_experts):
+        if e > 0 and e % 64 == 0:
+            logger.debug("  loaded down experts 0..{}", e - 1)
+        expert_dir = experts_dir / f"e_{e:03d}"
         routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=device))
-        t_load_down = time.perf_counter() - t_load_down_t0
 
-        logger.debug(
-            f"    Loaded expert {e}: gate_proj.tensorbin in {t_load_gate:.3f}s, up_proj.tensorbin in {t_load_up:.3f}s, down_proj.tensorbin in {t_load_down:.3f}s"
-        )
     logger.info("  routed experts for layer {} loaded in {:.3f}s", layer_idx, time.perf_counter() - t0)
-    return MoERoutedExpertWeights(
+    routed = MoERoutedExpertWeights(
         routed_gate_proj=routed_gate_proj,
         routed_up_proj=routed_up_proj,
         routed_down_proj=routed_down_proj,
     )
+    routed.validate_contiguous_dram()
+    return routed
 
 
 def load_dense_decoder_layer(

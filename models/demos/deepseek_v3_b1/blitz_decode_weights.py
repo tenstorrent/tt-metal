@@ -1372,6 +1372,14 @@ class BlitzDecodeWeights:
             — three lists of device-resident ttnn.Tensors, one per expert.
             The first tensor in each list can be used as the base address for
             the op; all tensors must be kept alive to prevent deallocation.
+
+        **IMPORTANT (DRAM layout):** For each projection list, experts must be allocated
+        contiguously in DRAM. The fused MoE ``DRAMStreamingMatmul`` kernel indexes an
+        expert as ``base_addr + expert_idx * expert_size_bytes`` using the first tensor's
+        ``buffer_address()`` as ``base_addr``. The inner ``upload()`` loop allocates all
+        experts of one projection before the next, which guarantees contiguity. Any code
+        that loads these weights from cache (e.g. ``load_moe_routed_experts``) must use the
+        same per-projection allocation order (all gates, then all ups, then all downs).
         """
         device = self._device
         tile_w = 32
