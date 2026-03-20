@@ -1017,7 +1017,8 @@ Tensor ExecuteBitwiseOr::invoke(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
                              input_tensor_a,
@@ -1035,7 +1036,8 @@ Tensor ExecuteBitwiseOr::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_OR>::invoke(
@@ -1050,7 +1052,8 @@ Tensor ExecuteBitwiseOr::invoke(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
                              input_tensor_a,
@@ -1068,7 +1071,8 @@ Tensor ExecuteBitwiseOr::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     return ttnn::bitwise_or(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1083,7 +1087,8 @@ Tensor ExecuteBitwiseXor::invoke(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
                              input_tensor_a,
@@ -1101,7 +1106,8 @@ Tensor ExecuteBitwiseXor::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_XOR>::invoke(
@@ -1116,7 +1122,8 @@ Tensor ExecuteBitwiseXor::invoke(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
                              input_tensor_a,
@@ -1134,7 +1141,8 @@ Tensor ExecuteBitwiseXor::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     return ttnn::bitwise_xor(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1149,7 +1157,8 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
                              input_tensor_a,
@@ -1167,7 +1176,8 @@ Tensor ExecuteBitwiseLeftShift::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     return BinaryOperationSfpu<operations::binary::BinaryOpType::LEFT_SHIFT>::invoke(
@@ -1182,7 +1192,8 @@ Tensor ExecuteBitwiseLeftShift::invoke(
     ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (not(use_legacy ? *use_legacy
                        : binary::is_legacy_only(
                              input_tensor_a,
@@ -1200,7 +1211,8 @@ Tensor ExecuteBitwiseLeftShift::invoke(
             post_activations,
             lhs_activations,
             rhs_activations,
-            use_legacy);
+            use_legacy,
+            sub_core_grids);
     }
 
     return ttnn::bitwise_left_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
