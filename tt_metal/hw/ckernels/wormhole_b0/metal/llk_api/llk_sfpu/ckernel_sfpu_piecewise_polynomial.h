@@ -305,15 +305,15 @@ inline void piecewise_polynomial_eval_full(const std::array<float, LUT_SIZE>& lu
 
 #if defined(RANGE_REDUCTION_EXP)
     sfpi::vFloat x;
-    sfpi::vIntk_int;
+    sfpi::vInt k_int;
     piecewise_exp_reduce(x_orig, x, k_int);
 #elif defined(RANGE_REDUCTION_TRIG)
     sfpi::vFloat x;
-    sfpi::vIntq_int;
+    sfpi::vInt q_int;
     piecewise_trig_reduce(x_orig, x, q_int);
 #elif defined(RANGE_REDUCTION_LOG)
     sfpi::vFloat x;
-    sfpi::vInte_int;
+    sfpi::vInt e_int;
     piecewise_log_reduce(x_orig, x, e_int);
 #else
     sfpi::vFloat x = x_orig;
