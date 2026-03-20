@@ -132,7 +132,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const tt::tt_metal::CircularBufferConfig value_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_cb_unit * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
-            .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
+            .set_page_size(value_tensor_cb_index, value_tensor_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
 
     constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
@@ -464,7 +464,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const tt::tt_metal::CircularBufferConfig value_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             cb_scale_factor * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
-            .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
+            .set_page_size(value_tensor_cb_index, value_tensor_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
 
     constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;

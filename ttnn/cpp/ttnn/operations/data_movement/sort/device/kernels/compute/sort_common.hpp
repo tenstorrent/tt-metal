@@ -109,7 +109,7 @@ void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, ui
     // Transpose from sorting by column to right structure
     reconfig_data_format_srca(transposed_cb_index);
     transpose_wh_init_short(transposed_cb_index);
-    pack_reconfig_data_format(transposed_cb_index);
+    pack_reconfig_data_format(dest_cb_index);
 
     cb_wait_front(transposed_cb_index, Wt);
 
