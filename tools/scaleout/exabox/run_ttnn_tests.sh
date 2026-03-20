@@ -101,6 +101,7 @@ WORK_DIR=/workspace
     --nodelist=$HOSTS \
     docker run \
     --rm --device /dev/tenstorrent \
+    -v /dev/hugepages-1G:/dev/hugepages-1G \
     -v $(pwd):/workspace \
     --entrypoint="" \
     $DOCKER_IMAGE \
