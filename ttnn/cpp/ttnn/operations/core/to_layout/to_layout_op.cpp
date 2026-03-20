@@ -4,6 +4,9 @@
 
 #include "to_layout_op.hpp"
 
+#include <bit>
+#include <limits>
+
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -38,7 +41,8 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const float pad_value) {
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -78,7 +82,7 @@ Tensor to_layout_impl(
             tensor_arg.dtype(), tt::tt_metal::PageConfig(Layout::TILE, tile), output_memory_config));
     auto padded_output_shape = tile_spec.padded_shape();
     auto original_rank = tensor_arg.logical_shape().rank();
-    auto original_shape = tensor_arg.logical_shape();
+    const auto& original_shape = tensor_arg.logical_shape();
 
     if (layout == ttnn::TILE_LAYOUT) {
         if (tensor.padded_shape().size() < 2) {
@@ -96,8 +100,7 @@ Tensor to_layout_impl(
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
-                return ttnn::untilize(
-                    tensor, output_memory_config, use_multicore_untilize, true /*use_pack_untilize*/, sub_core_grids);
+                return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
             if (layout == ttnn::TILE_LAYOUT) {
                 if (tensor.is_sharded()) {
@@ -136,12 +139,7 @@ Tensor to_layout_impl(
                 output_tensor_end[index] = tensor.logical_shape()[index] - 1;
             }
             tensor = ttnn::untilize_with_unpadding(
-                tensor,
-                output_tensor_end,
-                output_memory_config,
-                use_multicore_untilize,
-                true /*use_pack_untilize*/,
-                sub_core_grids);
+                tensor, output_tensor_end, output_memory_config, use_multicore_untilize, sub_core_grids);
             return ttnn::reshape(
                 tensor,
                 ttnn::Shape{output_shape},
@@ -160,14 +158,26 @@ Tensor to_layout_impl(
                     {0, padded_output_shape[2] - output_shape[2]},
                     {0, padded_output_shape[3] - output_shape[3]}};
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
-                tensor = ttnn::pad(tensor, padding, 0, true, std::nullopt);
+                tensor = ttnn::pad(tensor, padding, pad_value, true, std::nullopt);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
-                    pad_value_variant = 0.0f;
+                    pad_value_variant = pad_value;
+                } else if (tensor.dtype() == ttnn::DataType::INT32) {
+                    TT_FATAL(
+                        pad_value >= static_cast<float>(std::numeric_limits<int32_t>::min()) &&
+                            pad_value < static_cast<float>(std::numeric_limits<int32_t>::max()),
+                        "Pad value must be in the range of INT32 type");
+                    // static_cast safely truncates the float into a signed integer,
+                    // while std::bit_cast reinterprets those exact bits as unsigned to cleanly handle negative
+                    // wrap-arounds.
+                    pad_value_variant = std::bit_cast<uint32_t>(static_cast<int32_t>(pad_value));
                 } else {
-                    pad_value_variant = (uint32_t)0;
+                    TT_FATAL(
+                        pad_value >= 0.0f && pad_value < static_cast<float>(std::numeric_limits<uint32_t>::max()),
+                        "Pad value must be in the range of UINT32 type");
+                    pad_value_variant = (uint32_t)pad_value;
                 }
                 tensor = ttnn::tilize_with_val_padding(
                     tensor,
@@ -219,7 +229,7 @@ Tensor to_layout_impl(
         for (int index = 0; index < padded_output_shape.rank(); ++index) {
             padded_input_start.push_back(0);
         }
-        tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), 0);
+        tensor = tensor.pad(ttnn::Shape(padded_output_shape), ttnn::Shape(std::move(padded_input_start)), pad_value);
         tensor = tensor.to_layout(layout);
         return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
     }
@@ -233,8 +243,9 @@ Tensor ToLayout::invoke(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const float pad_value) {
+    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }
 
 }  // namespace ttnn::operations::core

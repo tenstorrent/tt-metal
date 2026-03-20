@@ -155,6 +155,7 @@ ReduceMultiCoreWProgramFactory::cached_program_t ReduceMultiCoreWProgramFactory:
                 .defines = reduce_defines});
     }
 
+    TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
     uint32_t out_dim_divider = Wt;
     std::vector<CoreCoord> cores;
     if (operation_attributes.sub_core_grids.has_value()) {

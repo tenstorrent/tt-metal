@@ -91,6 +91,10 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
         // Send output to a file so the test can check after program is run.
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
@@ -122,6 +126,10 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassNoneSpecified);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, false);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_mesh_coords(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_chip_ids(
+            tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, "");
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
             tt::llrt::RunTimeDebugFeatureDprint, true);
