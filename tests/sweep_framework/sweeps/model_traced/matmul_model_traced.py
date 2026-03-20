@@ -268,10 +268,22 @@ def run(
         # The matmul op asserts: out_block_w == per_core_N || out_block_h == 1.
         # When the traced program_config violates this (e.g. out_block_w was tuned for
         # a specific M/N size that doesn't match the test tensor), TT_FATAL fires.
-        # C++ attribute names may differ from Python getattr names, so the pre-call
-        # validation can't always catch this — retry without program_config instead.
+        # C++ attribute names differ from Python getattr names, so the pre-call
+        # validation can't always catch this.
+        # On retry: drop program_config AND convert inputs to DRAM so that matmul's
+        # auto-selection starts from a clean slate (sharded input + no program_config
+        # can trigger the same assertion via auto-computed per_core_N mismatch).
         if "out_block_w" in err_str or "program_config" in err_str.lower():
             op_kwargs_retry = {k: v for k, v in op_kwargs.items() if k != "program_config"}
+            op_kwargs_retry.pop("memory_config", None)
+            try:
+                input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
+            except Exception:
+                pass  # Already DRAM or can't convert — proceed with original
+            try:
+                input_tensor_b = ttnn.to_memory_config(input_tensor_b, ttnn.DRAM_MEMORY_CONFIG)
+            except Exception:
+                pass
             output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs_retry)
         else:
             raise

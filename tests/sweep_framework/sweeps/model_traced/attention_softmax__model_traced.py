@@ -120,13 +120,17 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
-    # attention_softmax_ requires an attention_mask
-    # Use binary mask (0 or 1) as in the working transformer sweep test
-    # NOT -inf masks as in some unit tests
+    # attention_softmax_ requires an attention_mask.
+    # Large mask values (e.g. ±100 float) cause the softmax output to be near-one-hot,
+    # and precision differences between float32 (golden) and bfloat8_b (device) produce
+    # completely different one-hot positions → PCC 0.0.
+    # Use binary mask (0 or 1) as in the reference transformer sweep test so that the
+    # mask does NOT dominate the scaled input, keeping PCC > 0.999.
     torch_mask_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32),
         input_b_dtype if input_b_dtype else input_a_dtype,
     )(shape_b)
+    torch_mask_tensor = (torch_mask_tensor > 0).to(torch.float32)
 
     # Get golden output using the ttnn golden function
     golden_function = ttnn.get_golden_function(ttnn.transformer.attention_softmax_)
