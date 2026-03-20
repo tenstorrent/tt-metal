@@ -13,7 +13,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 import ttnn
 from conftest import is_galaxy
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     CONCATENATED_TEXT_EMBEDINGS_SIZE,
     MAX_SEQUENCE_LENGTH,
@@ -50,6 +50,9 @@ def run_demo_inference(
     sigmas=None,
     lora_path=None,
 ):
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
+
     batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
     start_from, _ = evaluation_range
