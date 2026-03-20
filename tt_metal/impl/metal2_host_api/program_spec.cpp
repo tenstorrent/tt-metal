@@ -4,10 +4,12 @@
 
 #include <bit>
 #include <functional>
+#include <set>
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental::metal2_host_api {
@@ -79,6 +81,9 @@ using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
 using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
 using ComputeProcessorMaskMap = std::unordered_map<const KernelSpec*, ComputeProcessorMask>;
 
+// DFB name -> ID map (for unpack_to_dest_mode indexing)
+using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
+
 // ============================================================================
 // Helper Function Forward Declarations
 // ============================================================================
@@ -112,6 +117,13 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
     const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
     const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map);
+tt::tt_metal::KernelSource MakeKernelSource(const KernelSpec& kernel_spec);
+tt::tt_metal::experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
+    const KernelSpec& kernel_spec);
+tt::tt_metal::experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
+std::set<tt::tt_metal::DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask);
+std::set<tt::tt_metal::experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeProcessorMask mask);
 
 // ============================================================================
 //  PUBLIC ENTRY POINTS
@@ -134,7 +146,8 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
     // Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
-    // Create DataflowBuffers
+    // Create DataflowBuffers and build name -> ID map for unpack_to_dest_mode
+    DFBNameToIdMap dfb_name_to_id;
     for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
         const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
@@ -143,63 +156,34 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping
         uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
         program_impl->register_dfb_spec_name(dfb_name, dfb_id);
+        dfb_name_to_id[dfb_name] = dfb_id;
     }
 
     // Create Kernels
-    // (TODO... WIP)
-    /*
-
-    // Ok, what will we need?
-
-    //  - [DONE] We need a CreateKernel API that will accept our pre-solved processor list
-    //     - We'll need some silly helpers to convert from our mask to the official enum
-    //  - We need a way to get our consts into the headergen (new CTA mechanism)
-    //    ... and later, our location-specific consts into the RTA list...
-    //    ... tempted to do this via the experimental Quasar config
-
     for (const KernelSpec& kernel_spec : spec.kernels) {
+        KernelSource kernel_src = MakeKernelSource(kernel_spec);
+        NodeRangeSet node_ranges = to_node_range_set(kernel_spec.target_nodes);
+
+        std::shared_ptr<Kernel> kernel;
 
         if (kernel_spec.is_dm_kernel()) {
-
-            // Data movement kernel
-            KernelSource kernel_source = MakeKernelSource(kernel_spec);
-            QuasarDataMovementConfig config = MakeQuasarDataMovementConfig(kernel_spec);
-            std::set<DataMovementProcessor> dm_processors = MakeDMProcessorSet(DMProcessorMask);
-            // Get DFB local accessor names -> DFB ID
-            // (crap, this means walking the dfb bindings vector again...)
-
-            // Create the kernel
-            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config,
-    dm_processors);
-
-            // Add it to the ProgramImpl & save the kernel handle
-            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-            program_impl->register_kernel_spec_name(kernel_spec.unique_id, kh);
+            auto config = MakeQuasarDataMovementConfig(kernel_spec);
+            auto processors = GetDMProcessorSet(kernel_to_dm_processor_mask_map.at(&kernel_spec));
+            // TODO: Get DFB local accessor names -> DFB ID; find a way to get this down through the headergen mechanism
+            kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
+                kernel_src, node_ranges, config, processors);
+        } else {
+            auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
+            auto processors = GetComputeProcessorSet(kernel_to_compute_processor_mask_map.at(&kernel_spec));
+            // TODO: Get DFB local accessor names -> DFB ID; find a way to get this down through the headergen mechanism
+            kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
+                kernel_src, node_ranges, config, processors);
         }
-        else {
-            // Compute kernel
-            KernelSource kernel_source = MakeKernelSource(kernel_spec);
-            QuasarDataMovementConfig config = MakeQuasarComputeConfig(kernel_spec);
-            std::set<DataMovementProcessor> dm_processors = MakeComputeProcessorSet(ComputeProcessorMask);
-            // Get DFB local accessor names -> DFB ID
 
-            // Create the kernel
-            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config,
-    compute_processors);
-
-            // Add it to the ProgramImpl & save the kernel handle
-            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-            program_impl->register_kernel_spec_name(kernel_spec.unique_id, kh);
-        }
+        // Add the kernel to the ProgramImpl and register the name -> handle mapping
+        KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+        program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
     }
-
-    // Shoot.
-    // In order to implement ProgramRunParams, I'm going to need to store the
-    // KernelSpecName and DFBSpecName in the ProgramImpl.
-    // I need these to hold the mapping data from spec names to the handles.
-    // Luckily, ProgramImpl is not part of the public API, so I can add members to it.
-
-    */
 
     return Program(std::move(program_impl));
 }
@@ -417,6 +401,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     kernel.unique_id);
             } else {
                 TT_FATAL(false, "Unknown architecture");
+            }
+        }
+    }
+
+    // Validate compute kernel unpack_to_dest_mode references
+    for (const auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            const auto& compute_config = std::get<ComputeConfiguration>(kernel.config_spec);
+            for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+                TT_FATAL(
+                    collected.dfb_by_name.contains(dfb_name),
+                    "Kernel '{}' unpack_to_dest_mode references unknown DFB '{}'",
+                    kernel.unique_id,
+                    dfb_name);
             }
         }
     }
@@ -782,6 +780,134 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata};
+}
+
+// ----------------------------------------------------------------------------
+// MakeKernelSource: Create a KernelSource from a KernelSpec
+// ----------------------------------------------------------------------------
+
+KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
+    KernelSource::SourceType source_type = (kernel_spec.source_type == KernelSpec::SourceType::FILE_PATH)
+                                               ? KernelSource::SourceType::FILE_PATH
+                                               : KernelSource::SourceType::SOURCE_CODE;
+    return KernelSource(kernel_spec.source, source_type);
+}
+
+// ----------------------------------------------------------------------------
+// MakeQuasarDataMovementConfig: Create a QuasarDataMovementConfig from a KernelSpec
+// ----------------------------------------------------------------------------
+
+experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
+    TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
+
+    // Convert defines from vector<pair> to map
+    std::map<std::string, std::string> defines_map;
+    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
+        defines_map[key] = value;
+    }
+
+    return experimental::quasar::QuasarDataMovementConfig{
+        .num_threads_per_cluster = kernel_spec.num_threads,
+        .compile_args = {},  // Compile args are passed via named_compile_args
+        .defines = defines_map,
+        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .is_legacy_kernel = false,
+        .opt_level = kernel_spec.compiler_options.opt_level,
+    };
+}
+
+// ----------------------------------------------------------------------------
+// MakeQuasarComputeConfig: Create a QuasarComputeConfig from a KernelSpec
+// ----------------------------------------------------------------------------
+//
+// The unpack_to_dest_mode vector is indexed by DFB ID (which maps to CB index in the
+// underlying build system). The KernelSpec provides modes keyed by DFB name, so we need
+// the dfb_name_to_id map to translate names to indices.
+//
+// NOTE: This indexing scheme is a legacy artifact of the CB-based API.
+// It would be MUCH cleaner for ProgramImpl to accept a map<dfb_id, UnpackToDestMode> and
+// handle the vector construction internally. (TODO)
+
+experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
+    TT_FATAL(kernel_spec.is_compute_kernel(), "Expected a compute kernel");
+
+    const auto& compute_config = std::get<ComputeConfiguration>(kernel_spec.config_spec);
+
+    // Convert defines from vector<pair> to map
+    std::map<std::string, std::string> defines_map;
+    for (const auto& [key, value] : kernel_spec.compiler_options.defines) {
+        defines_map[key] = value;
+    }
+
+    // We need to convert UnpackToDestMode entries to a vector indexed by DFB ID. (Yuck.)
+    // Why? The underlying build system expects unpack_to_dest_mode[i] to correspond to buf_dataformat_arr[i],
+    // and DFB IDs are used as indices into buf_dataformat_arr (see set_dfb_data_fmt in dataflow_buffer.cpp).
+
+    // DFB indices are issued sequentially from zero, size the vector to the number of DFBs.
+    std::vector<UnpackToDestMode> unpack_modes(dfb_name_to_id.size(), UnpackToDestMode::Default);
+
+    // Populate the vector, using DFB ID as the index
+    for (const auto& [dfb_name, mode] : compute_config.unpack_to_dest_mode) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_name);
+        unpack_modes[dfb_id] = mode;
+    }
+
+    return experimental::quasar::QuasarComputeConfig{
+        .num_threads_per_cluster = kernel_spec.num_threads,
+        .math_fidelity = compute_config.math_fidelity,
+        .fp32_dest_acc_en = compute_config.fp32_dest_acc_en,
+        .dst_full_sync_en = compute_config.dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_modes,
+        .bfp8_pack_precise = compute_config.bfp8_pack_precise,
+        .math_approx_mode = compute_config.math_approx_mode,
+        .compile_args = {},  // Compile args are passed via named_compile_args
+        .defines = defines_map,
+        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .opt_level = kernel_spec.compiler_options.opt_level,
+    };
+}
+
+// ----------------------------------------------------------------------------
+// GetDMProcessorSet: Convert a DMProcessorMask to a set of DataMovementProcessor
+// ----------------------------------------------------------------------------
+
+std::set<DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask) {
+    std::set<DataMovementProcessor> processors;
+    for (uint8_t i = 0; i < QUASAR_DM_CORES_PER_NODE; ++i) {
+        if (mask.is_idx_in_use(i)) {
+            processors.insert(static_cast<DataMovementProcessor>(i));
+        }
+    }
+    return processors;
+}
+
+// ----------------------------------------------------------------------------
+// GetComputeProcessorSet: Convert a ComputeProcessorMask to a set of QuasarComputeProcessor
+// ----------------------------------------------------------------------------
+//
+// The ComputeProcessorMask represents Tensix engines (4 per node).
+// Each Tensix engine has 4 compute processors.
+// So if bit i is set in the mask, we include all 4 processors for that engine:
+//   Engine 0 -> NEO_0_COMPUTE_{0,1,2,3}
+//   Engine 1 -> NEO_1_COMPUTE_{0,1,2,3}
+//   etc.
+
+std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(ComputeProcessorMask mask) {
+    using QuasarComputeProcessor = experimental::quasar::QuasarComputeProcessor;
+    constexpr uint8_t PROCESSORS_PER_ENGINE = experimental::quasar::QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
+
+    std::set<QuasarComputeProcessor> processors;
+    for (uint8_t engine = 0; engine < QUASAR_TENSIX_CORES_PER_NODE; ++engine) {
+        if (mask.is_idx_in_use(engine)) {
+            // Add all 4 compute processors for this engine
+            for (uint8_t proc = 0; proc < PROCESSORS_PER_ENGINE; ++proc) {
+                uint8_t processor_id = engine * PROCESSORS_PER_ENGINE + proc;
+                processors.insert(static_cast<QuasarComputeProcessor>(processor_id));
+            }
+        }
+    }
+    return processors;
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
