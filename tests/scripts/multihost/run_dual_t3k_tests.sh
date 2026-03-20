@@ -32,8 +32,13 @@ run_dual_t3k_unit_tests() {
   # Run from /tmp with PYTHONPATH unset so repo-root ``ttnn/`` does not shadow the
   # installed package (see setup.py editable-install notes). TT_METAL_HOME stays set
   # for multihost probes and ttrun source fallback inside the test module.
+  #
+  # Root ``conftest.py`` imports ``models.*`` and requires PYTHONPATH=repo; do not
+  # load it here.  ``--confcutdir`` keeps ``tests/ttnn/conftest.py`` (ttnn fixtures)
+  # without pulling in the repo-root conftest.
   echo "LOG_METAL: Running ttrun env passthrough multihost pytest (import-isolated)"
   (cd /tmp && env -u PYTHONPATH pytest --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+    --confcutdir="${repo_root}/tests/ttnn" \
     --junitxml="${repo_root}/generated/test_reports/most_recent_tests_ttrun_env_passthrough_multihost.xml" \
     -m multihost \
     "${repo_root}/tests/ttnn/distributed/test_ttrun_env_passthrough.py") ; fail+=$?
