@@ -17,7 +17,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
+from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -243,10 +243,14 @@ class WanCausalConv3d(Module):
         super().__init__()
 
         self.unpadded_in_channels = in_channels
+        self.unpadded_out_channels = out_channels
+        self.TILE_WIDTH = 32
         self.in_channels = aligned_channels(in_channels)
         if self.in_channels != self.unpadded_in_channels:
             logger.warning(f"Padding in_channels from {self.unpadded_in_channels} to {self.in_channels}")
-        self.out_channels = out_channels
+        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
+        if self.out_channels != self.unpadded_out_channels:
+            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
 
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
@@ -290,25 +294,23 @@ class WanCausalConv3d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(
-            total_shape=[d, self.out_channels],
-            device=mesh_device,
-            pad_value=0,
-            dtype=dtype,
-        )
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "weight" in state:
-            weight_tt = ttnn.from_torch(state["weight"], dtype=self.dtype, pad_value=0)
-            prepared = ttnn.experimental.prepare_conv3d_weights(
-                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
-            )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
-        if "bias" in state:
-            state["bias"] = state["bias"].reshape(1, -1)
+        def maybe_pad_out_channels(weight, bias):
+            if self.out_channels != self.unpadded_out_channels:
+                weight = torch.nn.functional.pad(
+                    weight, (0, 0, 0, 0, 0, 0, 0, 0, 0, self.out_channels - self.unpadded_out_channels)
+                )
+                bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
+            return weight, bias
+
+        if "weight" in state and "bias" in state:
+            weight, bias = maybe_pad_out_channels(state["weight"], state["bias"])
+            state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -415,7 +417,6 @@ class WanCausalConv3d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
-            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -678,7 +679,11 @@ class WanConv2d(Module):
         super().__init__()
 
         self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.unpadded_out_channels = out_channels
+        self.TILE_WIDTH = 32
+        self.out_channels = self.TILE_WIDTH if out_channels < self.TILE_WIDTH else out_channels
+        if self.out_channels != self.unpadded_out_channels:
+            logger.warning(f"Padding out_channels from {self.unpadded_out_channels} to {self.out_channels}")
 
         self.kernel_size = _ntuple(kernel_size, 3)
         self.stride = _ntuple(stride, 3)
@@ -723,30 +728,16 @@ class WanConv2d(Module):
         )
 
         d = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
-        self.weight = Parameter(
-            total_shape=[d, self.out_channels],
-            device=mesh_device,
-            pad_value=0,
-            dtype=dtype,
-        )
-        self.bias = Parameter(
-            total_shape=[1, self.out_channels],
-            device=mesh_device,
-            pad_value=0,
-            dtype=dtype,
-        )
+        self.weight = Parameter(total_shape=[d, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
+        self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self.mask_cache = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "weight" in state:
-            weight_tt = ttnn.from_torch(state["weight"].unsqueeze(2), dtype=self.dtype, pad_value=0)
-            prepared = ttnn.experimental.prepare_conv3d_weights(
-                weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
+        if "weight" in state and "bias" in state:
+            state["weight"], state["bias"] = prepare_conv3d_weights(
+                state["weight"].unsqueeze(2), state["bias"], self.conv_config
             )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
-        if "bias" in state:
-            state["bias"] = state["bias"].reshape(1, -1)
 
     def get_cached_mask(self, x_BTHWC, logical_h):
         sharded_h = x_BTHWC.shape[2]
@@ -830,7 +821,6 @@ class WanConv2d(Module):
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
             bias_tensor=self.bias.data,
-            device=self.mesh_device,
             config=self.conv_config,
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
@@ -940,7 +930,21 @@ class WanResample(Module):
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
-                raise ValueError("feat_cache cannot be None")
+                # Replicate cached path's "Rep" boundary behavior:
+                # - Frame 0: output directly (no time_conv), like when feat_cache is None → "Rep"
+                # - Frames 1..T-1: time_conv with zero-padded boundary
+                # This gives contexts: frame 1 = [0,0,x_1], frame 2 = [0,x_1,x_2], frame t≥3 = [x_{t-2},x_{t-1},x_t]
+                # which matches the cached path exactly.
+                x_first = x_BTHWC[:, :1, :, :, :]  # frame 0: identity (T=1)
+                if T > 1:
+                    x_rest = x_BTHWC[:, 1:, :, :, :]  # frames 1..T-1
+                    x_time_rest = self.time_conv(x_rest, logical_h)  # zero-padded: context [0,0,x_1], [0,x_1,x_2], ...
+                    T_rest = x_time_rest.shape[1]  # = T-1
+                    x_BTHW2C = ttnn.reshape(x_time_rest, (B, T_rest, H, W, 2, C))
+                    x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
+                    x_rest_doubled = ttnn.reshape(x_BT2HWC, (B, T_rest * 2, H, W, C))  # 2*(T-1) frames
+                    x_BTHWC = ttnn.concat([x_first, x_rest_doubled], dim=1)  # 1 + 2*(T-1) = 2*T-1 frames
+                # If T=1: x_BTHWC = x_first (unchanged), no temporal doubling, same as cached "Rep" path
 
         if self.is_upsample:
             T2 = x_BTHWC.shape[1]
@@ -972,7 +976,8 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                raise ValueError("feat_cache cannot be None")
+                # No-cache full-T mode: time_conv with zero-padded temporal boundary
+                x_conv_BTHWC = self.time_conv(x_conv_BTHWC, logical_h)
         return x_conv_BTHWC, logical_h
 
 
@@ -1315,31 +1320,40 @@ class WanDecoder(Module):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
 
-    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
+    def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, use_cache: bool = True) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = z_BTHWC.shape
 
-        self.clear_cache()
         z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
-        output_BCTHW = None
-        for i in range(T):
-            # Process one frame at a time
-            self._conv_idx = [0]
-            out_BTHWC, new_logical_h = self.decoder(
-                x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
-            )
-            out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
-            if output_BCTHW is None:
-                output_BCTHW = out_BCTHW
-            else:
-                output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+        if use_cache:
+            self.clear_cache()
+            output_BCTHW = None
+            for i in range(T):
+                # Process one frame at a time
+                self._conv_idx = [0]
+                out_BTHWC, new_logical_h = self.decoder(
+                    x_BTHWC[:, i : i + 1, :, :, :], logical_h, feat_cache=self._feat_cache, feat_idx=self._conv_idx
+                )
+                # Channels first
+                out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
+                # Trim padding on output channels
+                out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
+                if output_BCTHW is None:
+                    output_BCTHW = out_BCTHW
+                else:
+                    output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
+            self.clear_cache()
+        else:
+            # No-cache full-T single-pass mode
+            out_BTHWC, new_logical_h = self.decoder(x_BTHWC, logical_h, feat_cache=None, feat_idx=None)
+            output_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
+            output_BCTHW = output_BCTHW[:, : self.out_channels, :, :, :]
 
         output_tile_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile_BCTHW, min=-1.0, max=1.0)
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)
-        self.clear_cache()
         return (output_BCTHW, new_logical_h)
 
 
