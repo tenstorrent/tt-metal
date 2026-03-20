@@ -907,11 +907,17 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
 
         @lru_cache
         def w2_prg_config(seq_len: int):
+            effective_m = min(seq_len, prefill_len_cutoff)
+            m_tiles = math.ceil(effective_m / tile_size)
+            effective_grid_size = (
+                grid_size[0],
+                min(grid_size[1], max(1, m_tiles)),
+            )
             return _matmul_config(
-                m=min(seq_len, prefill_len_cutoff),
+                m=effective_m,
                 k=padded_hidden_dim,
                 n=n_w2,
-                grid_size=grid_size,
+                grid_size=effective_grid_size,
                 per_core_n=math.ceil(n_w2 / (tile_size * dram_shard_grid_width)),
             )
 
