@@ -235,7 +235,7 @@ def test_ltx_video_decoder(mesh_device: ttnn.MeshDevice):
         decoder_blocks=decoder_blocks,
         patch_size=4,
         norm_layer=NormLayerType.PIXEL_NORM,
-        causal=False,
+        causal=True,  # Use causal to match TT default
         timestep_conditioning=False,
         base_channels=128,
     )
