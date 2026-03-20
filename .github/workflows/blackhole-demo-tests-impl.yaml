@@ -67,12 +67,18 @@ jobs:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
           filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          count=$(echo "$filtered" | jq 'length')
+          if [[ "$count" -eq 0 ]]; then
+            echo "::warning::No demo tests match model '${{ inputs.model }}' for enabled SKU(s) '${{ inputs.enabled-skus }}'; demo matrix is empty and demo jobs will be skipped."
+          fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
   blackhole-demo-tests:
     needs: load-test-matrix
+    # Skip entire job when test matrix is empty (to prevent GHA from erroring out the workflow on an empty strategy.matrix).
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
