@@ -19,7 +19,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import DRAMStreamingMatmulCompressed
+from models.demos.deepseek_v3_b1.micro_ops.dram_streaming_matmul_compressed.op import (
+    DRAMStreamingMatmulCompressed,
+    create_dram_streaming_tensors,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
 
@@ -123,7 +126,9 @@ def _run_dram_matmul_custom_compressed(
     b_shard_spec = ttnn.ShardSpec(dram_grid, [K, total_N_per_bank], ttnn.ShardOrientation.ROW_MAJOR)
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, b_shard_spec)
 
-    ct = CompressedTensor.from_torch(torch_b_shuffled, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        torch_b_shuffled, assigner, device=device, memory_config=b_mem_config, per_core_allocation=False
+    )
 
     logger.info(f"DRAM compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
@@ -164,6 +169,27 @@ def _run_dram_matmul_custom_compressed(
         tile=out_tile,
     )
 
+    # Create all device tensors (working buffer + per-core metadata)
+    (
+        in1_backing_tensor,
+        meta_tensors,
+        fmt_tensors,
+        meta_l1_addr_core_values,
+        fmt_l1_addr_core_values,
+        per_core_values,
+        num_in1_buffers,
+    ) = create_dram_streaming_tensors(
+        device,
+        ct,
+        compute_cores_list,
+        compute_core_grid,
+        primary_cores_list,
+        subblock_k,
+        num_subblocks_k,
+        per_core_N // tile_w,
+        cores_per_bank,
+    )
+
     # Run DRAM streaming compressed matmul
     ttnn_result = DRAMStreamingMatmulCompressed.op(
         ttnn_a,
@@ -171,6 +197,13 @@ def _run_dram_matmul_custom_compressed(
         ttnn_output,
         subblock_k=subblock_k,
         cores_per_bank=cores_per_bank,
+        meta_tensors=meta_tensors,
+        fmt_tensors=fmt_tensors,
+        meta_l1_addr_core_values=meta_l1_addr_core_values,
+        fmt_l1_addr_core_values=fmt_l1_addr_core_values,
+        per_core_values=per_core_values,
+        in1_backing_tensor=in1_backing_tensor,
+        num_in1_buffers=num_in1_buffers,
     )
 
     output_torch = ttnn.to_torch(ttnn_result)

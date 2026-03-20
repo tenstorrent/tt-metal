@@ -84,7 +84,9 @@ def _run_eltwise_add_compressed(
     bfp0_mae = 1e-3 if "bfp0" in formats else 0.01
     assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats, bfp0_mae_threshold=bfp0_mae)
     b_mem_config = _make_sharded_mem_config((M, N), shard_layout, ttnn.BufferType.L1, core_grid)
-    ct = CompressedTensor.from_torch(b_torch, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        b_torch, assigner, device=device, memory_config=b_mem_config, assignment_memory_config=b_mem_config
+    )
 
     logger.info(f"Compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
