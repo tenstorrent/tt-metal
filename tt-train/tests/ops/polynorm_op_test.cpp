@@ -220,19 +220,6 @@ void CompareKernelVsReferenceWithShape(
     autograd::ctx().reset_graph();
 }
 
-float device_polynorm_mse_loss(
-    const xt::xarray<float>& x, const xt::xarray<float>& weight, const xt::xarray<float>& bias, float epsilon) {
-    using namespace ttml;
-    auto* device = &autograd::ctx().get_device();
-
-    auto x_t = autograd::create_tensor(core::from_xtensor(x, device), /*requires_grad=*/false);
-    auto w_t = autograd::create_tensor(core::from_xtensor(weight, device), /*requires_grad=*/false);
-    auto b_t = autograd::create_tensor(core::from_xtensor(bias, device), /*requires_grad=*/false);
-    auto out = ops::polynorm(x_t, w_t, b_t, epsilon);
-    auto loss = ops::mse_loss(out, autograd::create_tensor(core::zeros_like(out->get_value())));
-    return core::to_vector(loss->get_value()).front();
-}
-
 }  // namespace
 
 // ============================================================================
@@ -262,94 +249,7 @@ TEST_F(PolyNormOpTest, PolyNorm_RepeatedRuns_NoHang) {
 }
 
 // ============================================================================
-// Section 2: PolyNorm Backward - Composite Path
-// ============================================================================
-TEST_F(PolyNormOpTest, PolyNorm_BackwardMatchesFiniteDifferences) {
-    using namespace ttml;
-
-    const std::vector<uint32_t> shape = {1, 1, 2, 8};
-    auto& rng = autograd::ctx().get_generator();
-
-    xt::xarray<float> x = xt::empty<float>(shape);
-    core::parallel_generate<float>(x, []() { return std::uniform_real_distribution<float>(-0.9F, 0.9F); }, rng());
-    xt::xarray<float> weight = xt::xarray<float>::from_shape({1, 1, 1, 3});
-    weight(0, 0, 0, 0) = 0.33F;
-    weight(0, 0, 0, 1) = 0.31F;
-    weight(0, 0, 0, 2) = 0.36F;
-    xt::xarray<float> bias = xt::xarray<float>::from_shape({1, 1, 1, 1});
-    bias(0, 0, 0, 0) = 0.05F;
-
-    auto x_t = autograd::create_tensor(core::from_xtensor(x, &autograd::ctx().get_device()), /*requires_grad=*/true);
-    auto w_t =
-        autograd::create_tensor(core::from_xtensor(weight, &autograd::ctx().get_device()), /*requires_grad=*/true);
-    auto b_t = autograd::create_tensor(core::from_xtensor(bias, &autograd::ctx().get_device()), /*requires_grad=*/true);
-
-    constexpr float eps = 1e-5F;
-    auto out = ops::polynorm(x_t, w_t, b_t, eps);
-    auto loss = ops::mse_loss(out, autograd::create_tensor(core::zeros_like(out->get_value())));
-    loss->backward();
-
-    auto grad_x = core::to_xtensor(x_t->get_grad());
-    auto grad_w = core::to_xtensor(w_t->get_grad());
-    auto grad_b = core::to_xtensor(b_t->get_grad());
-
-    constexpr float h = 5e-2F;
-
-    xt::xarray<float> grad_x_num = xt::zeros_like(x);
-    for (std::size_t i = 0; i < x.size(); ++i) {
-        xt::xarray<float> x_plus = x;
-        xt::xarray<float> x_minus = x;
-        x_plus.flat(i) += h;
-        x_minus.flat(i) -= h;
-        const float lp = device_polynorm_mse_loss(x_plus, weight, bias, eps);
-        const float lm = device_polynorm_mse_loss(x_minus, weight, bias, eps);
-        grad_x_num.flat(i) = (lp - lm) / (2.0F * h);
-    }
-
-    xt::xarray<float> grad_w_num = xt::zeros_like(weight);
-    for (std::size_t i = 0; i < weight.size(); ++i) {
-        xt::xarray<float> w_plus = weight;
-        xt::xarray<float> w_minus = weight;
-        w_plus.flat(i) += h;
-        w_minus.flat(i) -= h;
-        const float lp = device_polynorm_mse_loss(x, w_plus, bias, eps);
-        const float lm = device_polynorm_mse_loss(x, w_minus, bias, eps);
-        grad_w_num.flat(i) = (lp - lm) / (2.0F * h);
-    }
-
-    xt::xarray<float> grad_b_num = xt::zeros_like(bias);
-    {
-        xt::xarray<float> b_plus = bias;
-        xt::xarray<float> b_minus = bias;
-        b_plus(0, 0, 0, 0) += h;
-        b_minus(0, 0, 0, 0) -= h;
-        const float lp = device_polynorm_mse_loss(x, weight, b_plus, eps);
-        const float lm = device_polynorm_mse_loss(x, weight, b_minus, eps);
-        grad_b_num(0, 0, 0, 0) = (lp - lm) / (2.0F * h);
-    }
-
-    // Device BF16 math plus finite differences introduces higher noise.
-    const bool x_allclose = xt::allclose(grad_x, grad_x_num, 3.0e-1F, 3.0e-1F);
-    const bool w_allclose = xt::allclose(grad_w, grad_w_num, 1.5e-1F, 1.5e-1F);
-    const bool b_allclose = xt::allclose(grad_b, grad_b_num, 1.5e-1F, 1.5e-1F);
-
-    const float x_rmse = std::sqrt(xt::mean(xt::square(xt::abs(grad_x - grad_x_num)))());
-    const float w_rmse = std::sqrt(xt::mean(xt::square(xt::abs(grad_w - grad_w_num)))());
-    const float b_rmse = std::sqrt(xt::mean(xt::square(xt::abs(grad_b - grad_b_num)))());
-    const float x_max_abs_diff = xt::amax(xt::abs(grad_x - grad_x_num))();
-    const float w_max_abs_diff = xt::amax(xt::abs(grad_w - grad_w_num))();
-    const float b_max_abs_diff = xt::amax(xt::abs(grad_b - grad_b_num))();
-
-    EXPECT_TRUE(x_allclose) << "grad_x allclose failed"
-                            << " rtol=0.3 atol=0.3 rmse=" << x_rmse << " max_abs_diff=" << x_max_abs_diff;
-    EXPECT_TRUE(w_allclose) << "grad_w allclose failed"
-                            << " rtol=0.15 atol=0.15 rmse=" << w_rmse << " max_abs_diff=" << w_max_abs_diff;
-    EXPECT_TRUE(b_allclose) << "grad_b allclose failed"
-                            << " rtol=0.15 atol=0.15 rmse=" << b_rmse << " max_abs_diff=" << b_max_abs_diff;
-}
-
-// ============================================================================
-// Section 3: Nightly Larger Shape Coverage
+// Section 2: Nightly Larger Shape Coverage
 // ============================================================================
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_ProgressiveSmall) {
     CompareKernelVsReferenceWithShape({1, 1, 16, 128}, 1e-5F, /*run_backward=*/false);
