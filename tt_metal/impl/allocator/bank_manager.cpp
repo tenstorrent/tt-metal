@@ -631,7 +631,12 @@ MemoryBlockTable BankManager::get_memory_block_table(
 
 void BankManager::shrink_size(
     DeviceAddr shrink_size, bool bottom_up, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
+    for (uint32_t i = 0; i < allocator_dependencies_.num_allocators(); i++) {
+        if (i == allocator_id.get()) {
+            continue;
+        }
+        TT_FATAL(allocated_buffers_[i].empty(), "Cannot shrink allocator size: allocator {} has active allocations", i);
+    }
     auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->shrink_size(shrink_size, bottom_up);
@@ -639,7 +644,12 @@ void BankManager::shrink_size(
 }
 
 void BankManager::reset_size(BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
+    for (uint32_t i = 0; i < allocator_dependencies_.num_allocators(); i++) {
+        if (i == allocator_id.get()) {
+            continue;
+        }
+        TT_FATAL(allocated_buffers_[i].empty(), "Cannot reset allocator size: allocator {} has active allocations", i);
+    }
     auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->reset_size();
