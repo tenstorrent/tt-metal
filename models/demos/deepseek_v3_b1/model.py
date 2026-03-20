@@ -91,6 +91,7 @@ class DeepSeekV3:
         batch_size: int = 1,
         prev_rank: int | None = None,
         next_rank: int | None = None,
+        outputs_tokens: bool = False,
     ) -> None:
         """
         Args:
@@ -100,6 +101,8 @@ class DeepSeekV3:
                 payload size is B * TOKEN_ID_BYTES (int32).
             prev_rank: MPI rank of the upstream pipeline stage (None for the first stage).
             next_rank: MPI rank of the downstream pipeline stage (None for the last stage).
+            outputs_tokens: If True, this stage outputs token IDs (not activations).
+                Used for LM head and passthrough stages that produce small token payloads.
         """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
@@ -114,46 +117,118 @@ class DeepSeekV3:
 
         self._position: int = 0
         self._input_buffer = create_output_buffer(self._activation_size_datums)
-        if not next_rank:
+        if outputs_tokens or not next_rank:
             self._output_buffer: ttnn.Tensor = create_output_buffer(self._token_size_datums)
         else:
             self._output_buffer: ttnn.Tensor = create_output_buffer(self._activation_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
-    def prefill(self, prompt_tokens: list[ttnn.Tensor] | None, num_iterations: int | None = None) -> ttnn.Tensor:
-        """
-        Prefill-by-decode: for i = 0..S-1, send input_ids = x[i], get logits
-        (and device updates cache). Outputs for i < S-1 are discarded. Returns the
-        last step output so the caller can sample y0 (first generated token).
+    def prefill(
+        self,
+        prompt_tokens: list[ttnn.Tensor] | None,
+        num_iterations: int | None = None,
+        ref_hidden_states: torch.Tensor | None = None,
+        ref_logits: torch.Tensor | None = None,
+        layer_idx: int | None = None,
+        logits_tensor_fn: Callable[[], ttnn.Tensor] | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        save_outputs_dir: str | Path | None = None,
+        pcc_threshold: float = 0.90,
+    ) -> ttnn.Tensor:
+        """Prefill-by-decode with optional per-token validation and tensor dumping.
 
-        Args:
-            prompt_tokens: List of ttnn.Tensor, each already padded for the socket
-                (PCIe-aligned, size in bytes equal to page_size_bytes(batch_size)).
-                Caller is responsible for padding; use to_padded_input() if needed.
-
-        Returns:
-            Last step output tensor; valid data is first batch_size elements (logits
-            (B, V) in real decoder). None if prompt_tokens is empty. Caller uses this
-            to sample(logits) -> y0 for the generation loop.
+        Runs the normal pipeline prefill. When ref_hidden_states or ref_logits
+        are provided, compares device outputs against reference per token.
         """
+        from safetensors.torch import save_file
+
+        from models.common.utility_functions import comp_pcc
+
+        is_lm_head = logits_tensor_fn is not None
+        validating = ref_hidden_states is not None or ref_logits is not None
+        all_device_outputs = []
+
+        def _run_one_iteration(token_idx: int):
+            self._position += 1
+            if self._next_rank is not None:
+                ttnn.send_tensor(self._output_buffer, self._next_rank)
+
+            if not validating:
+                return
+
+            if is_lm_head and ref_logits is not None:
+                scores = logits_tensor_fn()
+                device_logits = (
+                    ttnn.to_torch(
+                        scores,
+                        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+                    )
+                    .float()
+                    .reshape(-1)
+                )
+                all_device_outputs.append(device_logits.unsqueeze(0))
+
+                ref_row = ref_logits[token_idx].float().reshape(-1)
+                min_len = min(device_logits.shape[0], ref_row.shape[0])
+                passing, pcc = comp_pcc(ref_row[:min_len], device_logits[:min_len], pcc_threshold)
+                max_abs_diff = (ref_row[:min_len] - device_logits[:min_len]).abs().max().item()
+                device_argmax = int(device_logits.argmax().item())
+                ref_argmax = int(ref_row.argmax().item())
+                sampled_token = int(ttnn.to_torch(self._output_buffer).to(torch.int32).flatten()[0].item())
+
+                logger.info(
+                    f"  token {token_idx}: PCC={pcc:.6f} pass={passing} "
+                    f"max_diff={max_abs_diff:.4f} "
+                    f"device_sampled={sampled_token} "
+                    f"device_argmax={device_argmax} ref_argmax={ref_argmax} "
+                    f"match={device_argmax == ref_argmax}"
+                )
+            elif ref_hidden_states is not None:
+                raw = ttnn.to_torch(self._output_buffer)
+                device_output = raw.contiguous().view(torch.uint8).view(torch.bfloat16).float().reshape(-1)
+                all_device_outputs.append(device_output)
+
+                ref_row = ref_hidden_states[token_idx].float().reshape(-1)
+                passing, pcc = comp_pcc(ref_row, device_output, pcc_threshold)
+                max_abs_diff = (ref_row - device_output).abs().max().item()
+                logger.info(
+                    f"  Layer {layer_idx} token {token_idx}: "
+                    f"PCC={pcc:.6f} pass={passing} max_diff={max_abs_diff:.4f}"
+                )
 
         if prompt_tokens is not None:
-            for token in prompt_tokens:
+            num_tokens = len(prompt_tokens)
+            if validating:
+                label = "LM head" if is_lm_head else f"Layer {layer_idx}"
+                logger.info(f"{label}: running {num_tokens} tokens through pipeline")
+            for i, token in enumerate(prompt_tokens):
                 self._write_fn(token)
                 self._read_fn(self._output_buffer)
-                self._position += 1
-                if self._next_rank is not None:
-                    ttnn.send_tensor(self._output_buffer, self._next_rank)
+                _run_one_iteration(i)
         else:
             assert self._prev_rank is not None, "Non-first stage must have a prev_rank"
             assert num_iterations is not None, "Non-first stage must be given num_iterations"
-            for _ in range(num_iterations):
+            num_tokens = num_iterations
+            if validating:
+                label = "LM head" if is_lm_head else f"Layer {layer_idx}"
+                logger.info(f"{label}: running {num_tokens} tokens through pipeline")
+            for i in range(num_iterations):
                 ttnn.recv_tensor(self._input_buffer, self._prev_rank)
                 self._write_fn(self._input_buffer)
                 self._read_fn(self._output_buffer)
-                self._position += 1
-                if self._next_rank is not None:
-                    ttnn.send_tensor(self._output_buffer, self._next_rank)
+                _run_one_iteration(i)
+
+        if validating and all_device_outputs and save_outputs_dir is not None:
+            save_dir = Path(save_outputs_dir)
+            save_dir.mkdir(parents=True, exist_ok=True)
+            stacked = torch.cat(all_device_outputs) if is_lm_head else torch.stack(all_device_outputs)
+            if is_lm_head:
+                save_file({"logits": stacked}, str(save_dir / "logits.safetensors"))
+                logger.info(f"Saved device logits {list(stacked.shape)} to {save_dir / 'logits.safetensors'}")
+            else:
+                key = f"decoder_output_layer_{layer_idx}"
+                save_file({key: stacked}, str(save_dir / f"{key}.safetensors"))
+                logger.info(f"Saved {key} {list(stacked.shape)} to {save_dir / f'{key}.safetensors'}")
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -182,6 +257,7 @@ class DeepSeekV3:
         trace_dir: str | Path,
         layer_idx: int,
         pcc_threshold: float = 0.90,
+        save_hidden_states_path: str | Path | None = None,
     ) -> dict:
         """Run a single stage across all trace tokens and validate the output.
 
@@ -194,11 +270,13 @@ class DeepSeekV3:
             trace_dir: Path to the debug trace directory containing hidden_states.safetensors.
             layer_idx: The decoder layer index this stage processes.
             pcc_threshold: Minimum PCC to pass validation.
+            save_hidden_states_path: If set, saves device outputs to this safetensors file
+                with key "decoder_output_layer_{layer_idx}".
 
         Returns:
             Dict with keys: layer, pcc, passing, max_abs_diff, num_tokens.
         """
-        from safetensors.torch import safe_open
+        from safetensors.torch import safe_open, save_file
 
         from models.common.utility_functions import comp_pcc
 
@@ -241,7 +319,8 @@ class DeepSeekV3:
             if (token_idx + 1) % 50 == 0 or token_idx == num_tokens - 1:
                 logger.info(f"Layer {layer_idx}: completed token {token_idx + 1}/{num_tokens}")
 
-        device_flat = torch.cat(all_device_outputs)
+        all_device_outputs_cat = torch.stack(all_device_outputs)
+        device_flat = all_device_outputs_cat.reshape(-1)
         trace_flat = all_trace_expected.float().reshape(-1)
 
         passing, pcc = comp_pcc(trace_flat, device_flat, pcc_threshold)
@@ -254,11 +333,156 @@ class DeepSeekV3:
         logger.info(f"Layer {layer_idx} trace max magnitude: {trace_flat.abs().max().item()}")
         logger.info(f"Layer {layer_idx} device max magnitude: {device_flat.abs().max().item()}")
 
+        if save_hidden_states_path is not None:
+            save_hidden_states_path = Path(save_hidden_states_path)
+            save_hidden_states_path.parent.mkdir(parents=True, exist_ok=True)
+            save_file(
+                {f"decoder_output_layer_{layer_idx}": all_device_outputs_cat},
+                str(save_hidden_states_path),
+            )
+            logger.info(f"Saved hidden states [{num_tokens}, {ACTIVATION_DIM}] to {save_hidden_states_path}")
+
         return {
             "layer": layer_idx,
             "pcc": pcc,
             "passing": passing,
             "max_abs_diff": max_abs_diff,
+            "num_tokens": num_tokens,
+        }
+
+    def prefill_with_trace_lmhead(
+        self,
+        trace_dir: str | Path,
+        logits_file: str | Path,
+        input_layer_idx: int,
+        logits_tensor_fn: Callable[[], ttnn.Tensor],
+        mesh_device: ttnn.MeshDevice,
+        pcc_threshold: float = 0.90,
+        save_logits_path: str | Path | None = None,
+    ) -> dict:
+        """Validate the LM head stage against reference logits.
+
+        For each token, feeds the last decoder layer's output into the LM head,
+        reads the on-device logits tensor back, compares per-token against
+        reference, and prints per-token PCC + argmax.
+
+        Args:
+            trace_dir: Path to debug trace directory with hidden_states.safetensors.
+            logits_file: Path to reference logits safetensors file.
+            input_layer_idx: Decoder layer index whose output is the LM head input.
+            logits_tensor_fn: Callable returning the on-device logits ttnn.Tensor.
+            mesh_device: MeshDevice for ConcatMeshToTensor readback.
+            pcc_threshold: Minimum PCC to pass.
+            save_logits_path: If set, saves all device logits to this safetensors file.
+
+        Returns:
+            Dict with keys: stage, per_token_results, overall_pcc, overall_passing, num_tokens.
+        """
+        from safetensors.torch import safe_open, save_file
+
+        from models.common.utility_functions import comp_pcc
+
+        trace_dir = Path(trace_dir)
+        trace_file = str(trace_dir / "hidden_states.safetensors")
+        logits_file = str(logits_file)
+
+        with safe_open(trace_file, framework="pt") as f:
+            all_trace_inputs = f.get_tensor(f"decoder_output_layer_{input_layer_idx}")
+
+        with safe_open(logits_file, framework="pt") as f:
+            all_ref_logits = f.get_tensor("logits")
+
+        num_tokens = all_trace_inputs.shape[0]
+        vocab_size = all_ref_logits.shape[-1]
+        logger.info(f"LM head: running {num_tokens} tokens (input=decoder_output_layer_{input_layer_idx})")
+        logger.info(f"LM head: reference logits shape: {list(all_ref_logits.shape)}")
+
+        all_device_logits = []
+        per_token_results = []
+
+        for token_idx in range(num_tokens):
+            trace_input = all_trace_inputs[token_idx].unsqueeze(0)
+            input_tensor = ttnn.from_torch(
+                trace_input.to(torch.bfloat16).reshape(1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+            self._write_fn(input_tensor)
+            self._read_fn(self._output_buffer)
+            self._position += 1
+
+            if self._next_rank is not None:
+                ttnn.send_tensor(self._output_buffer, self._next_rank)
+
+            scores_tensor = logits_tensor_fn()
+            device_logits = (
+                ttnn.to_torch(
+                    scores_tensor,
+                    mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
+                )
+                .float()
+                .reshape(-1)
+            )
+
+            if token_idx == 0:
+                logger.info(f"LM head: device logits shape: [{num_tokens}, {device_logits.shape[0]}]")
+
+            ref_logits = all_ref_logits[token_idx].float().reshape(-1)
+            min_len = min(device_logits.shape[0], ref_logits.shape[0])
+            device_cmp = device_logits[:min_len]
+            ref_cmp = ref_logits[:min_len]
+
+            passing, pcc = comp_pcc(ref_cmp, device_cmp, pcc_threshold)
+            max_abs_diff = (ref_cmp - device_cmp).abs().max().item()
+            device_argmax = int(device_logits.argmax().item())
+            ref_argmax = int(ref_logits.argmax().item())
+            sampled_token = int(ttnn.to_torch(self._output_buffer).to(torch.int32).flatten()[0].item())
+
+            logger.info(
+                f"  token {token_idx}: PCC={pcc:.6f} pass={passing} "
+                f"max_diff={max_abs_diff:.4f} "
+                f"device_sampled={sampled_token} "
+                f"device_argmax={device_argmax} ref_argmax={ref_argmax} "
+                f"match={device_argmax == ref_argmax}"
+            )
+
+            per_token_results.append(
+                {
+                    "token_idx": token_idx,
+                    "pcc": pcc,
+                    "passing": passing,
+                    "max_abs_diff": max_abs_diff,
+                    "device_argmax": device_argmax,
+                    "ref_argmax": ref_argmax,
+                    "argmax_match": device_argmax == ref_argmax,
+                }
+            )
+            all_device_logits.append(device_logits.unsqueeze(0))
+
+        all_device_logits_cat = torch.cat(all_device_logits, dim=0)
+        ref_flat = all_ref_logits[:num_tokens].float().reshape(-1)
+        device_flat = all_device_logits_cat.reshape(-1)
+        min_len = min(device_flat.shape[0], ref_flat.shape[0])
+        overall_passing, overall_pcc = comp_pcc(ref_flat[:min_len], device_flat[:min_len], pcc_threshold)
+
+        logger.info(f"{'=' * 80}")
+        logger.info(f"LM head summary ({num_tokens} tokens):")
+        logger.info(f"  Overall PCC: {overall_pcc} (threshold={pcc_threshold}, pass={overall_passing})")
+        logger.info(f"  Argmax matches: {sum(r['argmax_match'] for r in per_token_results)}/{num_tokens}")
+        logger.info(f"{'=' * 80}")
+
+        if save_logits_path is not None:
+            save_logits_path = Path(save_logits_path)
+            save_logits_path.parent.mkdir(parents=True, exist_ok=True)
+            save_file({"logits": all_device_logits_cat}, str(save_logits_path))
+            logger.info(f"Saved device logits [{num_tokens}, {all_device_logits_cat.shape[1]}] to {save_logits_path}")
+
+        return {
+            "stage": "lm_head",
+            "per_token_results": per_token_results,
+            "overall_pcc": overall_pcc,
+            "overall_passing": overall_passing,
             "num_tokens": num_tokens,
         }
 

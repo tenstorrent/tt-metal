@@ -158,10 +158,11 @@ class PipelineBlock:
             mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
         )
 
+        h2d_page_size = token_size_bytes if embedding_tensor is not None else d2h_socket_page_size
         self.host_io = HostInterface(
             self.h2d_socket,
             self.d2h_socket,
-            d2h_socket_page_size,
+            h2d_page_size,
             d2h_socket_page_size,
             core_to_core_socket_buffer_size=downstream_d2d_socket_fifo_size,
             h2d_downstream_core=entry_node_downstream,

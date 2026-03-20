@@ -57,12 +57,27 @@ class StageKind(ABC):
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         """Launch compute kernels after pipeline_block.run(). Default: no-op."""
 
+    def get_logits_tensor(self) -> ttnn.Tensor | None:
+        """Return the on-device logits tensor if this stage produces one."""
+        return None
+
+    def get_embedding_weight(self) -> ttnn.Tensor | None:
+        """Return the on-device embedding weight tensor if this stage has one."""
+        return None
+
+    def get_kv_cache_tensor(self) -> ttnn.Tensor | None:
+        """Return the on-device KV cache tensor if this stage has one."""
+        return None
+
 
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
 
     def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
         self._weights = weights
+
+    def get_embedding_weight(self) -> ttnn.Tensor | None:
+        return self._weights.embedding
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
@@ -407,3 +422,8 @@ class LMHeadStage(StageKind):
             persistent_mode=self._lm_head_persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
         )
+
+    def get_logits_tensor(self) -> ttnn.Tensor | None:
+        if self._lmhead_state:
+            return self._lmhead_state.get("ttnn_scores")
+        return None

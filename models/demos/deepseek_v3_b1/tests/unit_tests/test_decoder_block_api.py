@@ -268,6 +268,11 @@ class DecoderBlockStage(StageKind):
             is_torus=self._is_torus,
         )
 
+    def get_kv_cache_tensor(self) -> ttnn.Tensor | None:
+        if self._state:
+            return self._state["d"].get("ttnn_kv_cache")
+        return None
+
 
 class DenseBlockStage(StageKind):
     """Dense decoder block stage: bcast + fused attention + dense MLP + reduce-to-one.
@@ -458,6 +463,11 @@ class DenseBlockStage(StageKind):
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
         )
+
+    def get_kv_cache_tensor(self) -> ttnn.Tensor | None:
+        if self._state:
+            return self._state["d"].get("ttnn_kv_cache")
+        return None
 
 
 @pytest.mark.parametrize(

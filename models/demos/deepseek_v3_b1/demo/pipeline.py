@@ -14,7 +14,14 @@ from typing import Any, Callable
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.stage import EmbeddingStage, LMHeadStage, StageContext, StageKind
+from models.demos.deepseek_v3_b1.demo.stage import (
+    EmbeddingStage,
+    LMHeadStage,
+    PassthroughPayload,
+    PassthroughStage,
+    StageContext,
+    StageKind,
+)
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block_api import DecoderBlockStage, DenseBlockStage
@@ -70,16 +77,16 @@ def create_single_pod_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> MoE(3..12) -> LMHead -> Token fwd.
 
     If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
-    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device))
 
-    def stage_14(device: ttnn.MeshDevice) -> StageKind:
+    def stage_15(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
             weights=weight_provider.load_lm_head(device),
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
@@ -95,7 +102,7 @@ def create_single_pod_pipeline_configuration(
 
     def _decoder_stage(layer_id: int):
         return lambda d: DecoderBlockStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id + 3, device=d),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
         )
 
@@ -103,7 +110,12 @@ def create_single_pod_pipeline_configuration(
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i) for i in range(0, 16)},
+        0: stage_0,
+        1: _dense_stage(dense_ids[0]),
+        2: _dense_stage(dense_ids[1]),
+        3: _dense_stage(dense_ids[2]),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 15)},
+        15: stage_15,
     }
     return PipelineConfiguration(stage_factories)
 
@@ -141,7 +153,7 @@ def create_sp4_pipeline_configuration(
 
     def _decoder_stage(layer_id: int):
         return lambda d: DecoderBlockStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id + 3, device=d),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
         )
 
@@ -149,13 +161,13 @@ def create_sp4_pipeline_configuration(
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i) for i in range(0, 58)},
-        58: _decoder_stage(57),
-        59: _decoder_stage(57),
-        60: _decoder_stage(57),
-        61: _decoder_stage(57),
-        62: _decoder_stage(57),
-        63: _decoder_stage(57),
+        0: stage_0,
+        1: _dense_stage(dense_ids[0]),
+        2: _dense_stage(dense_ids[1]),
+        3: _dense_stage(dense_ids[2]),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
+        62: stage_62,
+        63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }
     return PipelineConfiguration(stage_factories)
 
@@ -285,6 +297,18 @@ class Pipeline:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(output_tensor)
+
+    def get_logits_tensor(self) -> ttnn.Tensor | None:
+        """Return the on-device logits tensor if this stage has one (LMHead only)."""
+        return self._stage_kind.get_logits_tensor()
+
+    def get_embedding_weight(self) -> ttnn.Tensor | None:
+        """Return the on-device embedding weight tensor if this stage has one."""
+        return self._stage_kind.get_embedding_weight()
+
+    def get_kv_cache_tensor(self) -> ttnn.Tensor | None:
+        """Return the on-device KV cache tensor if this stage has one."""
+        return self._stage_kind.get_kv_cache_tensor()
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()

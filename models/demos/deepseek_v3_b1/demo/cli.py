@@ -125,6 +125,26 @@ def create_parser() -> argparse.ArgumentParser:
         default=0.90,
         help="Minimum PCC for trace validation to pass (default: 0.90)",
     )
+    parser.add_argument(
+        "--logits-file",
+        type=Path,
+        default=None,
+        help="Path to reference logits safetensors for LM head validation",
+    )
+    parser.add_argument(
+        "--save-logits",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Save device LM head logits to this safetensors file",
+    )
+    parser.add_argument(
+        "--save-outputs-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Save per-layer hidden states and logits to this directory",
+    )
     return parser
 
 
@@ -146,6 +166,9 @@ def run_demo(
     trace_dir: Path | None = None,
     trace_start_layer: int = 3,
     trace_pcc_threshold: float = 0.90,
+    logits_file: Path | None = None,
+    save_logits: Path | None = None,
+    save_outputs_dir: Path | None = None,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -180,6 +203,9 @@ def run_demo(
             return_generated_tokens=True,
             trace_dir=trace_dir,
             trace_start_layer=trace_start_layer,
+            logits_file=logits_file,
+            save_logits_path=save_logits,
+            save_outputs_dir=save_outputs_dir,
             pcc_threshold=trace_pcc_threshold,
         )
 
@@ -205,6 +231,9 @@ def main(argv: list[str] | None = None) -> int:
         trace_dir=args.trace_dir,
         trace_start_layer=args.trace_start_layer,
         trace_pcc_threshold=args.trace_pcc_threshold,
+        logits_file=args.logits_file,
+        save_logits=args.save_logits,
+        save_outputs_dir=args.save_outputs_dir,
     )
     print(file=sys.stdout, flush=True)
     return 0

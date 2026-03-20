@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch
 from loguru import logger
+from safetensors.torch import safe_open
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -43,6 +44,7 @@ class ModelPipeline:
                 "DeepSeek V3 B1 pod pipeline requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
             )
         self.mesh_device = mesh_device
+        self._cache_path = cache_path
         num_procs = int(ttnn.distributed_context_get_size())
         if num_procs not in (4, 16, 64):
             raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
@@ -71,12 +73,15 @@ class ModelPipeline:
         my_rank = self.pipeline.my_mesh_id
         prev_rank = my_rank - 1 if my_rank > 0 else None
         next_rank = my_rank + 1 if my_rank < num_procs - 1 else None
+        has_logits = self.pipeline.get_logits_tensor() is not None
+        is_last = my_rank == num_procs - 1
         self.model = DeepSeekV3(
             write_fn=self.pipeline.write_token,
             read_fn=self.pipeline.read_output,
             batch_size=1,
             prev_rank=prev_rank,
             next_rank=next_rank,
+            outputs_tokens=has_logits or is_last,
         )
         logger.info(f"Created ModelPipeline for mesh id {my_rank} (prev={prev_rank}, next={next_rank}).")
 
@@ -85,26 +90,18 @@ class ModelPipeline:
         tokens: list[int] | None,
         trace_dir: str | Path | None = None,
         trace_start_layer: int = 3,
+        logits_file: str | Path | None = None,
+        save_logits_path: str | Path | None = None,
+        save_outputs_dir: str | Path | None = None,
         pcc_threshold: float = 0.90,
     ) -> dict | None:
-        """Prefill 1 user's prompt tokens, or validate against trace data.
+        """Prefill with real pipeline token flow and optional per-stage validation.
 
-        When trace_dir is provided, each stage independently loads its trace
-        input/output and validates via PCC (no MPI communication between stages).
-        The trace layer for this stage is trace_start_layer + my_mesh_id.
-
-        When trace_dir is None, runs normal prefill with MPI token forwarding.
+        Tokens flow through all stages via MPI send/recv. When trace_dir is
+        provided, each stage compares its output against reference after each
+        token (embedding/passthrough stages are skipped).
         """
         assert self.model is not None
-
-        if trace_dir is not None:
-            layer_idx = trace_start_layer + self.pipeline.my_mesh_id
-            logger.info(f"Stage {self.pipeline.my_mesh_id}: trace validation for layer {layer_idx}")
-            return self.model.prefill_with_trace(
-                trace_dir=trace_dir,
-                layer_idx=layer_idx,
-                pcc_threshold=pcc_threshold,
-            )
 
         prompt_token_tensors = None
         num_iterations = None
@@ -127,7 +124,70 @@ class ModelPipeline:
             num_procs = int(ttnn.distributed_context_get_size())
             if self.pipeline.my_mesh_id < num_procs - 1:
                 ttnn.send_token(num_iterations, ttnn.Rank(self.pipeline.my_mesh_id + 1))
-        self.model.prefill(prompt_token_tensors, num_iterations=num_iterations)
+
+        has_logits = self.pipeline.get_logits_tensor() is not None
+        is_first_stage = self.pipeline.my_mesh_id == 0
+        num_procs = int(ttnn.distributed_context_get_size())
+        is_last_stage = self.pipeline.my_mesh_id == num_procs - 1
+        is_decoder_stage = not is_first_stage and not has_logits and not is_last_stage
+        ref_hs = None
+        ref_lg = None
+        li = None
+
+        if trace_dir is not None:
+            trace_file = str(Path(trace_dir) / "hidden_states.safetensors")
+            if is_first_stage:
+                if tokens is not None:
+                    emb_path = Path(self._cache_path) / "embedding" / "embedding.tensorbin"
+                    logger.info(f"Stage 0: looking for embedding at {emb_path} (exists={emb_path.exists()})")
+                    if emb_path.exists():
+                        logger.info("Stage 0: loading embedding tensorbin from host...")
+                        emb_tt = ttnn.load_tensor(str(emb_path))
+                        logger.info(f"Stage 0: loaded ttnn tensor, extracting first shard...")
+                        emb_first = ttnn.get_device_tensors(emb_tt)[0]
+                        emb_host = ttnn.to_torch(emb_first).float()
+                        logger.info(f"Stage 0: torch tensor shape={list(emb_host.shape)}, dtype={emb_host.dtype}")
+                        while emb_host.dim() > 2:
+                            emb_host = emb_host[0]
+                        logger.info(f"Stage 0: squeezed to shape={list(emb_host.shape)}")
+                        ref_hs = torch.stack([emb_host[tid] for tid in tokens])
+                        logger.info(f"Stage 0: built ref_hs shape={list(ref_hs.shape)} for tokens {tokens}")
+                        li = "embedding"
+                        logger.info(
+                            f"Stage 0: embedding validation ready "
+                            f"(weight shape={list(emb_host.shape)}, {len(tokens)} tokens)"
+                        )
+                    else:
+                        logger.info(f"Stage 0: embedding weight file not found at {emb_path}, skipping validation")
+                else:
+                    logger.info(f"Stage {self.pipeline.my_mesh_id}: skipping validation (embedding, no tokens)")
+            elif has_logits:
+                li = 60
+                if logits_file is not None:
+                    with safe_open(str(logits_file), framework="pt") as f:
+                        ref_lg = f.get_tensor("logits")
+                    logger.info(
+                        f"Stage {self.pipeline.my_mesh_id}: LM head validation (ref logits {list(ref_lg.shape)})"
+                    )
+            elif is_decoder_stage:
+                li = self.pipeline.my_mesh_id - 1
+                with safe_open(trace_file, framework="pt") as f:
+                    ref_hs = f.get_tensor(f"decoder_output_layer_{li}")
+                logger.info(f"Stage {self.pipeline.my_mesh_id}: decoder validation for layer {li}")
+            else:
+                logger.info(f"Stage {self.pipeline.my_mesh_id}: skipping validation (embedding/passthrough)")
+
+        self.model.prefill(
+            prompt_token_tensors,
+            num_iterations=num_iterations,
+            ref_hidden_states=ref_hs,
+            ref_logits=ref_lg,
+            layer_idx=li,
+            logits_tensor_fn=self.pipeline.get_logits_tensor if has_logits else None,
+            mesh_device=self.mesh_device if has_logits else None,
+            save_outputs_dir=save_outputs_dir if trace_dir is not None else None,
+            pcc_threshold=pcc_threshold,
+        )
         return None
 
     def decode_forward(self, input_token: int) -> int:
@@ -151,6 +211,9 @@ class ModelPipeline:
         return_generated_tokens: bool = False,
         trace_dir: str | Path | None = None,
         trace_start_layer: int = 3,
+        logits_file: str | Path | None = None,
+        save_logits_path: str | Path | None = None,
+        save_outputs_dir: str | Path | None = None,
         pcc_threshold: float = 0.90,
     ) -> list[int] | None:
         """Run full inference: prefill the prompt then decode until EOS or max_new_tokens.
@@ -159,15 +222,13 @@ class ModelPipeline:
 
         When trace_dir is provided, runs trace validation instead of normal prefill.
         """
-        # if self.pipeline.my_mesh_id != 0:
-        #     raise RuntimeError("run_inference() should only be called on mesh id 0")
-        # assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
-
-        # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
         result = self.prefill_forward(
             prompt_token_ids,
             trace_dir=trace_dir,
             trace_start_layer=trace_start_layer,
+            logits_file=logits_file,
+            save_logits_path=save_logits_path,
+            save_outputs_dir=save_outputs_dir,
             pcc_threshold=pcc_threshold,
         )
         if trace_dir is not None:
