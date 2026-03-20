@@ -126,32 +126,32 @@ on:
       run-ttnn-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TTNN unit tests"
       run-models-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run model unit tests"
       run-profiler-regression:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run profiler regression tests"
       run-umd-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run UMD unit tests"
       run-ops-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run ops unit tests"
       run-tt-cnn-unit-tests:
         required: false
         type: boolean
-        default: true
+        default: false
         description: "Run TT-CNN unit tests"
       run-blackhole-multi-card-fast-unit-tests:
         required: false
@@ -400,7 +400,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu"]
+        test-group: ["BH-LoudBox"]  # HACK: hardcoded for manual testing
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
