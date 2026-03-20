@@ -893,3 +893,302 @@ def test_rotary_embedding_llama_prefill_cos_sin_and_trans_mat_sharding(
         pcc,
         device,
     )
+
+
+def run_test_rotary_embedding_llama_bwr(
+    num_positions,
+    num_heads,
+    head_dim,
+    datatype,
+    device,
+    use_compute_config=True,
+    shard_num_cores=-1,
+):
+    """
+    Bitwise reproducibility (BWR) test for rotary_embedding_llama.
+
+    Uses the all-interleaved prefill path as the golden baseline and verifies
+    that every other supported calling combination produces an identical result:
+      Case 2a: Height-sharded cos/sin, interleaved trans_mat  (prefill)
+      Case 2b: Interleaved cos/sin, height-sharded trans_mat  (prefill)
+      Case 2c: Height-sharded cos/sin AND trans_mat           (prefill)
+      Case 3:  Height-sharded decode  (batch and seq_len exchanged)
+    """
+    torch.manual_seed(42)
+    max_seq_len = MAX_SEQ_LEN
+    compute_grid_size = device.compute_with_storage_grid_size()
+    device_num_cores = compute_grid_size.x * compute_grid_size.y
+    head_dim_padded = nearest_32(head_dim)
+
+    compute_kernel_config = (
+        ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=(True if head_dim <= 128 else False),
+            packer_l1_acc=True,
+        )
+        if use_compute_config
+        else None
+    )
+
+    # Prefill input: [batch=1, num_heads, seq_len=num_positions, head_dim]
+    x_prefill = (torch.rand(1, num_heads, num_positions, head_dim) * 2) - 1
+    trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)
+    position_ids = torch.randint(1, MAX_SEQ_LEN, (num_positions,))
+    cos, sin = compute_gather_cos_sin(dhead=head_dim, end=max_seq_len * 2, position_ids=position_ids)
+    # cos, sin shape: [1, 1, num_positions, head_dim]
+
+    # ── Case 1: all-interleaved prefill (BASELINE) ──────────────────────
+    logger.info("BWR Case 1: all-interleaved prefill (baseline)")
+    x_tt = ttnn.from_torch(x_prefill, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    cos_tt = ttnn.from_torch(cos, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    sin_tt = ttnn.from_torch(sin, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+    tm_tt = ttnn.from_torch(trans_mat, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+
+    baseline = ttnn.to_torch(
+        ttnn.experimental.rotary_embedding_llama(
+            x_tt,
+            cos_tt,
+            sin_tt,
+            tm_tt,
+            is_decode_mode=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            compute_kernel_config=compute_kernel_config,
+        )
+    )
+
+    # Quick PCC sanity against PyTorch golden
+    cos_half, sin_half = cos[..., 0::2], sin[..., 0::2]
+    golden = apply_rotary_emb_qk_real(x_prefill, cos_half, sin_half)
+    passing, pcc_val = comp_pcc(golden, baseline, 0.9997)
+    logger.info(f"Baseline PCC vs PyTorch golden: {pcc_val}")
+    assert passing, f"Baseline PCC {pcc_val} below 0.9997"
+
+    mae = torch.mean(torch.abs(golden - baseline)).item()
+    max_abs_err = torch.max(torch.abs(golden - baseline)).item()
+    max_golden = torch.max(torch.abs(golden)).item()
+    logger.info(f"Golden vs baseline: MAE={mae:.6e}, MaxAE={max_abs_err:.6e}, MaxGolden={max_golden:.6e}")
+    assert mae < 0.01, f"MAE {mae} too large (golden vs baseline)"
+    assert max_abs_err < 0.1, f"Max absolute error {max_abs_err} too large (golden vs baseline)"
+
+    # ── Shared sharding configs ─────────────────────────────────────────
+    # shard_cores: how many cores to spread sharded tensors across
+    shard_cores = device_num_cores if shard_num_cores == -1 else min(shard_num_cores, device_num_cores)
+
+    # cos/sin shard: one tile-row per shard
+    cs_grid = ttnn.num_cores_to_corerangeset(shard_cores, compute_grid_size, row_wise=True)
+    cs_mem = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, head_dim_padded),
+        core_grid=cs_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # trans_mat shard: one 32x32 tile per shard
+    tm_grid = ttnn.num_cores_to_corerangeset(shard_cores, compute_grid_size, row_wise=True)
+    tm_mem = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+        core_grid=tm_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tm_repeated = trans_mat.repeat(1, 1, shard_cores, 1)
+
+    def run_prefill(cos_sharded, tm_sharded):
+        """Run a prefill variant and return the torch output."""
+        xt = ttnn.from_torch(x_prefill, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+
+        if cos_sharded:
+            ct = ttnn.to_memory_config(
+                ttnn.from_torch(cos, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT), cs_mem
+            )
+            st = ttnn.to_memory_config(
+                ttnn.from_torch(sin, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT), cs_mem
+            )
+        else:
+            ct = ttnn.from_torch(cos, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+            st = ttnn.from_torch(sin, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+
+        if tm_sharded:
+            tt = ttnn.from_torch(
+                tm_repeated,
+                device=device,
+                dtype=datatype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=tm_mem,
+            )
+        else:
+            tt = ttnn.from_torch(trans_mat, device=device, dtype=datatype, layout=ttnn.TILE_LAYOUT)
+
+        return ttnn.to_torch(
+            ttnn.experimental.rotary_embedding_llama(
+                xt,
+                ct,
+                st,
+                tt,
+                is_decode_mode=False,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=compute_kernel_config,
+            )
+        )
+
+    # ── Case 2a: sharded cos/sin, interleaved trans_mat ─────────────────
+    logger.info("BWR Case 2a: sharded cos/sin, interleaved trans_mat")
+    out = run_prefill(cos_sharded=True, tm_sharded=False)
+    assert torch.equal(baseline, out), "BWR FAILED Case 2a: sharded cos/sin != baseline"
+    logger.info("BWR Case 2a PASSED")
+
+    # ── Case 2b: interleaved cos/sin, sharded trans_mat ─────────────────
+    logger.info("BWR Case 2b: interleaved cos/sin, sharded trans_mat")
+    out = run_prefill(cos_sharded=False, tm_sharded=True)
+    assert torch.equal(baseline, out), "BWR FAILED Case 2b: sharded trans_mat != baseline"
+    logger.info("BWR Case 2b PASSED")
+
+    # ── Case 2c: sharded cos/sin AND trans_mat ──────────────────────────
+    logger.info("BWR Case 2c: sharded cos/sin AND trans_mat")
+    out = run_prefill(cos_sharded=True, tm_sharded=True)
+    assert torch.equal(baseline, out), "BWR FAILED Case 2c: both sharded != baseline"
+    logger.info("BWR Case 2c PASSED")
+
+    # ── Case 3: height-sharded decode ───────────────────────────────────
+    logger.info("BWR Case 3: height-sharded decode")
+    if num_positions > device_num_cores:
+        logger.info("Skipping BWR Case 3: num_positions > device_num_cores not supported in decode mode sharding")
+    elif num_heads > ttnn.TILE_SIZE:
+        logger.info("Skipping BWR Case 3: num_heads > TILE_SIZE not supported in decode mode sharding")
+    else:
+        # Interchange batch <-> seq_len:
+        #   prefill [1, NH, NP, HD] -> decode [1, NP, NH, HD]
+        x_decode = x_prefill.transpose(1, 2)
+        cos_decode = cos.transpose(1, 2)  # [1, NP, 1, HD]
+        sin_decode = sin.transpose(1, 2)
+
+        decode_grid = ttnn.num_cores_to_corerangeset(num_positions, compute_grid_size, row_wise=True)
+        decode_shard = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, head_dim),
+            core_grid=decode_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        x_tt = ttnn.from_torch(
+            x_decode,
+            device=device,
+            dtype=datatype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=decode_shard,
+        )
+        cos_tt = ttnn.from_torch(
+            cos_decode,
+            device=device,
+            dtype=datatype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=decode_shard,
+        )
+        sin_tt = ttnn.from_torch(
+            sin_decode,
+            device=device,
+            dtype=datatype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=decode_shard,
+        )
+        tm_decode_mem = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+            core_grid=decode_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        tm_tt = ttnn.from_torch(
+            trans_mat.repeat(1, 1, num_positions, 1),
+            device=device,
+            dtype=datatype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=tm_decode_mem,
+        )
+
+        decode_out = ttnn.to_torch(
+            ttnn.experimental.rotary_embedding_llama(
+                x_tt,
+                cos_tt,
+                sin_tt,
+                tm_tt,
+                is_decode_mode=True,
+                compute_kernel_config=compute_kernel_config,
+            )
+        )
+
+        # Transpose decode output back to prefill layout for comparison
+        decode_as_prefill = decode_out.transpose(1, 2)
+        assert torch.equal(baseline, decode_as_prefill), "BWR FAILED Case 3: decode != baseline"
+        logger.info("BWR Case 3 PASSED")
+
+    logger.info("All BWR cases PASSED!")
+
+
+@skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
+@pytest.mark.parametrize(
+    "num_positions, num_heads, head_dim",
+    (
+        (1024, 32, 256),
+        (512, 64, 64),
+        (32, 1, 64),
+        (32, 1, 128),
+        (32, 8, 128),
+        (64, 1, 128),
+    ),
+    ids=(
+        "pos1024_heads32_dim256",
+        "pos512_heads64_dim64",
+        "pos32_heads1_dim64",
+        "pos32_heads1_dim128",
+        "pos32_heads8_dim128",
+        "pos64_heads1_dim128",
+    ),
+)
+@pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
+@pytest.mark.parametrize(
+    "use_compute_config",
+    (True, False),
+    ids=("with_compute_config", "default_compute_config"),
+)
+@pytest.mark.parametrize(
+    "shard_num_cores",
+    (-1, 32),
+    ids=("shard_all_cores", "shard_32_cores"),
+)
+def test_rotary_embedding_llama_bwr(
+    num_positions,
+    num_heads,
+    head_dim,
+    datatype,
+    use_compute_config,
+    shard_num_cores,
+    device,
+):
+    """
+    Bitwise reproducibility: all calling combinations of rotary_embedding_llama
+    (interleaved prefill, sharded prefill, sharded decode) must produce
+    identical results.
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8 or compute_grid_size.y < 8:
+        pytest.skip(f"Requires grid size of at least (8, 8) to run")
+
+    if shard_num_cores > 0:
+        cos_sin_tile_rows = (num_positions + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        if shard_num_cores < cos_sin_tile_rows:
+            pytest.skip(f"shard_num_cores={shard_num_cores} too small for {cos_sin_tile_rows} cos/sin tile-rows")
+
+    run_test_rotary_embedding_llama_bwr(
+        num_positions,
+        num_heads,
+        head_dim,
+        datatype,
+        device,
+        use_compute_config,
+        shard_num_cores,
+    )
