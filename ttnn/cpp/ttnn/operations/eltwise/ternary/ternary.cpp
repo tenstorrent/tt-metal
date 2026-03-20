@@ -28,7 +28,7 @@ Tensor where_impl(
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Where Legacy");
-    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
+    using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
         return ttnn::multiply(
@@ -190,11 +190,7 @@ Tensor invoke_impl(
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
-    //  TODO: add sub_core_grids functionality to Unary Infra
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
 }
 
 }  // namespace
@@ -223,10 +219,7 @@ Tensor WhereOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
 template Tensor WhereOperation::invoke<int32_t>(
@@ -252,6 +245,14 @@ Tensor AddcmulOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
+
+    bool is_supported_dtype =
+        (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B);  // TODO(#38972): UINT32 support
+    TT_FATAL(
+        is_supported_dtype,
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, and INT32 dtypes. Got {}",
+        input_a.dtype());
 
     // Only TTT variant is supported for addcmul
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(

@@ -16,7 +16,6 @@
 #include "ttnn/operations/normalization/kernel_util/compute/policies.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "ttnn/operations/normalization/kernel_util/generic/bit.h"
-#include <tt-metalium/constants.hpp>
 #include <type_traits>
 #include <array>
 
@@ -150,12 +149,13 @@ inline void row_wise_accumulate_with_epilogue(
     uint32_t num_tiles,
     uint32_t block_size,
     uint32_t N,
+    uint32_t tile_width = 32,
     Epilogue epilogue = detail::no_op,
     AdditionalCBs... additional_cbs) {
     constexpr bool wait_at_end = wait_at_end_policy == policies::WaitAtEndPolicy::WAIT;
     // If the last tile is partial, we need two scalar tiles:
     // One for the full tiles, and one for the partial tile
-    const auto last_tile_partial = N % tt::constants::TILE_WIDTH > 0;
+    const auto last_tile_partial = N % tile_width > 0;
     const uint32_t num_scaler_tiles_needed = last_tile_partial ? 2 : 1;
     cb_wait_front(cb_scalar, num_scaler_tiles_needed);
     reconfig_data_format(cb_in, cb_scalar);
@@ -202,9 +202,15 @@ template <
     typename input_policy = policies::PartialBlockWithoutPopPolicy,
     policies::WaitAtEndPolicy wait_at_end_policy = policies::WaitAtEndPolicy::WAIT>
 inline void row_wise_mean(
-    uint32_t cb_in, uint32_t cb_scalar, uint32_t cb_out, uint32_t N, uint32_t num_tiles, uint32_t block_size) {
+    uint32_t cb_in,
+    uint32_t cb_scalar,
+    uint32_t cb_out,
+    uint32_t N,
+    uint32_t num_tiles,
+    uint32_t block_size,
+    uint32_t tile_width = 32) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
-        cb_in, cb_scalar, cb_out, num_tiles, block_size, N, [N]() {
+        cb_in, cb_scalar, cb_out, num_tiles, block_size, N, tile_width, [N]() {
             detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N));
         });
 }
@@ -238,7 +244,8 @@ inline void row_wise_mean_with_pre_add(
     uint32_t cb_out,
     uint32_t N,
     uint32_t num_tiles,
-    uint32_t block_size) {
+    uint32_t block_size,
+    uint32_t tile_width = 32) {
     row_wise_accumulate_with_epilogue<FLOAT32_REDUCTION, input_policy, wait_at_end_policy>(
         cb_in0,
         cb_scalar,
@@ -246,6 +253,7 @@ inline void row_wise_mean_with_pre_add(
         num_tiles,
         block_size,
         N,
+        tile_width,
         [N]() { detail::scale_dest(detail::dst0, generic::bit_cast<uint32_t>(1.0f / N)); },
         cb_in1);
 }

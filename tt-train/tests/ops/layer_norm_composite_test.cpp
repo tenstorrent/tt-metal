@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <random>
 
 #include "autograd/auto_context.hpp"
@@ -85,12 +84,16 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_backward) {
     uint32_t features = 3;
 
     std::vector<float> test_data{0.0, 1.0, 2.0};
-    auto tensor = autograd::create_tensor(core::from_vector(
-        test_data, ttnn::Shape({batch_size, seq_len, heads, features}), &autograd::ctx().get_device()));
+    auto tensor = autograd::create_tensor(
+        core::from_vector(
+            test_data, ttnn::Shape({batch_size, seq_len, heads, features}), &autograd::ctx().get_device()),
+        /* requires_grad */ true);
 
     auto gamma = autograd::create_tensor(
-        core::from_vector({1, 2, 3}, ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
-    auto beta = autograd::create_tensor(core::zeros(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+        core::from_vector({1, 2, 3}, ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()),
+        /* requires_grad */ true);
+    auto beta = autograd::create_tensor(
+        core::zeros(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::composite_layernorm(tensor, gamma, beta);
     auto target = autograd::create_tensor(core::zeros_like(tensor->get_value()));

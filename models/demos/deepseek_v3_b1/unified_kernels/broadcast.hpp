@@ -138,7 +138,7 @@ struct Broadcast {
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-
+                        invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
                             get_write_ptr(CTArgs::cb0_id),
@@ -265,11 +265,9 @@ struct Broadcast {
                     // between iterations will naturally sync the devices, but wait_min is a
                     // pragmatic choice to streamline standalone testing.
                     if (args.wait_output_semaphore) {
-                        WATCHER_RING_BUFFER_PUSH(0xA1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                        WATCHER_RING_BUFFER_PUSH(0xA2);
                     }
 
                     // 4. global semaphore reset
@@ -279,16 +277,15 @@ struct Broadcast {
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                    noc_async_atomic_barrier();
 
                 } else if constexpr (CTArgs::is_secondary_sender) {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender
                     if (args.wait_output_semaphore) {
-                        WATCHER_RING_BUFFER_PUSH(0xB1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                        WATCHER_RING_BUFFER_PUSH(0xB2);
                     }
 
                     // Reset semaphore after receiving data
@@ -319,11 +316,9 @@ struct Broadcast {
                 } else {
                     // Receiver: wait for data from broadcaster
                     if (args.wait_output_semaphore) {
-                        WATCHER_RING_BUFFER_PUSH(0xC1);
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
-                        WATCHER_RING_BUFFER_PUSH(0xC2);
                     }
 
                     // Reset global semaphore

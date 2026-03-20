@@ -9,6 +9,7 @@ import contextlib
 import os
 import sys
 from pathlib import Path
+from typing import Literal
 
 from loguru import logger
 from transformers import AutoTokenizer
@@ -71,15 +72,21 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-path",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the weight cache directory (required for --weights real)",
+    )
+    parser.add_argument(
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
     )
     parser.add_argument(
         "--weights",
         type=str,
-        choices=("synthetic", "real"),
-        default="synthetic",
-        help="Use synthetic or real (cached) weights (default: synthetic)",
+        choices=("synthetic", "real", "state_dict"),
+        default="real",
+        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
     )
     parser.add_argument(
         "--fp32",
@@ -119,8 +126,9 @@ def run_demo(
     prompt: str,
     max_new_tokens: int,
     tokenizer_name_or_path: str,
-    cache_path: Path,
-    use_real_weights: bool = False,
+    weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
+    cache_path: Path | None = None,
+    model_path: Path | None = None,
     lm_head_fp32_dest_acc_en: bool = True,
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
@@ -134,38 +142,33 @@ def run_demo(
         # Initialize model pipeline
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
+            weights_mode=weights_mode,
             cache_path=cache_path,
-            use_real_weights=use_real_weights,
+            model_path=model_path,
             lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             lm_head_persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
         )
 
-        # Run prefill + decode loop
         my_mesh_id = mesh_device.get_system_mesh_id()
         if my_mesh_id == 0:
-            # Prefill + decode pattern per model.py: prefill(prompt) -> sample y0; decode_step(y_t) -> sample y_{t+1}.
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
             logger.debug(f"Encoded prompt: {prompt_ids}")
             if not prompt_ids:
                 prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
 
-            # Prefill: send prompt tokens; discard outputs for i < S-1; use last output to sample y0.
-            next_token_id = model_pipeline.prefill_forward(prompt_ids)
-            generated = [next_token_id]
-            logger.info(
-                "Prefill done ({} prompt tokens); sampled y0: {}",
-                len(prompt_ids),
-                next_token_id,
+            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
+            generated_tokens = model_pipeline.run_inference(
+                prompt_token_ids=prompt_ids,
+                max_new_tokens=iterations,
+                eos_token_id=tokenizer.eos_token_id,
+                return_generated_tokens=True,
             )
-            # Generation loop: feed y[t], get output, sample y[t+1].
-            for step in range(iterations - 1):
-                next_token_id = model_pipeline.decode_forward(next_token_id)
-                generated.append(next_token_id)
-                logger.info("Decode step {} output token: {}", step + 1, next_token_id)
-            logger.info("Generated {} tokens total", len(generated))
+            assert generated_tokens is not None
+            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         model_pipeline.barrier()
     logger.info("Pod pipeline complete")
@@ -176,12 +179,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    if args.weights == "real" and args.cache_path is None:
+        parser.error("--cache-path is required when --weights real")
+    if args.weights == "state_dict":
+        if args.model_path is None:
+            parser.error("--model-path is required when --weights state_dict")
+        index_path = args.model_path / "model.safetensors.index.json"
+        if not index_path.is_file():
+            parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
+
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
+        weights_mode=args.weights,
         cache_path=args.cache_path,
-        use_real_weights=(args.weights == "real"),
+        model_path=args.model_path,
         lm_head_fp32_dest_acc_en=args.fp32,
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,

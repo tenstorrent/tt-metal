@@ -13,6 +13,7 @@ The current version is verified to work with the following models:
 | [Llama 3.2 11B Vision](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision)                   | n300                        | ```meta-llama/Llama-3.2-11B-Vision```           |
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
+| [Mixtral 8x7B Instruct v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1)        | LoudBox / QuietBox          | ```mistralai/Mixtral-8x7B-Instruct-v0.1```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
 | [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                    |
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |

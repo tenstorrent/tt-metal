@@ -32,9 +32,9 @@ set(SOURCES
     datasets/utils_test.cpp
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
+    optimizers/adamw_composite_test.cpp
+    optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
-    optimizers/sgd_fused_test.cpp
-    optimizers/adamw_fused_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -105,7 +105,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
-add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tt-train/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")

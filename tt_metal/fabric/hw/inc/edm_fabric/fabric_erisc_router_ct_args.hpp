@@ -8,7 +8,6 @@
 #include "api/dataflow/dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
-// NOTE: fabric_router_elastic_channels_ct_args.hpp removed - elastic channels not yet emitted from host
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
@@ -60,6 +59,7 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID");
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID");
+constexpr uint32_t vc2_receiver_free_slots_stream_id = NAMED_CT_ARG("VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_0_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_1_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_2_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID");
@@ -68,6 +68,7 @@ constexpr uint32_t sender_channel_4_free_slots_stream_id = NAMED_CT_ARG("SENDER_
 constexpr uint32_t sender_channel_5_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_6_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_7_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID");
+constexpr uint32_t sender_channel_8_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t tensix_relay_local_free_slots_stream_id = NAMED_CT_ARG("TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = NAMED_CT_ARG("MULTI_RISC_TEARDOWN_SYNC_STREAM_ID");
 constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_LINK_SYNC_STREAM_ID");
@@ -77,12 +78,17 @@ constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_L
 // ============================================================================
 constexpr size_t MAX_NUM_SENDER_CHANNELS = NAMED_CT_ARG("MAX_NUM_SENDER_CHANNELS");
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("MAX_NUM_RECEIVER_CHANNELS");
-// VC0 and VC1 channel counts depend on router type:
-// Z_ROUTER: 5 VC0 + 4 VC1 = 9 total
-// MESH: 4 VC0 + 4 VC1 = 8 total (with some unused)
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 5 : 4;
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;
-constexpr size_t VC1_SENDER_CHANNEL_START = MAX_NUM_SENDER_CHANNELS_VC0;
+constexpr size_t MAX_NUM_VCS = NAMED_CT_ARG("MAX_NUM_VCS");
+// Actual per-VC sender counts (emitted by builder, must be declared before use)
+constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
+constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
+constexpr size_t ACTUAL_VC2_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC2_SENDER_CHANNELS");
+// VC boundary derivation from actual counts (replaces old >= 9 heuristic)
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = ACTUAL_VC0_SENDER_CHANNELS;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = ACTUAL_VC1_SENDER_CHANNELS;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC2 = ACTUAL_VC2_SENDER_CHANNELS;
+constexpr size_t VC1_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS;
+constexpr size_t VC2_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS + ACTUAL_VC1_SENDER_CHANNELS;
 
 // ============================================================================
 // Downstream tensix connections
@@ -146,9 +152,6 @@ constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_C
 constexpr bool z_router_enabled = NAMED_CT_ARG("Z_ROUTER_ENABLED");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
-constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
-constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
-
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
 
@@ -157,77 +160,32 @@ constexpr bool udm_mode = NAMED_CT_ARG("UDM_MODE") != 0;
 constexpr uint32_t LOCAL_RELAY_NUM_BUFFERS = NAMED_CT_ARG("LOCAL_RELAY_NUM_BUFFERS");
 
 // ============================================================================
-// Pool collection (positional args, starting at index 0)
+// Channel allocations (positional args, starting at index 0)
 // ============================================================================
-constexpr size_t CHANNEL_POOL_COLLECTION_IDX = 0;
+constexpr size_t CHANNEL_ALLOCATIONS_IDX = 0;
 
-using channel_pools_args =
-    ChannelPoolCollection<CHANNEL_POOL_COLLECTION_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
-constexpr size_t NUM_POOLS = channel_pools_args::num_channel_pools;
+using channel_allocs = ChannelAllocations<CHANNEL_ALLOCATIONS_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
 
-// Parse channel-to-pool mappings (after all pool data)
-constexpr size_t CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX =
-    CHANNEL_POOL_COLLECTION_IDX + channel_pools_args::GET_NUM_ARGS_CONSUMED();
-static_assert(
-    get_compile_time_arg_val(CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX) == 0xabaddad8,
-    "CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host and "
-    "device. Double check the CT args.");
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_TO_ENTRY_IDX = channel_allocs::sender_channel_to_entry_index;
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_ENTRY_IDX =
+    channel_allocs::receiver_channel_to_entry_index;
 
-constexpr size_t CHANNEL_MAPPINGS_START_IDX = CHANNEL_MAPPINGS_START_SPECIAL_TAG_IDX + 1;
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_TO_POOL_IDX = channel_pools_args::sender_channel_to_pool_index;
-constexpr std::array<FabricChannelPoolType, NUM_SENDER_CHANNELS> SENDER_TO_POOL_TYPE = fill_array_with_next_n_args<
-    FabricChannelPoolType,
-    CHANNEL_MAPPINGS_START_IDX + NUM_SENDER_CHANNELS,
-    NUM_SENDER_CHANNELS>();
+// Remote channel allocations (after local channels + marker)
+constexpr size_t REMOTE_CHANNEL_START_MARKER_IDX = CHANNEL_ALLOCATIONS_IDX + channel_allocs::GET_NUM_ARGS_CONSUMED();
 static_assert(
-    all_elements_satisfy(
-        SENDER_TO_POOL_TYPE,
-        [](FabricChannelPoolType pool_type) { return pool_type <= FabricChannelPoolType::ELASTIC; }),
-    "SENDER_TO_POOL_TYPE must be less than or equal to FabricChannelPoolType::ELASTIC");
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_IDX =
-    channel_pools_args::receiver_channel_to_pool_index;
-static_assert(
-    all_elements_satisfy(RECEIVER_TO_POOL_IDX, [](size_t pool_idx) { return pool_idx < NUM_POOLS; }),
-    "RECEIVER_TO_POOL_IDX must be less than NUM_POOLS");
-constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> RECEIVER_TO_POOL_TYPE = fill_array_with_next_n_args<
-    FabricChannelPoolType,
-    // We accidentally double emit the *_TO_POOL_TYPE arrays so we skip past some unused args
-    CHANNEL_MAPPINGS_START_IDX + (2 * NUM_SENDER_CHANNELS) + NUM_RECEIVER_CHANNELS,
-    NUM_RECEIVER_CHANNELS>();
-static_assert(all_elements_satisfy(RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) {
-    return pool_type <= FabricChannelPoolType::ELASTIC;
-}));
-
-// Parse remote channel pool data (after channel-to-pool mappings)
-constexpr size_t REMOTE_CHANNEL_POOL_START_MARKER_IDX =
-    CHANNEL_MAPPINGS_START_IDX + 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS);
-static_assert(
-    get_compile_time_arg_val(REMOTE_CHANNEL_POOL_START_MARKER_IDX) == 0xabaddad6,
-    "Remote channel pool start marker not found. This implies some arguments were misaligned between host and device. "
+    get_compile_time_arg_val(REMOTE_CHANNEL_START_MARKER_IDX) == 0xabaddad6,
+    "Remote channel start marker not found. This implies some arguments were misaligned between host and device. "
     "Double check the CT args.");
 
-// Parse remote channel pool collection (follows same structure as local channels)
-constexpr size_t REMOTE_CHANNEL_POOL_IDX = REMOTE_CHANNEL_POOL_START_MARKER_IDX + 1;
-using eth_remote_channel_pools_args = ChannelPoolCollection<REMOTE_CHANNEL_POOL_IDX, 0, NUM_RECEIVER_CHANNELS>;
+constexpr size_t REMOTE_CHANNEL_ALLOCATIONS_IDX = REMOTE_CHANNEL_START_MARKER_IDX + 1;
+using eth_remote_channel_allocs = ChannelAllocations<REMOTE_CHANNEL_ALLOCATIONS_IDX, 0, NUM_RECEIVER_CHANNELS>;
 
-static constexpr size_t REMOTE_CHANNEL_MAPPINGS_START_IDX =
-    REMOTE_CHANNEL_POOL_IDX + eth_remote_channel_pools_args::GET_NUM_ARGS_CONSUMED();
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_TO_POOL_IDX =
-    eth_remote_channel_pools_args::receiver_channel_to_pool_index;
-constexpr size_t NUM_REMOTE_POOLS = eth_remote_channel_pools_args::num_channel_pools;
-constexpr std::array<FabricChannelPoolType, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_TO_POOL_TYPE =
-    fill_array_with_next_n_args<
-        FabricChannelPoolType,
-        // We accidentally double emit the *_TO_POOL_TYPE arrays so we skip past some unused args
-        REMOTE_CHANNEL_MAPPINGS_START_IDX + NUM_RECEIVER_CHANNELS,
-        NUM_RECEIVER_CHANNELS>();
-static_assert(all_elements_satisfy(REMOTE_RECEIVER_TO_POOL_TYPE, [](FabricChannelPoolType pool_type) {
-    return pool_type <= FabricChannelPoolType::ELASTIC;
-}));
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_TO_ENTRY_IDX =
+    eth_remote_channel_allocs::receiver_channel_to_entry_index;
 
-// Calculate how many args the remote channel pool consumes
+// Downstream sender num buffers (after remote channel allocations + marker)
 constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX =
-    REMOTE_CHANNEL_MAPPINGS_START_IDX + 2 * NUM_RECEIVER_CHANNELS;
+    REMOTE_CHANNEL_ALLOCATIONS_IDX + eth_remote_channel_allocs::GET_NUM_ARGS_CONSUMED();
 static_assert(
     get_compile_time_arg_val(DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX) == 0xabaddad7,
     "DOWNSTREAM_SENDER_NUM_BUFFERS_SPECIAL_TAG_IDX not found. This implies some arguments were misaligned between host "
@@ -261,6 +219,7 @@ constexpr size_t local_sender_channel_5_connection_info_addr = NAMED_CT_ARG("LOC
 constexpr size_t local_sender_channel_6_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_6_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_7_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_7_CONN_INFO_ADDR");
 constexpr size_t local_sender_channel_8_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_8_CONN_INFO_ADDR");
+constexpr size_t local_sender_channel_9_connection_info_addr = NAMED_CT_ARG("LOCAL_SENDER_CH_9_CONN_INFO_ADDR");
 
 // ============================================================================
 // Status pointers
@@ -290,10 +249,12 @@ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_6_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_7_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_8_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_9_SERVICED")),
 };
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_SERVICED")),
+    static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_2_SERVICED")),
 };
 
 // ============================================================================
@@ -360,6 +321,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_LIVE_CHECK_SKIP")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_LIVE_CHECK_SKIP")),
 };
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_live_check_skip_all_);
@@ -378,6 +340,7 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_INJECTION")),
+    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_INJECTION")),
 };
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
@@ -394,6 +357,7 @@ static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_6_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_9_ACK_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(sender_channel_ack_noc_ids_all_);
@@ -408,6 +372,7 @@ static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_6_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_9_ACK_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint8_t>(sender_channel_ack_cmd_buf_ids_all_);
@@ -418,6 +383,7 @@ constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_id
 static constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_0_FWD_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_1_FWD_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_2_FWD_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_noc_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
@@ -426,6 +392,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_data_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_FWD_DATA_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_FWD_DATA_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_FWD_DATA_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_data_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
@@ -434,6 +401,7 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_sync_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_FWD_SYNC_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_FWD_SYNC_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_FWD_SYNC_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding_sync_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
@@ -442,6 +410,7 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_forwarding
 static constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_local_write_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_0_LOCAL_WRITE_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("RX_CH_1_LOCAL_WRITE_NOC_ID")),
+    static_cast<size_t>(NAMED_CT_ARG("RX_CH_2_LOCAL_WRITE_NOC_ID")),
 };
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_noc_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
@@ -450,6 +419,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write
 static constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_0_LOCAL_WRITE_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_1_LOCAL_WRITE_CMD_BUF_ID")),
+    static_cast<uint8_t>(NAMED_CT_ARG("RX_CH_2_LOCAL_WRITE_CMD_BUF_ID")),
 };
 constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_write_cmd_buf_ids =
     take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint8_t>(
@@ -568,22 +538,24 @@ constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
 
 constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
     take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
+        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id, 0});
 
 // not in symbol table - because not used
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
-            // VC0
-            to_sender_0_pkts_acked_id,
-            to_sender_1_pkts_acked_id,
-            to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id,
-            // VC1
-            0,  // Padding upto MAX_NUM_SENDER_CHANNELS. VC1 does not use first level acks.
-            0,
-            0,
-            0});
+        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{// VC0
+                                                      to_sender_0_pkts_acked_id,
+                                                      to_sender_1_pkts_acked_id,
+                                                      to_sender_2_pkts_acked_id,
+                                                      to_sender_3_pkts_acked_id,
+                                                      // VC1 (no first level acks)
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      0,
+                                                      // Z-router extra + VC2 (no first level acks)
+                                                      0,
+                                                      0});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
@@ -596,7 +568,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_comple
             to_sender_4_pkts_completed_id,
             to_sender_5_pkts_completed_id,
             to_sender_6_pkts_completed_id,
-            to_sender_7_pkts_completed_id});
+            to_sender_7_pkts_completed_id,
+            0,  // Z-router extra / VC2 (worker-only, no router completion)
+            0});
 
 // Miscellaneous configuration
 
@@ -620,84 +594,51 @@ constexpr bool local_chip_noc_equals_downstream_noc =
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
 static constexpr uint8_t forward_and_local_write_noc_vc = NAMED_CT_ARG("EDM_NOC_VC");
 
-// ----------------------------------------------------------------------------- //
-// --------------------------------- PLACEHOLDER ------------------------------- //
-// ---------------------- UNTIL ELASTIC CHANNELS IMPLEMENTED ------------------- //
-// --------------------------------- ISSUE #26311 ------------------------------ //
-constexpr size_t CHUNK_N_PKTS = 0;
-constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
-    initialize_array<NUM_SENDER_CHANNELS, bool, false>();
-
-// Helper to extract num_slots from a channel's pool (returns 0 for non-static pools)
-template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t ChannelIdx>
+// Helpers to extract num_slots from a channel's allocation entry
+template <typename Allocs, auto& ChannelToEntryIndex, size_t ChannelIdx>
 constexpr size_t get_channel_num_slots() {
-    constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
-    constexpr auto pool_type = static_cast<FabricChannelPoolType>(ChannelPoolCollection::channel_pool_types[pool_idx]);
-
-    // If static pool, extract num_slots; otherwise default to 0
-    if constexpr (pool_type == FabricChannelPoolType::STATIC) {
-        using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
-        return PoolType::num_slots;
-    } else {
-        return 0;
-    }
+    constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
+    return Allocs::template Entry<entry_idx>::num_slots;
 }
 
-// Helper to extract remote_num_slots from a channel's pool (returns 0 for non-static pools)
-template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t ChannelIdx>
+template <typename Allocs, auto& ChannelToEntryIndex, size_t ChannelIdx>
 constexpr size_t get_channel_remote_num_slots() {
-    constexpr size_t pool_idx = ChannelToPoolIndex[ChannelIdx];
-    constexpr auto pool_type = static_cast<FabricChannelPoolType>(ChannelPoolCollection::channel_pool_types[pool_idx]);
-
-    // If static pool, extract remote_num_slots; otherwise default to 0
-    if constexpr (pool_type == FabricChannelPoolType::STATIC) {
-        using PoolType = std::tuple_element_t<pool_idx, typename ChannelPoolCollection::PoolsTuple>;
-        return PoolType::remote_num_slots;
-    } else {
-        return 0;
-    }
+    constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
+    return Allocs::template Entry<entry_idx>::remote_num_slots;
 }
 
-// Build array by inspecting each channel's pool
-template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t NumChannels, size_t... Indices>
+// Build arrays by inspecting each channel's allocation entry
+template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels, size_t... Indices>
 constexpr std::array<size_t, NumChannels> build_num_slots_array_impl(std::index_sequence<Indices...>) {
-    return {get_channel_num_slots<ChannelPoolCollection, ChannelToPoolIndex, Indices>()...};
+    return {get_channel_num_slots<Allocs, ChannelToEntryIndex, Indices>()...};
 }
 
-template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t NumChannels>
+template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels>
 constexpr std::array<size_t, NumChannels> build_num_slots_array() {
-    return build_num_slots_array_impl<ChannelPoolCollection, ChannelToPoolIndex, NumChannels>(
+    return build_num_slots_array_impl<Allocs, ChannelToEntryIndex, NumChannels>(
         std::make_index_sequence<NumChannels>{});
 }
 
-// Build remote num slots array by inspecting each channel's pool
-template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t NumChannels, size_t... Indices>
+template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels, size_t... Indices>
 constexpr std::array<size_t, NumChannels> build_remote_num_slots_array_impl(std::index_sequence<Indices...>) {
-    return {get_channel_remote_num_slots<ChannelPoolCollection, ChannelToPoolIndex, Indices>()...};
+    return {get_channel_remote_num_slots<Allocs, ChannelToEntryIndex, Indices>()...};
 }
 
-template <typename ChannelPoolCollection, auto& ChannelToPoolIndex, size_t NumChannels>
+template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels>
 constexpr std::array<size_t, NumChannels> build_remote_num_slots_array() {
-    return build_remote_num_slots_array_impl<ChannelPoolCollection, ChannelToPoolIndex, NumChannels>(
+    return build_remote_num_slots_array_impl<Allocs, ChannelToEntryIndex, NumChannels>(
         std::make_index_sequence<NumChannels>{});
 }
 
-// Backward compatibility arrays - no longer used by multi-pool implementation
-// These are kept for backward compatibility with code that hasn't migrated yet
-// The actual buffer counts are now extracted directly from pool data
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY = build_num_slots_array<
-    channel_pools_args,
-    SENDER_TO_POOL_IDX /*channel_pools_args::sender_channel_to_pool_index*/,
-    NUM_SENDER_CHANNELS>();
+constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
+    build_num_slots_array<channel_allocs, SENDER_TO_ENTRY_IDX, NUM_SENDER_CHANNELS>();
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = build_num_slots_array<
-    channel_pools_args,
-    channel_pools_args::receiver_channel_to_pool_index,
-    NUM_RECEIVER_CHANNELS>();
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
+    build_num_slots_array<channel_allocs, RECEIVER_TO_ENTRY_IDX, NUM_RECEIVER_CHANNELS>();
 
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY = build_num_slots_array<
-    eth_remote_channel_pools_args,
-    eth_remote_channel_pools_args::receiver_channel_to_pool_index,
+    eth_remote_channel_allocs,
+    eth_remote_channel_allocs::receiver_channel_to_entry_index,
     NUM_RECEIVER_CHANNELS>();
 
 }  // namespace tt::tt_fabric
@@ -709,8 +650,9 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 // RX channel forwarding disable flags (from imported trimming profile)
 constexpr bool disable_rx_ch0_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH0_FORWARDING") != 0;
 constexpr bool disable_rx_ch1_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH1_FORWARDING") != 0;
+constexpr bool disable_rx_ch2_forwarding = get_named_compile_time_arg_val("DISABLE_RX_CH2_FORWARDING") != 0;
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_forwarding_disabled = {
-    disable_rx_ch0_forwarding, disable_rx_ch1_forwarding};
+    disable_rx_ch0_forwarding, disable_rx_ch1_forwarding, disable_rx_ch2_forwarding};
 
 constexpr bool ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE =
     get_named_compile_time_arg_val("ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE");
@@ -722,7 +664,7 @@ constexpr size_t RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS =
 using ChannelTrimmingUsagePtr = tt::tt_fabric::FabricDatapathUsageL1Ptr<
     ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE,
     RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS,
-    MAX_NUM_RECEIVER_CHANNELS,
+    MAX_NUM_VCS,
     MAX_NUM_SENDER_CHANNELS>;
 constexpr ChannelTrimmingUsagePtr channel_trimming_usage_recorder{};
 
