@@ -9,6 +9,7 @@
 #include <variant>
 #include <reflect>
 
+#include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp"
 #include "ttnn/types.hpp"
 
