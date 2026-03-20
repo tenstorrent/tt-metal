@@ -1499,13 +1499,7 @@ def test_wan_decoder(
         logger.info(f"running torch model (use_cache={use_cache})")
         start = time.time()
         with torch.no_grad():
-            if use_cache:
-                torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
-            else:
-                # No-cache full-T: apply post_quant_conv then decoder with feat_cache=None
-                x = torch_model.post_quant_conv(torch_input_tensor)
-                torch_output = torch_model.decoder(x, feat_cache=None, feat_idx=None)
-                torch_output = torch.clamp(torch_output, min=-1.0, max=1.0)
+            torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
         logger.info(f"torch time taken: {time.time() - start}")
         logger.info(f"torch output shape: {torch_output.shape}")
 
