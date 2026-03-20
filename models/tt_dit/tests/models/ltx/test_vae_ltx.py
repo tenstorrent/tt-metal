@@ -228,6 +228,8 @@ def test_ltx_video_decoder(mesh_device: ttnn.MeshDevice):
     ]
 
     # PyTorch reference
+    from ltx_core.model.video_vae.enums import PaddingModeType
+
     torch_decoder = TorchVideoDecoder(
         convolution_dimensions=3,
         in_channels=128,
@@ -235,9 +237,10 @@ def test_ltx_video_decoder(mesh_device: ttnn.MeshDevice):
         decoder_blocks=decoder_blocks,
         patch_size=4,
         norm_layer=NormLayerType.PIXEL_NORM,
-        causal=True,  # Use causal to match TT default
+        causal=True,
         timestep_conditioning=False,
         base_channels=128,
+        decoder_spatial_padding_mode=PaddingModeType.ZEROS,  # Match TTNN's zero padding
     )
     torch_decoder.eval()
 
