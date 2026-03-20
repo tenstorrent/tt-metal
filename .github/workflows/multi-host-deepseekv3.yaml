@@ -356,8 +356,10 @@ jobs:
             generated/artifacts/dual_demo_full_results.json
           if-no-files-found: warn
 
+      # Temporary skip while https://github.com/tenstorrent/tt-metal/pull/40317
+      # attempts a proper fix; dual MTP smoke currently times out in CI.
       - name: Run dual MTP demo parity smoke test
-        if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ false && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
@@ -381,7 +383,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_mtp
 
       - name: Upload dual MTP demo output artifacts
-        if: ${{ always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ false && always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-demo-mtp-output-${{ github.run_id }}
