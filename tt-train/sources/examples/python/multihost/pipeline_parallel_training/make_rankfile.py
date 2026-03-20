@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
 """
 Generate an MPI rankfile from scontrol show hostnames output.
 
@@ -64,9 +67,7 @@ def make_rankfile(hosts: list[str], ranks_per_host: int) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate MPI rankfile from SLURM hostnames"
-    )
+    parser = argparse.ArgumentParser(description="Generate MPI rankfile from SLURM hostnames")
     parser.add_argument(
         "-n",
         "--ranks-per-host",
@@ -74,9 +75,7 @@ def main():
         required=True,
         help="Number of MPI ranks to assign per host",
     )
-    parser.add_argument(
-        "-o", "--output", default="-", help="Output file path (default: stdout)"
-    )
+    parser.add_argument("-o", "--output", default="-", help="Output file path (default: stdout)")
     args = parser.parse_args()
 
     raw_hosts = [line.strip() for line in sys.stdin if line.strip()]
