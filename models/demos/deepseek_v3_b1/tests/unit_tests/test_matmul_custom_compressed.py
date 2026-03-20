@@ -8,13 +8,19 @@ Tiles are pre-sorted by format. The kernel reconfigures the unpacker
 only once per format group instead of per tile.
 """
 
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
+
+pytestmark = pytest.mark.use_module_device({"allocator_mode": ttnn.device.AllocatorMode.HYBRID})
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
-from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import MatmulCustomCompressed
+from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import (
+    MatmulCustomCompressed,
+    create_runtime_fmt_tensors,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_eltwise_add_compressed import scale_tiles_for_mixed_formats
 
 
@@ -29,6 +35,7 @@ def _run_matmul_custom_compressed(
     pcc_threshold=0.98,
     impl="constexpr_compact",
     tile_scaler=None,
+    per_core_allocation=False,
 ):
     """Helper: run custom compressed A @ decompress(B_compressed).
 
@@ -67,7 +74,9 @@ def _run_matmul_custom_compressed(
     assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats, bfp0_mae_threshold=bfp0_mae)
     b_shard_spec = ttnn.ShardSpec(core_grid, [K, n_per_core], ttnn.ShardOrientation.ROW_MAJOR)
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, b_shard_spec)
-    ct = CompressedTensor.from_torch(torch_b, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        torch_b, assigner, device=device, memory_config=b_mem_config, per_core_allocation=per_core_allocation
+    )
 
     logger.info(f"Custom compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
@@ -120,8 +129,16 @@ def _run_matmul_custom_compressed(
         tile=out_tile,
     )
 
+    # Create fmt tensors for runtime path
+    fmt_tensors = None
+    if impl == "runtime":
+        all_cores = ttnn.corerange_to_cores(core_grid)
+        num_tiles_k = K // 32
+        out_w = n_per_core // 32
+        fmt_tensors = create_runtime_fmt_tensors(ct, core_grid, num_tiles_k * out_w, device, all_cores)
+
     # Run custom compressed matmul
-    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl)
+    ttnn_result = MatmulCustomCompressed.op(ttnn_a, ct, ttnn_output, impl=impl, fmt_tensors=fmt_tensors)
 
     output_torch = ttnn.to_torch(ttnn_result)
     assert output_torch.shape == (M, N), f"Expected shape ({M}, {N}), got {output_torch.shape}"
@@ -513,3 +530,34 @@ def test_matmul_custom_compressed_hybrid(device):
     passing, pcc_message = comp_pcc(torch_expected, output_torch, 0.98)
     logger.info(pcc_message)
     assert passing, pcc_message
+
+
+# --- Per-core allocation: runtime path ---
+
+
+def test_matmul_custom_compressed_per_core_runtime_large(device):
+    """[1, 7168] x [7168, 32], mixed bfp8+bfp4. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 32, formats=["bfp8", "bfp4"], impl="runtime", per_core_allocation=True
+    )
+
+
+def test_matmul_custom_compressed_per_core_runtime_multicore(device):
+    """[1, 7168] x [7168, 128], bfp8, 2 cores. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 128, formats=["bfp8"], impl="runtime", num_cores=2, per_core_allocation=True
+    )
+
+
+def test_matmul_custom_compressed_per_core_runtime_mixed_multicore(device):
+    """[1, 7168] x [7168, 416], mixed bfp8+bfp4, 13 cores. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 32 * 13, formats=["bfp8", "bfp4"], impl="runtime", num_cores=13, per_core_allocation=True
+    )
+
+
+def test_matmul_custom_compressed_per_core_runtime_all_formats(device):
+    """[1, 7168] x [7168, 32], mixed bfp8+bfp4+bfp2+bfp0. Runtime path with per-core allocation."""
+    _run_matmul_custom_compressed(
+        device, 1, 7168, 32, formats=["bfp8", "bfp4", "bfp2", "bfp0"], impl="runtime", per_core_allocation=True
+    )
