@@ -21,10 +21,12 @@ class ttMLA:
         seq_len: int = 1024,
         sp_axis: int = 0,
         tp_axis: int = 1,
+        is_balanced: bool = False,
     ):
         self.config = config
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
+        self.is_balanced = is_balanced
 
         # Extract dimensions from config
         self.hidden_size = config.hidden_size
@@ -445,7 +447,7 @@ class ttMLA:
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             is_causal=True,
             scale=self.scale,
-            is_balanced=False,
+            is_balanced=self.is_balanced,
         )
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)

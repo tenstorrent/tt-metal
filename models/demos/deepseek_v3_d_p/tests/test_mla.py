@@ -13,7 +13,12 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.utils.utils import get_rope_tensors
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    get_rope_tensors,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -95,8 +100,9 @@ def random_weights(config_only):
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
 @pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq128k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["skip_check", "check_pcc"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["unbalanced", "balanced"])
 @pytest.mark.timeout(900)  # Increase timeout to 15 minutes for large sequence lengths
-def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison, scale_down_sl):
+def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison, scale_down_sl, is_balanced):
     """
     Test comparing reference and TT MLA modules with same weights.
 
@@ -150,8 +156,17 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
 
     # Create TT MLA
     logger.info("Creating TT MLA...")
-    mla_tt = ttMLA(config, weights, mesh_device, layer_idx=0, seq_len=seq_len, sp_axis=sp_axis, tp_axis=tp_axis)
-    rope_tensors = get_rope_tensors(config, seq_len, mesh_device, sp_axis=sp_axis)
+    mla_tt = ttMLA(
+        config,
+        weights,
+        mesh_device,
+        layer_idx=0,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=is_balanced,
+    )
+    rope_tensors = get_rope_tensors(config, seq_len, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
 
     # Verify both exist
     assert mla_ref is not None, "Reference MLA should exist"
@@ -200,8 +215,15 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
         logger.info(f"  Output mean:  {ref_output.mean().item():.4f}")
         logger.info(f"  Output std:   {ref_output.std().item():.4f}")
 
+    # Reorder hidden_states for balanced ring attention
+    sp_factor = mesh_shape[sp_axis]
+    chunk_order = create_balanced_chunk_order(sp_factor) if is_balanced else None
+    tt_input = hidden_states.unsqueeze(0)  # [1, batch, seq, hidden]
+    if is_balanced:
+        tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
+
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.unsqueeze(0),
+        tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -217,6 +239,9 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
         tt_output_cpu = ttnn.to_torch(
             tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape)
         ).to(torch.bfloat16)
+
+        if is_balanced:
+            tt_output_cpu = reverse_reorder_tensor_chunks(tt_output_cpu, chunk_order, seq_dim=2)
 
         _, pcc_message = assert_with_pcc(ref_output.unsqueeze(0), tt_output_cpu, 0.98)
         logger.info(f"PCC is {pcc_message}")
