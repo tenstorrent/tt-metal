@@ -1128,7 +1128,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (in0_B == 1 && in0_B > 1) {
+    if (in0_B == 1 && in1_B > 1) {
         in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
     }
     if (in0_is_sharded) {
