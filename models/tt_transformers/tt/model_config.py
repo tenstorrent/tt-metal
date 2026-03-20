@@ -3649,11 +3649,17 @@ class ModelArgs:
             # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
         else:
             if self.cached_hf_model is None:
-                model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                model = model_cls.from_pretrained(
+                    self.CKPT_DIR, torch_dtype="auto", local_files_only=os.getenv("CI") == "true"
+                )
                 self.cached_hf_model = model
             else:
                 model = self.cached_hf_model
-            model.model.layers = model.model.layers[: self.n_layers]
+            inner = model.model
+            if hasattr(inner, "layers"):
+                inner.layers = inner.layers[: self.n_layers]
+            elif hasattr(inner, "language_model") and hasattr(inner.language_model, "layers"):
+                inner.language_model.layers = inner.language_model.layers[: self.n_layers]
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim, use_hf_rope=self.use_hf_rope)
             return wrapper
@@ -3680,10 +3686,11 @@ class ModelArgs:
 
     def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.transformer.layers[layer_idx].feed_forward
         else:
-            layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+            layer = vision_tower.vision_model.encoder.layers[0].mlp
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3723,10 +3730,11 @@ class ModelArgs:
 
     def reference_vision_attention(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            layer = model.vision_tower.transformer.layers[layer_idx].attention
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.transformer.layers[layer_idx].attention
         else:
-            layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+            layer = vision_tower.vision_model.encoder.layers[0].self_attn
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -3738,14 +3746,55 @@ class ModelArgs:
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
+    def _get_vision_tower(self, model):
+        """Handle different HF model architectures: Mistral3 nests vision_tower
+        under model.model, while Mllama has it directly on model."""
+        if hasattr(model, "vision_tower"):
+            return model.vision_tower
+        return model.model.vision_tower
+
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
-        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            # For Mistral: vision_tower is the PixtralVisionModel directly
-            layer = model.vision_tower.transformer
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.transformer
         else:
-            # For other models: vision_tower.vision_model.encoder
-            layer = model.vision_tower.vision_model.encoder
+            layer = vision_tower.vision_model.encoder
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_pixtral_image_block(self, layer_num=0):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        layer = vision_tower.transformer.layers[layer_num]
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms(self):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        layer = vision_tower.transformer.layers[0].ffn_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_conv2d_patch(self):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        layer = vision_tower.patch_conv
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rot_emb(self):
+        model = self.reference_vision_transformer(wrap=False)
+        vision_tower = self._get_vision_tower(model)
+        if "Mistral-Small-3.1-24B" in self.model_name:
+            layer = vision_tower.patch_positional_embedding
+        else:
+            raise NotImplementedError(f"reference_vision_rot_emb not implemented for {self.model_name}")
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer

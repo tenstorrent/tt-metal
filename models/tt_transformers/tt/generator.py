@@ -574,6 +574,8 @@ class Generator(WarmupForwardMixin):
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+                if "image_sizes" in local_kwargs and local_kwargs["image_sizes"] is not None:
+                    local_kwargs["image_sizes"] = local_kwargs["image_sizes"][idx]
 
             if sampling_enabled and not use_batched_prefill:
                 sampling_executed = True
