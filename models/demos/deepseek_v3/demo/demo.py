@@ -15,11 +15,11 @@ import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.utils.config_helpers import (
-    get_fabric_config,
     DEFAULT_SAMPLING_TEMPERATURE,
     DEFAULT_SAMPLING_TOP_K,
     DEFAULT_SAMPLING_TOP_P,
     USERS_PER_ROW,
+    get_fabric_config,
 )
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
