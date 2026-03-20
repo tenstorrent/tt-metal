@@ -39,14 +39,16 @@ on:
         type: string
         default: "in-service"
   schedule:
-    - cron: "0 */4 * * *" # Runs BH every 4 hours
+    - cron: "0 */4 * * *"
   push:
     branches: ["main"]
 
 run-name: >
   ${{
-    ((github.event_name == 'schedule' || github.event.inputs.arch == 'blackhole') && '(BH Galaxy) Quick') ||
-    ((github.event_name == 'push' || github.event.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Quick') ||
+    (github.event_name == 'schedule' && '(BH Galaxy) Quick') ||
+    (github.event.inputs.arch == 'blackhole' && '(BH Galaxy) Quick') ||
+    (github.event_name == 'push' && '(WH Galaxy) Quick') ||
+    (github.event.inputs.arch == 'wormhole_b0' && '(WH Galaxy) Quick') ||
     '(Unspecified Galaxy) Quick'
   }}
 
@@ -64,7 +66,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
+      enable-lto: ${{ inputs.enable-lto == true || inputs.enable-lto == 'true' }}
 
   galaxy-quick-test:
     needs: build-artifact
@@ -72,9 +74,11 @@ jobs:
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      blackhole: ${{ github.event_name == 'schedule' || github.event.inputs.arch == 'blackhole' }}
       scheduled: ${{ github.event_name == 'schedule' }}
       extra-tag: ${{ inputs.extra-tag || 'in-service' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
+      enable-lto: ${{ inputs.enable-lto == true || inputs.enable-lto == 'true' }}

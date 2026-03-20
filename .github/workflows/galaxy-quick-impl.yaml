@@ -1,8 +1,15 @@
-name: "[internal]Galaxy Quick tests"
+name: "[internal] Galaxy Quick tests"
+
 on:
   workflow_call:
     inputs:
       docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
         required: true
         type: string
       extra-tag:
@@ -31,19 +38,7 @@ on:
         default: false
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type }}
-      platform: ${{ inputs.platform }}
-      enable-lto: ${{ inputs.enable-lto }}
-      build-wheel: true
-
   quick-dual-glx-health:
-    needs: build-artifact
     runs-on:
       - ${{ inputs.extra-tag }}
     container:
@@ -67,12 +62,14 @@ jobs:
         with:
           submodules: recursive
           path: docker-job
+
       - name: ⬇️ Setup Job
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
       - name: Run health tests
         timeout-minutes: 10
         run: |
@@ -83,18 +80,19 @@ jobs:
             --hard-fail \
             --send-traffic \
             --num-iterations 1
+
       - name: Upload test reports
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+
       - name: Cleanup
         uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
   multi-host-glx-2x:
-    needs: build-artifact
     runs-on:
       - ${{ inputs.extra-tag }}
     env:
@@ -109,7 +107,7 @@ jobs:
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          name: ${{ inputs.build-artifact-name }}
 
       - name: Extract build files
         run: tar --zstd -xvf ttm_${{ inputs.platform == 'Ubuntu 22.04' && 'ubuntu-22.04' || 'ubuntu-20.04' }}-${{ inputs.build-type == 'Release' && 'release' || 'debug' }}.tar.zst
@@ -118,7 +116,7 @@ jobs:
         uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          name: ${{ inputs.wheel-artifact-name }}
 
       - name: Capture runner's home directory
         id: capture-home
@@ -128,7 +126,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ env.BUILD_DIR }}/lib
@@ -143,7 +141,6 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
