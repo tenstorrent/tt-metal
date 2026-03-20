@@ -97,6 +97,7 @@ public:
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };
+    DeviceAddr per_core_address(const CoreCoord& core) const;
 
     MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }

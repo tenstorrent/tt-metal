@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -43,6 +44,16 @@ public:
     const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return nd_shard_spec_; }
     bool created_with_nd_shard_spec() const { return created_with_nd_shard_spec_; }
+    bool per_core_allocation() const { return per_core_allocation_; }
+    MemoryConfig& set_per_core_allocation(bool enable) {
+        if (enable) {
+            TT_FATAL(buffer_type_ == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+            TT_FATAL(is_sharded(), "per_core_allocation requires a sharded memory layout");
+            TT_FATAL(!created_with_nd_shard_spec_, "per_core_allocation is not supported with NdShardSpec");
+        }
+        per_core_allocation_ = enable;
+        return *this;
+    }
 
     MemoryConfig with_shard_spec(std::optional<ShardSpec> shard_spec) const {
         return MemoryConfig(memory_layout_, buffer_type_, std::move(shard_spec));
@@ -81,6 +92,7 @@ private:
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
     bool created_with_nd_shard_spec_ = false;
+    bool per_core_allocation_ = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);
