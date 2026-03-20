@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import shutil
+import uuid
 import socket
 import subprocess
 import sys
@@ -1053,11 +1054,28 @@ class TestMultihostEnvPassthrough:
     """Integration tests that invoke tt-run with real MPI to verify env propagation."""
 
     @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path: Path):
-        """Create probe script and rank binding YAML in tmp_path."""
-        self.probe_script = tmp_path / "env_probe.py"
+    def _setup(self, request):
+        """Create probe + binding files on a filesystem visible to all MPI hosts.
+
+        Pytest's ``tmp_path`` lives under ``/tmp/pytest-of-*`` on the launcher only.
+        Remote ranks run ``python3 <probe>`` with the same path and would get ENOENT.
+        Use ``$TT_METAL_HOME/generated/...`` (shared checkout in CI) instead.
+        """
+        metal_home = os.environ["TT_METAL_HOME"]
+        # Node id may contain "::", brackets, etc. — keep directory names portable.
+        slug = "".join(c if c.isalnum() or c in "-_." else "_" for c in request.node.name)[:200]
+        work = (
+            Path(metal_home).resolve()
+            / "generated"
+            / "multihost_ttrun_env_probe"
+            / f"{slug}_{os.getpid()}_{uuid.uuid4().hex}"
+        )
+        work.mkdir(parents=True, exist_ok=False)
+        self.probe_script = work / "env_probe.py"
         _write_probe_script(self.probe_script)
-        self.tmp_path = tmp_path
+        self.tmp_path = work
+        yield
+        shutil.rmtree(work, ignore_errors=True)
 
     def test_tt_vars_propagated_to_all_ranks(self):
         """Set a TT_ prefixed var and verify both ranks see it rank-scoped."""
