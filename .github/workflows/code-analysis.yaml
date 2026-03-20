@@ -92,6 +92,25 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  # Quick P150b device grid check — temporary diagnostic
+  p150b-device-info:
+    runs-on: tt-ubuntu-2204-p150b-stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Print P150b device info
+        run: |
+          python3 -c "
+          import ttnn
+          device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+          grid = device.compute_with_storage_grid_size()
+          print(f'compute_grid: {grid.x}x{grid.y} = {grid.x * grid.y} cores')
+          print(f'arch: {device.arch()}')
+          print(f'device_id: {device.get_device_id()}')
+          dram = device.dram_grid_size()
+          print(f'dram_grid: {dram.x}x{dram.y}')
+          ttnn.close_device(device)
+          "
+
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
   # This workflow only needs to pass the platform string.
 
