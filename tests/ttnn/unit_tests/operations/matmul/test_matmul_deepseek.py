@@ -1180,7 +1180,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         "6400x512_32heads_per_core_M_gt_1",
     ],
 )
-def test_KV_Wm_matmul(device, test_case):
+def test_kv_wm_matmul(device, test_case):
     torch.manual_seed(0)
 
     in0_shape = test_case["in0_shape"]
