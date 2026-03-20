@@ -12,15 +12,206 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+// ============================================================================
+// Constants
+// ============================================================================
+
 // TODO: These constants should be queriable from the public API (currently HAL, for consistency)
 //       They are currently also hardcoded in the temporary Quasar host_api.hpp. Need to clean this up.
 static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
 static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
 
+// ============================================================================
+// Type Definitions
+// ============================================================================
+
+// Data structure built up from ProgramSpec to enable fast lookups.
+struct CollectedSpecData {
+    // Name -> spec lookups
+    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
+    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
+    std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+
+    // DFB endpoint info (derived from kernel bindings)
+    struct DFBEndpointInfo {
+        const KernelSpec* producer = nullptr;
+        const KernelSpec* consumer = nullptr;
+        const KernelSpec::DFBBinding* producer_binding = nullptr;
+        const KernelSpec::DFBBinding* consumer_binding = nullptr;
+    };
+    std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
+};
+
+// Bitmask for tracking processor allocation on a node.
+// (Factory functions are defined with processor assignment helper functions.)
+template <uint8_t NUM_CORES>
+struct ProcessorMask {
+    static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
+    static constexpr uint8_t VALID_BITS_MASK = (NUM_CORES == 8) ? 0xFF : ((1 << NUM_CORES) - 1);
+
+    uint8_t bits = 0x00;
+
+    // Operators
+    ProcessorMask operator|(ProcessorMask other) const { return {uint8_t(bits | other.bits)}; }
+    ProcessorMask operator&(ProcessorMask other) const { return {uint8_t(bits & other.bits)}; }
+    ProcessorMask operator~() const { return {uint8_t(~bits & VALID_BITS_MASK)}; }
+    ProcessorMask& operator|=(ProcessorMask other) {
+        bits |= other.bits;
+        return *this;
+    }
+    ProcessorMask& operator&=(ProcessorMask other) {
+        bits &= other.bits;
+        return *this;
+    }
+
+    // Queries
+    uint8_t num_in_use() const { return std::popcount(bits); }
+    uint8_t num_available() const { return NUM_CORES - num_in_use(); }
+    bool is_idx_available(uint8_t idx) const { return (bits & (1 << idx)) == 0; }
+    bool is_idx_in_use(uint8_t idx) const { return (bits & (1 << idx)) != 0; }
+    bool conflicts_with(ProcessorMask other) const { return (bits & other.bits) != 0; }
+};
+
+using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
+using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
+
+// Kernel -> ProcessorMask maps
+using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
+using ComputeProcessorMaskMap = std::unordered_map<const KernelSpec*, ComputeProcessorMask>;
+
+// ============================================================================
+// Helper Function Forward Declarations
+// ============================================================================
+
+// Utilities
+inline bool is_gen2_arch();
+inline bool is_gen1_arch();
+NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes);
+bool nodes_intersect(
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b);
+bool nodes_contains(
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset);
+
+// Phase 1: Collection & Validation
+CollectedSpecData CollectSpecData(const ProgramSpec& spec);
+void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected);
+
+// Phase 2: Processor Assignment
+template <uint8_t NUM_CORES>
+ProcessorMask<NUM_CORES> CreateMask(uint8_t mask);
+template <uint8_t NUM_CORES>
+std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use);
+std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAssignments(
+    const ProgramSpec& spec, const CollectedSpecData& collected);
+
+// Phase 3: Program Building
+experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
+    const DataflowBufferSpec* dfb_spec,
+    const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
+    const DMProcessorMaskMap& kernel_to_dm_processor_mask_map,
+    const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map);
+
+// ============================================================================
+//  ENTRY POINT
+// ============================================================================
+
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+    // Phase 1: Collect derived data (builds lookup tables, checks structural invariants)
+    CollectedSpecData collected = CollectSpecData(spec);
+
+    // Phase 1b: Validate semantic rules (can be skipped for trusted inputs)
+    if (!skip_validation) {
+        ValidateProgramSpec(spec, collected);
+    }
+
+    // Phase 2: Solve kernel-to-core assignments
+    // NOTE: Current solver assumes that a given DM kernel uses the _same_ set of DM cores on every node/cluster.
+    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
+        SolveKernelToProcessorAssignments(spec, collected);
+
+    // Phase 3: Build the Program
+    auto program_impl = std::make_shared<detail::ProgramImpl>();
+
+    // Create DataflowBuffers
+    std::unordered_map<DFBSpecName, uint32_t> dfb_name_to_id_map;
+    for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
+        const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
+        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
+            dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
+        dfb_name_to_id_map[dfb_name] = dfb_id;
+    }
+
+    // Create Kernels
+    // (TODO... WIP)
+    /*
+
+    // Ok, what will we need?
+
+    //  - [DONE] We need a CreateKernel API that will accept our pre-solved processor list
+    //     - We'll need some silly helpers to convert from our mask to the official enum
+    //  - We need a way to get our consts into the headergen (new CTA mechanism)
+    //    ... and later, our location-specific consts into the RTA list...
+    //    ... tempted to do this via the experimental Quasar config
+
+    for (const KernelSpec& kernel_spec : spec.kernels) {
+
+        if (kernel_spec.is_dm_kernel()) {
+
+            // Data movement kernel
+            KernelSource kernel_source = MakeKernelSource(kernel_spec);
+            QuasarDataMovementConfig config = MakeQuasarDataMovementConfig(kernel_spec);
+            std::set<DataMovementProcessor> dm_processors = MakeDMProcessorSet(DMProcessorMask);
+            // Get DFB local accessor names -> DFB ID
+            // (crap, this means walking the dfb bindings vector again...)
+
+            // Create the kernel
+            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config,
+    dm_processors);
+
+            // Add it to the ProgramImpl & save the kernel handle
+            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+            // TODO... save kernel handle
+        }
+        else {
+            // Compute kernel
+            KernelSource kernel_source = MakeKernelSource(kernel_spec);
+            QuasarDataMovementConfig config = MakeQuasarComputeConfig(kernel_spec);
+            std::set<DataMovementProcessor> dm_processors = MakeComputeProcessorSet(ComputeProcessorMask);
+            // Get DFB local accessor names -> DFB ID
+
+            // Create the kernel
+            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config,
+    compute_processors);
+
+            // Add it to the ProgramImpl & save the kernel handle
+            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
+            // TODO... save kernel handle
+        }
+    }
+
+    // Shoot.
+    // In order to implement ProgramRunParams, I'm going to need to store the
+    // KernelSpecName and DFBSpecName in the ProgramImpl.
+    // I need these to hold the mapping data from spec names to the handles.
+    // Luckily, ProgramImpl is not part of the public API, so I can add members to it.
+
+    */
+
+    return Program(std::move(program_impl));
+}
+
+// ============================================================================
+// IMPLEMENTATION: Utilities
+// ============================================================================
+
 inline bool is_gen2_arch() {
     tt::ARCH arch = tt::tt_metal::hal::get_arch();
     return arch == tt::ARCH::QUASAR;
 }
+
 inline bool is_gen1_arch() {
     tt::ARCH arch = tt::tt_metal::hal::get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
@@ -30,7 +221,6 @@ inline bool is_gen1_arch() {
 //       I'm sure a convert-to-CoreRangeSet helper already exists.
 //       Everything is converted to CoreRangeSet upfront in the iterative API.
 
-// Helper: Convert Nodes variant to NodeRangeSet
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes) {
     return std::visit(
         [](const auto& n) -> NodeRangeSet {
@@ -47,7 +237,6 @@ NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRang
         nodes);
 }
 
-// Helper: Check if two Nodes variants intersect
 bool nodes_intersect(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b) {
@@ -56,7 +245,6 @@ bool nodes_intersect(
     return a_set.intersects(b_set);
 }
 
-// Helper: Check if one Nodes variant contains another
 bool nodes_contains(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset) {
@@ -65,26 +253,13 @@ bool nodes_contains(
     return superset_node_range_set.contains(subset_node_range_set);
 }
 
-// Data structure built up from ProgramSpec to enable fast lookups
-struct CollectedSpecData {
-    // Name -> spec lookups
-    std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
-    std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
-    std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
-
-    // DFB endpoint info lives on the kernel spec
-    struct DFBEndpointInfo {
-        const KernelSpec* producer = nullptr;
-        const KernelSpec* consumer = nullptr;
-        const KernelSpec::DFBBinding* producer_binding = nullptr;
-        const KernelSpec::DFBBinding* consumer_binding = nullptr;
-    };
-    std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
-};
-
 // ============================================================================
+// IMPLEMENTATION: Collection & Validation
+// ============================================================================
+
+// ----------------------------------------------------------------------------
 // CollectSpecData: Build derived data structures from a ProgramSpec
-// ============================================================================
+// ----------------------------------------------------------------------------
 //
 // Indexes the ProgramSpec into lookup tables for efficient access.
 // Function enforces STRUCTURAL invariants only:
@@ -168,9 +343,9 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     return collected;
 }
 
-// ============================================================================
-// ValidateProgramSpec: Semantic validation of a ProgramSpec
-// ============================================================================
+// ----------------------------------------------------------------------------
+// ValidateProgramSpec: Semantic validation
+// ----------------------------------------------------------------------------
 //
 // This function checks SEMANTIC rules (that don't affect the CollectedSpecData structure):
 //   - Architecture requirements
@@ -435,67 +610,38 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     }
 }
 
-// Handy struct used for solving kernel->core assignments
+// ============================================================================
+// IMPLEMENTATION: Processor Assignment
+// ============================================================================
+
+// ProcessorMask factory functions
 template <uint8_t NUM_CORES>
-struct ProcessorMask {
-    static_assert(NUM_CORES > 0 && NUM_CORES <= 8, "ProcessorMask supports 1-8 processors");
+ProcessorMask<NUM_CORES> CreateMask(uint8_t mask) {
+    TT_FATAL(
+        mask <= ProcessorMask<NUM_CORES>::VALID_BITS_MASK,
+        "Mask specifies too many cores for ProcessorMask<{}>: {}",
+        NUM_CORES,
+        mask);
+    return {mask};
+}
 
-    // Mask of valid bit positions (e.g., 0xFF for 8 processors, 0x0F for 4)
-    static constexpr uint8_t VALID_BITS_MASK = (NUM_CORES == 8) ? 0xFF : ((1 << NUM_CORES) - 1);
-
-    // One-hot encoding of processors in use (0 = available, 1 = in use)
-    uint8_t bits = 0x00;
-
-    // Boolean operators
-    ProcessorMask operator|(ProcessorMask other) const { return {uint8_t(bits | other.bits)}; }
-    ProcessorMask operator&(ProcessorMask other) const { return {uint8_t(bits & other.bits)}; }
-    ProcessorMask operator~() const { return {uint8_t(~bits & VALID_BITS_MASK)}; }
-    ProcessorMask& operator|=(ProcessorMask other) {
-        bits |= other.bits;
-        return *this;
-    }
-    ProcessorMask& operator&=(ProcessorMask other) {
-        bits &= other.bits;
-        return *this;
+template <uint8_t NUM_CORES>
+std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const ProcessorMask<NUM_CORES>& already_in_use) {
+    if (already_in_use.num_available() < n) {
+        return std::nullopt;
     }
 
-    // Helpers
-    uint8_t num_in_use() const { return std::popcount(bits); }
-    uint8_t num_available() const { return NUM_CORES - num_in_use(); }
-    bool is_idx_available(uint8_t idx) const { return (bits & (1 << idx)) == 0; }
-    bool is_idx_in_use(uint8_t idx) const { return (bits & (1 << idx)) != 0; }
-    bool conflicts_with(ProcessorMask other) const { return (bits & other.bits) != 0; }
-
-    // Factory method: create a ProcessorMask from a mask
-    static ProcessorMask create(uint8_t mask) {
-        TT_FATAL(mask <= VALID_BITS_MASK, "Mask specifies too many cores for ProcessorMask<{}>: {}", NUM_CORES, mask);
-        return {mask};
-    }
-
-    // Factory method: allocate N available processors from those not already in use
-    // Returns a mask of the newly reserved processors, or std::nullopt if not enough are available
-    static std::optional<ProcessorMask> reserve_n(uint8_t n, const ProcessorMask& already_in_use) {
-        // Enough left?
-        if (already_in_use.num_available() < n) {
-            return std::nullopt;
+    ProcessorMask<NUM_CORES> newly_reserved;
+    for (uint8_t i = 0; i < NUM_CORES && n > 0; i++) {
+        if (already_in_use.is_idx_available(i)) {
+            newly_reserved.bits |= (1 << i);
+            n--;
         }
-
-        ProcessorMask newly_reserved;
-        for (uint8_t i = 0; i < NUM_CORES && n > 0; i++) {
-            if (already_in_use.is_idx_available(i)) {
-                newly_reserved.bits |= (1 << i);
-                n--;
-            }
-        }
-        return newly_reserved;
     }
-};
+    return newly_reserved;
+}
 
-// Type aliases for DM and compute processors on Quasar
-using DMProcessorMask = ProcessorMask<QUASAR_DM_CORES_PER_NODE>;
-using ComputeProcessorMask = ProcessorMask<QUASAR_TENSIX_CORES_PER_NODE>;
-
-// Helper: Reserve DM processors for a kernel on a WorkerSpec (aka KernelGroup)
+// Reserve DM processors for a kernel on a WorkerSpec.
 // Returns {this_kernel_mask, updated_cumulative_mask}
 // Throws TT_FATAL on conflict or allocation failure (see simplifying assumption notes)
 std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
@@ -520,7 +666,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     }
 
     // First time seeing this kernel - reserve new processors
-    std::optional<DMProcessorMask> reserved = DMProcessorMask::reserve_n(kernel_spec->num_threads, cumulative_mask);
+    std::optional<DMProcessorMask> reserved = ReserveProcessors(kernel_spec->num_threads, cumulative_mask);
     TT_FATAL(
         reserved.has_value(),
         "Failed to reserve processors for DM kernel '{}' on WorkerSpec '{}'. "
@@ -532,9 +678,9 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     return {mask, cumulative_mask | mask};
 }
 
-// Helper: Assign compute processor mask for a kernel.
+// Assign compute processor mask for a kernel.
 ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, const KernelSpecName& kernel_name) {
-    auto reserved = ComputeProcessorMask::reserve_n(kernel_spec->num_threads, ComputeProcessorMask::create(0x00));
+    auto reserved = ReserveProcessors(kernel_spec->num_threads, CreateMask<QUASAR_TENSIX_CORES_PER_NODE>(0x00));
     TT_FATAL(
         reserved.has_value(),
         "Compute kernel '{}' reservation failed. Condition should be unreachable after validation.",
@@ -542,38 +688,33 @@ ComputeProcessorMask AssignComputeProcessors(const KernelSpec* kernel_spec, cons
     return reserved.value();
 }
 
-using DMProcessorMaskMap = std::unordered_map<const KernelSpec*, DMProcessorMask>;
-using ComputeProcessorMaskMap = std::unordered_map<const KernelSpec*, ComputeProcessorMask>;
-
-// Helper: Solve kernel-to-core assignments
+// Solve kernel-to-core assignments.
 // NOTE: Despite the earlier legality checks, it is possible for the solver to fail! (with TT_FATAL)
 //   The current implementation makes a (likely temporary) simplifying assumption:
 //      A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
 //   If the input ProgramSpec passes legality checks but fails in the solver, the resulting error
 //   message will make it clear what went wrong (i.e. overly restrictive "common DM cores" assumption).
 std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAssignments(
-    const ProgramSpec& spec, const CollectedSpecData& derived_data) {
-    // Mapping from kernel specs to their processor masks
+    const ProgramSpec& spec, const CollectedSpecData& collected) {
     DMProcessorMaskMap kernels_to_dm_processor_mask;
     ComputeProcessorMaskMap kernels_to_compute_processor_mask;
 
-    // Solver loop (with simplifying assumption)
     for (const WorkerSpec& worker : spec.workers.value()) {
         // Cumulative DM processor mask for this WorkerSpec
-        // (If we decide to reserve DM cores for interal use, just update the initial mask here.)
-        DMProcessorMask cumulative_dm_mask = DMProcessorMask::create(0x00);
+        // (If we decide to reserve DM cores for internal use, just update the initial mask here.)
+        DMProcessorMask cumulative_dm_mask = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x00);
 
         // Since we enforce (at most) one compute kernel per WorkerSpec, no need to track cumulative mask.
 
         for (const KernelSpecName& kernel_name : worker.kernels) {
-            const KernelSpec* kernel_spec = derived_data.kernel_by_name.at(kernel_name);
+            const KernelSpec* kernel_spec = collected.kernel_by_name.at(kernel_name);
 
             if (kernel_spec->is_dm_kernel()) {
                 // Look up existing DM mask, if any (from previous WorkerSpec iterations)
                 std::optional<DMProcessorMask> existing_mask =
                     kernels_to_dm_processor_mask.contains(kernel_spec)
                         ? std::optional(kernels_to_dm_processor_mask.at(kernel_spec))
-                        : std::nullopt;  // (redundant lookup, for code readability)
+                        : std::nullopt;
 
                 auto [mask, new_cumulative] =
                     ReserveDMProcessors(kernel_spec, existing_mask, cumulative_dm_mask, worker.unique_id);
@@ -581,7 +722,7 @@ std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAss
                 kernels_to_dm_processor_mask[kernel_spec] = mask;
                 cumulative_dm_mask = new_cumulative;
             } else {
-                // compute kernel
+                // Compute kernel
                 kernels_to_compute_processor_mask[kernel_spec] = AssignComputeProcessors(kernel_spec, kernel_name);
             }
         }
@@ -590,7 +731,11 @@ std::pair<DMProcessorMaskMap, ComputeProcessorMaskMap> SolveKernelToProcessorAss
     return std::make_pair(kernels_to_dm_processor_mask, kernels_to_compute_processor_mask);
 }
 
-// Helper: Make a DataflowBufferConfig from a DataflowBufferSpec
+// ============================================================================
+// IMPLEMENTATION: Program Building
+// ============================================================================
+
+// Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
@@ -636,98 +781,6 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .enable_implicit_sync = !dfb_spec->disable_implicit_sync,
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata};
-}
-
-//============================================================================
-// MakeProgramFromSpec: Create a Program from a ProgramSpec
-//============================================================================
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
-    // Collect derived data (builds lookup tables, checks structural invariants)
-    CollectedSpecData collected = CollectSpecData(spec);
-
-    // Validate semantic rules (can be skipped in production for trusted inputs)
-    if (!skip_validation) {
-        ValidateProgramSpec(spec, collected);
-    }
-
-    // Solve kernel-to-core assignments
-    // NOTE: Current solver assumes that a given DM kernel uses the _same_ set of DM cores on every node/cluster.
-    auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
-        SolveKernelToProcessorAssignments(spec, collected);
-
-    // Create ProgramImpl
-    auto program_impl = std::make_shared<detail::ProgramImpl>();
-
-    // Create DataflowBuffers
-    std::unordered_map<DFBSpecName, uint32_t> dfb_name_to_id_map;
-    for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
-        // Create the DFB + add it to the ProgramImpl
-        const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
-        const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
-            dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
-        uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
-
-        // Remember the generated ID
-        dfb_name_to_id_map[dfb_name] = dfb_id;
-    }
-
-    // Create Kernels
-    // (TODO... WIP)
-    /*
-
-    // Ok, what will we need?
-
-    //  - [DONE] We need a CreateKernel API that will accept our pre-solved processor list
-    //     - We'll need some silly helpers to convert from our mask to the official enum
-    //  - We need a way to get our consts into the headergen (new CTA mechanism)
-    //    ... and later, our location-specific consts into the RTA list...
-    //    ... tempted to do this via the experimental Quasar config
-
-    for (const KernelSpec& kernel_spec : spec.kernels) {
-
-        if (kernel_spec.is_dm_kernel()) {
-
-            // Data movement kernel
-            KernelSource kernel_source = MakeKernelSource(kernel_spec);
-            QuasarDataMovementConfig config = MakeQuasarDataMovementConfig(kernel_spec);
-            std::set<DataMovementProcessor> dm_processors = MakeDMProcessorSet(DMProcessorMask);
-            // Get DFB local accessor names -> DFB ID
-            // (crap, this means walking the dfb bindings vector again...)
-
-            // Create the kernel
-            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarDataMovementKernel>(kernel_src, core_ranges, config,
-    dm_processors);
-
-            // Add it to the ProgramImpl & save the kernel handle
-            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-            // TODO... save kernel handle
-        }
-        else {
-            // Compute kernel
-            KernelSource kernel_source = MakeKernelSource(kernel_spec);
-            QuasarDataMovementConfig config = MakeQuasarComputeConfig(kernel_spec);
-            std::set<DataMovementProcessor> dm_processors = MakeComputeProcessorSet(ComputeProcessorMask);
-            // Get DFB local accessor names -> DFB ID
-
-            // Create the kernel
-            std::shared_ptr<Kernel> kernel = std::make_shared<QuasarComputeKernel>(kernel_src, core_ranges, config,
-    compute_processors);
-
-            // Add it to the ProgramImpl & save the kernel handle
-            KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-            // TODO... save kernel handle
-        }
-    }
-
-    // Shoot.
-    // In order to implement ProgramRunParams, I'm going to need to store the
-    // KernelSpecName and DFBSpecName in the ProgramImpl.
-    // I need these to hold the mapping data from spec names to the handles.
-    // Luckily, ProgramImpl is not part of the public API, so I can add members to it.
-
-    */
-
-    return Program(std::move(program_impl));
 }
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api
