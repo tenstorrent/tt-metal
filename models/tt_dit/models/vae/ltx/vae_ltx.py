@@ -274,3 +274,74 @@ class LTXResnetBlock3D(Module):
             residual = self.conv_shortcut(residual)
 
         return ttnn.add(residual, h)
+
+
+# =============================================================================
+# Torch-only VAE Decoder wrapper (for pipeline, runs on CPU)
+# =============================================================================
+
+
+class LTXVideoDecoderTorch:
+    """
+    Torch-only wrapper for the LTX-2 Video VAE decoder.
+
+    Runs on CPU/GPU. Used by the pipeline to decode latents → video.
+    TTNN implementation of the full decoder (with DepthToSpaceUpsample,
+    UNetMidBlock3D, etc.) is future work.
+
+    Usage:
+        decoder = LTXVideoDecoderTorch.from_config(config_dict)
+        video = decoder.decode(latent)  # (B, 128, F', H', W') → (B, 3, F, H, W)
+    """
+
+    def __init__(self, torch_decoder):
+        self.decoder = torch_decoder
+        self.decoder.eval()
+
+    @classmethod
+    def from_config(
+        cls,
+        decoder_blocks: list,
+        *,
+        in_channels: int = 128,
+        out_channels: int = 3,
+        patch_size: int = 4,
+        causal: bool = False,
+        timestep_conditioning: bool = False,
+        base_channels: int = 128,
+    ) -> "LTXVideoDecoderTorch":
+        """Create decoder from block config."""
+        import sys
+
+        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+        from ltx_core.model.video_vae.enums import NormLayerType
+        from ltx_core.model.video_vae.video_vae import VideoDecoder
+
+        decoder = VideoDecoder(
+            convolution_dimensions=3,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            decoder_blocks=decoder_blocks,
+            patch_size=patch_size,
+            norm_layer=NormLayerType.PIXEL_NORM,
+            causal=causal,
+            timestep_conditioning=timestep_conditioning,
+            base_channels=base_channels,
+        )
+        return cls(decoder)
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
+        self.decoder.load_state_dict(state_dict)
+
+    @torch.no_grad()
+    def decode(self, latent: torch.Tensor) -> torch.Tensor:
+        """
+        Decode latent tensor to video.
+
+        Args:
+            latent: (B, C, F', H', W') latent tensor (C=128)
+
+        Returns:
+            (B, 3, F, H, W) decoded video
+        """
+        return self.decoder(latent)
