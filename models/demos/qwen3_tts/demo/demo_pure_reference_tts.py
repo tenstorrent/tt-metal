@@ -656,11 +656,28 @@ def decode_audio(codes: torch.Tensor, decoder_weights: dict) -> torch.Tensor:
     return audio
 
 
+def get_default_reference_path():
+    """Get path to included Jim reference audio."""
+    import os
+
+    return os.path.join(os.path.dirname(__file__), "jim_reference.wav")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pure Reference TTS Demo with ICL")
     parser.add_argument("--text", type=str, required=True, help="Text to synthesize")
-    parser.add_argument("--ref-audio", type=str, required=True, help="Reference audio for voice cloning")
-    parser.add_argument("--ref-text", type=str, required=True, help="Text spoken in the reference audio")
+    parser.add_argument(
+        "--ref-audio",
+        type=str,
+        default=None,
+        help="Reference audio path (default: included jim_reference.wav)",
+    )
+    parser.add_argument(
+        "--ref-text",
+        type=str,
+        default="Let me also go over the review slides.",
+        help="Reference audio transcript (default: transcript for jim_reference.wav)",
+    )
     parser.add_argument("--output", type=str, default="/tmp/pure_reference_tts.wav", help="Output audio path")
     parser.add_argument("--max-tokens", type=int, default=256, help="Maximum tokens to generate")
     parser.add_argument("--language", type=str, default="english", help="Language (english, chinese, etc.)")
@@ -692,17 +709,20 @@ def main():
     )
     args = parser.parse_args()
 
+    # Use default Jim reference if not specified
+    ref_audio = args.ref_audio if args.ref_audio else get_default_reference_path()
+
     print("=" * 80)
     print("Pure Reference TTS Demo (ICL Mode)")
     print("=" * 80)
     print(f"Target text: {args.text}")
-    print(f"Reference audio: {args.ref_audio}")
+    print(f"Reference audio: {ref_audio}")
     print(f"Reference text: {args.ref_text}")
     print()
 
     # Verify reference audio exists
-    if not Path(args.ref_audio).exists():
-        print(f"ERROR: Reference audio not found: {args.ref_audio}")
+    if not Path(ref_audio).exists():
+        print(f"ERROR: Reference audio not found: {ref_audio}")
         return
 
     # Load weights
@@ -720,7 +740,7 @@ def main():
     from models.demos.qwen3_tts.demo.reference_icl_utils import trim_reference_for_icl_conditioning
 
     # Encode reference audio, then shorten if needed so text_len > codec_len
-    ref_codes, audio_data = encode_reference_audio(args.ref_audio, main_weights)
+    ref_codes, audio_data = encode_reference_audio(ref_audio, main_weights)
     ref_codes, audio_data = trim_reference_for_icl_conditioning(
         ref_codes, audio_data, tokenizer, args.ref_text, args.text
     )
@@ -796,7 +816,7 @@ def main():
     print("Summary - All Reference Components Used")
     print("=" * 80)
     print(f"Target text: {args.text}")
-    print(f"Reference audio: {args.ref_audio}")
+    print(f"Reference audio: {ref_audio}")
     print(f"Generated tokens: {len(codes)}")
     print(f"Audio duration: {len(audio_np) / 24000:.2f}s")
     print(f"Generation time: {gen_time:.2f}s")

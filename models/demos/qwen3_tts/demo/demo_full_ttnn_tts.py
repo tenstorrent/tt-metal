@@ -1435,11 +1435,28 @@ def run_full_ttnn_tts(
         print("\nDevice closed")
 
 
+def get_default_reference_path():
+    """Get path to included Jim reference audio."""
+    import os
+
+    return os.path.join(os.path.dirname(__file__), "jim_reference.wav")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Full TTNN TTS Demo")
     parser.add_argument("--text", type=str, required=True, help="Text to synthesize")
-    parser.add_argument("--ref-audio", type=str, required=True, help="Reference audio path")
-    parser.add_argument("--ref-text", type=str, required=True, help="Reference audio transcript")
+    parser.add_argument(
+        "--ref-audio",
+        type=str,
+        default=None,
+        help="Reference audio path (default: included jim_reference.wav)",
+    )
+    parser.add_argument(
+        "--ref-text",
+        type=str,
+        default="Let me also go over the review slides.",
+        help="Reference audio transcript (default: transcript for jim_reference.wav)",
+    )
     parser.add_argument("--output", type=str, default="/tmp/ttnn_tts_output.wav", help="Output path")
     parser.add_argument("--max-tokens", type=int, default=256, help="Max tokens to generate")
     parser.add_argument("--device-id", type=int, default=0, help="TT device ID")
@@ -1486,9 +1503,12 @@ def main():
     )
     args = parser.parse_args()
 
+    # Use default Jim reference if not specified
+    ref_audio = args.ref_audio if args.ref_audio else get_default_reference_path()
+
     run_full_ttnn_tts(
         text=args.text,
-        ref_audio=args.ref_audio,
+        ref_audio=ref_audio,
         ref_text=args.ref_text,
         output_path=args.output,
         max_new_tokens=args.max_tokens,
