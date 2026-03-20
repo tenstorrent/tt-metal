@@ -396,7 +396,7 @@ class TestShardedExecution:
         golden = rms_norm_golden(sh_ln_golden(torch_input, weight=torch_w), torch_w)
         check_pcc(golden, fused.output_tensors[0], label=f"sharded {shard_type}")
 
-    @skip_with_llk_assert("Compiler error with LLK asserts enabled")
+    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     def test_sharded_three_phase(self, device):
         """3-phase LN->RMS->LN block-sharded on 4x4 grid."""
         from models.experimental.ops.descriptors.fusion import Sequential
@@ -880,6 +880,7 @@ class TestBranchingTopology:
         for i, label in enumerate(["LL", "LR", "RL", "RR"]):
             check_pcc(goldens[i], fused.output_tensors[i], label=label)
 
+    @skip_with_llk_assert("Compiler error with LLK asserts enabled. Issue: #40330")
     def test_asymmetric_deep_left(self, device, multi_tensors):
         """Deep left + shallow right.
 
