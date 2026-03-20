@@ -15,6 +15,11 @@ from vllm.model_executor.models.gemma3_mm import (
     Gemma3ProcessingInfo,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.mistral3 import (
+    Mistral3DummyInputsBuilder,
+    _build_mistral3_info,
+    _build_mistral3_processor,
+)
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalDataDict
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
@@ -164,7 +169,16 @@ class CustomNamespace(SimpleNamespace):
         return key in self.__dict__
 
 
+@MULTIMODAL_REGISTRY.register_processor(
+    _build_mistral3_processor,
+    info=_build_mistral3_info,
+    dummy_inputs=Mistral3DummyInputsBuilder,
+)
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
+    model_capabilities = {
+        "supports_prefix_caching": False,
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -172,7 +186,16 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=32768, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        tt_data_parallel=1,
+        optimizations: str = None,
+    ):
+        assert optimizations is None, "Custom optimizations are not supported for this model"
         from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
         max_seq_len = 1024 * 128
