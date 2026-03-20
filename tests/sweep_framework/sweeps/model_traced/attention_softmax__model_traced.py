@@ -86,37 +86,44 @@ def run(
     torch.manual_seed(0)
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get(
+        "input_b_tensor_placement", kwargs.get("attention_mask_tensor_placement", None)
+    )
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs)
 
-    # Parse input_a_shape - can be tuple/list or dict (from binary operation extraction)
+    # V2 loader provides attention_mask as named tensor kwargs: attention_mask_shape, attention_mask_dtype, etc.
+    # Fall back to input_b_* for sample suite.
+    mask_shape = kwargs.get("attention_mask_shape", kwargs.get("input_b_shape"))
+    mask_dtype = kwargs.get("attention_mask_dtype", input_b_dtype)
+    mask_layout = kwargs.get("attention_mask_layout", input_b_layout)
+    mask_memory_config = kwargs.get("attention_mask_memory_config", input_b_memory_config)
+
+    # Parse input_a_shape
     if isinstance(input_a_shape, dict):
-        # Binary operation format: {"input_a": shape_a, "input_b": shape_b}
         shape_a = tuple(input_a_shape.get("input_a", input_a_shape.get("self", [1, 32, 32])))
         shape_b = tuple(input_a_shape.get("input_b", input_a_shape.get("other", shape_a)))
     elif isinstance(input_a_shape, (tuple, list)):
         shape_a = tuple(input_a_shape)
-        shape_b = shape_a  # Mask has same shape as input
+        shape_b = tuple(mask_shape) if mask_shape else shape_a
     else:
         shape_a = input_a_shape
-        shape_b = shape_a
+        shape_b = tuple(mask_shape) if mask_shape else shape_a
 
     # Get head_size from op_kwargs if provided (traced configs provide it as a kwarg),
     # otherwise fall back to scalar
     head_size = op_kwargs.get("head_size", int(scalar) if scalar is not None else None)
 
-    # Generate input tensor
+    # Generate input tensor — use small range to avoid BFLOAT8_B precision issues with softmax.
+    # Large values ([-100,100]) cause softmax to produce all-zeros or all-ones after quantization.
     torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-1, high=1, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
-    # attention_softmax_ requires an attention_mask
-    # Use binary mask (0 or 1) as in the working transformer sweep test
-    # NOT -inf masks as in some unit tests
+    # Generate attention mask with small range
     torch_mask_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32),
-        input_b_dtype if input_b_dtype else input_a_dtype,
+        partial(torch_random, low=-1, high=1, dtype=torch.float32),
+        mask_dtype if mask_dtype else input_a_dtype,
     )(shape_b)
 
     # Get golden output using the ttnn golden function
@@ -161,10 +168,13 @@ def run(
     else:
         input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Convert attention mask to TTNN tensor
-    mask_dtype = input_b_dtype if input_b_dtype else input_a_dtype
-    mask_layout = input_b_layout if input_b_layout else input_a_layout
-    mask_memory_config = input_b_memory_config if input_b_memory_config else input_a_memory_config
+    # Convert attention mask to TTNN tensor using V2 traced params (set above)
+    if not mask_dtype:
+        mask_dtype = input_a_dtype
+    if not mask_layout:
+        mask_layout = input_a_layout
+    if not mask_memory_config:
+        mask_memory_config = input_a_memory_config
     mask_is_sharded = hasattr(mask_memory_config, "is_sharded") and mask_memory_config.is_sharded()
 
     if not is_host:
