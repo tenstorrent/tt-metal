@@ -66,10 +66,6 @@ tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, floa
         ttnn::addalpha(buf_BX, X, a, std::nullopt, X);
     }
 
-    buf_A.deallocate();
-    buf_A2.deallocate();
-    buf_BX.deallocate();
-
     if (needs_transpose) {
         X = ttnn::transpose(X, -2, -1);
     }
