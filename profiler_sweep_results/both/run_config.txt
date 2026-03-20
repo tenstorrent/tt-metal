@@ -1,0 +1,7 @@
+Run Name: both
+Date: Wed Mar 18 10:08:47 PM UTC 2026
+Prompt Lengths: 32k
+Parse Only: false
+USE_FUSED_AG_MM=1
+TT_LLAMA_USE_FUSED_MM_RS=1
+LLAMA_DIR=/home/tvardhineni/llama-weights/Meta-Llama-3.3-70B-Instruct/original
