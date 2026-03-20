@@ -32,6 +32,8 @@ using namespace tt::tt_fabric::linear::experimental;
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #if defined(ENABLE_SOCKET_READER)
 #include "api/socket_api.h"
+#include "api/tensor/tensor_accessor.h"
+#include "../micro_ops/host_io/kernels/pcie_noc_utils.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 using tt::data_movement::common::tt_memmove;
 #endif
@@ -46,18 +48,29 @@ struct Broadcast {
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
-    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isSender, uint32_t useSocket = 0>
+    template <
+        uint32_t cb0Id,
+        uint32_t NumPagesToRead,
+        uint32_t isSender,
+        uint32_t useSocket = 0,
+        uint32_t useH2DEmbed = 0,
+        uint32_t h2dPullFromHost = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
         static constexpr uint32_t is_sender = isSender;
         static constexpr bool use_socket = useSocket != 0;
+        static constexpr bool use_h2d_embed = useH2DEmbed != 0;
+        static constexpr bool h2d_pull_from_host = h2dPullFromHost != 0;
+        static_assert(!(use_socket && use_h2d_embed), "Broadcast reader cannot use D2D socket and H2D embed together");
     };
 
     struct ReaderArgs {
         uint32_t socket_config_addr = 0;
         uint32_t socket_page_size = 0;
         uint32_t socket_num_pages = 0;
+        uint32_t embedding_tensor_addr = 0;
+        uint32_t embedding_row_size_bytes = 0;
     };
 
     template <
@@ -132,19 +145,45 @@ struct Broadcast {
             if constexpr (IsWorkerCore) {
                 if (CTArgs::is_sender) {
 #if defined(ENABLE_SOCKET_READER)
-                    if constexpr (CTArgs::use_socket) {
+                    if constexpr (CTArgs::use_socket || CTArgs::use_h2d_embed) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         socket_wait_for_pages(recv, args.socket_num_pages);
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        invalidate_l1_cache();
-                        noc_async_read(
-                            get_noc_addr(recv.read_ptr),
-                            get_write_ptr(CTArgs::cb0_id),
-                            args.socket_page_size,
-                            1 - noc_index);
-                        noc_async_read_barrier(1 - noc_index);
+                        if constexpr (CTArgs::use_socket) {
+                            invalidate_l1_cache();
+                            noc_async_read(
+                                get_noc_addr(recv.read_ptr),
+                                get_write_ptr(CTArgs::cb0_id),
+                                args.socket_page_size,
+                                1 - noc_index);
+                            noc_async_read_barrier(1 - noc_index);
+                        } else {
+                            if constexpr (CTArgs::h2d_pull_from_host) {
+                                const uint32_t read_addr_hi = recv.h2d.data_addr_hi;
+                                const uint32_t read_addr_lo = recv.h2d.data_addr_lo;
+                                const uint32_t pcie_xy_enc = recv.h2d.pcie_xy_enc;
+                                noc_async_wide_read_any_len_with_state(
+                                    NOC_INDEX,
+                                    pcie_xy_enc,
+                                    ((static_cast<uint64_t>(read_addr_hi) << 32) | read_addr_lo) + recv.read_ptr -
+                                        recv.fifo_addr,
+                                    recv.read_ptr,
+                                    args.socket_page_size);
+                                noc_async_read_barrier();
+                            }
+
+                            constexpr auto embedding_args = TensorAccessorArgs<1>();
+                            auto embedding_accessor = TensorAccessor(
+                                embedding_args, args.embedding_tensor_addr, args.embedding_row_size_bytes);
+                            volatile tt_l1_ptr uint32_t* token_id_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(recv.read_ptr);
+                            const uint64_t embedding_noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
+                            noc_async_read(
+                                embedding_noc_addr, get_write_ptr(CTArgs::cb0_id), args.embedding_row_size_bytes);
+                            noc_async_read_barrier();
+                        }
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);

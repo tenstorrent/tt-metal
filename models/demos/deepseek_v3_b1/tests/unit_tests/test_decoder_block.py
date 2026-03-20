@@ -15,10 +15,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
+from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import (
+    H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
+    AttentionBlock,
+    DecoderIngressMode,
+)
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
@@ -1547,3 +1551,210 @@ def test_decoder_mlp(
     logger.info("✓ DecoderBlock MLP mesh test passed!")
 
     ttnn.synchronize_device(submesh)
+
+
+@pytest.mark.parametrize("h2d_mode", [ttnn.H2DMode.HOST_PUSH, ttnn.H2DMode.DEVICE_PULL])
+@pytest.mark.requires_grid_size((13, 10))
+def test_dense_decoder_h2d_embed_single_device(
+    bh_2d_mesh_device,
+    h2d_mode,
+    get_reference_model_state_dict,
+):
+    """Focused single-device test for decoder ingress mode H2D -> embedding -> RMSNorm."""
+    if not is_slow_dispatch():
+        pytest.skip("Skipping H2D decoder ingress test in fast dispatch mode")
+
+    torch.manual_seed(0)
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
+    ttnn.enable_asynchronous_slow_dispatch(submesh)
+    device_grid_size = submesh.compute_with_storage_grid_size()
+
+    epsilon = 1e-6
+    position_id = 0
+    max_seq_len = 128
+    use_fp32 = False
+    reduce_root_coord = ttnn.MeshCoordinate(0, 0)
+
+    state_dict = get_reference_model_state_dict(
+        layer_idx=DENSE_LAYER_IDX,
+        is_moe=False,
+        seed=RoutedExpert.SEED,
+    )
+
+    d = create_decoder_block_tensors(
+        submesh,
+        1,
+        1,
+        0,
+        0,
+        position_id,
+        state_dict,
+        layer_idx=DENSE_LAYER_IDX,
+        max_seq_len=max_seq_len,
+        reduce_root_coord=reduce_root_coord,
+        is_moe=False,
+    )
+
+    vocab_size = 8
+    token_id = 3
+    torch_embedding = torch.randn((1, 1, vocab_size, d["golden_torch_input"].shape[-1]), dtype=torch.bfloat16)
+    torch_embedding[0, 0, token_id, :] = d["golden_torch_input"].reshape(-1)
+    embedding_tensor = ttnn.from_torch(
+        torch_embedding,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    embedding_tensor = ttnn.to_device(embedding_tensor, submesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    num_cores = device_grid_size.x * device_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    moe_semaphores = MoeOp.create_semaphores(submesh)
+
+    input_core = ttnn.CoreCoord(device_grid_size.x - 1, 9)
+    h2d_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), input_core)
+    h2d_socket = ttnn.H2DSocket(
+        submesh,
+        h2d_core,
+        ttnn.BufferType.L1,
+        H2D_EMBED_TOKEN_PAGE_SIZE_BYTES * 2,
+        h2d_mode,
+    )
+    h2d_socket.set_page_size(H2D_EMBED_TOKEN_PAGE_SIZE_BYTES)
+
+    token_datums = H2D_EMBED_TOKEN_PAGE_SIZE_BYTES // 4
+    torch_token = torch.zeros((1, token_datums), dtype=torch.uint32)
+    torch_token[0, 0] = token_id
+    token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    moe_final_output_tensor, _attention_block_output_tensor = DecoderBlock.op(
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attention_block_output"],
+        attention_block_semaphores=attn_semaphores,
+        shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+        gate_mm_weights_tensor=None,
+        gate_bias_tensor=None,
+        gate_indices_tensor=None,
+        gate_output_scores_tensor=None,
+        gate_output_indices_tensor=None,
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        moe_final_output_tensor=None,
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        moe_semaphores=moe_semaphores,
+        reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+        reduce_output_tensor=d["reduce_output_tensor"],
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=reduce_root_coord,
+        enable_routing=False,
+        bcast_cluster_axis=0,
+        bcast_secondary_cluster_axis=1,
+        reduce_cluster_axis=0,
+        sdpa_cluster_axis=0,
+        num_links=1,
+        epsilon=epsilon,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=True,
+        use_hardcoded_expert_index=False,
+        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        num_iterations=1,
+        input_ingress_mode=DecoderIngressMode.H2D_EMBED,
+        upstream_socket=None,
+        h2d_socket=h2d_socket,
+        embedding_tensor=embedding_tensor,
+        h2d_token_page_size=H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
+        downstream_socket=None,
+        persistent_next_iter_semaphore=None,
+        persistent_mode=False,
+    )
+
+    h2d_socket.write_tensor(token_tensor)
+    ttnn.synchronize_device(submesh)
+
+    root_device_tensor = ttnn.get_device_tensors(moe_final_output_tensor)[0]
+    decoder_mlp_output = ttnn.to_torch(root_device_tensor)
+    decoder_mlp_output_valid = extract_routed_expert_output(
+        decoder_mlp_output.unsqueeze(0),
+        d["num_gate_proj_cores"],
+        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+        d["per_core_down_proj_N"],
+    )
+
+    QNOPE_HEAD_DIM = 128
+    QROPE_HEAD_DIM = 64
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
+    HEADS_PER_ROW = 8
+
+    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+        d["golden_torch_input"],
+        d["golden_torch_gamma"],
+        d["golden_torch_matmul_weights"],
+        d["golden_torch_rmsnorm2_gamma"],
+        d["golden_torch_matmul2_weights"],
+        d["golden_torch_matmul3_weights"],
+        d["golden_torch_sin"],
+        d["golden_torch_cos"],
+        d["golden_position_ids"],
+        d["golden_torch_dkv_matmul_weights"],
+        d["golden_torch_dkv_rmsnorm_gamma"],
+        d["golden_torch_kv_cache"],
+        d["golden_scale"],
+        d["golden_torch_kv_b2_proj_weights"],
+        d["golden_torch_o_proj_weights"],
+        epsilon=epsilon,
+        num_qnope_heads=d["golden_total_qnope_heads"],
+        num_qrope_heads=d["golden_total_qrope_heads"],
+        qnope_head_dim=QNOPE_HEAD_DIM,
+        qrope_head_dim=QROPE_HEAD_DIM,
+        heads_per_row=HEADS_PER_ROW,
+        nope_dim=KNOPE_DIM,
+        rope_dim=KROPE_DIM,
+        moe_shared_gate_weights=d["golden_moe_shared_gate"],
+        moe_shared_up_weights=d["golden_moe_shared_up"],
+        moe_shared_down_weights=d["golden_moe_shared_down"],
+        moe_gate_proj_weights_dict=d["golden_moe_gate_proj_dict"],
+        moe_up_proj_weights_dict=d["golden_moe_up_proj_dict"],
+        moe_down_proj_weights_dict=d["golden_moe_down_proj_dict"],
+        moe_rmsnorm_gamma=d["golden_moe_rmsnorm_gamma"],
+        moe_rmsnorm_epsilon=epsilon,
+        moe_enable_routing=False,
+    )
+
+    passing, pcc = comp_pcc(moe_output.flatten(), decoder_mlp_output_valid.float().flatten(), 0.975)
+    logger.info(f"H2D_EMBED dense decoder PCC ({h2d_mode}): {pcc}")
+    assert passing, f"H2D_EMBED dense decoder PCC check failed ({h2d_mode}): {pcc}"

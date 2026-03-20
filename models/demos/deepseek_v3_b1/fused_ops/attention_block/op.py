@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_b1.circular_buffer_utils import (
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import _extend_runtime_args, _get_element_size_bytes, _round_up
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
+    get_interleaved_tensor_accessor_args,
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
 )
@@ -42,6 +43,9 @@ def extend_fabric_args(existing_rt_args, fabric_args):
 
 
 H2D_EMBED_TOKEN_PAGE_SIZE_BYTES = 64
+BCAST_INPUT_MODE_NONE = 0
+BCAST_INPUT_MODE_H2D_EMBED = 1
+BCAST_INPUT_MODE_D2D_SOCKET = 2
 
 
 class DecoderIngressMode(str, Enum):
@@ -134,6 +138,16 @@ def validate_decoder_input_ingress_mode(
         return mode
 
     raise AssertionError(f"Unhandled decoder ingress mode: {mode}")
+
+
+def _get_bcast_input_mode_for_device(input_ingress_mode, is_input_source_device):
+    if not is_input_source_device or input_ingress_mode == DecoderIngressMode.LEGACY_LOCAL_TENSOR:
+        return BCAST_INPUT_MODE_NONE
+    if input_ingress_mode == DecoderIngressMode.H2D_EMBED:
+        return BCAST_INPUT_MODE_H2D_EMBED
+    if input_ingress_mode == DecoderIngressMode.D2D_SOCKET:
+        return BCAST_INPUT_MODE_D2D_SOCKET
+    raise AssertionError(f"Unhandled decoder ingress mode for broadcast input path: {input_ingress_mode}")
 
 
 class AttentionBlock:
@@ -333,7 +347,11 @@ class AttentionBlock:
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         cb_id_context=None,
+        input_ingress_mode=DecoderIngressMode.LEGACY_LOCAL_TENSOR,
         upstream_socket=None,
+        h2d_socket=None,
+        embedding_tensor=None,
+        h2d_token_page_size=H2D_EMBED_TOKEN_PAGE_SIZE_BYTES,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -360,7 +378,10 @@ class AttentionBlock:
             fp32_dest_acc_en: Whether to enable FP32 accumulation in compute kernel
             skip_ccl: If True, skip CCL broadcast (single-device mode)
             noc_mode: NOC mode for the kernel (dedicated or dynamic)
-            upstream_socket: Socket for upstream communication
+            input_ingress_mode: Explicit decoder ingress mode
+            upstream_socket: D2D socket for later-layer activation input
+            h2d_socket: H2D socket for stage-0 token input
+            embedding_tensor: DRAM embedding tensor used by H2D_EMBED mode
         Returns:
             Tuple of (io_tensors, full_device_grid, per_device_contexts) where:
             - full_device_grid: CoreRangeSet covering the full device compute grid
@@ -375,6 +396,15 @@ class AttentionBlock:
         """
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
+
+        validate_decoder_input_ingress_mode(
+            input_ingress_mode=input_ingress_mode,
+            input_tensor_mesh=input_tensor_mesh,
+            upstream_socket=upstream_socket,
+            h2d_socket=h2d_socket,
+            embedding_tensor=embedding_tensor,
+            h2d_token_page_size=h2d_token_page_size,
+        )
 
         # Get mesh/device info
         mesh_device = input_tensor_mesh.device()
@@ -396,6 +426,9 @@ class AttentionBlock:
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
+        embedding_tensors_per_device = (
+            ttnn.get_device_tensors(embedding_tensor) if embedding_tensor is not None else None
+        )
 
         # Post-SDPA parameters
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
@@ -3023,6 +3056,9 @@ class AttentionBlock:
         kv_cache_tensor_accessor_args = ttnn.TensorAccessorArgs(ref_kv_cache_tensor)
         brisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
         ncrisc_compile_time_args = kv_cache_tensor_accessor_args.get_compile_time_args()
+        brisc_compile_time_args.extend(
+            get_interleaved_tensor_accessor_args(embedding_tensor) if embedding_tensor is not None else [0]
+        )
         # =======================================================================
         # Mcast2 compile-time args (uses same grid and semaphores as first mcast)
         # ========================================================================
@@ -3421,6 +3457,7 @@ class AttentionBlock:
             for col in range(mesh_cols):
                 mesh_coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
+                is_input_source_device = (row == sender_row) and (col == sender_col)
 
                 # CCL role calculation (only matters if not skipping CCL)
                 if skip_ccl:
@@ -3459,6 +3496,9 @@ class AttentionBlock:
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
                 position_ids_tensor_device = position_ids_tensors_per_device[device_idx]
                 kv_cache_tensor_device = kv_cache_tensors_per_device[device_idx]
+                embedding_tensor_device = (
+                    embedding_tensors_per_device[device_idx] if embedding_tensors_per_device else None
+                )
 
                 # Calculate ring index and targets for primary axis (column)
                 ring_size = mesh_rows
@@ -3476,39 +3516,63 @@ class AttentionBlock:
                 range_hops_forward = num_targets_forward
                 start_distance_backward = 1 if num_targets_backward > 0 else 0
                 range_hops_backward = num_targets_backward
-                bcast_num_pages_to_read = bcast_num_pages
+                bcast_input_mode = _get_bcast_input_mode_for_device(input_ingress_mode, is_input_source_device)
+                bcast_use_socket = bcast_input_mode == BCAST_INPUT_MODE_D2D_SOCKET
+                bcast_use_h2d_embed = bcast_input_mode == BCAST_INPUT_MODE_H2D_EMBED
+                bcast_uses_external_input = bcast_use_socket or bcast_use_h2d_embed
+                bcast_num_pages_to_read = bcast_num_pages if (not skip_ccl or bcast_uses_external_input) else 0
+                bcast_cb0_id = bcast_pkt_cb if not skip_ccl else (input_cb if bcast_uses_external_input else 0)
+                bcast_input_socket = (
+                    upstream_socket if bcast_use_socket else (h2d_socket if bcast_use_h2d_embed else None)
+                )
+                bcast_socket_page_size = (
+                    input_shape[0] * input_shape[1] * element_size
+                    if bcast_use_socket
+                    else (h2d_token_page_size if bcast_use_h2d_embed else 0)
+                )
+                bcast_socket_num_pages = 1 if bcast_uses_external_input else 0
+                bcast_embedding_tensor_address = (
+                    int(embedding_tensor_device.buffer_address()) if bcast_use_h2d_embed else 0
+                )
+                bcast_embedding_row_size_bytes = (
+                    int(embedding_tensor.shape[-1] * dtype_size(embedding_tensor.dtype)) if bcast_use_h2d_embed else 0
+                )
+                bcast_h2d_pull_from_host = (
+                    int(h2d_socket.get_h2d_mode() == ttnn.H2DMode.DEVICE_PULL) if bcast_use_h2d_embed else 0
+                )
 
                 # ================================================================
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
                 # bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
                 # bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if upstream_socket is not None else []
+                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if bcast_uses_external_input else []
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_use_socket", 1 if upstream_socket is not None else 0),
+                    ("bcast_cb0_id", bcast_cb0_id),
+                    ("bcast_num_pages_to_read", bcast_num_pages_to_read),
+                    ("bcast_is_sender", int(is_input_source_device)),
+                    ("bcast_use_socket", int(bcast_use_socket)),
+                    ("bcast_use_h2d_embed", int(bcast_use_h2d_embed)),
+                    ("bcast_h2d_pull_from_host", bcast_h2d_pull_from_host),
                     (
                         "bcast_socket_config_addr",
-                        upstream_socket.get_config_buffer_address() if upstream_socket is not None else 0,
+                        bcast_input_socket.get_config_buffer_address() if bcast_input_socket is not None else 0,
                     ),
-                    (
-                        "bcast_socket_page_size",
-                        input_shape[0] * input_shape[1] * element_size if upstream_socket is not None else 0,
-                    ),
-                    ("bcast_socket_num_pages", 1 if upstream_socket is not None else 0),
+                    ("bcast_socket_page_size", bcast_socket_page_size),
+                    ("bcast_socket_num_pages", bcast_socket_num_pages),
+                    ("bcast_embedding_tensor_address", bcast_embedding_tensor_address),
+                    ("bcast_embedding_row_size_bytes", bcast_embedding_row_size_bytes),
                 ]
 
                 bcast_ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
+                    ("bcast_cb0_id", bcast_cb0_id),
+                    ("bcast_num_pages_to_read", bcast_num_pages_to_read),
                     ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
                     ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
                     ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
+                    ("bcast_is_sender", int(is_input_source_device)),
                     ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
                     ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
                     ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
@@ -3517,10 +3581,14 @@ class AttentionBlock:
                     ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
                     ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
                     ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
+                    ("bcast_use_socket", int(bcast_use_socket)),
+                    ("bcast_use_h2d_embed", int(bcast_use_h2d_embed)),
                 ]
 
                 bcast_trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
+                    ("bcast_use_socket", int(bcast_use_socket)),
+                    ("bcast_use_h2d_embed", int(bcast_use_h2d_embed)),
                 ]
 
                 # ================================================================
@@ -4036,7 +4104,11 @@ class AttentionBlock:
             skip_ccl,
             noc_mode,
             cb_id_context,
+            input_ingress_mode,
             upstream_socket,
+            h2d_socket,
+            embedding_tensor,
+            h2d_token_page_size,
         )
 
         io_tensors = []

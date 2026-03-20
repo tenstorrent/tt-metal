@@ -66,6 +66,9 @@ struct Core {
     static constexpr bool is_knope_core = get_named_compile_time_arg_val("is_knope_core") == 1;
     static constexpr bool is_krope_core = get_named_compile_time_arg_val("is_krope_core") == 1;
     static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
+    static constexpr bool bcast_use_socket_input = get_named_compile_time_arg_val("bcast_use_socket") == 1;
+    static constexpr bool bcast_use_h2d_embed = get_named_compile_time_arg_val("bcast_use_h2d_embed") == 1;
+    static constexpr bool bcast_uses_external_input = bcast_use_socket_input || bcast_use_h2d_embed;
 
     // MLA
     static constexpr bool is_mla_core = get_named_compile_time_arg_val("is_mla_core") == 1;
@@ -716,16 +719,20 @@ void kernel_main() {
         get_named_compile_time_arg_val("bcast_cb0_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
         get_named_compile_time_arg_val("bcast_is_sender"),
-        get_named_compile_time_arg_val("bcast_use_socket")>;
+        get_named_compile_time_arg_val("bcast_use_socket"),
+        get_named_compile_time_arg_val("bcast_use_h2d_embed"),
+        get_named_compile_time_arg_val("bcast_h2d_pull_from_host")>;
 
-    // CCL Broadcast reader runtime args (only populated when not skip_ccl)
+    // CCL/socket/H2D input reader runtime args
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{};
 
-    if constexpr (!Core::skip_ccl) {
+    if constexpr (!Core::skip_ccl || Core::bcast_uses_external_input) {
         bcast_args = deepseek_b1_ops::Broadcast::ReaderArgs{
             get_named_compile_time_arg_val("bcast_socket_config_addr"),  // socket_config_addr
             get_named_compile_time_arg_val("bcast_socket_page_size"),    // socket_page_size
             get_named_compile_time_arg_val("bcast_socket_num_pages"),    // socket_num_pages
+            get_named_compile_time_arg_val("bcast_embedding_tensor_address"),
+            get_named_compile_time_arg_val("bcast_embedding_row_size_bytes"),
         };
     }
 
@@ -1149,7 +1156,7 @@ void kernel_main() {
         // ========================================================================
         // CCL Broadcast (optional, skip if single-device mode)
         // ========================================================================
-        if constexpr (!Core::skip_ccl) {
+        if constexpr (!Core::skip_ccl || Core::bcast_uses_external_input) {
             {
                 DeviceZoneScopedN("CCL_BROADCAST");
                 deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
@@ -1163,8 +1170,10 @@ void kernel_main() {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
 
-            cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
-            cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+            if constexpr (!Core::skip_ccl || !Core::bcast_uses_external_input) {
+                cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+                cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+            }
         }
 #endif
 

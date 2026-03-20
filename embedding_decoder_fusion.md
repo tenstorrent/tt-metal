@@ -157,3 +157,37 @@ Implement embedding-decoder kernel fusion by extending decoder fused op to conta
 - No kernel-side changes are included in step 1.
 - No compile-time/runtime arg threading for `H2D_EMBED` has been added yet.
 - Existing behavior should remain unchanged because the default temporary mode is `LEGACY_LOCAL_TENSOR`.
+
+### Implementation Update: Step 2
+- Added real `H2D_EMBED` threading through the fused attention/decoder builders.
+- `AttentionBlock.get_program_context(...)` now threads ingress-mode-dependent metadata into the kernel build:
+  selected external-input mode per device,
+  H2D socket config when applicable,
+  H2D token page size,
+  embedding tensor address,
+  embedding row size,
+  H2D mode (`HOST_PUSH` vs `DEVICE_PULL`),
+  BRISC positional compile-time arg for embedding tensor accessor.
+- The external-input mode is only enabled on the actual input-source device.
+  Other devices remain on the normal local/broadcast path.
+- Updated both unified decoder kernels so the broadcast reader can run when:
+  `skip_ccl == false`
+  or `skip_ccl == true` with an external input mode active.
+- Updated both unified decoder kernels so NCRISC does not blindly push the RMSNorm input CB in
+  single-device external-input mode.
+  This prevents double-signaling when BRISC owns the CB push for socket/H2D input.
+- Extended `unified_kernels/broadcast.hpp` reader path with an `H2D_EMBED` branch:
+  wait for one H2D token page,
+  optionally perform PCIe pull when H2D mode is `DEVICE_PULL`,
+  extract token id from word 0,
+  perform DRAM embedding lookup,
+  write embedding row into the decoder input CB,
+  pop/notify/update the H2D socket.
+- Kept the current D2D socket reader path intact.
+- Added a focused single-device dense decoder unit test that exercises `H2D_EMBED` for both:
+  `H2DMode.HOST_PUSH`
+  `H2DMode.DEVICE_PULL`
+- The new test uses `skip_ccl=True` and validates the decoder output against the existing dense decoder golden path.
+- Current status:
+  Python syntax verification is complete.
+  No tests have been run yet.

@@ -259,7 +259,11 @@ class DecoderBlock:
             skip_ccl,
             noc_mode,
             mla_cb_id_context,
+            input_ingress_mode=input_ingress_mode,
             upstream_socket=upstream_socket,
+            h2d_socket=h2d_socket,
+            embedding_tensor=embedding_tensor,
+            h2d_token_page_size=h2d_token_page_size,
         )
 
         moe = MoeOp(
