@@ -38,6 +38,7 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
     // constraints, fused ternary checks, etc.).  fused_ternary_scalar lives at the fused-op
     // level rather than inside matmul_struct, so inject it before calling.
     MinimalMatmulParams mm_attrs = attributes.matmul_struct;
+    mm_attrs.fused_ternary_scalar = attributes.fused_ternary_scalar;
 
     auto to_mutable_opt = [](const std::optional<const Tensor>& opt) -> std::optional<Tensor> {
         return opt.has_value() ? std::optional<Tensor>(opt.value()) : std::nullopt;
@@ -50,6 +51,8 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
             .weight_tensor = tensor_args.weight_tensor,
             .bias_tensor = to_mutable_opt(tensor_args.bias),
             .optional_input_tensor = std::nullopt,
+            .fused_ternary_input_a = to_mutable_opt(tensor_args.addcmul_input_tensor1),
+            .fused_ternary_input_b = to_mutable_opt(tensor_args.addcmul_input_tensor2),
         });
 
     // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
@@ -202,7 +205,10 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<uint32_t> num_buffers_per_channel,
     std::optional<uint32_t> chunk_width_in_mm_blocks,
     const std::optional<Tensor>& optional_rs_intermediate_tensor,
-    const std::optional<Tensor>& optional_rs_output_tensor) {
+    const std::optional<Tensor>& optional_rs_output_tensor,
+    const std::optional<float> fused_ternary_scalar,
+    const std::optional<const Tensor>& addcmul_input_tensor1,
+    const std::optional<const Tensor>& addcmul_input_tensor2) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
@@ -223,6 +229,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
 
     auto operation_attributes = OperationType::operation_attributes_t{
         /* matmul_struct */ matmul_struct,
+        /* fused_ternary_scalar */ fused_ternary_scalar,
         /* dim */ dim,
         /* num_links */ num_links,
         /* ring_size */ num_devices,
@@ -241,7 +248,13 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         /* devices */ devices};
 
     auto tensor_args = OperationType::tensor_args_t{
-        input_tensor, weight_tensor, optional_rs_intermediate_tensor, optional_rs_output_tensor, bias};
+        input_tensor,
+        weight_tensor,
+        optional_rs_intermediate_tensor,
+        optional_rs_output_tensor,
+        bias,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
