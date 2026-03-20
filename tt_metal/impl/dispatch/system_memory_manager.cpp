@@ -394,6 +394,7 @@ uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) con
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
     }
+    log_info(tt::LogMetal, "issue_queue_write_ptr: {}", this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4);
     return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
@@ -401,6 +402,7 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
     if (is_mock_device()) {
         return 0;
     }
+    log_info(tt::LogMetal, "completion_queue_read_ptr: {}", this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4);
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
 }
 
@@ -533,7 +535,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
 
     if (use_dram_for_cq_storage()) {
         MetalContext::instance().get_cluster().write_dram_vec(
-            this->cq_sysmem_start + cq_interface.offset + cq_interface.cq_start,
+            this->cq_sysmem_start + (cq_interface.offset - this->channel_offset) + cq_interface.cq_start,
             this->get_issue_queue_size(cq_id),
             this->device_id,
             0,
