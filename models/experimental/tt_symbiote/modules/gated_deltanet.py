@@ -1,10 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import torch
 import ttnn
 from typing import Optional
 
+from models.experimental.tt_symbiote.core.gdelta_debug import (
+    gdelta_cache_summary,
+    gdelta_debug_enabled,
+    gdelta_torch_stats,
+)
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
@@ -21,6 +27,19 @@ try:
 except ImportError:
     recurrent_gated_delta_rule_ttnn = None
     l2_norm_ttnn_recurrent = None
+
+
+def _gdelta_ttnn_to_torch_stats(name: str, backend: str, layer_idx: Optional[int], tensor, device) -> None:
+    if not gdelta_debug_enabled() or tensor is None:
+        return
+    try:
+        if device is not None and getattr(device, "get_num_devices", lambda: 1)() > 1:
+            x = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+        else:
+            x = ttnn.to_torch(tensor)
+        gdelta_torch_stats(name, backend, layer_idx, x)
+    except Exception:
+        pass
 
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5):
@@ -183,6 +202,7 @@ def gated_deltanet_forward_ttnn(
     mode="recurrent",
     chunk_size=64,
     return_conv_state=False,
+    debug_layer_idx: Optional[int] = None,
 ):
     """
     TTNN forward pass for the Gated DeltaNet layer.
@@ -226,6 +246,8 @@ def gated_deltanet_forward_ttnn(
     T = hidden_states.shape[1]
     key_dim = num_heads * head_k_dim
     value_dim = num_v_heads * head_v_dim
+
+    _gdelta_ttnn_to_torch_stats("in_hidden", "ttnn", debug_layer_idx, hidden_states, device)
 
     q = ttnn.linear(hidden_states, q_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.linear(hidden_states, k_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -303,6 +325,12 @@ def gated_deltanet_forward_ttnn(
 
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim], memory_config=ttnn.L1_MEMORY_CONFIG)
     o = ttnn.linear(o, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    _gdelta_ttnn_to_torch_stats("out_hidden", "ttnn", debug_layer_idx, o, device)
+    if new_recurrent_state is not None:
+        _gdelta_ttnn_to_torch_stats("new_recurrent_state", "ttnn", debug_layer_idx, new_recurrent_state, device)
+    if conv_state is not None:
+        _gdelta_ttnn_to_torch_stats("conv_state_tensor", "ttnn", debug_layer_idx, conv_state, device)
 
     return o, new_recurrent_state, conv_state
 
@@ -476,6 +504,55 @@ class TTNNGatedDeltaNet(TTNNModule):
                 setattr(self, name, ttnn.to_device(w, self.device))
         # Conv weights/biases stay on host (ROW_MAJOR); ttnn.conv1d moves them to device internally
 
+    @staticmethod
+    def _gdelta_use_ttnn_prefill() -> bool:
+        """If True, use TTNN for prefill (T>1). Default False: HF torch fills conv_state the way
+        causal_conv1d_update / causal_conv1d_fn expect; our TTNN-written conv slice was wrong shape/format."""
+        return os.environ.get("TT_SYMBIOTE_GDELTA_USE_TTNN", "").strip().lower() in ("1", "true", "yes", "on")
+
+    def _forward_hf_gated_delta_net(self, hidden_states, cache_params, attention_mask, **kwargs) -> TorchTTNNTensor:
+        """Run original Qwen3NextGatedDeltaNet on torch (correct cache for decode)."""
+        T = int(hidden_states.shape[1])
+        gdelta_cache_summary("torch", self.layer_idx, cache_params)
+        hs_for_torch = hidden_states
+        need_ag = (
+            self.device_state is not None
+            and self.device.get_num_devices() > 1
+            and self.hidden_size is not None
+            and hasattr(hs_for_torch, "shape")
+            and hs_for_torch.shape[-1] != self.hidden_size
+        )
+        if need_ag:
+            if hasattr(hs_for_torch, "to_ttnn"):
+                hs_for_torch = hs_for_torch.to_ttnn
+            hs_for_torch = ttnn.experimental.all_gather_async(
+                hs_for_torch,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+        if self.device.get_num_devices() > 1:
+            hs_torch = ttnn.to_torch(ttnn.get_device_tensors(hs_for_torch)[0]).to(torch.bfloat16)
+        elif hasattr(hs_for_torch, "to_torch"):
+            t = hs_for_torch.to_torch
+            hs_torch = (t() if callable(t) else t).to(torch.bfloat16)
+        else:
+            hs_torch = ttnn.to_torch(hs_for_torch).to(torch.bfloat16)
+        torch_dev = next(self._fallback_torch_layer.parameters()).device
+        hs_torch = hs_torch.to(torch_dev)
+        gdelta_torch_stats("in_hidden", "torch", self.layer_idx, hs_torch)
+        out = self._fallback_torch_layer(
+            hidden_states=hs_torch,
+            cache_params=cache_params,
+            cache_position=kwargs.get("cache_position"),
+            attention_mask=attention_mask,
+        )
+        gdelta_torch_stats("out_hidden", "torch", self.layer_idx, out)
+        gdelta_cache_summary("torch", self.layer_idx, cache_params)
+        return TorchTTNNTensor(out)
+
     def forward(
         self,
         hidden_states: ttnn.Tensor,
@@ -489,46 +566,20 @@ class TTNNGatedDeltaNet(TTNNModule):
 
         Compatible with HuggingFace Qwen3NextDecoderLayer.linear_attn call:
         linear_attn(hidden_states=..., cache_params=past_key_values, attention_mask=...).
+
+        By default uses the original HF torch module for **prefill and decode** when available, so
+        ``conv_states`` / ``recurrent_states`` match ``causal_conv1d_update`` (TTNN-only conv_state
+        snapshots were incompatible and broke generation). Set ``TT_SYMBIOTE_GDELTA_USE_TTNN=1`` to
+        use TTNN on prefill only (decode still uses HF for T==1).
         """
-        # Decode (T==1): TTNN lacks conv_state for causal conv. Fall back to torch layer which uses
-        # cache_params.conv_states and recurrent_states correctly. Only on single device.
         T = hidden_states.shape[1]
-        num_dev = self.device.get_num_devices() if self.device else 0
-        if T == 1 and self.layer_idx is not None and self.layer_idx < 3:
-            print(
-                f"[DEBUG TTNNGatedDeltaNet] T=1 decode layer_idx={self.layer_idx} num_devices={num_dev} "
-                f"fallback_avail={getattr(self, '_fallback_torch_layer', None) is not None} "
-                f"will_fallback={num_dev == 1 and getattr(self, '_fallback_torch_layer', None) is not None}"
-            )
+        use_ttnn_prefill = self._gdelta_use_ttnn_prefill()
         if (
-            T == 1
-            and getattr(self, "_fallback_torch_layer", None) is not None
+            getattr(self, "_fallback_torch_layer", None) is not None
             and self.device is not None
-            and self.device.get_num_devices() == 1
+            and (T == 1 or not use_ttnn_prefill)
         ):
-            has_prev = cache_params is not None and getattr(cache_params, "has_previous_state", False)
-            conv_ok = (
-                cache_params is not None
-                and getattr(cache_params, "conv_states", None) is not None
-                and self.layer_idx is not None
-                and self.layer_idx < len(cache_params.conv_states)
-                and cache_params.conv_states[self.layer_idx] is not None
-            )
-            print(
-                f"[DEBUG TTNNGatedDeltaNet] T=1 fallback to torch layer_idx={self.layer_idx} "
-                f"has_previous_state={has_prev} conv_states[{self.layer_idx}]={'set' if conv_ok else 'None'}"
-            )
-            if hasattr(hidden_states, "to_torch"):
-                hs_torch = hidden_states.to_torch.to(torch.bfloat16)
-            else:
-                hs_torch = ttnn.to_torch(hidden_states).to(torch.bfloat16)
-            out = self._fallback_torch_layer(
-                hidden_states=hs_torch,
-                cache_params=cache_params,
-                cache_position=kwargs.get("cache_position"),
-                attention_mask=attention_mask,
-            )
-            return TorchTTNNTensor(out)
+            return self._forward_hf_gated_delta_net(hidden_states, cache_params, attention_mask, **kwargs)
 
         if cache_params is not None and self.layer_idx is not None:
             recurrent_states = getattr(cache_params, "recurrent_states", None)
@@ -579,11 +630,8 @@ class TTNNGatedDeltaNet(TTNNModule):
         T = hidden_states.shape[1]
         use_mode = "chunk" if T > 64 else "recurrent"
         need_conv_state = cache_params is not None and self.layer_idx is not None and T > 1
-        if T > 1 and self.layer_idx is not None and self.layer_idx < 3:
-            print(
-                f"[DEBUG TTNNGatedDeltaNet] Prefill T={T} layer_idx={self.layer_idx} "
-                f"need_conv_state={need_conv_state} cache_params={'yes' if cache_params else 'no'}"
-            )
+        if gdelta_debug_enabled():
+            gdelta_cache_summary("ttnn", self.layer_idx, cache_params)
 
         output, new_recurrent_state, conv_state = gated_deltanet_forward_ttnn(
             hidden_states=hidden_states,
@@ -616,6 +664,7 @@ class TTNNGatedDeltaNet(TTNNModule):
             mode=use_mode,
             chunk_size=self.chunk_size,
             return_conv_state=need_conv_state,
+            debug_layer_idx=self.layer_idx,
         )
 
         # Update cache: conv_state for torch decode fallback, recurrent_state for TTNN decode
@@ -627,11 +676,6 @@ class TTNNGatedDeltaNet(TTNNModule):
                 else:
                     conv_torch = ttnn.to_torch(conv_state)
                 conv_states[self.layer_idx] = conv_torch.to(torch.bfloat16)
-                if self.layer_idx == 0:
-                    print(
-                        f"[DEBUG TTNNGatedDeltaNet] Prefill wrote conv_state layer_idx={self.layer_idx} "
-                        f"T={T} shape={tuple(conv_states[self.layer_idx].shape)}"
-                    )
 
         # Update cache for decode (recurrent state must be written back so next token sees it)
         # Keep torch and TTNN in same dtype (bfloat16): recurrent kernel may return state in float32.
