@@ -4143,6 +4143,7 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_RingToMesh48Nodes) {
     // Each node connects to its two neighbors in a ring
     AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
 
+    // TODO: Change this to a programmatically generated ring topology
     // Parse ring topology from the provided data
     // Node 0: connects to 47 and 1
     target_adj_map[0] = {47, 47, 47, 47, 1, 1, 1, 1, 1, 1, 1, 1};
