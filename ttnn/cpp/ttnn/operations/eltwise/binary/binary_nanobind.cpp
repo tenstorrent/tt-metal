@@ -100,7 +100,8 @@ using BitwiseScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>);
+    std::optional<bool>,
+    const std::optional<CoreRangeSet>&);
 using BitwiseTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
@@ -109,7 +110,8 @@ using BitwiseTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
-    std::optional<bool>);
+    std::optional<bool>,
+    const std::optional<CoreRangeSet>&);
 using BinaryUnaryScalarFn = Tensor (*)(
     const Tensor&,
     float,
@@ -664,7 +666,7 @@ void bind_bitwise_binary_ops_operation(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict execution to a subset of cores (e.g. for subdevice use). Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -708,7 +710,8 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none()),
+            nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
         ttnn::overload_t(
             tensor_tensor_fn,
             nb::arg("input_tensor_a"),
@@ -719,7 +722,8 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("use_legacy") = nb::none()));
+            nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 template <ttnn::unique_string Name, typename Fn>

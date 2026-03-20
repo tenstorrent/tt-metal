@@ -151,7 +151,8 @@ Tensor where_tss(
     const ScalarVariant& value_true,
     const ScalarVariant& value_false,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     Tensor input = condition;
     // Check if we have any float scalars
     bool has_float_scalar = std::holds_alternative<float>(value_true) || std::holds_alternative<float>(value_false);
@@ -169,7 +170,7 @@ Tensor where_tss(
         value_true,
         value_false);
 
-    return ttnn::detail::unary_impl(input, {param}, memory_config, optional_output_tensor);
+    return ttnn::detail::unary_impl(input, {param}, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 Tensor xielu(
