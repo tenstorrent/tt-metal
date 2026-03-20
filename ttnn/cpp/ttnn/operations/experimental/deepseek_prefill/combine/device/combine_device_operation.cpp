@@ -71,18 +71,11 @@ CombineDeviceOperation::spec_return_value_t CombineDeviceOperation::compute_outp
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Get input shape to extract hidden_dim
     auto dispatched_shape = tensor_args.dispatched_buffer.tensor_spec().logical_shape();
-    uint32_t per_device_batch = dispatched_shape[0];  // Should be 1 for sharded input
     uint32_t hidden_dim = dispatched_shape[-1];
 
-    // Output shape: (per_device_batch, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
-    // The extra dimension (1) allows proper composition across 2D mesh
-    // For sharded input on dim 0, per-device shape is (1, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
+    // Output shape: (1, 1, seq_len_per_chip, num_experts_per_tok, hidden_dim)
     auto output_shape = ttnn::Shape(
-        {per_device_batch,
-         1,
-         operation_attributes.seq_len_per_chip,
-         operation_attributes.num_experts_per_tok,
-         hidden_dim});
+        {1, 1, operation_attributes.seq_len_per_chip, operation_attributes.num_experts_per_tok, hidden_dim});
 
     // Memory config and layout
     auto mem_config = operation_attributes.output_mem_config;
