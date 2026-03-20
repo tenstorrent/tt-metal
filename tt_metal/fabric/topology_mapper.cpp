@@ -468,6 +468,14 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
+        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
+            for (const auto& [pos, fabric_node] : pinnings) {
+                config.pinnings.emplace_back(pos, fabric_node);
+            }
+        }
+
         // Build ASIC positions map (required if pinnings are used)
         if (!config.pinnings.empty()) {
             const auto& asic_descriptors = physical_system_descriptor_.get_asic_descriptors();
@@ -574,11 +582,7 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_f
     for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
-            TT_FATAL(
-                host_rank.has_value(),
-                "Fabric node id mesh_id={}, chip_id={} not found",
-                *mesh_id,
-                chip_id);
+            TT_FATAL(host_rank.has_value(), "Fabric node id mesh_id={}, chip_id={} not found", *mesh_id, chip_id);
             mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
         }
     }
@@ -1802,7 +1806,7 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
                 info.fabric_node_id,
                 info.hostname,
                 e.what());
-            }
+        }
 
         // Check 3: For local chips, verify physical chip ID maps correctly to ASIC ID via cluster API
         if (is_local_chip) {
