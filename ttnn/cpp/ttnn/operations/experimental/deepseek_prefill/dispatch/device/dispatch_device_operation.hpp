@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <variant>
 #include <array>
+#include <vector>
+#include <variant>
 
 #include "dispatch_types.hpp"
 #include "dispatch_program_factory.hpp"
@@ -29,7 +30,7 @@ struct DispatchDeviceOperation {
     using operation_attributes_t = DispatchParams;
     using tensor_args_t = DispatchInputs;
     using spec_return_value_t = std::array<ttnn::TensorSpec, 2>;
-    using topology_return_value_t = std::array<tt::tt_metal::TensorTopology, 2>;
+    using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
     using tensor_return_value_t = std::array<Tensor, 2>;
     using program_factory_t = std::variant<DispatchProgramFactory>;
 
