@@ -383,6 +383,7 @@ def initialize_test_inputs(
     indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
     weights = torch.randn(weights_shape, dtype=torch.bfloat16)
+    weights = weights / weights.sum(dim=-1, keepdim=True)  # Normalize so topk sums to 1
     indices = torch.randint(0, num_routed_experts, indices_shape, dtype=torch.int32)
 
     # Validate expert activations
@@ -459,6 +460,7 @@ def initialize_predictable_test_inputs(
 
     for k in range(num_experts_per_tok):
         weights[:, :, k] = float(num_experts_per_tok + k + 1)
+    weights = weights / weights.sum(dim=-1, keepdim=True)  # Normalize so topk sums to 1
 
     # Round-robin indices pattern
     indices = torch.zeros(indices_shape, dtype=torch.int32)
@@ -617,3 +619,40 @@ def get_routed_expert_output_mesh_composer(mesh_device):
             dims=[1, 0],
         ),
     )
+
+
+def create_sparse_combine_output(
+    num_chips: int,
+    seq_len: int,
+    topk: int,
+    hidden_dim: int,
+    sparsity: float = 0.75,
+    seed: int = 42,
+) -> torch.Tensor:
+    """
+    Create synthetic sparse combine output for testing.
+
+    In real MoE, combine output is sparse because each chip only has valid data
+    for tokens routed to its local experts. This function simulates that sparsity.
+
+    Args:
+        num_chips: Number of chips in the reduction group
+        seq_len: Sequence length per chip
+        topk: Number of expert slots per token
+        hidden_dim: Hidden dimension
+        sparsity: Fraction of positions that are zero (default 0.75)
+        seed: Random seed for reproducibility
+
+    Returns:
+        Sparse tensor of shape [num_chips, seq_len, topk, hidden_dim]
+    """
+    torch.manual_seed(seed)
+
+    # Create random data
+    data = torch.randn(num_chips, seq_len, topk, hidden_dim, dtype=torch.bfloat16)
+
+    # Apply sparsity mask (zero out random positions in topk dimension)
+    mask = torch.rand(num_chips, seq_len, topk, 1) > sparsity
+    data = data * mask.to(torch.bfloat16)
+
+    return data
