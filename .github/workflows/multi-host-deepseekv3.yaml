@@ -322,9 +322,8 @@ jobs:
           if-no-files-found: warn
 
       # ── Demo tests ──────────────────────────────────────────────────────
-      # Branch-local validation hook: skip the long dual demo on this branch so the MTP smoke step can run.
       - name: Run dual demo test (256 prompts, 1 batch)
-        if: ${{ github.ref_name != 'yieldthought/fix-dual-mtp-selector' && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
@@ -348,7 +347,7 @@ jobs:
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
 
       - name: Upload dual demo output artifacts
-        if: ${{ github.ref_name != 'yieldthought/fix-dual-mtp-selector' && always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
+        if: ${{ always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: actions/upload-artifact@v4
         with:
           name: dual-demo-output-${{ github.run_id }}
