@@ -204,7 +204,6 @@ class Experts(AbstractModule):
         return mesh_device.shape[1] == 8
 
     @classmethod
-    @classmethod
     def _create_model_config(
         cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, mode: str
     ) -> ModelPrefillConfig | ModelDecodeConfig:
@@ -223,31 +222,42 @@ class Experts(AbstractModule):
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Construct the config
-        return {
+        config = {
             "mesh_device": MeshDeviceStub(mesh_device.shape),
-            "w1_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            ),
-            "w2_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
-            ),
-            "w3_experts": LinearConfig(
-                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=output_memory_config,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-            ),
-            "mul_experts": MulConfig(
-                memory_config=output_memory_config,
-                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            ),
             "input_memory_config": input_memory_config,
             "output_memory_config": output_memory_config,
             "num_experts_per_device": num_experts_per_device,
         }
+
+        if is_quad_mesh() and is_ring_fabric(get_fabric_config()):
+            config["quad_ring_w0_w1_experts"] = {
+                "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+            }
+            config["quad_ring_w2_experts"] = {
+                "input_tensor_b": FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+            }
+        else:
+            config["w1_experts"] = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                memory_config=output_memory_config,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            )
+            config["w2_experts"] = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                memory_config=output_memory_config,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
+            )
+            config["w3_experts"] = LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                memory_config=output_memory_config,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            )
+            config["mul_experts"] = MulConfig(
+                memory_config=output_memory_config,
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            )
+
+        return config
 
     @classmethod
     def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
