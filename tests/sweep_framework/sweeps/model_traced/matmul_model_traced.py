@@ -125,8 +125,13 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
-    # Apply activation to golden if specified (matches what ttnn.matmul does with activation kwarg)
+    # Apply activation to golden if specified — check both op kwarg and program_config.fused_activation
     activation = op_kwargs.get("activation")
+    if not activation or activation == "__ABSENT__":
+        # Check program_config for fused_activation
+        pc = op_kwargs.get("program_config")
+        if pc and hasattr(pc, "fused_activation") and pc.fused_activation is not None:
+            activation = str(pc.fused_activation)
     if activation and activation != "__ABSENT__":
         act_str = str(activation).lower()
         if "gelu" in act_str:
