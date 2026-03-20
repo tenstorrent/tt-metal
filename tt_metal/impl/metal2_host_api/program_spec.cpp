@@ -82,13 +82,109 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 };
 
-// Perform ALL validation checks required on the ProgramSpec.
-// If the call succeeds, the ProgramSpec is guaranteed to be valid.
-// Return a CollectedSpecData structure (derived from the ProgramSpec) for re-use during program creation.
-CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
-    CollectedSpecData collected_spec_data;
+// ============================================================================
+// CollectSpecData: Build derived data structures from a ProgramSpec
+// ============================================================================
+//
+// Indexes the ProgramSpec into lookup tables for efficient access.
+// Function enforces STRUCTURAL invariants only:
+//   - No duplicate names (would corrupt map lookups)
+//   - No dangling references (would cause .at() failures later)
+//   - Complete endpoint info (DFBs have both producer and consumer)
+//
+// If this function returns, the CollectedSpecData is internally consistent,
+// and the ProgramSpec is structurally well-formed.
+// Semantic validation (thread limits, architecture rules, etc.) is separate.
 
-    // Check target architecture (temporary)
+CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
+    CollectedSpecData collected;
+
+    // Collect KernelSpecs
+    for (const auto& kernel : spec.kernels) {
+        auto [it, inserted] = collected.kernel_by_name.try_emplace(kernel.unique_id, &kernel);
+        TT_FATAL(inserted, "Duplicate KernelSpec name '{}'", kernel.unique_id);
+    }
+
+    // Collect DataflowBufferSpecs
+    for (const auto& dfb : spec.dataflow_buffers) {
+        auto [it, inserted] = collected.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
+        TT_FATAL(inserted, "Duplicate DataflowBufferSpec name '{}'", dfb.unique_id);
+    }
+
+    // Build DFB endpoint info from kernel bindings
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& dfb_binding : kernel.dfb_bindings) {
+            // Referential integrity: the DFB must exist
+            TT_FATAL(
+                collected.dfb_by_name.contains(dfb_binding.dfb_spec_name),
+                "Kernel '{}' references unknown DFB '{}'",
+                kernel.unique_id,
+                dfb_binding.dfb_spec_name);
+
+            CollectedSpecData::DFBEndpointInfo& endpoint_info = collected.dfb_endpoints[dfb_binding.dfb_spec_name];
+
+            if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
+                TT_FATAL(
+                    endpoint_info.producer == nullptr,
+                    "DFB '{}' has multiple producers (second: '{}')",
+                    dfb_binding.dfb_spec_name,
+                    kernel.unique_id);
+                endpoint_info.producer = &kernel;
+                endpoint_info.producer_binding = &dfb_binding;
+            } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
+                TT_FATAL(
+                    endpoint_info.consumer == nullptr,
+                    "DFB '{}' has multiple consumers (second: '{}')",
+                    dfb_binding.dfb_spec_name,
+                    kernel.unique_id);
+                endpoint_info.consumer = &kernel;
+                endpoint_info.consumer_binding = &dfb_binding;
+            } else {
+                TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
+            }
+        }
+    }
+
+    // Completeness: every DFB must have exactly one producer and one consumer
+    for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
+        TT_FATAL(endpoint_info.producer != nullptr, "DFB '{}' has no producer", dfb_name);
+        TT_FATAL(endpoint_info.consumer != nullptr, "DFB '{}' has no consumer", dfb_name);
+    }
+
+    // Referential integrity: every declared DFB must be bound by some kernel
+    for (const auto& dfb : spec.dataflow_buffers) {
+        TT_FATAL(
+            collected.dfb_endpoints.contains(dfb.unique_id),
+            "DFB '{}' is defined but not bound by any kernel",
+            dfb.unique_id);
+    }
+
+    // Collect SemaphoreSpecs
+    for (const auto& semaphore : spec.semaphores) {
+        auto [it, inserted] = collected.semaphore_by_name.try_emplace(semaphore.unique_id, &semaphore);
+        TT_FATAL(inserted, "Duplicate SemaphoreSpec name '{}'", semaphore.unique_id);
+    }
+
+    return collected;
+}
+
+// ============================================================================
+// ValidateProgramSpec: Semantic validation of a ProgramSpec
+// ============================================================================
+//
+// This function checks SEMANTIC rules (that don't affect the CollectedSpecData structure):
+//   - Architecture requirements
+//   - Resource limits
+//   - Feature support
+//   - Target node constraints (worker overlap, node coverage, node validity)
+//
+// Assumes CollectedSpecData is already built.
+
+void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected) {
+    //////////////////////////////
+    // Architecture checks
+    //////////////////////////////
+
     TT_FATAL(
         tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR,
         "Metal 2.0 API is currently only implemented for Quasar. WH/BH support coming soon.");
@@ -99,13 +195,6 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
 
     // A Program needs at least one kernel
     TT_FATAL(!spec.kernels.empty(), "A ProgramSpec must have at least one KernelSpec");
-
-    // All KernelSpecs must have unique names
-    for (const auto& kernel : spec.kernels) {
-        // Populate kernel_by_name lookup while validating
-        auto [it, inserted] = collected_spec_data.kernel_by_name.try_emplace(kernel.unique_id, &kernel);
-        TT_FATAL(inserted, "Duplicate name '{}' found KernelSpec list", kernel.unique_id);
-    }
 
     // Validate kernel thread counts
     for (const auto& kernel : spec.kernels) {
@@ -127,7 +216,7 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
         }
     }
 
-    // Check DM configs
+    // Validate DM configs
     for (const auto& kernel : spec.kernels) {
         if (kernel.is_dm_kernel()) {
             const auto& data_movement_config = std::get<DataMovementConfiguration>(kernel.config_spec);
@@ -157,50 +246,8 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
     }
 
     //////////////////////////////////
-    // DataflowBufferSpec validation
+    // Validate DataflowBufferSpecs
     //////////////////////////////////
-
-    // All DataflowBufferSpecs must have unique names
-    for (const auto& dfb : spec.dataflow_buffers) {
-        // Populate dfb_by_name lookup while validating
-        auto [it, inserted] = collected_spec_data.dfb_by_name.try_emplace(dfb.unique_id, &dfb);
-        TT_FATAL(inserted, "Duplicate name '{}' found in dataflow_buffers", dfb.unique_id);
-    }
-
-    // A DFB must have exactly one producer and one consumer
-    for (const auto& kernel : spec.kernels) {
-        for (const auto& dfb_binding : kernel.dfb_bindings) {
-            // Get the DFBEndpointInfo for this DFB (if it doesn't exist, create it)
-            CollectedSpecData::DFBEndpointInfo& endpoint_info =
-                collected_spec_data.dfb_endpoints[dfb_binding.dfb_spec_name];
-
-            if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::PRODUCER) {
-                TT_FATAL(
-                    endpoint_info.producer == nullptr, "DFB '{}' has multiple producers", dfb_binding.dfb_spec_name);
-                endpoint_info.producer = &kernel;
-                endpoint_info.producer_binding = &dfb_binding;
-            } else if (dfb_binding.endpoint_type == KernelSpec::DFBEndpointType::CONSUMER) {
-                TT_FATAL(
-                    endpoint_info.consumer == nullptr, "DFB '{}' has multiple consumers", dfb_binding.dfb_spec_name);
-                endpoint_info.consumer = &kernel;
-                endpoint_info.consumer_binding = &dfb_binding;
-            } else {
-                TT_FATAL(false, "RELAY endpoints are only used for remote DFB, which is not supported yet");
-            }
-        }
-    }
-    for (const auto& [dfb_name, endpoint_info] : collected_spec_data.dfb_endpoints) {
-        TT_FATAL(endpoint_info.producer != nullptr, "DFB '{}' has no producer", dfb_name);
-        TT_FATAL(endpoint_info.consumer != nullptr, "DFB '{}' has no consumer", dfb_name);
-    }
-
-    // Check for unbound DFBs
-    for (const auto& dfb : spec.dataflow_buffers) {
-        TT_FATAL(
-            collected_spec_data.dfb_endpoints.contains(dfb.unique_id),
-            "DFB '{}' is defined but not bound by any kernel",
-            dfb.unique_id);
-    }
 
     // Remote DFBs are not supported yet
     for (const auto& dfb : spec.dataflow_buffers) {
@@ -208,13 +255,11 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
         TT_FATAL(!dfb.producer_consumer_map || dfb.producer_consumer_map->empty(), "Remote DFBs are not supported yet");
     }
 
-    // Data format metadata (optional param) MUST be specified a DFB with a compute endpoint
-    for (const auto& [dfb_name, endpoint_info] : collected_spec_data.dfb_endpoints) {
-        // Does it have a compute kernel endpoint?
+    // Data format metadata (optional param) MUST be specified for a DFB with a compute endpoint
+    for (const auto& [dfb_name, endpoint_info] : collected.dfb_endpoints) {
         if ((endpoint_info.producer && endpoint_info.producer->is_compute_kernel()) ||
             (endpoint_info.consumer && endpoint_info.consumer->is_compute_kernel())) {
-            // Data format metadata is required
-            const DataflowBufferSpec* dfb_spec = collected_spec_data.dfb_by_name.at(dfb_name);
+            const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
             TT_FATAL(
                 dfb_spec->data_format_metadata.has_value(),
                 "DFB '{}' is used by a compute kernel, but no data_format_metadata is specified",
@@ -223,32 +268,22 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
     }
 
     //////////////////////////////////
-    // SemaphoreSpec validation
+    // Validate SemaphoreSpecs
     //////////////////////////////////
 
     // Semaphores aren't supported yet for Quasar
     TT_FATAL(spec.semaphores.empty(), "Semaphores are not supported yet");
 
-    // All SemaphoreSpecs must have unique names
-    for (const auto& semaphore : spec.semaphores) {
-        // Populate semaphore_by_name lookup while validating
-        auto [it, inserted] = collected_spec_data.semaphore_by_name.try_emplace(semaphore.unique_id, &semaphore);
-        TT_FATAL(inserted, "Duplicate name '{}' found in semaphores", semaphore.unique_id);
-    }
-
     //////////////////////////////
-    // WorkerSpec validation
+    // Validate WorkerSpecs
     //////////////////////////////
 
-    // Check that WorkerSpecs are provided on Quasar
-    // NOTE: WorkerSpec data is redundant, but improves clarity and messaging.
+    // WorkerSpecs are required on Gen2+
+    // NOTE: WorkerSpec data is strictly redundant, but improves clarity and messaging.
     //       If it's hated, we can make it optional on Gen2 and derive the WorkerSpec if absent.
     TT_FATAL(spec.workers.has_value(), "Workers are required on Gen2+");
     const auto& workers = spec.workers.value();
     TT_FATAL(!workers.empty(), "At least one WorkerSpec is required");
-
-    // WorkerSpecs don't really need unique names, as the names are only used for error messaging.
-    // No need to validate uniqueness.
 
     // WorkerSpecs may not overlap in their target nodes
     for (const auto& worker : workers) {
@@ -276,7 +311,7 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
         uint32_t dm_cores_needed = 0;
         uint32_t compute_cores_needed = 0;
         for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = collected_spec_data.kernel_by_name.at(kernel_name);
+            const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
                 compute_cores_needed += kernel_spec->num_threads;
             }
@@ -302,7 +337,7 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
     for (const auto& worker : workers) {
         uint32_t num_compute_kernels = 0;
         for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = collected_spec_data.kernel_by_name.at(kernel_name);
+            const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             if (kernel_spec->is_compute_kernel()) {
                 num_compute_kernels++;
             }
@@ -317,7 +352,7 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
     // Kernels in a WorkerSpec must contain the WorkerSpec's target nodes
     for (const auto& worker : workers) {
         for (const auto& kernel_name : worker.kernels) {
-            const auto& kernel_spec = collected_spec_data.kernel_by_name.at(kernel_name);
+            const auto& kernel_spec = collected.kernel_by_name.at(kernel_name);
             TT_FATAL(
                 nodes_contains(kernel_spec->target_nodes, worker.target_nodes),
                 "Kernel '{}' target nodes must contain WorkerSpec '{}' target nodes",
@@ -329,7 +364,7 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
     // DFBs in a WorkerSpec must contain the WorkerSpec's target nodes
     for (const auto& worker : workers) {
         for (const auto& dfb_name : worker.dataflow_buffers) {
-            const auto& dfb_spec = collected_spec_data.dfb_by_name.at(dfb_name);
+            const auto& dfb_spec = collected.dfb_by_name.at(dfb_name);
             TT_FATAL(
                 nodes_contains(dfb_spec->target_nodes, worker.target_nodes),
                 "DFB '{}' target nodes must contain WorkerSpec '{}' target nodes",
@@ -341,7 +376,7 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
     // Semaphores in a WorkerSpec must contain the WorkerSpec's target nodes
     for (const auto& worker : workers) {
         for (const auto& semaphore_name : worker.semaphores) {
-            const auto& semaphore_spec = collected_spec_data.semaphore_by_name.at(semaphore_name);
+            const auto& semaphore_spec = collected.semaphore_by_name.at(semaphore_name);
             TT_FATAL(
                 nodes_contains(semaphore_spec->target_nodes, worker.target_nodes),
                 "Semaphore '{}' target nodes must contain WorkerSpec '{}' target nodes",
@@ -398,8 +433,6 @@ CollectedSpecData ValidateAndCollectSpecData(const ProgramSpec& spec) {
             "DFB '{}' has target nodes that are not accounted for by any WorkerSpec",
             dfb_name);
     }
-
-    return collected_spec_data;
 }
 
 // Handy struct used for solving kernel->core assignments
@@ -605,24 +638,31 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .tile = dfb_spec->tile_format_metadata};
 }
 
-Program MakeProgramFromSpec(const ProgramSpec& spec) {
-    // Validate and collect derived data
-    // (We could add a flag to skip validation at production runtime, to reduce overhead.)
-    CollectedSpecData derived_data = ValidateAndCollectSpecData(spec);
+//============================================================================
+// MakeProgramFromSpec: Create a Program from a ProgramSpec
+//============================================================================
+Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+    // Collect derived data (builds lookup tables, checks structural invariants)
+    CollectedSpecData collected = CollectSpecData(spec);
+
+    // Validate semantic rules (can be skipped in production for trusted inputs)
+    if (!skip_validation) {
+        ValidateProgramSpec(spec, collected);
+    }
 
     // Solve kernel-to-core assignments
     // NOTE: Current solver assumes that a given DM kernel uses the _same_ set of DM cores on every node/cluster.
     auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
-        SolveKernelToProcessorAssignments(spec, derived_data);
+        SolveKernelToProcessorAssignments(spec, collected);
 
     // Create ProgramImpl
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
     // Create DataflowBuffers
     std::unordered_map<DFBSpecName, uint32_t> dfb_name_to_id_map;
-    for (const auto& [dfb_name, dfb_endpoint_info] : derived_data.dfb_endpoints) {
+    for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
         // Create the DFB + add it to the ProgramImpl
-        const DataflowBufferSpec* dfb_spec = derived_data.dfb_by_name.at(dfb_name);
+        const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
             dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
         uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
