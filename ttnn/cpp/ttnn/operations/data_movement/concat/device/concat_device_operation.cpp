@@ -41,18 +41,21 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
         return ConcatProgramFactory{};
     }
 
-    // Sharded-to-sharded (s2s) cases
+    // Sharded-to-sharded, 2 tensors cases
     if (input_tensors.size() == 2) {
         if (input_tensors[0].layout() == input_tensors[1].layout()) {
-            if (3 == args.dim && input_tensors[0].layout() == Layout::ROW_MAJOR &&
-                0 == input_tensors[0].padded_shape()[-1] % args.groups &&
-                0 == input_tensors[1].padded_shape()[-1] % args.groups) {
-                return ConcatS2SRMProgramFactory{};
-            }
-
-            return ConcatS2STiledProgramFactory{};
-        }
-
+            if (3 == args.dim) {
+                if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
+                    0 == input_tensors[0].padded_shape()[-1] % args.groups &&
+                    0 == input_tensors[1].padded_shape()[-1] % args.groups) {
+                    return ConcatS2SRMProgramFactory{};
+                }
+                // input can be ND sharded - so protect
+                if (input_tensors[0].shard_spec().has_value() && input_tensors[1].shard_spec().has_value()) {
+                    return ConcatS2STiledProgramFactory{};
+                }
+            }  // dimention 3
+        }  // equal layouts
     }  // Multi-tensor s2s case
 
     if (2 == args.dim || 3 == args.dim) {
