@@ -6,14 +6,14 @@
 #include "sync.hpp"
 #include "timestamp.hpp"
 
-#define ARGS(X)           \
-    X(num_bytes_per_send) \
-    X(transfer_size)      \
-    X(transfer_count)     \
-    X(send_delta_addr)    \
-    X(send_l1_address)    \
-    X(recv_l1_address)    \
-    X(barrier_address)
+#define ARGS(X)                     \
+    X(uint32_t, num_bytes_per_send) \
+    X(uint32_t, transfer_size)      \
+    X(uint32_t, transfer_count)     \
+    X(uint32_t, send_delta_addr)    \
+    X(uint32_t, send_l1_address)    \
+    X(uint32_t, recv_l1_address)    \
+    X(uint32_t, barrier_address)
 
 void kernel_main() {
     ARG_INIT(ARGS);
