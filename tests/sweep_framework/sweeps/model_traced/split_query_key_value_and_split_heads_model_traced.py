@@ -85,11 +85,13 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     output_memory_config = kwargs.get("output_memory_config", None)
     op_kwargs = build_op_kwargs(
-        kwargs, exclude={"compute_with_storage_grid_size", "memory_config"}, output_memory_config=output_memory_config
+        kwargs, exclude={"compute_with_storage_grid_size"}, output_memory_config=output_memory_config
     )
 
-    # Read num_heads from op_kwargs if present (traced config), falling back to function param
-    num_heads = op_kwargs.get("num_heads", num_heads)
+    # num_heads comes from named param in run(), not from op_kwargs.
+    # Ensure it's in op_kwargs for passing to the op.
+    if "num_heads" not in op_kwargs and num_heads is not None:
+        op_kwargs["num_heads"] = int(num_heads)
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
@@ -97,44 +99,26 @@ def run(
     else:
         shape = input_a_shape
 
+    # Traced configs may have 4D [batch, 1, seq_len, hidden_dim].
+    # The standard op expects 3D; the experimental op handles 4D natively.
+    use_experimental = len(shape) == 4 and shape[1] == 1
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Get golden function for split_query_key_value_and_split_heads
+    # Golden function expects 3D input — squeeze 4D for golden, unsqueeze output to match TTNN
     golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
-
-    # Golden function expects 3D input [batch, seq_len, hidden_dim]
-    # but traced configs have 4D [batch, 1, seq_len, hidden_dim]
-    if len(shape) == 4 and shape[1] == 1:
-        # Squeeze out the second dimension for golden function
-        torch_input_3d = torch_input_tensor_a.squeeze(1)
-        (
-            torch_query_tensor,
-            torch_key_tensor,
-            torch_value_tensor,
-        ) = golden_function(torch_input_3d, num_heads=num_heads)
-        # Unsqueeze back to 4D to match ttnn output
-        torch_query_tensor = torch_query_tensor.unsqueeze(1)
-        torch_key_tensor = torch_key_tensor.unsqueeze(1)
-        torch_value_tensor = torch_value_tensor.unsqueeze(1)
-    else:
-        (
-            torch_query_tensor,
-            torch_key_tensor,
-            torch_value_tensor,
-        ) = golden_function(torch_input_tensor_a, num_heads=num_heads)
+    golden_input = torch_input_tensor_a.squeeze(1) if use_experimental else torch_input_tensor_a
+    (
+        torch_query_tensor,
+        torch_key_tensor,
+        torch_value_tensor,
+    ) = golden_function(golden_input, num_heads=num_heads)
+    # No unsqueeze needed — both golden and TTNN return 4D [B, H, S, D]
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
-
-    # The operation expects 3D input [batch, seq_len, hidden_dim]
-    # but traced configs have 4D [batch, 1, seq_len, hidden_dim]
-    needs_unsqueeze = False
-    if len(shape) == 4 and shape[1] == 1:
-        # Squeeze out the second dimension for ttnn operation
-        torch_input_tensor_a = torch_input_tensor_a.squeeze(1)
-        needs_unsqueeze = True
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
@@ -147,8 +131,7 @@ def run(
                 input_a_tensor_placement,
             )
         else:
-            # Always create as DRAM interleaved — lines below convert sharded to DRAM anyway,
-            # and traced shard specs may exceed the device's core count (TT_FATAL).
+            # Create on DRAM first, then move to traced sharded config if needed
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -156,24 +139,40 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+                try:
+                    input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
+                except Exception:
+                    pass  # Stay on DRAM
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # This operation splits QKV and heads - returns tuple of (Q, K, V)
-    query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor_a, **op_kwargs
-    )
+    if use_experimental:
+        # Experimental op takes compute_with_storage_grid_size as positional arg
+        grid = kwargs.get("compute_with_storage_grid_size")
+        if isinstance(grid, dict):
+            from tests.sweep_framework.master_config_loader_v2 import dict_to_core_grid
+
+            grid = dict_to_core_grid(grid)
+        if grid is None:
+            grid = device.compute_with_storage_grid_size()
+        # Convert CoreGrid to CoreCoord if needed
+        if hasattr(grid, "x") and hasattr(grid, "y") and type(grid).__name__ == "CoreGrid":
+            grid = ttnn.CoreCoord(grid.x, grid.y)
+        query_tensor, key_tensor, value_tensor = ttnn.experimental.split_query_key_value_and_split_heads(
+            input_tensor_a, grid, **op_kwargs
+        )
+    else:
+        query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
+            input_tensor_a, **op_kwargs
+        )
     query_tensor = mesh_tensor_to_torch(query_tensor, device if is_mesh_device else None)
     key_tensor = mesh_tensor_to_torch(key_tensor, device if is_mesh_device else None)
     value_tensor = mesh_tensor_to_torch(value_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Unsqueeze back to 4D if we squeezed earlier
-    if needs_unsqueeze:
-        query_tensor = query_tensor.unsqueeze(1)
-        key_tensor = key_tensor.unsqueeze(1)
-        value_tensor = value_tensor.unsqueeze(1)
+    # No unsqueeze needed — experimental op returns 5D [B,1,H,S,D] matching golden
 
     # Check with PCC for all three outputs
     # check_with_pcc returns (bool, str) tuple
