@@ -338,6 +338,9 @@ class Glm4MoeTT:
     configuration: dict[str, Any]
     tt_ccl: Any | None
 
+    # DRAM weight prefetcher — initialized when GLM4_MOE_PREFETCH=1
+    prefetcher: Any | None = None
+
     # MTP (Multi-Token Prediction) fields — loaded when GLM4_MOE_MTP=1
     mtp_enabled: bool = False
     mtp_enorm: Any | None = None        # RMSNorm(hidden_size)
@@ -544,6 +547,24 @@ class Glm4MoeTT:
             ttnn.synchronize_device(device)
             print("  [DEBUG MODEL] synchronize after layers OK", flush=True, file=sys.stderr)
 
+        # ---- DRAM Weight Prefetcher (optional, for decode latency optimization) ----
+        prefetcher = None
+        if os.environ.get("GLM4_MOE_PREFETCH", "0").strip() == "1":
+            from models.demos.glm4_moe.tt.prefetcher_setup import Glm4MoePrefetcherSetup
+            n_tensors_per_layer = 2  # QKV + O-proj (attention weights only for Phase 2)
+            prefetcher = Glm4MoePrefetcherSetup(
+                mesh_device=device,
+                n_tensors_per_layer=n_tensors_per_layer,
+                n_layers=num_layers_to_run,
+            )
+            # Register attention weights from all layers
+            for li in range(num_layers_to_run):
+                lw = layer_weights_dict[li]
+                prefetcher.insert_tensor(lw.w_qkv)
+                prefetcher.insert_tensor(lw.w_o)
+            logger.info("Prefetcher: registered {} attention weights ({} layers × {} tensors)",
+                        len(prefetcher.tensor_addrs), num_layers_to_run, n_tensors_per_layer)
+
         # ---- MTP Layer (optional, for GLM-4.7 Full with num_nextn_predict_layers=1) ----
         mtp_enabled = os.environ.get("GLM4_MOE_MTP", "").strip() == "1"
         mtp_max_batch = int(os.environ.get("GLM4_MOE_MTP_MAX_BATCH", "16") or "16")
@@ -681,6 +702,7 @@ class Glm4MoeTT:
             moe_runtime=moe_runtime,
             configuration=configuration,
             tt_ccl=tt_ccl,
+            prefetcher=prefetcher,
             mtp_enabled=mtp_enabled,
             mtp_max_batch=mtp_max_batch,
             mtp_enorm=mtp_enorm,

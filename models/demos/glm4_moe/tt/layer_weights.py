@@ -18,6 +18,36 @@ from models.demos.glm4_moe.tt.config import Glm4MoeHParams
 from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 
 
+import math
+
+
+def _env_prefetch() -> bool:
+    """Return True if DRAM weight prefetching is enabled."""
+    return os.environ.get("GLM4_MOE_PREFETCH", "0").strip() == "1"
+
+
+def create_dram_sharded_mem_config(K: int, N: int, num_dram_cores: int = 12, tile_size: int = 32):
+    """Create WIDTH_SHARDED DRAM memory config for weight prefetching.
+
+    Shards the N dimension across DRAM cores with tile-aligned padding.
+    Used by the DRAM prefetcher to read weights in parallel across banks.
+    """
+    padded_N = math.ceil(N / (tile_size * num_dram_cores)) * (tile_size * num_dram_cores)
+    shard_N = padded_N // num_dram_cores
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet([ttnn.CoreRange(
+            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_dram_cores - 1)
+        )]),
+        [K, shard_N],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+
 def _env_fp8_dequant() -> bool:
     """Return True if FP8 dequant is enabled. Default off; auto-enabled on first FP8 weight."""
     return os.environ.get("GLM4_MOE_FP8_DEQUANT", "0").strip() == "1"
@@ -244,6 +274,7 @@ def _linear_weight_tt(
     cache_file: Optional[Path] = None,
     dtype: ttnn.DataType = ttnn.bfloat16,
     mesh_mapper: Any | None = None,
+    memory_config: Any | None = None,
 ) -> ttnn.Tensor:
     """Convert a torch Linear weight in HF layout [out, in] into TT layout [1, 1, in, out]."""
     if torch_weight_out_in.ndim != 2:
@@ -252,12 +283,14 @@ def _linear_weight_tt(
     is_mesh = _is_mesh_device(device)
     if is_mesh and mesh_mapper is None:
         mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    if memory_config is None:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
     return ttnn.as_tensor(
         w,
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         mesh_mapper=mesh_mapper if is_mesh else None,
         cache_file_name=None if cache_file is None else Path(cache_file),
     )
@@ -520,14 +553,21 @@ def convert_decoder_layer_weights(
     else:
         qkv_mapper = None
 
+    _prefetch = _env_prefetch()
+    _qkv_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    if _prefetch:
+        # Per-device QKV shape: [5120, 1792]. DRAM-shard across 12 cores.
+        _qkv_mem_cfg = create_dram_sharded_mem_config(5120, 1792)
+        logger.info("  [DEBUG L{}] QKV using DRAM-sharded mem config for prefetch", layer_idx)
+
     w_qkv = ttnn.as_tensor(
         qkv_cat,
         dtype=attn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=_qkv_mem_cfg,
         mesh_mapper=qkv_mapper,
-        cache_file_name=c("w_qkv", tp_variant),
+        cache_file_name=c("w_qkv", tp_variant + ("_dram_shard" if _prefetch else "")),
     )
     logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
 
@@ -564,12 +604,18 @@ def convert_decoder_layer_weights(
     # Each device gets [1, 1, 1536, 5120]
     wo_mapper = _tp_mesh_mapper(device, shard_dim=2) if tp_size > 1 else _replicate_mapper(device)
     _ok = f"model.layers.{layer_idx}.self_attn.o_proj.weight"
+    _wo_mem_cfg = None  # default: DRAM interleaved
+    if _prefetch:
+        # Per-device O-proj shape: [1536, 5120]. DRAM-shard across 12 cores.
+        _wo_mem_cfg = create_dram_sharded_mem_config(1536, 5120)
+        logger.info("  [DEBUG L{}] O-proj using DRAM-sharded mem config for prefetch", layer_idx)
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=_maybe_dequant_fp8(state, _ok, state[_ok]),
-        cache_file=c("w_o", tp_variant),
+        cache_file=c("w_o", tp_variant + ("_dram_shard" if _prefetch else "")),
         dtype=attn_dtype,
         mesh_mapper=wo_mapper,
+        memory_config=_wo_mem_cfg,
     )
     logger.info("  [DEBUG L{}] w_o done", layer_idx)
 
