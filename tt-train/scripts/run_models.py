@@ -128,38 +128,39 @@ def main() -> int:
             print(f"Subprocess {binary} failed. Return code {ret_code}")
             continue
 
-        # Extract memory and step metrics from the run log
+        # Extract the following metrics from the log
         memory_data = analyze_memory.main(["--logs", str(log_path)])
+        if memory_data is None:
+            raise Exception(f"analyze_memory returned None. Please check the log {log_path}.")
         print(memory_data)
 
         step_data = analyze_steps.main(["--logs", str(log_path)])
+        if step_data is None:
+            raise Exception(f"analyze_steps returned None. Please check the log {log_path}.")
         print(step_data)
 
-        if all(x is not None for x in (memory_data, step_data)):
-            git_commit_hash = get_git_commit_hash()
+        # Build metrics payload and write JSON alongside the log
+        pydantic_data = tt_train_metrics.TtTrainMetricsData(
+            test_ts=current_time,
+            model_name=model_name,
+            model_filename=model_filename,
+            binary_name=binary,
+            args=" ".join(args),
+            git_commit_hash=git_commit_hash,
+            model_dram_mb=memory_data["model"],
+            optimizer_dram_mb=memory_data["optimizer"],
+            activations_dram_mb=memory_data["activations"],
+            gradients_dram_mb=memory_data["gradients_overhead"],
+            unaccounted_dram_mb=memory_data["other"],
+            total_dram_mb=memory_data["total"],
+            device_memory_mb=memory_data["device_memory"],
+            last_loss=step_data["last_loss"],
+            average_iteration_time_ms=step_data["average_iteration_time_ms"],
+        )
+        print(pydantic_data)
 
-            # Build metrics payload and write JSON alongside the log
-            pydantic_data = tt_train_metrics.TtTrainMetricsData(
-                test_ts=current_time,
-                model_name=model_name,
-                model_filename=model_filename,
-                binary_name=binary,
-                args=" ".join(args),
-                git_commit_hash=git_commit_hash,
-                model_dram_mb=memory_data["model"],
-                optimizer_dram_mb=memory_data["optimizer"],
-                activations_dram_mb=memory_data["activations"],
-                gradients_dram_mb=memory_data["gradients_overhead"],
-                unaccounted_dram_mb=memory_data["other"],
-                total_dram_mb=memory_data["total"],
-                device_memory_mb=memory_data["device_memory"],
-                last_loss=step_data["last_loss"],
-                average_iteration_time_ms=step_data["average_iteration_time_ms"],
-            )
-            print(pydantic_data)
-
-            output_filename = output_dir / log_path.with_suffix(".json").name
-            tt_train_metrics.write_json(pydantic_data, output_filename)
+        output_filename = output_dir / log_path.with_suffix(".json").name
+        tt_train_metrics.write_json(pydantic_data, output_filename)
 
     if failing_models:
         # Fail the run if any model binary exited non-zero
