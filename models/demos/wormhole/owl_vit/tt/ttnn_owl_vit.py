@@ -9,6 +9,25 @@ import torch
 import ttnn
 
 
+def _get_mesh_composer(device):
+    """Create mesh_composer for multi-device ttnn.to_torch calls."""
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if num_devices > 1:
+        return ttnn.ConcatMeshToTensor(device, dim=0)
+    return None
+
+
+def _to_torch(tensor, device):
+    """Convert ttnn tensor to torch, handling multi-device meshes."""
+    mesh_composer = _get_mesh_composer(device)
+    result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+    # For multi-device, we get replicated data - take first batch
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if num_devices > 1 and len(result.shape) > 0 and result.shape[0] > 1:
+        result = result[: result.shape[0] // num_devices]
+    return result
+
+
 @dataclass
 class OwlViTTTNNConfig:
     """Configuration for TTNN OWL-ViT model."""
@@ -795,7 +814,7 @@ def run_class_head(
 
     # L2 normalize image embeddings
     # Using fallback to torch for correctness on normalization
-    image_embeds_torch = ttnn.to_torch(image_class_embeds).float()
+    image_embeds_torch = _to_torch(image_class_embeds, device).float()
     image_norm = torch.nn.functional.normalize(image_embeds_torch, p=2, dim=-1, eps=1e-6)
 
     # L2 normalize text embeddings
@@ -809,15 +828,15 @@ def run_class_head(
     pred_logits = torch.matmul(image_norm, text_norm.transpose(-2, -1))
 
     # Apply logit_shift and logit_scale
-    patch_features_torch = ttnn.to_torch(patch_features).float()
+    patch_features_torch = _to_torch(patch_features, device).float()
 
-    shift_weight = ttnn.to_torch(parameters["class_head"]["logit_shift"]["weight"]).float()
-    shift_bias = ttnn.to_torch(parameters["class_head"]["logit_shift"]["bias"]).float()
+    shift_weight = _to_torch(parameters["class_head"]["logit_shift"]["weight"], device).float()
+    shift_bias = _to_torch(parameters["class_head"]["logit_shift"]["bias"], device).float()
     # shift_weight is [768, 1]
     logit_shift = torch.matmul(patch_features_torch, shift_weight.squeeze(0)) + shift_bias.squeeze()
 
-    scale_weight = ttnn.to_torch(parameters["class_head"]["logit_scale"]["weight"]).float()
-    scale_bias = ttnn.to_torch(parameters["class_head"]["logit_scale"]["bias"]).float()
+    scale_weight = _to_torch(parameters["class_head"]["logit_scale"]["weight"], device).float()
+    scale_bias = _to_torch(parameters["class_head"]["logit_scale"]["bias"], device).float()
     logit_scale = torch.matmul(patch_features_torch, scale_weight.squeeze(0)) + scale_bias.squeeze()
     logit_scale = torch.nn.functional.elu(logit_scale) + 1
 

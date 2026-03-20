@@ -211,6 +211,10 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
             return_perf_metrics=return_perf_metrics,
         )
 
+    # Expose generator so callers (e.g. agentic WhisperTool) can release the persistent
+    # decoder trace before loading other models on the same mesh — Metal disallows safe
+    # buffer allocation while a trace capture is active.
+    _model_pipeline.whisper_generator = generator
     return _model_pipeline
 
 

@@ -44,6 +44,26 @@ from models.demos.wormhole.owl_vit.tt.ttnn_owl_vit import (
 ttnn_config = OwlViTTTNNConfig()
 
 
+def _get_mesh_composer(device):
+    """Create mesh_composer for multi-device ttnn.to_torch calls."""
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if num_devices > 1:
+        return ttnn.ConcatMeshToTensor(device, dim=0)
+    return None
+
+
+def _to_torch(tensor, device):
+    """Convert ttnn tensor to torch, handling multi-device meshes."""
+    mesh_composer = _get_mesh_composer(device)
+    result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+    # For multi-device, we get replicated data - take first batch
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if num_devices > 1 and result.shape[0] > 1:
+        # Keep only the first replica (data is replicated, not sharded)
+        result = result[: result.shape[0] // num_devices]
+    return result
+
+
 # =============================================================================
 # Model Configuration Constants
 # =============================================================================
@@ -741,7 +761,7 @@ def run_owl_vit_end_to_end(
     logger.info(f"Text encoder output shape: {text_hidden_states.shape}")
 
     # Pool from EOS token position (convert to torch for indexing)
-    text_output_torch = ttnn.to_torch(text_hidden_states)
+    text_output_torch = _to_torch(text_hidden_states, device)
     batch_size = text_output_torch.shape[0]
 
     # Gather the hidden state at EOS position for each sequence
@@ -767,7 +787,7 @@ def run_owl_vit_end_to_end(
         memory_config=dram_config,
         dtype=ttnn.bfloat16,
     )
-    text_embeds_torch = ttnn.to_torch(text_embeds)
+    text_embeds_torch = _to_torch(text_embeds, device)
     logger.info(f"Text embeds shape: {text_embeds_torch.shape}")
 
     # Process vision features following OWL-ViT's image_embedder method:
@@ -775,7 +795,7 @@ def run_owl_vit_end_to_end(
     # 2. Broadcast class token to match patch features
     # 3. Element-wise multiply
     # 4. Apply layer norm
-    vision_torch = ttnn.to_torch(vision_output)  # [batch, 577, 768]
+    vision_torch = _to_torch(vision_output, device)  # [batch, 577, 768]
 
     # Extract class token and patch features
     class_token = vision_torch[:, :1, :]  # [batch, 1, 768]

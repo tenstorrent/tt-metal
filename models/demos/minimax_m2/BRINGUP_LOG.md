@@ -1,5 +1,180 @@
 # MiniMax-M2.5 TTNN Bringup Log
 
+## N300 General Agentic Mode (Session 2026-03-18)
+
+| Status | Component |
+|--------|-----------|
+| ✅ Done | `models/demos/minimax_m2/agentic/` — full directory structure |
+| ✅ Done | `tool_wrappers/llm_tool.py` — Llama 3.1 8B **fully TTNN** (internal KV cache, fabric-enabled full mesh) |
+| ✅ Done | `tool_wrappers/whisper_tool.py` — WhisperGenerator wrapping (TTNN) |
+| ✅ Done | `tool_wrappers/speecht5_tool.py` — SpeechT5 TTS (TTNN hybrid) |
+| ✅ Done | `tool_wrappers/owlvit_tool.py` — OWL-ViT zero-shot detection (TTNN) |
+| ✅ Done | `tool_wrappers/bert_tool.py` — BERT Large QA (TTNN) |
+| ✅ Removed | `tool_wrappers/vit_tool.py` — deleted (ViT incompatible with shared device setup) |
+| ✅ Removed | `tool_wrappers/sbert_tool.py` — deleted (Turkish model, CI-coupled) |
+| ✅ Done | `tools.py` — 5 TOOL_SCHEMAS + dispatch_tool() |
+| ✅ Done | `loader.py` — load_all_models(), open_n300_device() |
+| ✅ Done | `orchestrator.py` — run_agentic_loop(), run_one_turn(), process_single_query() |
+| ✅ Done | `demo.py` — CLI entry point (interactive + single-query modes) |
+| ✅ Done | `tests/test_agentic.py` — 34 offline pytest tests, all passing |
+| ✅ Done | `tests/conftest.py` — session-scoped device + synthetic data fixtures |
+| ✅ Done | `tests/test_device_individual.py` — 43 per-tool warmup + trace-reuse tests (require N300) |
+| ✅ Done | `tests/test_device_integration.py` — 34+ end-to-end agentic pipeline tests (require N300) |
+
+### LLM TTNN Implementation (key detail)
+- `kv_cache=None` passed to all Generator calls → uses model's internal pre-allocated KV cache
+- No paged attention required; no external KV cache tensors to manage
+- `warmup_prefill=True` on first `prefill_forward_text` → compiles kernels for all supported seq lengths
+- Decode trace captured lazily on first `decode_forward(enable_trace=True)` call
+- `prefill_forward_text` returns torch `[1, 1, vocab_size]`; `decode_forward` returns `(logits, log_probs)` pair
+
+### Test Hierarchy (run in this order)
+1. **Offline** (no device): `pytest tests/test_agentic.py -m offline` — 34 tests
+2. **Individual** (per model): `pytest tests/test_device_individual.py -m device` — warmup + trace reuse per tool
+3. **Integration** (full pipeline): `pytest tests/test_device_integration.py -m "device and integration"` — end-to-end
+
+**Test Results:** 34/34 offline pass. Device tests require N300 + model weights.
+
+**Block hash:** `git log --oneline -1` on branch `ssinghal/minimax`
+
+### Session 2026-03-19 update
+
+- **Status:** In progress — staged Whisper-first load + trace release before co-resident models.
+- **PCC:** N/A (workflow orchestration and runtime loading/debug session, not a PCC block validation run).
+- **Block Hash:** `7e0537a26f`
+- **Notes:**
+  - `run_all_tools.py`: **PHASE 0a/1a** load Whisper only → warmup (trace capture); **release Whisper decoder trace**; **PHASE 0b** load OWL/BERT/SpeechT5; **PHASE 1b** warmups; **PHASE 2** infer. Whisper-only teardown was insufficient — OWL/BERT still resident caused Whisper stall; Whisper-first staging fixes that.
+  - After Whisper warmup, **`WhisperTool.release_decoder_trace()`** (`WhisperGenerator.cleanup()`) — Metal warns allocations are unsafe while a persistent trace is active; this avoids hangs loading BERT after Whisper (re-capture on next `transcribe`).
+  - `create_functional_whisper...` attaches **`whisper_generator`** on the pipeline callable for the above.
+  - Script supports `--skip-llm` when HF gated model auth is unavailable.
+  - SpeechT5: `warmup_on_init` + init checkpoints in `speecht5_tool.py`.
+  - LLM: HF gated `meta-llama/Llama-3.2-3B-Instruct` needs token/cache unless `--skip-llm`.
+
+### Session 2026-03-20: Systematic Pairwise Testing → **RESOLVED**
+
+- **Status:** ✅ **RESOLVED** — All 4 models run successfully on chip0 submesh.
+- **PCC:** N/A (multi-model workflow testing, not PCC block validation).
+- **Block Hash:** `7e0537a26f`
+
+**Test Framework Created:**
+- `tests/level0/` — Standalone tests for each model
+- `tests/level1/test_pairwise.py` — Parameterized pairwise tests
+- `tests/level2/test_triple.py` — Three-model combination tests
+- `tests/TESTS_DONE.md` — Passing test log
+- `tests/NOT_POSSIBLE.md` — Architectural blockers
+
+**Final Results:**
+
+| Level | Test | Status |
+|-------|------|--------|
+| L0 | Whisper standalone | PASS |
+| L0 | BERT standalone | PASS |
+| L0 | OWL-ViT standalone | PASS |
+| L0 | SpeechT5 standalone | PASS |
+| L1 | Whisper + BERT | PASS (trace release required) |
+| L1 | BERT + OWL-ViT | PASS |
+| L1 | OWL-ViT + SpeechT5 | PASS |
+| L1 | BERT + SpeechT5 | **PASS** (both on chip0) |
+| L2 | BERT + OWL + SpeechT5 | **PASS** (all on chip0) |
+| L3 | **All 4 models** (--skip-llm) | **PASS** |
+
+**Root Cause Confirmed:** Mixing full-mesh models with chip0-submesh models causes deadlocks. When any model uses the full mesh while others use chip0 submesh, warmup hangs.
+
+**Solution:** Run ALL models on chip0 submesh. This sacrifices multi-chip parallelism (chip1 unused) but enables stable co-residency for all models.
+
+**Architecture:**
+```
+N300 (1×2 mesh)
+├── chip0 (all models)
+│   ├── Whisper STT
+│   ├── BERT QA
+│   ├── OWL-ViT detection
+│   ├── SpeechT5 TTS
+│   └── LLM (if loaded)
+└── chip1 (unused — available for future optimization)
+```
+
+**DRAM Budget (chip0 only):** ~9.9 GB / 12 GB (~2 GB headroom)
+
+### Session 2026-03-20: Full (1,2) Mesh Support + Llama 8B — COMPLETE ✅
+
+**All 5 models now work on full (1,2) mesh with fabric enabled!**
+
+| Model | Full Mesh (1,2) | Notes |
+|-------|-----------------|-------|
+| OWL-ViT | ✅ PASS | Added `mesh_composer` to `ttnn_owl_vit.py` |
+| BERT | ✅ PASS | Native support |
+| Whisper | ✅ PASS | Native support |
+| SpeechT5 | ✅ PASS | Added scalar handling via `get_device_tensors` |
+| LLM (Llama 3.1 8B) | ✅ PASS | Upgraded from 3B to 8B, requires HF auth |
+
+**Key Fixes:**
+
+1. **Fabric Config for LLM on Full Mesh:**
+```python
+# Must call set_fabric_config BEFORE open_mesh_device
+ttnn.set_fabric_config(
+    ttnn.FabricConfig.FABRIC_1D,
+    ttnn.FabricReliabilityMode.STRICT_INIT,
+    None,
+    ttnn.FabricTensixConfig.DISABLED,
+)
+mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2), **device_params)
+```
+
+2. **Multi-Device Scalar Handling:**
+```python
+# Scalar tensors on multi-device can't use ConcatMeshToTensor (no dim to concat)
+# Solution: use get_device_tensors to extract from device 0
+if is_scalar:
+    device_tensors = ttnn.get_device_tensors(tensor)
+    return ttnn.to_torch(device_tensors[0])
+```
+
+**Files Modified:**
+- `models/demos/wormhole/owl_vit/tt/ttnn_owl_vit.py` — Added `_to_torch` helper
+- `models/demos/wormhole/owl_vit/tests/test_end_to_end.py` — Updated `ttnn.to_torch` calls
+- `models/experimental/speecht5_tts/demo_ttnn.py` — Added `_to_torch` with scalar handling
+- `models/experimental/speecht5_tts/tt/ttnn_speecht5_generator.py` — Added `_to_torch` helper
+- `models/demos/minimax_m2/agentic/tool_wrappers/owlvit_tool.py` — Updated for mesh_composer
+- `models/demos/minimax_m2/agentic/loader.py` — Added fabric config before mesh open
+- `models/demos/minimax_m2/agentic/tool_wrappers/llm_tool.py` — Upgraded to Llama 3.1 8B
+
+**Benchmark Results (full (1,2) mesh, 3 iterations):**
+
+| Model | Mean (ms) | Std (ms) | Min (ms) | Max (ms) |
+|-------|-----------|----------|----------|----------|
+| Whisper | 186.2 | 12.8 | 175.2 | 200.2 |
+| BERT | 150.6 | 8.6 | 142.3 | 159.4 |
+| OWL-ViT | 154.0 | 72.4 | 105.4 | 237.2 |
+| SpeechT5 | 2731.7 | 316.0 | 2544.6 | 3096.6 |
+| **TOTAL** | **~3.2s** | — | — | — |
+
+**Architecture (full mesh with fabric):**
+```
+N300 (1×2 mesh) — BOTH CHIPS ACTIVE via FABRIC_1D
+├── chip0 + chip1 (sharded/replicated as appropriate)
+│   ├── Whisper STT
+│   ├── BERT QA
+│   ├── OWL-ViT detection
+│   ├── SpeechT5 TTS
+│   └── LLM (Llama 3.1 8B — sharded across both chips)
+```
+
+**Notes:**
+- SpeechT5 longer time (~2.7s) due to autoregressive TTS generation (~80 steps)
+- OWL-ViT variance from JIT compilation on first iterations
+- All models run sequentially without hangs
+- Whisper decoder trace released after warmup for model coexistence
+
+### Shared N300 multi-model run — issues & blockers (detail)
+
+See **`models/demos/minimax_m2/agentic/SHARED_DEVICE_BLOCKERS.md`** for:
+
+- Observed symptoms (Whisper trace stall with co-residents, Metal trace+alloc warning, BERT warmup hang, device locks, post-kill init warnings, HF 401).
+- Working theory (staged Whisper-first load, decoder trace release, BERT vs chip0 submesh interaction — **not fully resolved**).
+- What still blocks proving **load → warmup → infer** for all tools on one mesh end-to-end.
+
 ## Target Platform
 Galaxy (TG) — mesh device `(8, 4)` = 32 × Wormhole B0 chips
 

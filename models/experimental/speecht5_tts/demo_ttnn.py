@@ -61,6 +61,42 @@ from datasets import load_dataset
 DEFAULT_CHUNK_SIZE = 300
 
 
+def _get_mesh_composer(device):
+    """Create mesh_composer for multi-device ttnn.to_torch calls."""
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if num_devices > 1:
+        return ttnn.ConcatMeshToTensor(device, dim=0)
+    return None
+
+
+def _to_torch(tensor, device):
+    """Convert ttnn tensor to torch, handling multi-device meshes."""
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+
+    # Single device: no mesh_composer needed
+    if num_devices == 1:
+        return ttnn.to_torch(tensor)
+
+    # Multi-device: check tensor shape to decide strategy
+    tensor_shape = tensor.shape
+    is_scalar = len(tensor_shape) == 0
+
+    if is_scalar:
+        # Scalar tensors on multi-device: can't use mesh_composer (no dim to concat)
+        # Get individual device tensors and convert just the first one
+        device_tensors = ttnn.get_device_tensors(tensor)
+        return ttnn.to_torch(device_tensors[0])
+
+    # Multi-device non-scalar: use mesh_composer
+    mesh_composer = _get_mesh_composer(device)
+    result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+    # For multi-device, we get replicated data - take first batch
+    if len(result.shape) > 0 and result.shape[0] > 1:
+        # Keep only the first replica (data is replicated, not sharded)
+        result = result[: result.shape[0] // num_devices]
+    return result
+
+
 def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE):
     """Split long text into smaller chunks at sentence/word boundaries."""
     if len(text) <= max_chunk_size:
@@ -360,11 +396,11 @@ def generate_speech_fp32(
         # For trace mode: accumulate on CPU immediately to avoid device allocations during trace
         if enable_trace and generator is not None:
             # Transfer to CPU immediately
-            mel_output_torch = ttnn.to_torch(mel_output_ttnn)
+            mel_output_torch = _to_torch(mel_output_ttnn, device)
             spectrogram_frames_cpu.append(mel_output_torch)
         else:
             # No trace: keep on device
-            mel_output_torch = ttnn.to_torch(mel_output_ttnn)
+            mel_output_torch = _to_torch(mel_output_ttnn, device)
             all_mel_outputs.append(mel_output_torch)
 
         # Check stop condition (same logic as demo_ttnn.py)
@@ -389,7 +425,7 @@ def generate_speech_fp32(
             sum_prob = ttnn.sum(sigmoid_logits, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
             should_stop = ttnn.ge(sum_prob, stop_threshold, memory_config=ttnn.L1_MEMORY_CONFIG)
             any_stop_scalar = ttnn.sum(should_stop)
-            if ttnn.to_torch(any_stop_scalar).item() > 0:
+            if _to_torch(any_stop_scalar, device).item() > 0:
                 break
 
         # For next input, extract LAST frame using ttnn slice operation
@@ -403,14 +439,14 @@ def generate_speech_fp32(
         )
 
         # Convert to torch for next iteration (needed for ttnn.from_torch at line 181)
-        current_mel = ttnn.to_torch(current_mel_ttnn)
+        current_mel = _to_torch(current_mel_ttnn, device)
 
         # Prepare next input
         if use_kv_cache:
             # Unsqueeze in ttnn to add batch dimension: [1, num_mel_bins] -> [1, 1, num_mel_bins]
             decoder_input_ttnn = ttnn.unsqueeze(current_mel_ttnn, 0)
             # Convert to torch for next iteration
-            decoder_input = ttnn.to_torch(decoder_input_ttnn)
+            decoder_input = _to_torch(decoder_input_ttnn, device)
         else:
             decoder_input = torch.cat([decoder_input, current_mel.unsqueeze(0)], dim=1)
 

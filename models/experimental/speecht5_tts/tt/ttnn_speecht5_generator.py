@@ -25,6 +25,31 @@ import torch
 import ttnn
 from loguru import logger
 
+
+def _get_mesh_composer(device):
+    """Create mesh_composer for multi-device ttnn.to_torch calls."""
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+    if num_devices > 1:
+        return ttnn.ConcatMeshToTensor(device, dim=0)
+    return None
+
+
+def _to_torch(tensor, device):
+    """Convert ttnn tensor to torch, handling multi-device meshes."""
+    tensor_shape = tensor.shape
+    is_scalar = len(tensor_shape) == 0 or (len(tensor_shape) == 1 and tensor_shape[0] == 1)
+    num_devices = device.get_num_devices() if hasattr(device, "get_num_devices") else 1
+
+    if is_scalar or num_devices == 1:
+        return ttnn.to_torch(tensor)
+
+    mesh_composer = _get_mesh_composer(device)
+    result = ttnn.to_torch(tensor, mesh_composer=mesh_composer)
+    if len(result.shape) > 0 and result.shape[0] > 1:
+        result = result[: result.shape[0] // num_devices]
+    return result
+
+
 # Supported encoder sequence lengths (padded sizes)
 # Similar to Whisper's chunked input approach
 SUPPORTED_ENCODER_SEQ_LENS = [128, 256, 384, 512, 768]
@@ -604,7 +629,7 @@ class SpeechT5Generator:
         self._switch_to_encoder_size(padded_seq_len)
 
         # Convert to torch for padding, then back to TTNN
-        encoder_torch = ttnn.to_torch(encoder_output)
+        encoder_torch = _to_torch(encoder_output, self.device)
         if len(encoder_torch.shape) == 4:
             encoder_torch = encoder_torch.squeeze(1)  # [B, 1, S, H] -> [B, S, H]
 
@@ -669,6 +694,29 @@ class SpeechT5Generator:
         self.trace_compiled = False
 
         logger.info("Released all decoder trace resources")
+
+    def cleanup_aggressive(self):
+        """
+        Aggressively release persistent trace + runtime buffers.
+
+        Use this when switching workloads and you want to minimize persistent L1
+        residency from SpeechT5. This invalidates current trace artifacts and
+        requires warm-up/trace recapture before next traced generation.
+        """
+        # First release traces (existing behavior)
+        self.cleanup()
+
+        # Then release persistent L1 work buffers used by traced decode path
+        for attr in ("decoder_input_preallocated", "decoder_output_sync"):
+            tensor = getattr(self, attr, None)
+            if tensor is not None:
+                try:
+                    ttnn.deallocate(tensor)
+                except Exception as e:
+                    logger.warning(f"Error deallocating {attr}: {e}")
+                setattr(self, attr, None)
+
+        logger.info("Aggressive cleanup complete (trace + persistent L1 buffers released)")
 
     def __del__(self):
         """Cleanup on destruction - do NOT release trace here as device may be closed."""
