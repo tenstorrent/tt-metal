@@ -26,15 +26,20 @@
 // ============================================================================
 
 namespace tt::tt_metal {
-bool logical_matches_physical(const TensorSpec& tensor_spec);
+bool logical_matches_physical(const TensorSpec& tensor_spec);  // NOLINT(readability-redundant-declaration)
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::tensor_impl {
 template <typename T>
-std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value);
+std::vector<T> encode_tensor_data(  // NOLINT(readability-redundant-declaration)
+    ttsl::Span<const T> logical_data,
+    const TensorSpec& tensor_spec,
+    T pad_value);
 
 template <typename T>
-std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec);
+std::vector<T> decode_tensor_data(  // NOLINT(readability-redundant-declaration)
+    ttsl::Span<const T> physical_data,
+    const TensorSpec& tensor_spec);
 }  // namespace tt::tt_metal::tensor_impl
 
 // ============================================================================
