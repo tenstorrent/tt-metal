@@ -84,3 +84,37 @@ Some matmul vectors only had `arg0`/`arg1` in JSON because `input_a_*` were `__A
   - Mean `overall_p50`: improved with L1 (~-4.2% vs DRAM).
   - Mean `overall_p95`: regressed with L1 (~+9.4% vs DRAM), including one notable tail spike.
   - Conclusion: memory-bound behavior is visible, but naive L1 forcing is not universally safe under strict p50+p95 no-regression requirements.
+- Post-rebuild baseline-first adaptive boundary-memory check (3x baseline first, then 3x adaptive):
+  - Baseline: DRAM intermediate tensors.
+  - Adaptive rule: L1 only for short/moderate shapes (`seq_len <= 64`, `dim <= 1536`, `hidden_dim <= 3072`), DRAM otherwise.
+  - Mean `overall_p50`: slightly worse (~+0.4% vs baseline).
+  - Mean `overall_p95`: better (~-4.6% vs baseline).
+  - Conclusion: adaptive policy improves tail but still fails strict objective criterion because `overall_p50` does not improve.
+- Post-rebuild baseline-first subblock-width check in shared `MLP1D` helper (`_get_out_subblock_w`, 4 -> 8) with 3x baseline and 3x after:
+  - Setup: `tests/sweep_framework/benchmark_protocol/mlp1d_prefill_n150_benchmark.py`.
+  - Mean `overall_p50`: regressed (~+6.4% vs baseline).
+  - Mean `overall_p95`: regressed (~+3.1% vs baseline).
+  - Conclusion: this change clearly regressed and was reverted.
+- Post-rebuild baseline-first boundary-benchmark harness adjustment (force final output to DRAM, keep adaptive policy only on intermediate) with 3x baseline and 3x after:
+  - Setup: `tests/sweep_framework/benchmark_protocol/matmul_boundary_memory_n150_benchmark.py`.
+  - Mean `overall_p50`: regressed (~+1.5% vs baseline).
+  - Mean `overall_p95`: regressed (~+5.9% vs baseline).
+  - Conclusion: no improvement under strict criterion; reverted.
+- Post-rebuild baseline-first adaptive gate tightening (L1 only at `dim == 1536`, not for smaller `dim`) with 3x baseline and 3x after:
+  - Setup: `tests/sweep_framework/benchmark_protocol/matmul_boundary_memory_n150_benchmark.py`.
+  - Mean `overall_p50`: improved (~-5.8% vs baseline).
+  - Mean `overall_p95`: slightly regressed (~+0.7% vs baseline).
+  - Conclusion: mixed result; reverted under strict both-metrics-must-improve policy.
+
+### Exploration infra additions (N150)
+
+- Added regime manifest for low-noise screening:
+  - `tests/sweep_framework/benchmark_protocol/matmul_n150_regimes.json`.
+  - 8 representative cases spanning decode small-M DRAM-bound, prefill/FF larger-M, and tiny/irregular edge shapes.
+- Added kernel-focused microbench harness:
+  - `tests/sweep_framework/benchmark_protocol/matmul_n150_kernelbench.py`.
+  - Resolves real traced vectors by `input_hash` from `matmul_n150_protocol_all.json`.
+  - Reports per-case e2e (`ms`) and optional device-kernel duration (`ns`) in one JSON output.
+- Added exploration scoreboard (separate from strict merge gate):
+  - `matmul_exploration_scoreboard.md`.
+  - Keeps mixed but informative candidates instead of discarding them.

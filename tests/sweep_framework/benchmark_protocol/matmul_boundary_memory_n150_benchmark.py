@@ -27,12 +27,23 @@ def _percentile(sorted_values: list[float], pct: float) -> float | None:
     return sorted_values[lo] * (1.0 - w) + sorted_values[hi] * w
 
 
-def _run_case(
-    case: dict, device: ttnn.Device, inter_memcfg: ttnn.MemoryConfig, warmup_iters: int, measure_iters: int
-) -> dict:
+def _choose_intermediate_memcfg(mode: str, seq_len: int, dim: int, hidden_dim: int) -> ttnn.MemoryConfig:
+    if mode == "dram":
+        return ttnn.DRAM_MEMORY_CONFIG
+    if mode == "l1":
+        return ttnn.L1_MEMORY_CONFIG
+    # Conservative adaptive rule:
+    # keep DRAM for larger boundaries and use L1 only for moderate hidden sizes at short sequence.
+    if seq_len <= 64 and dim <= 1536 and hidden_dim <= 3072:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
+def _run_case(case: dict, device: ttnn.Device, inter_mem_mode: str, warmup_iters: int, measure_iters: int) -> dict:
     seq_len = int(case["seq_len"])
     dim = int(case["dim"])
     hidden_dim = int(case["hidden_dim"])
+    inter_memcfg = _choose_intermediate_memcfg(inter_mem_mode, seq_len, dim, hidden_dim)
 
     a = ttnn.from_torch(
         torch.randn((1, 1, seq_len, dim), dtype=torch.bfloat16),
@@ -75,6 +86,7 @@ def _run_case(
         "seq_len": seq_len,
         "dim": dim,
         "hidden_dim": hidden_dim,
+        "intermediate_memory": "l1" if inter_memcfg == ttnn.L1_MEMORY_CONFIG else "dram",
         "perf_ms": {
             "mean": statistics.fmean(samples_ms),
             "p50": _percentile(sorted_samples, 0.50),
@@ -88,7 +100,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Matmul boundary memory benchmark on N150")
     parser.add_argument("--warmup-iters", type=int, default=3)
     parser.add_argument("--measure-iters", type=int, default=10)
-    parser.add_argument("--intermediate-memory", choices=["dram", "l1"], default="dram")
+    parser.add_argument("--intermediate-memory", choices=["dram", "l1", "adaptive"], default="dram")
     parser.add_argument(
         "--out-json",
         type=Path,
@@ -98,8 +110,6 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    inter_memcfg = ttnn.DRAM_MEMORY_CONFIG if args.intermediate_memory == "dram" else ttnn.L1_MEMORY_CONFIG
-
     cases = [
         {"name": "mid_2048_4096", "seq_len": 32, "dim": 2048, "hidden_dim": 4096},
         {"name": "mid_1536_3072", "seq_len": 32, "dim": 1536, "hidden_dim": 3072},
@@ -108,7 +118,9 @@ def main() -> int:
 
     device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
     try:
-        rows = [_run_case(case, device, inter_memcfg, args.warmup_iters, args.measure_iters) for case in cases]
+        rows = [
+            _run_case(case, device, args.intermediate_memory, args.warmup_iters, args.measure_iters) for case in cases
+        ]
     finally:
         ttnn.close_device(device)
 

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "description": "Representative N150 matmul regimes for low-noise kernel microbench screening.",
+  "cases": [
+    {
+      "name": "decode_whisper_proj_1x1280x1280",
+      "regime": "decode_1d_dram_bound_small_m",
+      "input_hash": "93e6c32db99bc4d46eb5542f0642c4e0344e700afe56836943d1df53"
+    },
+    {
+      "name": "decode_whisper_up_1x1280x5120",
+      "regime": "decode_1d_dram_bound_small_m",
+      "input_hash": "c6c52148b0f37a67dbb123d1af6c059fdd5cdd0e7d5b5e3bf5b307e4"
+    },
+    {
+      "name": "decode_whisper_down_1x5120x1280",
+      "regime": "decode_1d_dram_bound_small_m",
+      "input_hash": "033c0e9952210a0b430e40e3610bb2f46bdbb49b7c8e5b544c441026"
+    },
+    {
+      "name": "prefill_mistral_ff_32x2048x4096",
+      "regime": "prefill_ff_2d_larger_m",
+      "input_hash": "4c2a2b275378b6a2fb9f237a33b647e7ff9bf0b1caa3bf4ec0a6a6ce"
+    },
+    {
+      "name": "prefill_phi3_ff_32x1536x3072",
+      "regime": "prefill_ff_2d_larger_m",
+      "input_hash": "249ac9e32eea311e55e48e7086fc747e8f821e4cfa0d439d00a017cb"
+    },
+    {
+      "name": "prefill_falcon_ff_32x18176x4544",
+      "regime": "prefill_ff_2d_larger_m",
+      "input_hash": "0eec67ae8c1d2704c37a012d3f02c032967a2753c8eeeb2e7efe9de3"
+    },
+    {
+      "name": "edge_whisper_1x1500x64",
+      "regime": "tiny_tile_or_irregular_k_n",
+      "input_hash": "7821c3fc7a28ceb758c551e3cb2d68e19cd5d5f05db120b1fe122ade"
+    },
+    {
+      "name": "edge_vit_197x197x64",
+      "regime": "tiny_tile_or_irregular_k_n",
+      "input_hash": "73a6a22891440ef21e25a5e1446d970e332090d52624f92b6a2dd66a"
+    }
+  ]
+}

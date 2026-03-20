@@ -38,10 +38,19 @@ Improve matmul efficiency in shared paths that can benefit multiple models on no
 - Add stricter no-regression benchmark policy for new experiments:
   - require both `overall_p50` and `overall_p95` to decrease across repeated runs.
   - auto-revert experiment candidates that fail this gate.
+- Add a separate exploration track (non-merge gate):
+  - preserve mixed but informative candidates in an explicit scoreboard.
+  - keep strict `p50+p95` gate only for merge decisions.
 - Explore memory-traffic bottlenecks around matmul boundaries:
   - reduce unnecessary DRAM round-trips for intermediate tensors.
   - prefer scoped, shape-gated changes with safe fallbacks.
 - Expand coverage with additional N150/T3K-safe shape families before broad rollout.
+- Add regime-aware kernel microbench workflow:
+  - maintain a fixed small regime manifest (6-10 shapes).
+  - use low-noise microbench runs to screen candidates before protocol A/B.
+- Add alternating-run variance controls:
+  - baseline/candidate interleaving in fresh processes for A/B fairness.
+  - track both per-run and per-shape variance.
 
 ## Notes
 
