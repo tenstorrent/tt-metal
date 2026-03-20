@@ -361,6 +361,8 @@ class TtPreTransformerMLP(LightweightModule):
 class TtPreTransformerLayer(LightweightModule):
     """Single pre-transformer layer."""
 
+    TILE = 32
+
     def __init__(
         self,
         device,
@@ -372,48 +374,89 @@ class TtPreTransformerLayer(LightweightModule):
         super().__init__()
         self.device = device
         self.config = config
+        hidden = config.pre_transformer_hidden_size  # 512
 
         prefix = f"pre_transformer.layers.{layer_num}."
 
-        # Layer norms
-        self.input_layernorm_weight = ttnn.from_torch(
-            state_dict[prefix + "input_layernorm.weight"].unsqueeze(0).unsqueeze(0),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
-        self.post_attention_layernorm_weight = ttnn.from_torch(
-            state_dict[prefix + "post_attention_layernorm.weight"].unsqueeze(0).unsqueeze(0),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-        )
+        # Layer norms: shape [1, 1, hidden//TILE, TILE] in ROW_MAJOR_LAYOUT
+        # (matches the RMSNorm class convention used by the Talker)
+        def _load_norm(key):
+            w = state_dict[key].view(1, 1, hidden).reshape([1, 1, hidden // self.TILE, self.TILE])
+            return ttnn.from_torch(
+                w.to(dtype.to_torch() if hasattr(dtype, "to_torch") else torch.bfloat16),
+                dtype=dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        import torch as _torch
+
+        def _load_norm_t(key):
+            w = state_dict[key].to(_torch.bfloat16).view(1, 1, hidden).reshape([1, 1, hidden // self.TILE, self.TILE])
+            return ttnn.as_tensor(
+                w, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        self.input_layernorm_weight = _load_norm_t(prefix + "input_layernorm.weight")
+        self.post_attention_layernorm_weight = _load_norm_t(prefix + "post_attention_layernorm.weight")
 
         # Attention and MLP
         self.attention = TtPreTransformerAttention(device, state_dict, layer_num, config, dtype)
         self.mlp = TtPreTransformerMLP(device, state_dict, layer_num, config, dtype)
 
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
     def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """Forward pass for pre-transformer layer."""
+        """
+        Forward pass for pre-transformer layer.
+
+        Args:
+            x: [batch, seq_len, hidden_size] (3D)
+        """
+        # ttnn.rms_norm requires 4D [batch, 1, seq, hidden]
+        batch_size = x.shape[0]
+        seq_len = x.shape[1]
+        x_4d = ttnn.reshape(x, [batch_size, 1, seq_len, self.config.pre_transformer_hidden_size])
+
         # Pre-norm for attention
         residual = x
-        x = ttnn.rms_norm(x, epsilon=self.config.rms_norm_eps, weight=self.input_layernorm_weight)
+        x_normed = ttnn.rms_norm(
+            x_4d,
+            epsilon=self.config.rms_norm_eps,
+            weight=self.input_layernorm_weight,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        # Back to 3D for attention
+        x_normed_3d = ttnn.reshape(x_normed, [batch_size, seq_len, self.config.pre_transformer_hidden_size])
 
-        # Self-attention
-        x = self.attention(x, cos, sin)
+        # Self-attention (3D in, 3D out)
+        attn_out = self.attention(x_normed_3d, cos, sin)
 
-        # Residual connection
-        x = ttnn.add(x, residual)
+        # Residual connection (3D)
+        x = ttnn.add(attn_out, residual)
 
-        # Pre-norm for MLP
+        # Pre-norm for MLP (back to 4D)
         residual = x
-        x = ttnn.rms_norm(x, epsilon=self.config.rms_norm_eps, weight=self.post_attention_layernorm_weight)
+        x_4d = ttnn.reshape(x, [batch_size, 1, seq_len, self.config.pre_transformer_hidden_size])
+        x_normed = ttnn.rms_norm(
+            x_4d,
+            epsilon=self.config.rms_norm_eps,
+            weight=self.post_attention_layernorm_weight,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        x_normed_3d = ttnn.reshape(x_normed, [batch_size, seq_len, self.config.pre_transformer_hidden_size])
 
-        # MLP
-        x = self.mlp(x)
+        # MLP (3D in, 3D out)
+        mlp_out = self.mlp(x_normed_3d)
 
-        # Residual connection
-        x = ttnn.add(x, residual)
+        # Residual connection (3D)
+        x = ttnn.add(mlp_out, residual)
 
         return x
 
@@ -454,12 +497,22 @@ class TtPreTransformer(LightweightModule):
         for i in range(config.pre_transformer_num_layers):
             self.layers.append(TtPreTransformerLayer(device, state_dict, i, config, dtype))
 
-        # Final norm
-        self.norm_weight = ttnn.from_torch(
-            state_dict["pre_transformer.norm.weight"].unsqueeze(0).unsqueeze(0),
+        # Final norm: [1, 1, hidden//32, 32] in ROW_MAJOR_LAYOUT
+        _hidden = config.pre_transformer_hidden_size
+        import torch as _t
+
+        _norm_w = (
+            state_dict["pre_transformer.norm.weight"]
+            .to(_t.bfloat16)
+            .view(1, 1, _hidden)
+            .reshape([1, 1, _hidden // 32, 32])
+        )
+        self.norm_weight = ttnn.as_tensor(
+            _norm_w,
             dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Output projection
@@ -484,23 +537,28 @@ class TtPreTransformer(LightweightModule):
         Forward pass through pre-transformer.
 
         Args:
-            x: Input embeddings [batch, seq_len, latent_dim]
-            cos, sin: RoPE frequencies
+            x: Input embeddings [batch, seq_len, latent_dim] (3D)
+            cos, sin: RoPE frequencies (unused, pre-transformer uses full attention)
 
         Returns:
-            Output [batch, seq_len, hidden_size]
+            Output [batch, seq_len, decoder_dim] (3D)
         """
-        # Input projection
+        # Input projection (3D → 3D)
         x = ttnn.linear(x, self.input_proj, bias=self.input_proj_bias)
 
-        # Process through layers
+        # Process through layers (each layer: 3D → 3D)
         for layer in self.layers:
             x = layer(x, cos, sin)
 
-        # Final norm
-        x = ttnn.rms_norm(x, epsilon=self.config.rms_norm_eps, weight=self.norm_weight)
+        # Final norm: requires 4D [batch, 1, seq, hidden]
+        batch_size = x.shape[0]
+        seq_len = x.shape[1]
+        hidden = self.config.pre_transformer_hidden_size
+        x_4d = ttnn.reshape(x, [batch_size, 1, seq_len, hidden])
+        x_4d = ttnn.rms_norm(x_4d, epsilon=self.config.rms_norm_eps, weight=self.norm_weight)
+        x = ttnn.reshape(x_4d, [batch_size, seq_len, hidden])
 
-        # Output projection
+        # Output projection (3D → 3D)
         x = ttnn.linear(x, self.output_proj, bias=self.output_proj_bias)
 
         return x

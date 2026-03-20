@@ -105,6 +105,10 @@ class DecoderLayer(LightweightModule):
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         start_pos: int = 0,
         mode: str = "prefill",
+        cur_pos_tensor: Optional[ttnn.Tensor] = None,
+        decode_attn_mask: Optional[ttnn.Tensor] = None,
+        cp_prefill_mask: Optional[ttnn.Tensor] = None,
+        prefill_attn_mask: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Apply decoder layer.
@@ -118,8 +122,14 @@ class DecoderLayer(LightweightModule):
             transformation_mat: Transformation matrix for RoPE
             attention_mask: Optional attention mask
             kv_cache: Optional tuple of (k_cache, v_cache) for this layer
-            start_pos: Starting position in sequence (for KV cache)
+            start_pos: Starting position in sequence (for KV cache, non-trace path)
             mode: "prefill" for full sequence or "decode" for single token
+            cur_pos_tensor: Optional int32 device tensor [1] for trace-compatible decode
+            decode_attn_mask: Optional float32 device tensor [1,1,1,max_seq] for decode
+            cp_prefill_mask: Optional float32 device tensor [1,1,seq,max_seq] for
+                trace-compatible CP prefill (writes cache at constant positions 0,1)
+            prefill_attn_mask: Optional float32 device tensor [1,heads,padded_seq,max_seq]
+                for trace-compatible Talker prefill (writes full K/V at position 0)
 
         Returns:
             Tuple of (output, updated_kv_cache) where:
@@ -138,6 +148,10 @@ class DecoderLayer(LightweightModule):
             kv_cache=kv_cache,
             start_pos=start_pos,
             mode=mode,
+            cur_pos_tensor=cur_pos_tensor,
+            decode_attn_mask=decode_attn_mask,
+            cp_prefill_mask=cp_prefill_mask,
+            prefill_attn_mask=prefill_attn_mask,
         )
         x = ttnn.add(residual, x)
 

@@ -169,23 +169,103 @@ class TtModel(LightweightModule):
 
 ### 7. PCC Verification
 
-```python
-import torch
+#### ⚠️ CRITICAL: Two Modes of PCC Testing
 
-def verify_pcc(ttnn_output, reference_output, threshold=0.99):
-    """Verify Pearson Correlation Coefficient > threshold."""
-    ttnn_torch = ttnn.to_torch(ttnn_output).to(torch.float32)
-    ref_torch = reference_output.to(torch.float32)
+There are two fundamentally different PCC testing modes. **Both are required.**
 
-    # Flatten and compute PCC
-    pcc = torch.corrcoef(torch.stack([
-        ttnn_torch.flatten(),
-        ref_torch.flatten()
-    ]))[0, 1].item()
+**Mode A — Isolated (per-block):** each block gets the *reference* hidden state as input.
+- Purpose: verifies the block implementation is numerically correct in isolation.
+- Passes easily (PCC > 0.99 per block), but **does NOT guarantee correct generation**.
 
-    assert pcc > threshold, f"PCC {pcc:.4f} < {threshold}"
-    return pcc
+**Mode B — Chained (end-to-end):** TTNN output of layer N feeds into TTNN layer N+1, exactly as happens during inference.
+- Purpose: measures accumulated error over all layers.
+- **This is the one that matters for audio quality / token correctness.**
+
+**Why Mode A can pass while generation is broken:**
+- 28 layers × PCC 0.99 each → compounded chain PCC can fall to ~0.75 or lower
+- PCC measures *correlation*, not *magnitude* — a vector can have PCC 1.0000 against reference but max abs error of 160 (scale is off)
+- A logit shift of 0.5 across 3072 candidates flips the top predicted token
+
+**Observed example from Qwen3-TTS-12Hz-1.7B:**
 ```
+Layer | Chain PCC | Max Abs Error | Note
+    0 |    0.9907 |          0.6  | First layer error
+  2-17 |    1.0000 |        160.0  | PCC=1 but scale wrong!
+   27 |    0.9967 |        130.0  |
+FINAL |    0.9588 |           -   | After final norm reveals scale error
+Logit |    0.9694 |           -   | Top token is DIFFERENT from reference
+```
+
+#### Chained PCC Test Pattern
+
+Always write a chained test alongside per-block tests:
+
+```python
+def test_chained_N_layer_pcc(device, state_dict):
+    """Feed TTNN output of layer i into TTNN layer i+1 (chained mode)."""
+    # 1. Build the REAL input (e.g. ICL embedding, actual prompt embedding)
+    inputs_embeds = build_real_input(state_dict)
+
+    # 2. Run reference chain — decoder_layer() called N times sequentially
+    ref_hidden = inputs_embeds.float()
+    ref_per_layer = {}
+    for i in range(num_layers):
+        layer_weights = extract_layer_weights(state_dict, i)
+        ref_hidden = reference_decoder_layer(ref_hidden, layer_weights, cos, sin, config)
+        ref_per_layer[i] = ref_hidden.clone()
+
+    # 3. Run TTNN chain — each layer receives the TTNN output of the previous layer
+    hidden_tt = ttnn.from_torch(inputs_embeds.bfloat16(), device=device,
+                                dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for i, layer in enumerate(ttnn_layers):
+        hidden_tt, _ = layer(hidden_tt, cos_tt, sin_tt, trans_mat,
+                             attention_mask=None, kv_cache=None,
+                             start_pos=0, mode="prefill")
+        # Extract for comparison
+        ttnn_out = ttnn.to_torch(hidden_tt).squeeze(1).float()[:, :seq_len, :]
+        pcc = compute_pcc(ref_per_layer[i], ttnn_out)
+        max_err = (ref_per_layer[i] - ttnn_out).abs().max().item()
+        print(f"Layer {i:2d}: PCC={pcc:.4f}  MaxAbsErr={max_err:.2f}")
+
+    # 4. Final norm and logit comparison
+    final_pcc = compute_pcc(ref_final, ttnn_final)
+    logit_pcc = compute_pcc(ref_logits, ttnn_logits)
+    print(f"Final PCC: {final_pcc:.4f}  Logit PCC: {logit_pcc:.4f}")
+
+    # 5. Check top predicted token matches
+    assert ref_logits.argmax() == ttnn_logits.argmax(), \
+        f"Top token mismatch: ref={ref_logits.argmax()} ttnn={ttnn_logits.argmax()}"
+
+    assert final_pcc > 0.99, f"Chained 28-layer PCC {final_pcc:.4f} < 0.99"
+```
+
+#### RMSNorm Weight Format for TTNN
+
+When loading RMSNorm weights for `ttnn.rms_norm`, the gamma must be reshaped:
+
+```python
+TILE = 32
+# Reshape [hidden_size] → [1, 1, hidden_size//32, 32] in ROW_MAJOR_LAYOUT
+norm_w = state_dict["model.norm.weight"].to(torch.bfloat16)
+norm_w_reshaped = norm_w.view(1, 1, hidden_size // TILE, TILE)
+norm_tt = ttnn.as_tensor(norm_w_reshaped, device=device, dtype=ttnn.bfloat16,
+                         layout=ttnn.ROW_MAJOR_LAYOUT,
+                         memory_config=ttnn.DRAM_MEMORY_CONFIG)
+# Then: ttnn.rms_norm(hidden, epsilon=eps, weight=norm_tt)
+```
+
+#### PCC Thresholds
+
+| Check | Threshold | Why |
+|-------|-----------|-----|
+| Per-block isolated | > 0.99 | Confirms block is correct |
+| Per-layer chained output | > 0.99 | Confirms errors don't compound |
+| Full model final hidden | > 0.99 | Confirms correct output distribution |
+| Logit PCC (last pos) | > 0.99 | Confirms correct token prediction |
+| Top-1 token match | exact | Confirms greedy decoding correctness |
+
+If chained PCC drops below 0.99 but per-block PCC is fine, the error is in the **RoPE format**, **attention scaling**, **bfloat16 overflow**, or **KV-cache causal masking**.
 
 ### 8. Audio Codec Decoder (for TTS models)
 
