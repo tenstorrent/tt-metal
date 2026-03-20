@@ -57,7 +57,7 @@ def generate_pack_untilize_combinations(
             if in_fmt.is_32_bit()
             else (
                 (DestAccumulation.No,)
-                if in_fmt == DataFormat.Int16
+                if in_fmt in [DataFormat.Int16, DataFormat.Float16]
                 else (DestAccumulation.No, DestAccumulation.Yes)
             )
         )
@@ -71,11 +71,12 @@ def generate_pack_untilize_combinations(
 
 PACK_UNTILIZE_FORMATS = input_output_formats(
     [
-        DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.Float16_b,
         DataFormat.Int16,
+        DataFormat.Int32,
     ],
-    same=True,  # Input format and output format are the same
+    same=True,
 )
 ALL_PACK_UNTILIZE_COMBINATIONS = generate_pack_untilize_combinations(
     PACK_UNTILIZE_FORMATS
@@ -91,9 +92,6 @@ def test_pack_untilize_quasar(formats_dest_acc_dimensions):
     formats = formats_dest_acc_dimensions[0]
     dest_acc = formats_dest_acc_dimensions[1]
     input_dimensions = formats_dest_acc_dimensions[2]
-
-    if formats.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("Fails for now.")
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
