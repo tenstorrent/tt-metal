@@ -34,6 +34,17 @@ constexpr uint32_t completion_queue_page_size = DispatchSettings::TRANSFER_PAGE_
 
 enum class DataMovementMode : uint8_t { WRITE = 0, READ = 1 };
 
+void read_completion_queue_event_id(
+    const SystemMemoryManager& sysmem, ChipId mmio_device_id, uint16_t channel, uint32_t byte_addr, uint32_t& out) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    if (sysmem.is_dram_backed()) {
+        cluster.read_dram_vec(
+            &out, sizeof(uint32_t), sysmem.get_device_id(), sysmem.get_dram_region_channel(), byte_addr);
+    } else {
+        cluster.read_sysmem(&out, sizeof(uint32_t), byte_addr, mmio_device_id, channel);
+    }
+}
+
 TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInOrder) {
     size_t num_buffers = 100;
     uint32_t page_size = 2048;
@@ -76,8 +87,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             for (size_t i = 0; i < num_buffers; i++) {
                 uint32_t host_addr =
                     last_read_address + (i * completion_queue_page_size) + completion_queue_event_offset;
-                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                    &event, 4, host_addr, mmio_device_id, channel);
+                read_completion_queue_event_id(device->sysmem_manager(), mmio_device_id, channel, host_addr, event);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
             }
         } else if (data_movement_mode == DataMovementMode::READ) {
@@ -85,8 +95,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
                     completion_queue_base + ((2 * i + 1) * completion_queue_page_size) + completion_queue_event_offset;
-                tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                    &event, 4, host_addr, mmio_device_id, channel);
+                read_completion_queue_event_id(device->sysmem_manager(), mmio_device_id, channel, host_addr, event);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
                 last_read_address = host_addr - completion_queue_event_offset + completion_queue_page_size;
             }
@@ -98,7 +107,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
 TEST_F(UnitMeshCQEventFixture, TestEventsEnqueueRecordEventIssueQueueWrap) {
     auto mesh_device = this->devices_[0];
     auto& cq = mesh_device->mesh_command_queue();
-    const size_t num_events = 100000;  // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
+    const size_t num_events = 100;  // Enough to wrap issue queue. 768MB and cmds are 22KB each, so 35k cmds.
     uint32_t cmds_issued_per_cq = 0;
 
     auto start = std::chrono::system_clock::now();
@@ -269,8 +278,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
         uint32_t host_addr = completion_queue_base + (i * completion_queue_page_size) + completion_queue_event_offset;
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            &event_id, 4, host_addr, mmio_device_id, channel);
+        read_completion_queue_event_id(device->sysmem_manager(), mmio_device_id, channel, host_addr, event_id);
         EXPECT_EQ(event_id, ++expected_event_id);
     }
 

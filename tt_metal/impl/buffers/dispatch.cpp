@@ -1588,7 +1588,12 @@ void read_completion_queue(
     if (sysmem_manager.is_dram_backed()) {
         tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
             .get_cluster()
-            .read_dram_vec(dst, size_bytes, device_id, 0, completion_q_read_ptr + completion_q_data_offset);
+            .read_dram_vec(
+                dst,
+                size_bytes,
+                device_id,
+                sysmem_manager.get_dram_region_channel(),
+                completion_q_read_ptr + completion_q_data_offset);
     } else {
         tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id())
             .get_cluster()

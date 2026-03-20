@@ -37,7 +37,7 @@ uint32_t get_cq_issue_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
             &recv,
             sizeof(uint32_t),
             chip_id,
-            0,
+            sysmem_manager.get_dram_region_channel(),
             sysmem_manager.get_dram_region_base_addr() + get_relative_cq_offset(cq_id, cq_size) + issue_q_rd_ptr);
     } else {
         ChipId mmio_device_id =
@@ -73,7 +73,7 @@ uint32_t get_cq_issue_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
             &recv,
             sizeof(uint32_t),
             chip_id,
-            0,
+            sysmem_manager.get_dram_region_channel(),
             sysmem_manager.get_dram_region_base_addr() + get_relative_cq_offset(cq_id, cq_size) + issue_q_wr_ptr);
     } else {
         ChipId mmio_device_id =
@@ -104,7 +104,7 @@ uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_siz
             &recv,
             sizeof(uint32_t),
             chip_id,
-            0,
+            sysmem_manager.get_dram_region_channel(),
             sysmem_manager.get_dram_region_base_addr() + get_relative_cq_offset(cq_id, cq_size) + completion_q_wr_ptr);
     } else {
         ChipId mmio_device_id =
@@ -140,7 +140,7 @@ inline uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t
             &recv,
             sizeof(uint32_t),
             chip_id,
-            0,
+            sysmem_manager.get_dram_region_channel(),
             sysmem_manager.get_dram_region_base_addr() + get_relative_cq_offset(cq_id, cq_size) + completion_q_rd_ptr);
     } else {
         ChipId mmio_device_id =

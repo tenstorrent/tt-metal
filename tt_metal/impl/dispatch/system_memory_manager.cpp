@@ -21,6 +21,7 @@
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "memcpy.hpp"
+#include "allocator/allocator.hpp"
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -131,18 +132,23 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         return;
     }
 
-    if (use_dram_for_cq_storage()) {
-        this->cq_size = 1 << 28;  // 256 MB
+    if (is_dram_backed()) {
+        const uint32_t dram_backed_command_queues_size =
+            MetalContext::instance().hal().get_dev_size(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
+        TT_ASSERT(dram_backed_command_queues_size > 0);
+        TT_FATAL(
+            (dram_backed_command_queues_size % num_hw_cqs) == 0,
+            "Size of DRAM region reserved for command queues {}B is not divisible by number of command queues {}",
+            dram_backed_command_queues_size,
+            num_hw_cqs);
+        this->cq_size = dram_backed_command_queues_size / num_hw_cqs;
         TT_ASSERT((this->cq_size % MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::DRAM)) == 0);
-        IDevice* device = MetalContext::instance().device_manager()->get_active_device(this->device_id);
+        const IDevice* device = MetalContext::instance().device_manager()->get_active_device(this->device_id);
         TT_FATAL(device->is_mmio_capable(), "Device {} is not an MMIO device", this->device_id);
-        this->dram_region_buffer =
-            Buffer::create(device, this->cq_size * num_hw_cqs, this->cq_size * num_hw_cqs, BufferType::DRAM);
-        this->dram_region_staging_buffer = std::make_unique<char[]>(this->cq_size * num_hw_cqs);
+        this->dram_region_staging_buffer = std::make_unique<char[]>(dram_backed_command_queues_size);
         this->cq_sysmem_start = this->dram_region_staging_buffer.get();
-        this->channel_offset =
-            this->dram_region_buffer
-                ->address();  // change this to 0 and instead modify individual functions to subtract buf addr
+        this->channel_offset = this->get_dram_region_base_addr();  // change this to 0 and instead modify individual
+                                                                   // functions to subtract buf addr
         this->init_dispatch_core_interfaces(num_hw_cqs, 0);
         return;
     }
@@ -212,7 +218,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
 
         const uint32_t alignment = ctx.hal().get_alignment(HalMemType::HOST);
-        const uint32_t base = use_dram_for_cq_storage() ? this->get_dram_region_base_addr() : 0;
+        const uint32_t base = is_dram_backed() ? this->get_dram_region_base_addr() : 0;
         this->cq_interfaces.push_back(
             SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start, alignment, base));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
@@ -238,10 +244,6 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
 bool SystemMemoryManager::is_mock_device() const {
     return tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().get_target_device_type() ==
            tt::TargetDevice::Mock;
-}
-
-bool SystemMemoryManager::use_dram_for_cq_storage() const {
-    return tt::tt_metal::MetalContext::instance(this->context_id).rtoptions().get_dram_backed_cq();
 }
 
 uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
@@ -394,7 +396,7 @@ uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) con
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
     }
-    log_info(tt::LogMetal, "issue_queue_write_ptr: {}", this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4);
+    // log_info(tt::LogMetal, "issue_queue_write_ptr: {}", this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4);
     return this->cq_interfaces[cq_id].issue_fifo_wr_ptr << 4;
 }
 
@@ -402,17 +404,17 @@ uint32_t SystemMemoryManager::get_completion_queue_read_ptr(const uint8_t cq_id)
     if (is_mock_device()) {
         return 0;
     }
-    log_info(tt::LogMetal, "completion_queue_read_ptr: {}", this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4);
+    // log_info(tt::LogMetal, "completion_queue_read_ptr: {}", this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4);
     return this->cq_interfaces[cq_id].completion_fifo_rd_ptr << 4;
 }
 
 void* SystemMemoryManager::get_completion_queue_ptr(uint8_t cq_id) const {
-    if (use_dram_for_cq_storage()) {
+    if (is_dram_backed()) {
         MetalContext::instance().get_cluster().read_dram_vec(
             this->cq_sysmem_start + (this->get_issue_queue_limit(cq_id) - this->channel_offset),
             this->get_completion_queue_size(cq_id),
             this->device_id,
-            0,
+            this->get_dram_region_channel(),
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) +
                 cq_interfaces[cq_id].cq_start + cq_interfaces[cq_id].command_issue_region_size);
     }
@@ -501,7 +503,7 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 
     if (this->bypass_enable) {
         std::copy((uint8_t*)data, (uint8_t*)data + size_in_bytes, (uint8_t*)this->bypass_buffer.data() + write_ptr);
-    } else if (use_dram_for_cq_storage()) {
+    } else if (is_dram_backed()) {
         memcpy(user_scratchspace, data, size_in_bytes);
     } else {
         memcpy_to_device(user_scratchspace, data, size_in_bytes);
@@ -533,18 +535,18 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
         cq_interface.issue_fifo_wr_ptr += push_size_16B;
     }
 
-    if (use_dram_for_cq_storage()) {
+    if (is_dram_backed()) {
         MetalContext::instance().get_cluster().write_dram_vec(
             this->cq_sysmem_start + (cq_interface.offset - this->channel_offset) + cq_interface.cq_start,
             this->get_issue_queue_size(cq_id),
             this->device_id,
-            0,
+            this->get_dram_region_channel(),
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + cq_interface.cq_start);
         MetalContext::instance().get_cluster().write_dram_vec(
             &cq_interface.issue_fifo_wr_ptr,
             sizeof(uint32_t),
             this->device_id,
-            0,
+            this->get_dram_region_channel(),
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + issue_q_wr_ptr);
         return;
     }
@@ -572,12 +574,12 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
 
-    if (use_dram_for_cq_storage()) {
+    if (is_dram_backed()) {
         MetalContext::instance().get_cluster().write_dram_vec(
             &read_ptr_and_toggle,
             sizeof(uint32_t),
             this->device_id,
-            0,
+            this->get_dram_region_channel(),
             this->get_dram_region_base_addr() + get_relative_cq_offset(cq_id, this->cq_size) + completion_q_rd_ptr);
         return;
     }
@@ -775,11 +777,22 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
-bool SystemMemoryManager::is_dram_backed() const { return this->dram_region_buffer != nullptr; }
+bool SystemMemoryManager::is_dram_backed() const {
+    return tt::tt_metal::MetalContext::instance(this->context_id).rtoptions().get_dram_backed_cq();
+}
 
 uint32_t SystemMemoryManager::get_dram_region_base_addr() const {
     TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
-    return this->dram_region_buffer->address();
+    return tt::tt_metal::MetalContext::instance(this->context_id)
+        .hal()
+        .get_dev_addr(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
+}
+
+uint32_t SystemMemoryManager::get_dram_region_channel() const {
+    TT_FATAL(this->is_dram_backed(), "CQs are not DRAM backed");
+    const IDevice* device =
+        MetalContext::instance(this->context_id).device_manager()->get_active_device(this->device_id);
+    return device->allocator_impl()->get_dram_channel_from_bank_id(0);
 }
 
 }  // namespace tt::tt_metal

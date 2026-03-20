@@ -300,12 +300,22 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
         std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
-            cq_zeros.data(),
-            (cq_size - cq_start),
-            get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
-            mmio_device_id,
-            channel);
+        if (local_device->sysmem_manager().is_dram_backed()) {
+            tt::tt_metal::MetalContext::instance().get_cluster().write_dram_vec(
+                cq_zeros.data(),
+                (cq_size - cq_start),
+                local_device->id(),
+                local_device->sysmem_manager().get_dram_region_channel(),
+                local_device->sysmem_manager().get_dram_region_base_addr() +
+                    get_absolute_cq_offset(channel, 0, cq_size) + cq_start);
+        } else {
+            tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
+                cq_zeros.data(),
+                (cq_size - cq_start),
+                get_absolute_cq_offset(channel, 0, cq_size) + cq_start,
+                mmio_device_id,
+                channel);
+        }
     }
 
     // Create src vector

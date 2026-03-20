@@ -42,6 +42,21 @@ T val(T v) {
 }
 }  // namespace
 
+void read_cq_memory_for_dump(
+    void* dst,
+    uint32_t size_bytes,
+    uint64_t byte_addr,
+    ChipId mmio_device_id,
+    uint16_t channel,
+    const SystemMemoryManager& sysmem_manager) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    if (sysmem_manager.is_dram_backed()) {
+        cluster.read_dram_vec(dst, size_bytes, mmio_device_id, 0, byte_addr);
+    } else {
+        cluster.read_sysmem(dst, size_bytes, byte_addr, mmio_device_id, channel);
+    }
+}
+
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
     std::ifstream host_dispatch_dump_file;
     std::ifstream device_dispatch_dump_file;
@@ -360,8 +375,7 @@ void dump_completion_queue_entries(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
         uint32_t page_addr = base_addr + page_offset;
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
 
         // Check if this page starts with a valid command id
         CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
@@ -457,8 +471,8 @@ void dump_issue_queue_entries(
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
     uint32_t end_of_curr_page =
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
+    read_cq_memory_for_dump(
+        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel, sysmem_manager);
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
@@ -467,8 +481,8 @@ void dump_issue_queue_entries(
         // Check if we need to read a new page
         if (curr_addr > end_of_curr_page) {
             uint32_t page_base = curr_addr - (curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-            tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+            read_cq_memory_for_dump(
+                read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
             end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
         }
 
@@ -524,8 +538,8 @@ void dump_issue_queue_entries(
                     if (dispatch_curr_addr > end_of_curr_page) {
                         uint32_t page_base =
                             dispatch_curr_addr - (dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-                        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+                        read_cq_memory_for_dump(
+                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
                         end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
                     }
 
@@ -628,8 +642,7 @@ void dump_command_queue_raw_data(
         print_progress_bar(((float)page_offset / bytes_to_read) + 0.005);
 
         // Print in 16B per line
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
         TT_ASSERT(read_data.size() % 16 == 0);
         for (uint32_t line_offset = 0; line_offset < read_data.size(); line_offset += 16) {
             uint32_t line_addr = page_addr + line_offset;
