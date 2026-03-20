@@ -276,6 +276,9 @@ class Talker(LightweightModule):
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         start_pos: int = 0,
         mode: str = "prefill",
+        cur_pos_tensor: Optional[ttnn.Tensor] = None,
+        decode_attn_mask: Optional[ttnn.Tensor] = None,
+        prefill_attn_mask: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass starting from hidden states (for mixed embeddings).
@@ -287,8 +290,12 @@ class Talker(LightweightModule):
             transformation_mat: Transformation matrix for RoPE
             attention_mask: Optional attention mask
             kv_caches: Optional list of (k_cache, v_cache) tuples, one per layer
-            start_pos: Starting position in sequence (for KV cache)
+            start_pos: Starting position in sequence (for KV cache, non-trace path)
             mode: "prefill" for full sequence or "decode" for single token
+            cur_pos_tensor: Optional int32 device tensor [1] for trace-compatible decode
+            decode_attn_mask: Optional float32 device tensor [1,1,1,max_seq] for decode
+            prefill_attn_mask: Optional float32 device tensor [1,heads,padded_seq,max_seq]
+                for trace-compatible Talker prefill
 
         Returns:
             Tuple of (hidden_states, updated_kv_caches)
@@ -302,6 +309,9 @@ class Talker(LightweightModule):
             kv_caches=kv_caches,
             start_pos=start_pos,
             mode=mode,
+            cur_pos_tensor=cur_pos_tensor,
+            decode_attn_mask=decode_attn_mask,
+            prefill_attn_mask=prefill_attn_mask,
         )
 
     def _forward_layers(
@@ -314,6 +324,9 @@ class Talker(LightweightModule):
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         start_pos: int = 0,
         mode: str = "prefill",
+        cur_pos_tensor: Optional[ttnn.Tensor] = None,
+        decode_attn_mask: Optional[ttnn.Tensor] = None,
+        prefill_attn_mask: Optional[ttnn.Tensor] = None,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """Internal: Apply decoder layers and final norm.
 
@@ -323,8 +336,12 @@ class Talker(LightweightModule):
             transformation_mat: RoPE transformation matrix
             attention_mask: Optional attention mask
             kv_caches: Optional list of (k_cache, v_cache) tuples per layer
-            start_pos: Starting position for KV cache
+            start_pos: Starting position for KV cache (non-trace path)
             mode: "prefill" or "decode"
+            cur_pos_tensor: Optional int32 device tensor [1] for trace-compatible decode
+            decode_attn_mask: Optional float32 device tensor [1,1,1,max_seq] for decode
+            prefill_attn_mask: Optional float32 device tensor [1,heads,padded_seq,max_seq]
+                for trace-compatible Talker prefill
 
         Returns:
             Tuple of (output, updated_kv_caches)
@@ -350,6 +367,9 @@ class Talker(LightweightModule):
                 kv_cache=layer_kv_cache,
                 start_pos=start_pos,
                 mode=mode,
+                cur_pos_tensor=cur_pos_tensor,
+                decode_attn_mask=decode_attn_mask,
+                prefill_attn_mask=prefill_attn_mask,
             )
             if updated_kv_caches is not None:
                 updated_kv_caches.append(updated_kv_cache)
