@@ -676,22 +676,6 @@ def get_rope_tensors(
     return rope_setup.get_rot_mats(position_ids)
 
 
-def get_position_ids_tensor(
-    hf_config: PretrainedConfig,
-    batch_size_per_row: int,
-    position_ids: torch.Tensor,
-    mesh_device: ttnn.MeshDevice,
-    *,
-    on_host: bool = False,
-) -> ttnn.Tensor:
-    rope_setup = RotarySetup(
-        device=mesh_device,
-        batch_size_per_row=batch_size_per_row,
-        hf_config=hf_config,
-    )
-    return rope_setup.get_position_idxs_tensor(position_ids, on_host=on_host)
-
-
 # Mapping of system names to their corresponding mesh shapes
 SYSTEM_NAME_TO_MESH_SHAPE: dict[str, tuple[int, int]] = {
     "TG": (4, 8),
