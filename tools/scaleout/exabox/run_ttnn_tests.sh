@@ -10,7 +10,6 @@ Runs ttnn validation tests across multiple hosts using a specified Docker image.
 Required Options:
     --hosts <host-list>                     Comma-separated list of hosts
     --image <docker-image>                  Docker image to use
-    --script <script-path>                  Path to the validation script to run inside the container
 
 Optional:
     --output <directory>                    Output directory for log files (default: validation_output)
@@ -19,14 +18,12 @@ Optional:
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
        --image ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest \\
-       --script test_ttnn.py \\
 EOF
 }
 
 # Parse command line arguments
 HOSTS=""
 DOCKER_IMAGE=""
-SCRIPT_PATH=""
 OUTPUT_DIR="ttnn_validation_output"
 
 while [[ $# -gt 0 ]]; do
@@ -45,14 +42,6 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             DOCKER_IMAGE="$2"
-            shift 2
-            ;;
-        --script)
-            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --script requires a non-empty value"
-                exit 1
-            fi
-            SCRIPT_PATH="$2"
             shift 2
             ;;
         --output)
@@ -91,16 +80,8 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     exit 1
 fi
 
-if [[ -z "$SCRIPT_PATH" ]]; then
-    echo "Error: --script is required"
-    echo ""
-    show_help
-    exit 1
-fi
-
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
-echo "Using script: $SCRIPT_PATH"
 echo "Output directory: $OUTPUT_DIR"
 echo ""
 
