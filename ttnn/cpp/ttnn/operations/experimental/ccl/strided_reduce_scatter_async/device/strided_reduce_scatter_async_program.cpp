@@ -338,6 +338,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<experimental::ccl::StridedReduceScatterFusedOpSignaler>& mm_fused_op_signaler,
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
@@ -561,6 +562,11 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
+    bool fuse_mm_op = mm_fused_op_signaler.has_value();
+    if (fuse_mm_op) {
+        mm_fused_op_signaler->init_strided_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
+        reader_compute_defines["FUSE_MM_OP_SIGNALER"] = "1";
+    }
 
     // Kernel Runtime Args
     const uint32_t l1_unreserved_base_address =
@@ -611,7 +617,7 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         chunks_per_mm_N_full_block_val,
         mm_block_wt_val,
         slice_Ht_per_core,
-        false,  // fuse_mm_op: wired up in fusion commit
+        fuse_mm_op,
         slice_Ht);
 
     if (input_is_sharded) {
@@ -790,6 +796,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
+                if (fuse_mm_op) {
+                    mm_fused_op_signaler->push_strided_reduce_scatter_fused_op_rt_args(reader_rt_args);
+                }
                 // Addcmul tensor addresses (a then b) — must be last so override_runtime_arguments
                 // can locate them via reader_addcmul_rt_arg_offset.
                 if (fuse_rs_addcmul) {
@@ -963,6 +972,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
 
     std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> fused_op_signaler = std::nullopt;
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> mm_fused_op_signaler = std::nullopt;
     tt::tt_metal::Program program{};
     auto shared_vars = ::ttnn::build_ring_strided_reduce_scatter_async_program_artifacts(
         program,
@@ -982,6 +992,7 @@ RingStridedReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.using_persistent_buffers,
         operation_attributes.sub_device_id,
         fused_op_signaler,
+        mm_fused_op_signaler,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         CoreCoord(0, 0),
