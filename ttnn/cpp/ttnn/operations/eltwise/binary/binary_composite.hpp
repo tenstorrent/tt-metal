@@ -379,7 +379,8 @@ struct ExecuteBitwiseAnd {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -389,7 +390,8 @@ struct ExecuteBitwiseAnd {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBitwiseOr {
@@ -401,7 +403,8 @@ struct ExecuteBitwiseOr {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -411,7 +414,8 @@ struct ExecuteBitwiseOr {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBitwiseXor {
@@ -423,7 +427,8 @@ struct ExecuteBitwiseXor {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -433,7 +438,8 @@ struct ExecuteBitwiseXor {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBitwiseLeftShift {
@@ -445,7 +451,8 @@ struct ExecuteBitwiseLeftShift {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -455,7 +462,8 @@ struct ExecuteBitwiseLeftShift {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBitwiseRightShift {
@@ -467,7 +475,8 @@ struct ExecuteBitwiseRightShift {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -477,7 +486,8 @@ struct ExecuteBitwiseRightShift {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {

@@ -190,11 +190,7 @@ Tensor invoke_impl(
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
-    //  TODO: add sub_core_grids functionality to Unary Infra
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
 }
 
 }  // namespace
@@ -223,10 +219,7 @@ Tensor WhereOperation::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    if (sub_core_grids.has_value()) {
-        TT_THROW("Subcore grids are not supported for WhereOperation TSS variant");
-    }
-    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
 template Tensor WhereOperation::invoke<int32_t>(
