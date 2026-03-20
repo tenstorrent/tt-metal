@@ -13,13 +13,14 @@ It does **not** change CI workflows or add hard gates. It reuses:
 
 1. **Generate vectors** — `MasterConfigLoader.get_suite_parameters("matmul")` runs at import time; the generator expands the `model_traced` suite and writes `tests/sweep_framework/vectors_export/model_traced.matmul_model_traced.json` (plus optional `__mesh_*` variants).
 
-2. **Partition** — `matmul_n150_protocol.py partition` reads the merged `model_traced` suite and assigns each `input_hash` to **smoke**, **train**, or **holdout** (see below).
+2. **Partition** — `matmul_n150_protocol.py partition` reads the merged `model_traced` suite and assigns each `input_hash` to **smoke**, **train**, or **holdout** (see below). Optional filters: `--source-include '<regex>'` and `--source-exclude '<regex>'`.
 
 3. **Write subset JSON** — `write-json` copies the selected vectors into `benchmark_protocol/generated/matmul_n150_*.json` for `sweeps_runner --vector-source file`.
 
 4. **Run** — `sweeps_runner` executes vectors; results land in `tests/sweep_framework/results_export/` as a JSON **list of OpTest-like records** (metrics include `e2e_perf_ms` when `--perf` is set).
 
 5. **Report** — `matmul_n150_protocol.py report` joins results to the manifest by `input_hash` and prints pass rate, timeouts, p50/p95 e2e, and optional memory p50s.
+6. **Analyze sources** *(optional)* — `matmul_n150_protocol.py analyze-sources` prints traced source counts and top weighted shape/source patterns (`batch*M*K*N`) to help choose high-impact subsets.
 
 ## Deterministic split
 
@@ -49,6 +50,13 @@ export RUNNER_LABEL=N150              # optional; appears in result card_type
 # 2) Build manifest + protocol JSON slices
 python3 tests/sweep_framework/benchmark_protocol/matmul_n150_protocol.py partition
 python3 tests/sweep_framework/benchmark_protocol/matmul_n150_protocol.py write-json
+
+# Optional: DeepSeek-focused analysis and partitioning
+python3 tests/sweep_framework/benchmark_protocol/matmul_n150_protocol.py analyze-sources \
+  --source-include 'deepseek' \
+  --top-n 20
+python3 tests/sweep_framework/benchmark_protocol/matmul_n150_protocol.py partition \
+  --source-include 'deepseek'
 
 # 3) Run combined protocol set with e2e perf (cwd must be sweep_framework for imports)
 ( cd tests/sweep_framework && python3 sweeps_runner.py \

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
@@ -42,6 +43,38 @@ def _normalize_traced_source(raw: Any) -> str:
         parts = [_normalize_traced_source(x) for x in raw]
         return ",".join(parts)
     return str(raw)
+
+
+def _compile_optional_regex(pattern: str | None) -> re.Pattern[str] | None:
+    if not pattern:
+        return None
+    return re.compile(pattern)
+
+
+def filter_suite_vectors_by_traced_source(
+    suite_vectors: dict[str, dict[str, Any]],
+    *,
+    include_pattern: str | None = None,
+    exclude_pattern: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """
+    Filter vectors by traced_source regex rules.
+
+    include_pattern: keep only vectors where regex matches traced_source.
+    exclude_pattern: drop vectors where regex matches traced_source.
+    """
+    include_re = _compile_optional_regex(include_pattern)
+    exclude_re = _compile_optional_regex(exclude_pattern)
+
+    out: dict[str, dict[str, Any]] = {}
+    for input_hash, vec in suite_vectors.items():
+        traced_source = _normalize_traced_source(vec.get("traced_source"))
+        if include_re and not include_re.search(traced_source):
+            continue
+        if exclude_re and exclude_re.search(traced_source):
+            continue
+        out[input_hash] = vec
+    return out
 
 
 def _normalize_shape(val: Any) -> str:

@@ -30,6 +30,7 @@ Usage: $0 <command>
 
   generate   — sweeps_parameter_generator for matmul model_traced only (needs working ttnn import)
   partition  — write manifest (smoke/train/holdout) from vectors_export
+  analyze   — print traced_source distribution / weighted shape patterns
   write-json — write slice JSON files + combined protocol file for --vector-source file
   run        — sweeps_runner on combined protocol vectors (perf + optional memory)
   report     — summarize results_export using manifest
@@ -40,6 +41,8 @@ Environment:
   RUNNER_LABEL        — e.g. N150 (shown in results card_type)
   SWEEPS_TAG          — vector tag (default: USER)
   MEASURE_MEMORY=1    — for 'run', add --measure-memory
+  SOURCE_INCLUDE      — regex traced_source include filter for partition/analyze
+  SOURCE_EXCLUDE      — regex traced_source exclude filter for partition/analyze
 
 EOF
 }
@@ -53,9 +56,31 @@ run_generate() {
 
 run_partition() {
   mkdir -p "${GEN}"
+  local extra=()
+  if [[ -n "${SOURCE_INCLUDE:-}" ]]; then
+    extra+=(--source-include "${SOURCE_INCLUDE}")
+  fi
+  if [[ -n "${SOURCE_EXCLUDE:-}" ]]; then
+    extra+=(--source-exclude "${SOURCE_EXCLUDE}")
+  fi
   python3 "${SWEEP_FW}/benchmark_protocol/matmul_n150_protocol.py" partition \
     --vectors-export "${VECTORS}" \
+    "${extra[@]}" \
     --output "${MANIFEST}"
+}
+
+run_analyze() {
+  local extra=()
+  if [[ -n "${SOURCE_INCLUDE:-}" ]]; then
+    extra+=(--source-include "${SOURCE_INCLUDE}")
+  fi
+  if [[ -n "${SOURCE_EXCLUDE:-}" ]]; then
+    extra+=(--source-exclude "${SOURCE_EXCLUDE}")
+  fi
+  python3 "${SWEEP_FW}/benchmark_protocol/matmul_n150_protocol.py" analyze-sources \
+    --vectors-export "${VECTORS}" \
+    --top-n 20 \
+    "${extra[@]}"
 }
 
 run_write_json() {
@@ -109,6 +134,7 @@ esac
 case "${cmd}" in
   generate) run_generate ;;
   partition) run_partition ;;
+  analyze) run_analyze ;;
   write-json) run_write_json ;;
   run) run_sweeps ;;
   report) run_report ;;
