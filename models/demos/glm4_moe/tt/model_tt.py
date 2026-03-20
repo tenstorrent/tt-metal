@@ -722,7 +722,10 @@ class Glm4MoeTT:
             logits [active, 1, vocab] as torch float32 when sampling_params is None,
             or next token ids [active] as torch int32 when sampling_params is not None.
         """
-        logger.info("=== decode() called: tokens={}, enable_trace={} ===", tuple(tokens.shape), enable_trace)
+        _PROF = os.environ.get("GLM4_MOE_PROFILE", "0") != "0"
+        _t_decode_start = time.perf_counter_ns() if _PROF else 0
+        if _PROF:
+            logger.info("TTPROF decode_start active={} trace={}", int((start_pos >= 0).sum().item()), enable_trace)
         if tokens.ndim != 2 or tokens.shape[1] != 1:
             raise ValueError(f"expected tokens [B,1], got {tuple(tokens.shape)}")
         if start_pos.ndim != 1:
@@ -1621,22 +1624,21 @@ class Glm4MoeTT:
                     )
                 raise
         else:
+            _PROF = os.environ.get("GLM4_MOE_PROFILE", "0") != "0"
+
             # Update persistent inputs and replay.
+            _t0 = time.perf_counter_ns() if _PROF else 0
             self._update_trace_inputs(state, tokens, positions, page_table)
 
             # MTP input update before trace replay.
-            # In-trace embedding mode: only upload positions + RoPE (embedding comes from
-            # argmax inside the trace). Fallback mode: also upload previous-step embedding.
             if self.mtp_enabled and state.mtp_logits_tt is not None and active <= self.mtp_max_batch:
                 mtp_positions = positions[:active] + 1
                 if self.embed_w is not None:
-                    # In-trace embedding: only need positions + RoPE (embedding computed inside trace)
                     self._copy_mtp_trace_inputs_positions_only(
                         state=state,
                         mtp_positions=mtp_positions,
                     )
                 else:
-                    # Fallback: upload PREVIOUS step's main_ids embedding
                     prev_main_ids = getattr(self, '_prev_main_ids', None)
                     if prev_main_ids is not None:
                         self._copy_mtp_trace_inputs(
@@ -1644,12 +1646,19 @@ class Glm4MoeTT:
                             main_token_ids=prev_main_ids[:active],
                             mtp_positions=mtp_positions,
                         )
+            _t1 = time.perf_counter_ns() if _PROF else 0
 
             if self.tt_ccl is not None:
                 self.tt_ccl.reset_sem_counters()
             ttnn.synchronize_device(self.device)
+            _t2 = time.perf_counter_ns() if _PROF else 0
             ttnn.execute_trace(self.device, state.trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(self.device)
+            _t3 = time.perf_counter_ns() if _PROF else 0
+
+            if _PROF:
+                logger.info("TTPROF trace_replay h2d={:.1f}ms sync={:.1f}ms exec={:.1f}ms",
+                    (_t1-_t0)/1e6, (_t2-_t1)/1e6, (_t3-_t2)/1e6)
 
         # Read outputs (use real active count, not padded bucket).
         # First, get main model token IDs (needed for both return AND MTP).
