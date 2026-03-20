@@ -701,53 +701,53 @@ def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientat
     [
         # All 12 DRAM banks, grid == num_shards (12 shards on 12 banks)
         (
-            [1, 1, 384, 64],
-            [1, 1, 32, 64],
+            [2, 1, 384, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
             ttnn.ShardOrientation.ROW_MAJOR,
             "dram_nd_all_banks_eq_shards_row_major",
         ),
         (
-            [1, 1, 384, 64],
-            [1, 1, 32, 64],
+            [2, 1, 384, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
             ttnn.ShardOrientation.COL_MAJOR,
             "dram_nd_all_banks_eq_shards_col_major",
         ),
         # All 12 DRAM banks, num_shards < num_banks (6 shards on 12 banks)
         (
-            [1, 1, 192, 64],
-            [1, 1, 32, 64],
+            [2, 1, 192, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
             ttnn.ShardOrientation.ROW_MAJOR,
             "dram_nd_all_banks_gt_shards_row_major",
         ),
         (
-            [1, 1, 192, 64],
-            [1, 1, 32, 64],
+            [2, 1, 192, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
             ttnn.ShardOrientation.COL_MAJOR,
             "dram_nd_all_banks_gt_shards_col_major",
         ),
         # All 12 DRAM banks, num_shards > num_banks (24 shards on 12 banks, 2 per bank)
         (
-            [1, 1, 768, 64],
-            [1, 1, 32, 64],
+            [2, 1, 768, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
             ttnn.ShardOrientation.ROW_MAJOR,
             "dram_nd_all_banks_lt_shards_row_major",
         ),
         (
-            [1, 1, 768, 64],
-            [1, 1, 32, 64],
+            [2, 1, 768, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
             ttnn.ShardOrientation.COL_MAJOR,
             "dram_nd_all_banks_lt_shards_col_major",
         ),
         # Disjoint DRAM banks (banks 0-3 and 8-11), grid == num_shards
         (
-            [1, 1, 256, 64],
-            [1, 1, 32, 64],
+            [2, 1, 256, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
@@ -758,8 +758,8 @@ def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientat
             "dram_nd_disjoint_eq_shards_row_major",
         ),
         (
-            [1, 1, 256, 64],
-            [1, 1, 32, 64],
+            [2, 1, 256, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
@@ -771,8 +771,8 @@ def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientat
         ),
         # Disjoint DRAM banks, num_shards < num_banks (4 shards on 8 disjoint banks)
         (
-            [1, 1, 128, 64],
-            [1, 1, 32, 64],
+            [2, 1, 128, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
@@ -783,8 +783,8 @@ def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientat
             "dram_nd_disjoint_gt_shards_row_major",
         ),
         (
-            [1, 1, 128, 64],
-            [1, 1, 32, 64],
+            [2, 1, 128, 64],
+            [2, 1, 32, 64],
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
