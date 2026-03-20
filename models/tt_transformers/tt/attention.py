@@ -521,20 +521,18 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _hf_rope_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
-
         q_heads_1BQD = ttnn.experimental.rotary_embedding(
             q_heads_pre_rot_1BQD,
             rot_mats[0],
             rot_mats[1],
-            int_current_pos,
+            0,
         )
 
         k_heads_1BKD = ttnn.experimental.rotary_embedding(
             k_heads_pre_rot_1BKD,
             rot_mats[0],
             rot_mats[1],
-            int_current_pos,
+            0,
         )
         # This is done because rotary_embedding outputs are padded in the num_heads dimension both steps
         # reshape (indicating the padding size) as the slicing are required for attention to work properly
