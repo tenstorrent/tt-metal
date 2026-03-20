@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.prepare_weights import (
     create_gate_indices_tensor,
+    deinterleave_q_b_proj,
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
@@ -629,7 +630,9 @@ def create_decoder_block_tensors(
         golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
         golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
         golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-        golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
+        golden_torch_matmul2_weights = deinterleave_q_b_proj(
+            state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
+        )
         golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
         golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
         golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
