@@ -377,6 +377,42 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
+// 4x8 benchmark: 32 unique programs on 32 devices (1:1 mapping)
+// Expects parallel dispatch with thread pool.
+// This replicates the deepseek blitz case of 32 independent programs dispatched across 32 devices on a GLX
+TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
+    constexpr uint32_t num_programs = 32;
+    constexpr uint32_t num_devices = 32;
+
+    auto programs = tt::tt_metal::distributed::test::utils::create_benchmark_programs(
+        num_programs, mesh_device_->compute_with_storage_grid_size(), true);
+
+    std::vector<MeshCoordinateRange> devices;
+    devices.reserve(num_devices);
+    for (uint32_t d = 0; d < num_devices; d++) {
+        devices.emplace_back(MeshCoordinate{d / 8, d % 8});
+    }
+
+    std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
+    for (uint32_t d = 0; d < num_devices; d++) {
+        workload->add_program(devices[d], std::move(*programs[d]));
+    }
+
+    auto t0 = std::chrono::steady_clock::now();
+    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+    auto t1 = std::chrono::steady_clock::now();
+    Finish(mesh_device_->mesh_command_queue());
+    auto t2 = std::chrono::steady_clock::now();
+
+    auto enqueue_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    auto finish_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
+
+    log_info(tt::LogTest, "ParallelizationBenchmark: {} programs on {} devices", num_programs, num_devices);
+    log_info(tt::LogTest, "Enqueue time: {} ms", enqueue_ms);
+    log_info(tt::LogTest, "Finish time: {} ms", finish_ms);
+    log_info(tt::LogTest, "Total time: {} ms", enqueue_ms + finish_ms);
+}
+
 TEST_F(MeshWorkloadTest4x8, SimultaneousMeshWorkloads) {
     uint32_t num_programs_0 = 16;
     uint32_t num_programs_1 = 24;
