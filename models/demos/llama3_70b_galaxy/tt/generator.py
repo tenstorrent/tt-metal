@@ -1286,9 +1286,10 @@ class Generator(WarmupForwardMixin):
 
         if self.enable_split_sampling and not return_logits:
             # Apply bitmask outside trace to keep trace reusable.
-            self.model.start_bitmask_to_device(bitmask)
-            self.model.complete_bitmask_to_device()
-            trace_tok_rm = self.model.apply_bitmask_to_logits(trace_tok_rm)
+            if bitmask is not None:
+                self.model.start_bitmask_to_device(bitmask)
+                self.model.complete_bitmask_to_device()
+                trace_tok_rm = self.model.apply_bitmask_to_logits(trace_tok_rm)
             return self.model.sampling.sample(
                 logits=trace_tok_rm,
                 tt_out_tok=self.trace_inputs_decode[return_logits][0],
