@@ -153,6 +153,7 @@ enum class EnvVarID {
     TT_METAL_WATCHER_DISABLE_ETH,                             // Disable watcher on ethernet cores
     TT_METAL_WATCHER_DISABLE_CB_SANITIZE,                     // Disable watcher circular buffer sanitization
     TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION,  // Enable NoC linked transaction sanitization
+    TT_METAL_WATCHER_NOC_SANITIZE_LITE,                        // Enable lite NOC sanitize (grid bounds only)
 
     // ========================================
     // INSPECTOR
@@ -1076,6 +1077,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->watcher_settings.noc_sanitize_linked_transaction = true;
             break;
 
+        // TT_METAL_WATCHER_NOC_SANITIZE_LITE
+        // Enables lite NOC sanitize mode: simple grid-bounds checking without
+        // coordinate classification. Reduces firmware code size while preserving
+        // basic out-of-bounds NOC XY and L1 address overflow detection.
+        // Default: false
+        // Usage: export TT_METAL_WATCHER_NOC_SANITIZE_LITE=1
+        case EnvVarID::TT_METAL_WATCHER_NOC_SANITIZE_LITE:
+            this->watcher_settings.noc_sanitize_lite = true;
+            break;
+
         // ========================================
         // INSPECTOR
         // ========================================
@@ -1832,6 +1843,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(watcher_feature_disabled(watcher_eth_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_cb_sanitize_str));
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
+    hash_str += std::to_string(get_watcher_noc_sanitize_lite());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
     hash_str += std::to_string(get_llk_asserts());

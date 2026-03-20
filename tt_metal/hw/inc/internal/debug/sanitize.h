@@ -49,6 +49,239 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
 
+// Error handler shared between full and lite sanitize modes.
+// Note: this is intentionally defined before the WATCHER_NOC_SANITIZE_LITE split
+// so both modes share the same implementation.
+void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
+    uint8_t noc_id,
+    uint64_t noc_addr,
+    uint32_t l1_addr,
+    uint32_t len,
+    debug_sanitize_noc_cast_t multicast,
+    debug_sanitize_noc_dir_t dir,
+    debug_sanitize_noc_which_core_t which_core,
+    uint16_t return_code) {
+    if (return_code == DebugSanitizeOK) {
+        return;
+    }
+
+    debug_sanitize_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize);
+    volatile debug_sanitize_addr_msg_t* san = &v[noc_id];
+
+#if defined(ARCH_QUASAR)
+    // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
+    uintptr_t addr = reinterpret_cast<uintptr_t>(san);
+    if (addr >= MEM_L1_UNCACHED_BASE) {
+        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+    }
+    uint16_t expected = DebugSanitizeOK;
+    if (__atomic_compare_exchange_n(
+            &san->return_code, &expected, DebugSanitizeWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+#else
+    if (san->return_code == DebugSanitizeOK)
+#endif
+    {
+        san->noc_addr = noc_addr;
+        san->l1_addr = l1_addr;
+        san->len = len;
+        san->which_risc = internal_::get_hw_thread_idx();
+        san->is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
+        san->is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
+        san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
+        san->return_code = return_code;
+#if defined(ARCH_QUASAR)
+        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
+        // TODO: Replace with flush_l2_cache_line() once available
+        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
+        *flush_reg = reinterpret_cast<uintptr_t>(san);
+        asm volatile("fence" ::: "memory");
+#endif
+    }
+
+#if defined(COMPILE_FOR_ERISC)
+    // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
+    // still running and try to make it exit.
+    volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+    go_message_ptr->signal = RUN_MSG_DONE;
+
+    // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
+    // kernel is written. In this case we'll do an early exit back to base FW.
+    internal_::disable_erisc_app();
+    // Subordinates do not have an erisc exit
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
+    erisc_exit();
+#endif
+#endif
+
+    while (1) {
+        ;
+    }
+}
+
+#if defined(WATCHER_NOC_SANITIZE_LITE)
+// ============================================================================
+// NOC Sanitize Lite Mode
+//
+// Performs simple grid-bounds checking without the expensive get_core_type()
+// coordinate iteration. This reduces firmware code size by ~1.5KB while still
+// catching the most common errors: out-of-bounds NOC XY coordinates and L1
+// address overflow.
+// ============================================================================
+
+// Lite: check that NOC XY coordinates are within the grid bounds.
+// Does NOT classify core type (Tensix/DRAM/ETH/PCIE) — just verifies
+// the coordinates are non-zero-width and within noc_size.
+inline bool debug_sanitize_lite_check_xy(uint8_t noc_id, uint8_t x, uint8_t y) {
+    core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
+    uint8_t noc_size_x = core_info->noc_size_x;
+    uint8_t noc_size_y = core_info->noc_size_y;
+    // In lite mode we just check the raw coordinate is within grid dimensions.
+    // NOC 0 and NOC 1 have different coordinate mappings but the grid size is the same.
+    return (x < noc_size_x && y < noc_size_y);
+}
+
+// Lite: simple L1 address range check.
+inline uint16_t debug_sanitize_lite_check_local_addr(uint32_t addr, uint32_t len) {
+    if (addr + len <= addr) {
+        return DebugSanitizeNocAddrZeroLength;
+    }
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
+    constexpr uint64_t local_mem_size = MEM_ETH_SIZE;
+    constexpr uint64_t local_mem_base = MEM_ETH_BASE;
+#else
+    constexpr uint64_t local_mem_size = MEM_L1_SIZE;
+    constexpr uint64_t local_mem_base = MEM_L1_BASE;
+#endif
+    if (addr < local_mem_base) {
+        return DebugSanitizeNocAddrUnderflow;
+    }
+    if (addr + len > local_mem_base + local_mem_size) {
+        return DebugSanitizeNocAddrOverflow;
+    }
+    return DebugSanitizeOK;
+}
+
+// Lite version of debug_sanitize_noc_addr: grid bounds check only.
+uint32_t debug_sanitize_noc_addr(
+    uint8_t noc_id,
+    uint64_t noc_addr,
+    uint32_t l1_addr,
+    uint32_t noc_len,
+    debug_sanitize_noc_cast_t multicast,
+    debug_sanitize_noc_dir_t dir,
+    bool check_linked) {
+    uint8_t x, y;
+    if (multicast) {
+        x = (uint8_t)NOC_MCAST_ADDR_START_X(noc_addr);
+        y = (uint8_t)NOC_MCAST_ADDR_START_Y(noc_addr);
+    } else {
+        x = (uint8_t)NOC_UNICAST_ADDR_X(noc_addr);
+        y = (uint8_t)NOC_UNICAST_ADDR_Y(noc_addr);
+    }
+
+    if (!debug_sanitize_lite_check_xy(noc_id, x, y)) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id, noc_addr, l1_addr, noc_len, multicast, dir,
+            DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeNocTargetInvalidXY);
+    }
+
+    if (multicast) {
+        uint8_t x_end = (uint8_t)NOC_MCAST_ADDR_END_X(noc_addr);
+        uint8_t y_end = (uint8_t)NOC_MCAST_ADDR_END_Y(noc_addr);
+        if (!debug_sanitize_lite_check_xy(noc_id, x_end, y_end)) {
+            debug_sanitize_post_addr_and_hang(
+                noc_id, noc_addr, l1_addr, noc_len, multicast, dir,
+                DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeNocTargetInvalidXY);
+        }
+    }
+
+    // Default alignment — lite mode cannot determine core type for specific alignment.
+    uint32_t alignment_mask =
+        (dir == DEBUG_SANITIZE_NOC_READ ? NOC_L1_READ_ALIGNMENT_BYTES : NOC_L1_WRITE_ALIGNMENT_BYTES) - 1;
+    return alignment_mask;
+}
+
+// Lite version of debug_sanitize_noc_and_worker_addr: grid bounds + L1 range check.
+void debug_sanitize_noc_and_worker_addr(
+    uint8_t noc_id,
+    uint64_t noc_addr,
+    uint32_t worker_addr,
+    uint32_t len,
+    debug_sanitize_noc_cast_t multicast,
+    debug_sanitize_noc_dir_t dir,
+    bool check_linked) {
+    uint32_t alignment_mask = debug_sanitize_noc_addr(noc_id, noc_addr, worker_addr, len, multicast, dir, check_linked);
+
+    // Check local worker address range.
+    uint16_t return_code = debug_sanitize_lite_check_local_addr(worker_addr, len);
+    debug_sanitize_post_addr_and_hang(
+        noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
+
+    if ((worker_addr & alignment_mask) != (noc_addr & alignment_mask)) {
+        debug_sanitize_post_addr_and_hang(
+            noc_id, noc_addr, worker_addr, len, multicast, dir,
+            DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeNocAlignment);
+    }
+}
+
+// Lite: no core type classification, so just check L1 bounds.
+void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
+    // In lite mode we cannot determine if the target is DRAM without get_core_type().
+    // Skip this check — it's a best-effort diagnostic.
+}
+
+void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
+#if defined(COMPILE_FOR_ERISC)
+    constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
+#else
+    constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
+#endif
+    if (addr + len <= addr || addr + len > l1_overflow_addr) {
+        debug_sanitize_post_addr_and_hang(
+            0, 0, addr, len,
+            DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeL1AddrOverflow);
+    }
+}
+
+void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
+#if defined(COMPILE_FOR_ERISC)
+    constexpr uint32_t l1_overflow_addr = MEM_ETH_SIZE;
+    if (src_addr + len <= src_addr || src_addr + len > l1_overflow_addr) {
+        debug_sanitize_post_addr_and_hang(
+            0, 0, src_addr, len,
+            DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeEthSrcL1AddrOverflow);
+    }
+    if (dst_addr + len <= dst_addr || dst_addr + len > l1_overflow_addr) {
+        debug_sanitize_post_addr_and_hang(
+            0, 0, dst_addr, len,
+            DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_WRITE,
+            DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeEthDestL1AddrOverflow);
+    }
+#endif
+}
+
+inline void debug_sanitize_check_linked_transactions(
+    uint8_t noc_id,
+    uint64_t noc_addr,
+    uint32_t l1_addr,
+    uint32_t noc_len,
+    debug_sanitize_noc_cast_t multicast,
+    debug_sanitize_noc_dir_t dir) {
+    // Linked transaction check is the same in lite mode.
+    if (multicast == DEBUG_SANITIZE_NOC_UNICAST) {
+        auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
+        if (watcher_msg->noc_linked_status[noc_id]) {
+            debug_sanitize_post_addr_and_hang(
+                noc_id, noc_addr, l1_addr, noc_len, multicast, dir,
+                DEBUG_SANITIZE_NOC_TARGET, DebugSanitizeNocLinkedTransactionViolation);
+        }
+    }
+}
+
+#else  // !WATCHER_NOC_SANITIZE_LITE — full NOC sanitize mode
+
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
@@ -260,76 +493,8 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
 }
 #endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
 
-// Note:
-//  - this isn't racy w/ the host so long as return_code is written last
-//  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
-//  - for Quasar, multiple DMs share one NOC so CAS is used; address is remapped from uncached to
-//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
-void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
-    uint8_t noc_id,
-    uint64_t noc_addr,
-    uint32_t l1_addr,
-    uint32_t len,
-    debug_sanitize_noc_cast_t multicast,
-    debug_sanitize_noc_dir_t dir,
-    debug_sanitize_noc_which_core_t which_core,
-    uint16_t return_code) {
-    if (return_code == DebugSanitizeOK) {
-        return;
-    }
-
-    debug_sanitize_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize);
-    volatile debug_sanitize_addr_msg_t* san = &v[noc_id];
-
-#if defined(ARCH_QUASAR)
-    // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
-    uintptr_t addr = reinterpret_cast<uintptr_t>(san);
-    if (addr >= MEM_L1_UNCACHED_BASE) {
-        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
-    }
-    uint16_t expected = DebugSanitizeOK;
-    if (__atomic_compare_exchange_n(
-            &san->return_code, &expected, DebugSanitizeWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
-#else
-    if (san->return_code == DebugSanitizeOK)
-#endif
-    {
-        san->noc_addr = noc_addr;
-        san->l1_addr = l1_addr;
-        san->len = len;
-        san->which_risc = internal_::get_hw_thread_idx();
-        san->is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
-        san->is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
-        san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
-        san->return_code = return_code;
-#if defined(ARCH_QUASAR)
-        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
-        // TODO: Replace with flush_l2_cache_line() once available
-        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-        *flush_reg = reinterpret_cast<uintptr_t>(san);
-        asm volatile("fence" ::: "memory");
-#endif
-    }
-
-#if defined(COMPILE_FOR_ERISC)
-    // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
-    // still running and try to make it exit.
-    volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-    go_message_ptr->signal = RUN_MSG_DONE;
-
-    // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
-    // kernel is written. In this case we'll do an early exit back to base FW.
-    internal_::disable_erisc_app();
-    // Subordinates do not have an erisc exit
-#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
-    erisc_exit();
-#endif
-#endif
-
-    while (1) {
-        ;
-    }
-}
+// debug_sanitize_post_addr_and_hang is defined above (before the WATCHER_NOC_SANITIZE_LITE split)
+// so it is shared between full and lite modes.
 
 inline void debug_sanitize_check_linked_transactions(
     uint8_t noc_id,
@@ -616,6 +781,8 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     }
 #endif
 }
+
+#endif  // WATCHER_NOC_SANITIZE_LITE
 
 // TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id, read_cmd_buf)                                       \
