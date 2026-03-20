@@ -259,23 +259,16 @@ def run_test_linear_impl(
     # Check results
     check_result_list = []
     for n in range(num_iters):
-        print(f"iteration {n}:")
+        logger.info(f"iteration {n}:")
         tt_output = tt_output_tensor_list[n]
 
         if use_non_fused:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis + 2, tp_axis + 2]
-            else:
-                concat_dims = [tp_axis + 2, sp_axis + 2]
+            concat_dims = [sp_axis + 2, tp_axis + 2]
         else:
-            if cluster_axis == 0:
-                concat_dims = [sp_axis, tp_axis]
-            else:
-                concat_dims = [tp_axis, sp_axis]
-
+            concat_dims = [sp_axis, tp_axis]
         check_result = []
         for c in range(chunks):
-            tt_output_chunk = ttnn.from_device(tt_output[c])
+            tt_output_chunk = ttnn.from_device(tt_output[c : c + 1])
             tt_output_chunk = ttnn.to_torch(
                 tt_output_chunk,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=concat_dims),
@@ -368,7 +361,7 @@ def run_test_linear(
         torch_addcmul_b = None
 
     # Prepare TT tensors
-    if sp_axis == 1:
+    if sp_axis == 0:
         if use_non_fused:
             shard_dims = [sp_axis + 2, tp_axis + 2]
         else:
@@ -434,7 +427,11 @@ def run_test_linear(
     [
         [
             (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
+                "trace_region_size": 90112,
+            },
             ttnn.Topology.Ring,
             1,
             4,
@@ -448,6 +445,7 @@ def run_test_linear(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
@@ -464,6 +462,7 @@ def run_test_linear(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
@@ -480,6 +479,7 @@ def run_test_linear(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
@@ -496,6 +496,7 @@ def run_test_linear(
             (4, 8),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
                 "fabric_router_config": create_fabric_router_config(4096),
                 "trace_region_size": 90112,
             },
