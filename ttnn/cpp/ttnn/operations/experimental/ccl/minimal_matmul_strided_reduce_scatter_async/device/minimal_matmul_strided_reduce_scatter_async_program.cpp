@@ -123,11 +123,14 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             shared_variables.rs_shared_variables.num_cores_per_link,
             attributes.barrier_semaphore,
             attributes.semaphore,
-            output_tensor.at(0),   // RS input = MM output
-            output_tensor.at(1),   // RS intermediate
-            output_tensor.at(2));  // RS output
+            output_tensor.at(0),  // RS input = MM output
+            output_tensor.at(1),  // RS intermediate
+            output_tensor.at(2),  // RS output
+            shared_variables.rs_shared_variables.reader_addcmul_rt_arg_offset,
+            tensor_args.addcmul_input_tensor1,
+            tensor_args.addcmul_input_tensor2);
 
-        // Override MM runtime arguments
+        // Override MM runtime arguments (addcmul is now fused in RS, not MM)
         auto cached_program_proxy = ttnn::experimental::prim::MinimalMatmulProgramFactory::cached_program_t::proxy(
             program, shared_variables.mm_shared_variables);
 
@@ -175,7 +178,12 @@ minimal_matmul_strided_reduce_scatter_async_program(
     const std::optional<const Tensor>& bias,
     const std::optional<operations::unary::UnaryWithParam>& fused_activation,
     ttnn::experimental::prim::MinimalMatmulConfig config,
-    DeviceComputeKernelConfig compute_kernel_config) {
+    DeviceComputeKernelConfig compute_kernel_config,
+
+    /* Fused addcmul params */
+    const std::optional<float> fused_ternary_scalar = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt) {
     tt::tt_metal::Program program{};
 
     // Derive matmul geometry parameters for the RS factory.
@@ -230,7 +238,11 @@ minimal_matmul_strided_reduce_scatter_async_program(
         mm_block_ht_val,
         mm_block_wt_val,
         mm_N_full_block_wt_val,
-        chunk_width_in_mm_blocks);
+        chunk_width_in_mm_blocks,
+        // Phase 2: fuse addcmul at the RS final write step (not in MM kernel)
+        fused_ternary_scalar,
+        addcmul_input_tensor1,
+        addcmul_input_tensor2);
 
     // =========================================================================
     // STEP 2: Create the Matmul program SECOND
@@ -308,7 +320,12 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         tensor_args.bias,
         attributes.matmul_struct.fused_activation,
         attributes.matmul_struct.config.value(),
-        attributes.matmul_struct.compute_kernel_config);
+        attributes.matmul_struct.compute_kernel_config,
+
+        /* Fused addcmul params */
+        attributes.fused_ternary_scalar,
+        tensor_args.addcmul_input_tensor1,
+        tensor_args.addcmul_input_tensor2);
 }
 
 }  // namespace ttnn::experimental::prim
