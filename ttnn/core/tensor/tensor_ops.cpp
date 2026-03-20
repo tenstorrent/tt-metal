@@ -26,7 +26,7 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
     const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    DeviceStorage device_storage(std::move(mesh_buffer));
+    DeviceStorage device_storage(mesh_buffer);
     // TODO (#25340): Implement correct logic and add test for this
     ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
     for (size_t i = 0; i < device->shape().dims(); i++) {
