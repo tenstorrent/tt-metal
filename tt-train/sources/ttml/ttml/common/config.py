@@ -209,12 +209,20 @@ def load_config(path: str, configs_root: str = None) -> dict:
     if configs_root is None:
         configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/"
 
-    # if the path is relative, make it absolute using configs_root,
-    # but only if the path doesn't already point to an existing file
-    if not os.path.isabs(path) and not os.path.exists(path):
-        path = os.path.join(configs_root, path)
+    # Expand env vars (e.g. ${TT_METAL_RUNTIME_ROOT}) before absolute-path check.
+    expanded_path = os.path.expandvars(path)
+    if "${TT_METAL_RUNTIME_ROOT}" in expanded_path or "$TT_METAL_RUNTIME_ROOT" in expanded_path:
+        raise RuntimeError(
+            f"Unresolved TT_METAL_RUNTIME_ROOT in config path: {path}. "
+            "Please export TT_METAL_RUNTIME_ROOT to the tt-metal repository root."
+        )
 
-    with open(path, "r") as f:
+    # If path is relative and doesn't already point to a real file, make it absolute
+    # using configs_root.
+    if not os.path.isabs(expanded_path) and not os.path.exists(expanded_path):
+        expanded_path = os.path.join(configs_root, expanded_path)
+
+    with open(expanded_path, "r") as f:
         raw = os.path.expandvars(f.read())
     config = yaml.safe_load(raw)
     return config
