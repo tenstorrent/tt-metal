@@ -600,8 +600,8 @@ class Transformer(LightweightModule):
                 x = ttnn.to_memory_config(
                     x,
                     self.args.get_residual_mem_config(
-                        mode, self.prefetcher, residual_replicated=i > 0
-                    ),  # Optimization for models that use replicated residuals in decode - for now models that use pre and post ff norms in decoder (Gemam3 only)
+                        mode, self.prefetcher, residual_replicated=i > 0 and layer.pre_ff_norm is not None
+                    ),  # Optimization for models that use replicated residuals in decode - for now models that use pre and post ff norms in decoder (Gemma3 only)
                     activation_dtype,
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:
@@ -628,7 +628,7 @@ class Transformer(LightweightModule):
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
-        if mode == Mode.DECODE:
+        if mode == Mode.DECODE and self.layers[0].pre_ff_norm is not None:
             x = ttnn.mesh_partition(
                 x,
                 memory_config=x.memory_config(),
