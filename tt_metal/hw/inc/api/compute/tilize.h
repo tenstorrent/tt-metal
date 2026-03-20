@@ -253,7 +253,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
