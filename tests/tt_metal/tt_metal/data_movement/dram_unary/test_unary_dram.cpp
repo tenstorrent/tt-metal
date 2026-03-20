@@ -5,6 +5,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -96,23 +97,39 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
     std::string reader_kernel_path = kernels_dir + reader_kernel_filename + ".cpp";
     std::string writer_kernel_path = kernels_dir + writer_kernel_filename + ".cpp";
 
-    CreateKernel(
-        program,
-        reader_kernel_path,
-        test_config.core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        experimental::quasar::CreateKernel(
+            program,
+            reader_kernel_path,
+            test_config.core_coord,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
 
-    CreateKernel(
-        program,
-        writer_kernel_path,
-        test_config.core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = writer_compile_args});
+        experimental::quasar::CreateKernel(
+            program,
+            writer_kernel_path,
+            test_config.core_coord,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
+    } else {
+        CreateKernel(
+            program,
+            reader_kernel_path,
+            test_config.core_coord,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
+
+        CreateKernel(
+            program,
+            writer_kernel_path,
+            test_config.core_coord,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_compile_args});
+    }
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
