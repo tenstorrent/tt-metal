@@ -90,17 +90,7 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
     return ttnn::subtract(t_log_out, output, std::nullopt, output_mem_config);
 }
 
-Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return operations::unary::detail::unary_impl(
-        x,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LGAMMA}},
-        output_mem_config,
-        std::nullopt,
-        std::nullopt);
-}
-
-// Existing implementation of lgamma.
-// TODO: Remove this once the lgamma kernel for float32 is supported.
+// TODO: Remove this once the _multigammaln kernel is supported.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {
@@ -516,12 +506,3 @@ Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& out
 }
 
 }  // namespace ttnn::operations::unary
-
-namespace ttnn {
-Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m) {
-    if (t.dtype() == DataType::BFLOAT16) {
-        return ttnn::operations::unary::_lgamma_fast(t, m);
-    }
-    return ttnn::operations::unary::_lgamma(t, m);
-}
-}  // namespace ttnn
