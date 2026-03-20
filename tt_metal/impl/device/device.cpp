@@ -62,22 +62,6 @@
 
 namespace tt::tt_metal {
 
-uint64_t IDevice::get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    // TODO: Remove this function
-    // https://github.com/tenstorrent/tt-metal/issues/39814
-    return MetalContext::instance(extract_context_id(this))
-        .hal()
-        .get_dev_addr(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
-uint64_t IDevice::get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const {
-    // TODO: Remove this function
-    // https://github.com/tenstorrent/tt-metal/issues/39814
-    return MetalContext::instance(extract_context_id(this))
-        .hal()
-        .get_dev_size(this->get_programmable_core_type(virtual_core), addr_type);
-}
-
 void IDevice::set_program_cache_misses_allowed(bool allowed) {
     this->get_program_cache().set_cache_misses_allowed(allowed);
 }
