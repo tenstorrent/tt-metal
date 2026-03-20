@@ -233,10 +233,20 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     if (launch_thread_pool_) {
         // Dispatch programs in parallel
         for (auto& [coord_range, program] : range_program_map) {
-            auto first_coord = *coord_range.begin();
-            const auto* const device = mesh_device_->impl().get_device(first_coord);
+            // Find first local device for thread binding
+            IDevice* device = nullptr;
+            for (const auto& coord : coord_range) {
+                if (mesh_device_->impl().is_local(coord)) {
+                    device = mesh_device_->impl().get_device(coord);
+                    break;
+                }
+            }
+            if (!device) {
+                continue;  // No local work for this host
+            }
+            auto* program_ptr = &program;
             launch_thread_pool_->enqueue(
-                [this, &coord_range, &program, blocking]() { dispatch_program(coord_range, program, blocking); },
+                [this, coord_range, program_ptr, blocking]() { dispatch_program(coord_range, *program_ptr, blocking); },
                 device->id());
         }
         launch_thread_pool_->wait();

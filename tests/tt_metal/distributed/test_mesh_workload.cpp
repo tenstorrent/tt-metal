@@ -379,7 +379,7 @@ TEST_F(MeshWorkloadTest2x4, SimultaneousMeshWorkloads) {
 
 // 4x8 benchmark: 32 unique programs on 32 devices (1:1 mapping)
 // Expects parallel dispatch with thread pool.
-// This replicates the deepseek blitz case of 32 indendepent programs dispatched across 32 devices on a GLX
+// This replicates the deepseek blitz case of 32 independent programs dispatched across 32 devices on a GLX
 TEST_F(MeshDeviceFixture4x8DispatchAgnostic, ParallelizationBenchmark) {
     constexpr uint32_t num_programs = 32;
     constexpr uint32_t num_devices = 32;
