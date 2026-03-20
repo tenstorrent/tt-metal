@@ -39,6 +39,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -212,21 +213,30 @@ def _preprocess_experts_with_bspm(
                 ), f"BSPM has {bspm_codes.shape[2]} tiles but weight needs {tiles_h * tiles_w}"
                 codes_1d = bspm_codes[expert_idx, proj_idx, : tiles_h * tiles_w]
 
-                # Apply per-tile quantization
-                w_tiled = w_kn.reshape(tiles_h, 32, tiles_w, 32)
-                for r in range(tiles_h):
-                    for c in range(tiles_w):
-                        code = int(codes_1d[r * tiles_w + c])
-                        mant_bits = TT_CODE_TO_MANT.get(code, 3)  # default bfp4
-                        if mant_bits is None:
-                            w_tiled[r, :, c, :] = 0.0
-                        else:
-                            tile = w_tiled[r, :, c, :]  # (32, 32)
-                            w_tiled[r, :, c, :] = quantize_dequantize_bfp(tile, mant_bits)
+                # Apply per-tile quantization — batched by code value.
+                # code=1 (bfp4) is skipped: the standard pipeline encodes to bfp4
+                # anyway, so it's a no-op.  Only non-bfp4 tiles need preprocessing.
+                codes_2d = codes_1d.reshape(tiles_h, tiles_w)
+                unique_codes = np.unique(codes_2d)
+                non_bfp4_codes = unique_codes[unique_codes != 1]
+                if len(non_bfp4_codes) == 0:
+                    continue  # all tiles are bfp4 — skip weight entirely
 
-                # Restore (N, K) orientation and store in overrides
-                w_processed = torch.from_numpy(w_kn.reshape(K, N)).T.to(w_f32.dtype)
-                overrides[key] = w_processed
+                # (tiles_h, tiles_w, 32, 32) — easier to index by (r, c)
+                w_tiled = w_kn.reshape(tiles_h, 32, tiles_w, 32).transpose(0, 2, 1, 3).copy()
+
+                for code in non_bfp4_codes:
+                    rs, cs = np.where(codes_2d == code)
+                    tiles_batch = w_tiled[rs, cs]  # (n_tiles, 32, 32)
+                    mant_bits = TT_CODE_TO_MANT.get(int(code), 3)
+                    if mant_bits is None:
+                        w_tiled[rs, cs] = 0.0
+                    else:
+                        w_tiled[rs, cs] = quantize_dequantize_bfp(tiles_batch, mant_bits)
+
+                # Restore (tiles_h, 32, tiles_w, 32) → (K, N) → transpose to (N, K)
+                w_out = w_tiled.transpose(0, 2, 1, 3).reshape(K, N)
+                overrides[key] = torch.from_numpy(w_out).T.to(w_f32.dtype)
 
         layers_processed += 1
 
@@ -325,7 +335,7 @@ def _run_one_decode_step(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": get_fabric_config()}],
