@@ -23,22 +23,25 @@ constexpr auto kComputeKernelPath =
 
 constexpr uint32_t kWriterOutputBufferIdx = 0U;
 
+// CBs with input data / scalar parameters
 constexpr auto kInputPass1CbIndex = tt::CBIndex::c_0;
 constexpr auto kInputPass2CbIndex = tt::CBIndex::c_1;
-constexpr auto kInputPass3CbIndex = tt::CBIndex::c_19;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
-constexpr auto kEpsCbIndex = tt::CBIndex::c_3;
-constexpr auto kW0CbIndex = tt::CBIndex::c_4;
-constexpr auto kW1CbIndex = tt::CBIndex::c_5;
-constexpr auto kW2CbIndex = tt::CBIndex::c_6;
-constexpr auto kBiasCbIndex = tt::CBIndex::c_7;
-constexpr auto kSumX2CbIndex = tt::CBIndex::c_8;
-constexpr auto kSumX4CbIndex = tt::CBIndex::c_9;
-constexpr auto kSumX6CbIndex = tt::CBIndex::c_10;
-constexpr auto kInvRmsXCbIndex = tt::CBIndex::c_11;
-constexpr auto kInvRmsX2CbIndex = tt::CBIndex::c_12;
-constexpr auto kInvRmsX3CbIndex = tt::CBIndex::c_13;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_14;
+constexpr auto kInputPass3CbIndex = tt::CBIndex::c_2;
+constexpr auto kScalerCbIndex = tt::CBIndex::c_3;
+constexpr auto kEpsCbIndex = tt::CBIndex::c_4;
+constexpr auto kW0CbIndex = tt::CBIndex::c_5;
+constexpr auto kW1CbIndex = tt::CBIndex::c_6;
+constexpr auto kW2CbIndex = tt::CBIndex::c_7;
+constexpr auto kBiasCbIndex = tt::CBIndex::c_8;
+// CBs with intermediate computations
+constexpr auto kSumX2CbIndex = tt::CBIndex::c_9;
+constexpr auto kSumX4CbIndex = tt::CBIndex::c_10;
+constexpr auto kSumX6CbIndex = tt::CBIndex::c_11;
+constexpr auto kInvRmsXCbIndex = tt::CBIndex::c_12;
+constexpr auto kInvRmsX2CbIndex = tt::CBIndex::c_13;
+constexpr auto kInvRmsX3CbIndex = tt::CBIndex::c_14;
+// CBs with output data
+constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumOneTile = 1U;
 
@@ -111,19 +114,19 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     auto* device = input.device();
 
     tt::tt_metal::Program program{};
-    tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(data_format == tt::DataFormat::Float16_b, "PolyNormForward currently supports BF16 input only");
     const uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t float32_tile_size = tt::tile_size(tt::DataFormat::Float32);
 
-    auto padded_tensor_shape = input.padded_shape();
+    const auto padded_tensor_shape = input.padded_shape();
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
     const uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
     const uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
     const uint32_t total_rows_to_process = NC * Ht;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     constexpr uint32_t block_size = 4U;
@@ -187,14 +190,11 @@ PolyNormForwardProgramFactory::cached_program_t PolyNormForwardProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
-    // Bump this when compute kernel ABI/logic changes to avoid stale binaries.
-    constexpr uint32_t kPolyNormKernelRevision = 17U;
-    std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size, Wt, kPolyNormKernelRevision};
+    std::vector<uint32_t> compute_group_1_args = {num_rows_per_core_group_1, block_size, Wt};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, true);
     if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_group_2_args = {
-            num_rows_per_core_group_2, block_size, Wt, kPolyNormKernelRevision};
+        std::vector<uint32_t> compute_group_2_args = {num_rows_per_core_group_2, block_size, Wt};
         kernels.compute_group_2 =
             create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, true);
     }

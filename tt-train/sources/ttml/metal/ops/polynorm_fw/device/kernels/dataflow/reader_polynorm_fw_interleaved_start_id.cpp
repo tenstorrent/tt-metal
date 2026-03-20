@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
@@ -20,15 +21,16 @@ void kernel_main() {
     const uint32_t packed_w2 = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packed_bias = get_arg_val<uint32_t>(arg_idx++);
 
+    // CBs with input data / scalar parameters
     constexpr auto cb_input_pass_1 = tt::CBIndex::c_0;
     constexpr auto cb_input_pass_2 = tt::CBIndex::c_1;
-    constexpr auto cb_input_pass_3 = tt::CBIndex::c_19;
-    constexpr auto cb_scaler = tt::CBIndex::c_2;
-    constexpr auto cb_eps = tt::CBIndex::c_3;
-    constexpr auto cb_w0 = tt::CBIndex::c_4;
-    constexpr auto cb_w1 = tt::CBIndex::c_5;
-    constexpr auto cb_w2 = tt::CBIndex::c_6;
-    constexpr auto cb_bias = tt::CBIndex::c_7;
+    constexpr auto cb_input_pass_3 = tt::CBIndex::c_2;
+    constexpr auto cb_scaler = tt::CBIndex::c_3;
+    constexpr auto cb_eps = tt::CBIndex::c_4;
+    constexpr auto cb_w0 = tt::CBIndex::c_5;
+    constexpr auto cb_w1 = tt::CBIndex::c_6;
+    constexpr auto cb_w2 = tt::CBIndex::c_7;
+    constexpr auto cb_bias = tt::CBIndex::c_8;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -49,7 +51,7 @@ void kernel_main() {
 
         // Pass A: feed stream consumed first by compute (pass_1).
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
+            const uint32_t current_block_size = std::min(block_size, Wt - col);
             const uint32_t block_start_idx = row_start_idx + col;
 
             read_tiles_by_row(
@@ -58,7 +60,7 @@ void kernel_main() {
 
         // Pass B: feed pass_3 after pass_1, matching compute's stage order.
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
+            const uint32_t current_block_size = std::min(block_size, Wt - col);
             const uint32_t block_start_idx = row_start_idx + col;
             read_tiles_by_row(
                 cb_input_pass_3, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);
@@ -67,7 +69,7 @@ void kernel_main() {
         // Pass C: feed pass_2 last. This stream is only consumed in emit_output(),
         // so producing it earlier can deadlock for Wt > block_size.
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            const uint32_t current_block_size = (col + block_size <= Wt) ? block_size : (Wt - col);
+            const uint32_t current_block_size = std::min(block_size, Wt - col);
             const uint32_t block_start_idx = row_start_idx + col;
             read_tiles_by_row(
                 cb_input_pass_2, input_address_generator, block_start_idx, current_block_size, tile_bytes, block_size);

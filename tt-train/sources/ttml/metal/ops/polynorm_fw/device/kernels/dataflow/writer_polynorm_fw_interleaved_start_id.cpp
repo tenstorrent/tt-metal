@@ -12,7 +12,8 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr auto cb_output = tt::CBIndex::c_14;
+    // CB with output data
+    constexpr auto cb_output = tt::CBIndex::c_15;
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
@@ -23,24 +24,4 @@ void kernel_main() {
     for (uint32_t r = start_row; r < (start_row + num_rows_to_process); ++r) {
         write_full_row_tiles(cb_output, output_addr_generator, Wt, block_size, tile_bytes, r * Wt);
     }
-
-#ifdef POLYNORM_DEBUG
-    constexpr auto cb_debug = tt::CBIndex::c_18;
-    if (num_rows_to_process > 0U && start_row == 0U) {
-        cb_wait_front(cb_debug, 6U);
-        DPRINT << "POLYNORM_DEBUG: sum_x2" << ENDL();
-        print_tile(cb_debug, 0U, false);
-        DPRINT << "POLYNORM_DEBUG: sum_x4" << ENDL();
-        print_tile(cb_debug, 1U, false);
-        DPRINT << "POLYNORM_DEBUG: sum_x6" << ENDL();
-        print_tile(cb_debug, 2U, false);
-        DPRINT << "POLYNORM_DEBUG: inv_rms_x" << ENDL();
-        print_tile(cb_debug, 3U, false);
-        DPRINT << "POLYNORM_DEBUG: inv_rms_x2" << ENDL();
-        print_tile(cb_debug, 4U, false);
-        DPRINT << "POLYNORM_DEBUG: inv_rms_x3" << ENDL();
-        print_tile(cb_debug, 5U, false);
-        cb_pop_front(cb_debug, 6U);
-    }
-#endif
 }
