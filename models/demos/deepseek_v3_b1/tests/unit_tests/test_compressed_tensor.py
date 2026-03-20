@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 import ttnn
+
+pytestmark = pytest.mark.use_module_device({"allocator_mode": ttnn.device.AllocatorMode.HYBRID})
 from models.demos.deepseek_v3_b1.compressed_tensor import (
     COMPRESSED_FORMATS,
     CompressedTensor,
@@ -156,7 +159,7 @@ def test_device_height_sharded(device):
     ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
 
     print(f"{ct}")
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
     assert ct.max_shard_size > 0, "Expected sharded layout"
 
     recovered = ct.to_torch()
@@ -177,7 +180,7 @@ def test_device_width_sharded(device):
     ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
 
     print(f"{ct}")
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
     assert ct.max_shard_size > 0, "Expected sharded layout"
 
     recovered = ct.to_torch()
@@ -199,7 +202,7 @@ def test_device_block_sharded(device):
     ct = CompressedTensor.from_torch(x, assigner, device=device, memory_config=data_mem)
 
     print(f"{ct}")
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
     assert ct.max_shard_size > 0, "Expected sharded layout"
 
     recovered = ct.to_torch()
@@ -267,7 +270,7 @@ def test_device_uneven_height_shard(device):
     print(f"{ct}")
     _print_shard_distribution(ct, data_mem)
     _validate_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
 
     # Verify assignment round-trips correctly despite uneven shards
     result = assigner.assign(x, ttnn_quantize_fn)
@@ -294,7 +297,7 @@ def test_device_uneven_width_shard(device):
     print(f"{ct}")
     _print_shard_distribution(ct, data_mem)
     _validate_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
 
     result = assigner.assign(x, ttnn_quantize_fn)
     recovered_assignment = ct.get_assignment()
@@ -325,7 +328,7 @@ def test_device_uneven_block_shard(device):
     print(f"{ct}")
     _print_shard_distribution(ct, data_mem)
     _validate_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
 
     result = assigner.assign(x, ttnn_quantize_fn)
     recovered_assignment = ct.get_assignment()
@@ -361,7 +364,7 @@ def test_device_4d_uneven_height_shard(device):
     print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
     _print_shard_distribution(ct, data_mem)
     _validate_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
     assert ct.tiles_h == 18
     assert ct.tiles_w == 4
 
@@ -396,7 +399,7 @@ def test_device_4d_uneven_width_shard(device):
     print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
     _print_shard_distribution(ct, data_mem)
     _validate_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
     assert ct.tiles_h == 12
     assert ct.tiles_w == 5
 
@@ -432,7 +435,7 @@ def test_device_4d_uneven_block_shard(device):
     print(f"tiles_h={ct.tiles_h}, tiles_w={ct.tiles_w}")
     _print_shard_distribution(ct, data_mem)
     _validate_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
     assert ct.tiles_h == 18
     assert ct.tiles_w == 5
 
@@ -474,7 +477,7 @@ def test_device_bfp0_bfp2_bfp4_uneven_height_shard(device):
 
     print(f"{ct}")
     _print_shard_distribution(ct, data_mem)
-    assert ttnn.is_tensor_storage_on_device(ct.data)
+    assert all(ttnn.is_tensor_storage_on_device(t) for t in ct.get_data_tensors())
 
     # Should have a mix of all 3 formats
     assert ct.tile_counts["bfp4"] > 0, f"Expected bfp4 tiles: {ct.tile_counts}"

@@ -7,10 +7,13 @@ Test eltwise add with compressed tensor input.
 Single core, HEIGHT_SHARDED.
 """
 
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
+
+pytestmark = pytest.mark.use_module_device({"allocator_mode": ttnn.device.AllocatorMode.HYBRID})
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.micro_ops.eltwise_add_compressed.op import EltwiseAddCompressed
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_compressed_tensor import _make_sharded_mem_config
@@ -84,7 +87,9 @@ def _run_eltwise_add_compressed(
     bfp0_mae = 1e-3 if "bfp0" in formats else 0.01
     assigner = CompressedTensorAssigner(metric="pcc", threshold=threshold, formats=formats, bfp0_mae_threshold=bfp0_mae)
     b_mem_config = _make_sharded_mem_config((M, N), shard_layout, ttnn.BufferType.L1, core_grid)
-    ct = CompressedTensor.from_torch(b_torch, assigner, device=device, memory_config=b_mem_config)
+    ct = CompressedTensor.from_torch(
+        b_torch, assigner, device=device, memory_config=b_mem_config, assignment_memory_config=b_mem_config
+    )
 
     logger.info(f"Compressed B: {ct}")
     logger.info(f"Tile counts: {ct.tile_counts}")
