@@ -27,7 +27,7 @@ void generate_bcast_scaler() {
     constexpr uint32_t onetile = 1;
 #ifdef ARCH_QUASAR
     dfb1.reserve_back(onetile);
-    auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr());
+    auto ptr = reinterpret_cast<uint16_t*>(dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
 #else
     cb_reserve_back(cb_in_2, onetile);
     auto ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_in_2));
@@ -89,7 +89,7 @@ void kernel_main() {
         uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
 #ifdef ARCH_QUASAR
         dfb0.reserve_back(rem);
-        uint32_t l1_write_addr = dfb0.get_write_ptr();
+        uint32_t l1_write_addr = dfb0.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR;
 
         for (uint32_t r = 0; r < rem; r++) {
             uint64_t src_noc_addr =
