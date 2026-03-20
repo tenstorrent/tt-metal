@@ -270,6 +270,6 @@ class DeepseekMoeGateSingleCore:
 
         # Execute generic op
         io_tensors = [input_tensor, bias_tensor, input_indices_tensor, output_tensor, output_indices_tensor]
-        output = ttnn.generic_op(io_tensors, program_descriptor)
+        ttnn.generic_op(io_tensors, program_descriptor)
 
         return output_tensor, output_indices_tensor
