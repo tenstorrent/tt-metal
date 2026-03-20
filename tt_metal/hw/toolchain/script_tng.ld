@@ -140,18 +140,18 @@ SECTIONS {
     IF_KERNEL(*_object.o(.tdata .tbss))
     . = ALIGN(4);
     __ldm_tdata_init = .;
-    *(.tdata.start) /* define __tdata_start as TLS symbol) */
-    *(.tdata .tdata.* .gnu.linkonce.td.*)
+    *-crt0-tls.o(.tdata.start) /* define __tdata_start as TLS symbol) */
+    *(EXCLUDE_FILE (*-crt0-tls.o) .tdata .tdata.* .gnu.linkonce.td.*)
     . = ALIGN(4);
-    *(.tdata.end)
+    *-crt0-tls.o(.tdata.end)
   } :tdata :tls
   .tbss
   : IF_KERNEL(LOAD_AFTER_ALIGN(.tbss, .tdata))
   {
-    *(.tbss.start) /* define __tbss_start as TLS symbol) */
-    *(.tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
+    *-crt0-tls.o(.tbss.start) /* define __tbss_start as TLS symbol) */
+    *(EXCLUDE_FILE (*-crt0-tls.o).tbss .tbss.* .gnu.linkonce.tb.* .tcommon)
     . = ALIGN(4);
-    *(.tbss.end)
+    *-crt0-tls.o(.tbss.end)
   } :tdata :tls
 
 #if defined(TYPE_KERNEL)
