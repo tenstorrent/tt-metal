@@ -16,15 +16,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     LinearConfig,
     LinearFallbackConfig,
     MeshDeviceStub,
-    MulConfig,
-    ReshapeConfig,
-    ScatterConfig,
-    TopKConfig,
-    TopKFallbackConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
-    even_int_div,
     get_dequantized_tensor,
     shard_and_save,
 )
@@ -46,7 +40,6 @@ class MoEGate(AbstractModule):
     @classmethod
     def convert_weights(
         cls,
-        hf_config: PretrainedConfig,
         state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
@@ -80,40 +73,6 @@ class MoEGate(AbstractModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                 )
-            },
-            "multiply_expert_scale": {
-                "input_tensor_b": shard_and_save(
-                    output_path / f"multiply_expert_scale.input_tensor_b",
-                    torch.tensor([hf_config.routed_scaling_factor])
-                    .repeat(1, hf_config.num_experts_per_tok)
-                    .unsqueeze(0)
-                    .unsqueeze(0),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-            },
-            "scatter_top_expert_groups": {
-                "input": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.input",
-                    torch.full((1, 1, 1, hf_config.n_group), -float("inf")),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
-                "src": shard_and_save(
-                    output_path / f"scatter_top_expert_groups.src",
-                    torch.ones((1, 1, 1, hf_config.topk_group)),
-                    shard_dims=(None, None),
-                    mesh_device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                ),
             },
         }
 
@@ -171,18 +130,13 @@ class MoEGate(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
-        Note: topk_fallback and use_bitonic_sort are defaulted to True and not required in future when we have equivalent topk op.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
             mode: "decode" or "prefill"
-            topk_fallback: whether to use topk fallback
-            use_bitonic_sort: whether to use bitonic sort
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
@@ -200,47 +154,6 @@ class MoEGate(AbstractModule):
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
                     dtype=ttnn.bfloat16,
-                ),
-                "multiply_expert_scale": BinaryOpConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                ),
-                "reshape_scores": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
-                ),
-                "topk_within_expert_groups": TopKConfig(
-                    k=2,  # no hf config for this
-                    dim=-1,
-                ),
-                "topk_expert_groups": TopKConfig(
-                    k=hf_config.topk_group,
-                    dim=-1,
-                ),
-                "scatter_top_expert_groups": ScatterConfig(
-                    input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    dim=3,
-                ),
-                "reshape_group_mask": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, 1),
-                ),
-                "reshape_active_experts": ReshapeConfig(
-                    shape=(1, 1, -1, hf_config.n_routed_experts),
-                ),
-                "mul_scores_with_mask": MulConfig(
-                    memory_config=memory_config,
-                ),
-                "topk_experts": TopKConfig(
-                    k=hf_config.num_experts_per_tok,
-                    dim=-1,
-                ),
-                "topk_fallback": topk_fallback,
-                "topk_fallback_config": TopKFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                    memory_config=memory_config,
-                    use_bitonic_sort=use_bitonic_sort,
                 ),
                 "linear_fallback": False,
                 "linear_fallback_config": LinearFallbackConfig(
@@ -266,47 +179,6 @@ class MoEGate(AbstractModule):
                     memory_config=memory_config,
                     dtype=ttnn.bfloat16,
                 ),
-                "multiply_expert_scale": BinaryOpConfig(
-                    input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    memory_config=memory_config,
-                    dtype=ttnn.bfloat16,
-                ),
-                "reshape_scores": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
-                ),
-                "topk_within_expert_groups": TopKConfig(
-                    k=2,  # no hf config for this
-                    dim=-1,
-                ),
-                "topk_expert_groups": TopKConfig(
-                    k=hf_config.topk_group,
-                    dim=-1,
-                ),
-                "scatter_top_expert_groups": ScatterConfig(
-                    input=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    src=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                    dim=3,
-                ),
-                "reshape_group_mask": ReshapeConfig(
-                    shape=(1, -1, hf_config.n_group, 1),
-                ),
-                "reshape_active_experts": ReshapeConfig(
-                    shape=(1, 1, -1, hf_config.n_routed_experts),
-                ),
-                "mul_scores_with_mask": MulConfig(
-                    memory_config=memory_config,
-                ),
-                "topk_experts": TopKConfig(
-                    k=hf_config.num_experts_per_tok,
-                    dim=-1,
-                ),
-                "topk_fallback": topk_fallback,
-                "topk_fallback_config": TopKFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                    memory_config=memory_config,
-                    use_bitonic_sort=use_bitonic_sort,
-                ),
                 "linear_fallback": False,
                 "linear_fallback_config": LinearFallbackConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -323,20 +195,16 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback, use_bitonic_sort)
+        return cls.model_config(hf_config, mesh_device, "decode")
 
     @classmethod
     def prefill_model_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = False,
-        use_bitonic_sort: bool = True,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback, use_bitonic_sort)
+        return cls.model_config(hf_config, mesh_device, "prefill")
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -364,7 +232,6 @@ class MoEGate(AbstractModule):
         topk_experts_indices_list = []
         while True:
             batch_size_per_device = end_index - start_index
-            # get the ceil of batch size per core
             core_grid = ttnn.num_cores_to_corerangeset(
                 batch_size_per_device,
                 ttnn.CoreCoord(grid.x, grid.y),
@@ -374,7 +241,7 @@ class MoEGate(AbstractModule):
             input_output_shard_shape = (32, 32)
             reshaped_input_shape = (batch_size_per_device, 16, 16)
 
-            # currently we cannot convert the tile size of logits and input indices to 16*16,
+            # currently we cannot convert the tile size of logits and input indices to 16*16 which is required by the original op,
             # but the memory layout is the same since the length is 256
             input_output_shard_spec = ttnn.ShardSpec(
                 core_grid,

@@ -107,12 +107,6 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         ("prefill", 1, _prefill_seq_len),
     ],
 )
-@pytest.mark.parametrize(
-    "topk_fallback",
-    [
-        True,
-    ],
-)
 def test_forward_pass(
     device_params,
     mode,
@@ -125,7 +119,6 @@ def test_forward_pass(
     cache_path,
     mesh_device,
     ccl,
-    topk_fallback,
 ):
     """Test forward pass against reference model."""
 
@@ -152,9 +145,7 @@ def test_forward_pass(
         layer_id=module_path,
     )
 
-    model_config = get_model_config(
-        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=topk_fallback
-    )
+    model_config = get_model_config(MoE, mode, hf_config, mesh_device, device_params["fabric_config"])
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)

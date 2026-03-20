@@ -89,19 +89,11 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         ("prefill", 1, _prefill_seq_len),
     ],
 )
-@pytest.mark.parametrize(
-    "topk_fallback,use_bitonic_sort",
-    [
-        (True, True),
-    ],
-)
 def test_forward_pass(
     mode,
     batch_size_per_row,
     seq_len,
     hf_config,
-    topk_fallback,
-    use_bitonic_sort,
     request,
     cache_path,
     mesh_device,
@@ -110,7 +102,7 @@ def test_forward_pass(
     """Test forward pass against reference model."""
 
     module_path = "model.layers.3.mlp"
-    reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort)
+    reference_model = ReferenceMoEGate(hf_config)
     checkpoint_state_dict = request.getfixturevalue("state_dict")
     num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     state_dict, torch_input, reference_topk_indices, reference_topk_weights = generate_reference_io(
@@ -123,7 +115,6 @@ def test_forward_pass(
 
     weight_config = get_test_weight_config(
         MoEGate,
-        hf_config,
         (state_dict,),
         cache_path,
         mesh_device,
@@ -134,9 +125,7 @@ def test_forward_pass(
     )
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(
-        MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
-    )
+    model_config = get_model_config(MoEGate, mode, hf_config, mesh_device)
 
     # Create a new model state
     model_state = MoEGate.create_shared_state(mesh_device)

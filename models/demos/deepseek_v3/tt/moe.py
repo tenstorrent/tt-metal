@@ -56,9 +56,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         assert state_dict is not None
 
         return {
-            "moe_gate": MoEGate.convert_weights(
-                hf_config, (state_dict,), output_path / "moe_gate", mesh_device, "gate."
-            ),
+            "moe_gate": MoEGate.convert_weights((state_dict,), output_path / "moe_gate", mesh_device, "gate."),
             "moe_experts": MoEExperts.convert_weights(
                 hf_config, (state_dict,), output_path / "moe_experts", mesh_device
             ),
@@ -157,7 +155,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         mode: str,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
@@ -198,7 +195,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -247,7 +244,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
+                "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
                 "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -279,9 +276,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
-        topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, fabric_config, "decode")
 
     @classmethod
     def prefill_model_config(
@@ -289,9 +285,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
-        topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill")
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
