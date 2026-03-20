@@ -211,8 +211,8 @@ def test_unet(
     sdxl_refiner_unet_location,
     reset_seeds,
 ):
-    if is_blackhole():
-        pytest.skip("Not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     run_refiner_unet_model(
         device,
         image_resolution,

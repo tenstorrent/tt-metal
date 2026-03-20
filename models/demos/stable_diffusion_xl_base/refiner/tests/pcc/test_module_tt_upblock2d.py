@@ -68,8 +68,8 @@ def test_upblock(
     sdxl_refiner_unet_location,
     reset_seeds,
 ):
-    if is_blackhole():
-        pytest.skip("Not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     unet = UNet2DConditionModel.from_pretrained(
         sdxl_refiner_unet_location,
         torch_dtype=torch.float32,
