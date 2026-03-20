@@ -51,6 +51,7 @@ target_sources(
             all_gather_async/device/all_gather_via_broadcast_factory.hpp
             all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
+            reduce_scatter_common/reduce_scatter_validate_utils.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_ring_program_factory.hpp
