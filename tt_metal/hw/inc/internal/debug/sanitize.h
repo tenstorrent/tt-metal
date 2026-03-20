@@ -18,6 +18,24 @@
 #include "api/debug/noc_logging.h"
 #include "api/debug/dprint.h"
 
+// Watcher overlay section attribute macro.
+// When WATCHER_AS_OVERLAY is defined, functions marked with this attribute are placed
+// in the .watcher_overlay linker section instead of .text. This keeps them out of the
+// firmware's fixed-size code region, allowing watcher to grow without overflowing the
+// tight RISC firmware limits (6KB for brisc on Wormhole).
+//
+// The .watcher_overlay section is defined in main.ld at a special VMA (0x7000000).
+// Currently this is groundwork only — the host firmware initializer does not yet load
+// the overlay section. When WATCHER_AS_OVERLAY is not defined, this is a no-op.
+//
+// Future: sanitize functions will be called via function pointers initialized at
+// firmware startup from the overlay load address.
+#if defined(WATCHER_AS_OVERLAY)
+#define WATCHER_OVERLAY_SECTION __attribute__((section(".watcher_overlay")))
+#else
+#define WATCHER_OVERLAY_SECTION
+#endif
+
 #if !defined(COMPILE_FOR_TRISC) && defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && \
     !defined(FORCE_WATCHER_OFF)
 
@@ -52,7 +70,7 @@ using debug_sanitize_noc_which_core_t = bool;
 // Error handler shared between full and lite sanitize modes.
 // Note: this is intentionally defined before the WATCHER_NOC_SANITIZE_LITE split
 // so both modes share the same implementation.
-void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
+WATCHER_OVERLAY_SECTION void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t l1_addr,
@@ -283,7 +301,8 @@ inline void debug_sanitize_check_linked_transactions(
 #else  // !WATCHER_NOC_SANITIZE_LITE — full NOC sanitize mode
 
 // Helper function to get the core type from noc coords.
-AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
+// This is the most expensive sanitize function (~100 lines of coordinate iteration).
+WATCHER_OVERLAY_SECTION AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
     // Check if the target NOC endpoint is a valid non-Tensix core in the Physical Coordinate Space
     for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
@@ -524,7 +543,7 @@ inline void debug_sanitize_check_linked_transactions(
 // to. Need to do this because L1 alignment needs to match the noc address alignment requirements,
 // even if it's different than the inherent L1 alignment requirements.
 // Direction is specified because reads and writes may have different L1 requirements (see noc_parameters.h).
-uint32_t debug_sanitize_noc_addr(
+WATCHER_OVERLAY_SECTION uint32_t debug_sanitize_noc_addr(
     uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t l1_addr,
@@ -667,7 +686,7 @@ uint32_t debug_sanitize_noc_addr(
     return alignment_mask;
 }
 
-void debug_sanitize_noc_and_worker_addr(
+WATCHER_OVERLAY_SECTION void debug_sanitize_noc_and_worker_addr(
     uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t worker_addr,
@@ -716,7 +735,7 @@ void debug_sanitize_noc_and_worker_addr(
 #endif
 }
 
-void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
+WATCHER_OVERLAY_SECTION void debug_throw_on_dram_addr(uint8_t noc_id, uint64_t addr, uint32_t len) {
     uint8_t x = (uint8_t)NOC_UNICAST_ADDR_X(addr);
     uint8_t y = (uint8_t)NOC_UNICAST_ADDR_Y(addr);
     bool is_virtual_coord = true;
