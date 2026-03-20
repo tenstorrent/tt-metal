@@ -37,16 +37,11 @@ from ...utils.test import line_params
 @pytest.mark.parametrize(
     "T0, resolution",  # For T0 use num_latent_frames for uncached VAE, or 4 for cached VAE.
     [
-        4,
-        (720, 1280),
-        4,
-        (480, 832),
-        128,
-        (720, 1280),
-        128,
-        (480, 832),
-        128,
-        (768, 512),
+        [4, (720, 1280)],
+        [4, (480, 832)],
+        [128, (720, 1280)],
+        [128, (480, 832)],
+        [128, (768, 512)],
     ],
     ids=[
         "uncached-720p",
