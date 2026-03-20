@@ -57,7 +57,7 @@ UntilizeMultiCoreNDShardInputProgramFactory::cached_program_t UntilizeMultiCoreN
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& groups = distribution_spec.core_groups();
-    const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
+    const auto& ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(a);
     uint32_t num_compute_cores = ordered_cores_with_data.size();
     const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 

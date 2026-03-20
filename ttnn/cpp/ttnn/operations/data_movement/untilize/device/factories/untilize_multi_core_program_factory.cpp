@@ -48,7 +48,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     bool input_is_sharded = a.is_sharded();
     std::vector<CoreCoord> ordered_cores_with_data;
-    bool has_ordered_cores_with_data = false;
 
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
@@ -69,8 +68,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t num_tiles_per_input_block = num_tiles_per_row;
     uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
-    uint32_t num_shards = 0;
-    uint32_t num_shards_height = 0;
     uint32_t input_shard_height = 0;
     uint32_t input_shard_width = 0;
     if (input_is_sharded) {
@@ -85,20 +82,9 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         num_input_blocks_per_full_core = input_shard_height / tile_height;
         num_input_blocks_per_cliff_core = 0;
 
-        num_shards_height = tt::div_up(tensor_height, input_shard_height);
-        num_shards = num_shards_height * num_input_blocks_across_width;
-        if (num_compute_cores >
-            num_shards) {  // If the user specified more compute cores than there are data, we need to figure out which
-                           // cores have data on them and only activate those cores.
-            ordered_cores_with_data = a.buffer()->buffer_distribution_spec().value().cores_with_data();
-            has_ordered_cores_with_data = true;
-            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
-
-            full_compute_core_range = compute_core_range;
-        } else {
-            compute_core_range = input_shard_spec.grid;
-            full_compute_core_range = input_shard_spec.grid;
-        }
+        ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(a);
+        compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
+        full_compute_core_range = compute_core_range;
         cliff_compute_core_range = CoreRangeSet();
     }
 
@@ -279,7 +265,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
-    std::vector<CoreCoord> full_cores = has_ordered_cores_with_data
+    std::vector<CoreCoord> full_cores = input_is_sharded
                                             ? ordered_cores_with_data
                                             : corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
     for (uint32_t i = 0; i < full_cores.size(); ++i) {

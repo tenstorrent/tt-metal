@@ -1495,6 +1495,7 @@ void pytensor_module(nb::module_& mod) {
 
             Example:
                 >>> cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(sharded_tensor)
+                >>> # cores will have a list of CoreCoords in shard-orientation order. These are the optimal worker cores on which programs/kernels can be launched for the sharded tensor.
         )doc");
 }
 
