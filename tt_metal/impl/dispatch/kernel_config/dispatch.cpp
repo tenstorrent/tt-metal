@@ -465,8 +465,6 @@ void DispatchKernel::CreateKernel() {
     auto downstream_s_virtual_noc_coords =
         device_->virtual_noc0_coordinate(noc_selection_.downstream_noc, downstream_s_virtual_core);
 
-    log_info(tt::LogMetal, "completion queue base addr: {}", static_config_.completion_queue_base_addr.value());
-
     std::map<std::string, std::string> defines = {
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},

@@ -11,7 +11,6 @@
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <mutex>
 #include <vector>
 #include "impl/context/context_types.hpp"
@@ -105,10 +104,10 @@ public:
 
     uint32_t get_dram_region_base_addr() const;
 
+    uint32_t get_dram_region_channel() const;
+
 private:
     bool is_mock_device() const;
-
-    bool use_dram_for_cq_storage() const;
 
     void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
@@ -133,7 +132,7 @@ private:
     uint32_t bypass_buffer_write_offset = 0;
 
     std::unique_ptr<char[]> dram_region_staging_buffer;
-    std::shared_ptr<Buffer> dram_region_buffer;
+    // std::shared_ptr<Buffer> dram_region_buffer;
 };
 
 }  // namespace tt::tt_metal

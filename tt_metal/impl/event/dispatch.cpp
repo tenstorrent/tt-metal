@@ -188,7 +188,8 @@ void read_completion_queue(
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
     if (sysmem_manager.is_dram_backed()) {
-        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(dst, size_bytes, device_id, 0, addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, sysmem_manager.get_dram_region_channel(), addr);
     } else {
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
     }
