@@ -100,7 +100,6 @@ jobs:
   #       if: always()
 
   multi-host-glx-2x:
-    if: ${{ inputs.wormhole_b0 == true || inputs.scheduled == true }}
     runs-on:
       - ${{ inputs.extra-tag }}
     needs: build-artifact

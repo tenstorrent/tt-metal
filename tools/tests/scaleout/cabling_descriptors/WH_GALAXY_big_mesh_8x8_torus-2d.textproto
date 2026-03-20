@@ -1,0 +1,341 @@
+graph_templates {
+  key: "big_mesh_8x8"
+  value {
+    children {
+      name: "dim0_group0"
+      graph_ref {
+        graph_template: "big_mesh_dim1"
+      }
+    }
+    children {
+      name: "dim0_group1"
+      graph_ref {
+        graph_template: "big_mesh_dim1"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 3
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 3
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 4
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 4
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 5
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 5
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 6
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 6
+          }
+          port_b {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 3
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 3
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 3
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 4
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 4
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 5
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 5
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 5
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 6
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 6
+          }
+        }
+        connections {
+          port_a {
+            path: "dim0_group1"
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 6
+          }
+          port_b {
+            path: "dim0_group0"
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 6
+          }
+        }
+      }
+    }
+  }
+}
+graph_templates {
+  key: "big_mesh_dim1"
+  value {
+    children {
+      name: "dim1_node0"
+      node_ref {
+        node_descriptor: "WH_GALAXY"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a {
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 1
+          }
+          port_b {
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 1
+          }
+          port_b {
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "dim1_node0"
+            tray_id: 3
+            port_id: 2
+          }
+          port_b {
+            path: "dim1_node0"
+            tray_id: 1
+            port_id: 2
+          }
+        }
+        connections {
+          port_a {
+            path: "dim1_node0"
+            tray_id: 4
+            port_id: 2
+          }
+          port_b {
+            path: "dim1_node0"
+            tray_id: 2
+            port_id: 2
+          }
+        }
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "big_mesh_8x8"
+  child_mappings {
+    key: "dim0_group0"
+    value {
+      sub_instance {
+        template_name: "big_mesh_dim1"
+        child_mappings {
+          key: "dim1_node0"
+          value {
+            host_id: 0
+          }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "dim0_group1"
+    value {
+      sub_instance {
+        template_name: "big_mesh_dim1"
+        child_mappings {
+          key: "dim1_node0"
+          value {
+            host_id: 1
+          }
+        }
+      }
+    }
+  }
+}
