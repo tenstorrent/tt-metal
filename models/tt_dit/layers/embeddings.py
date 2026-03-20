@@ -640,3 +640,90 @@ class Embedding(Module):
 
     def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
         return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)
+
+
+class LTXAdaLayerNormSingle(Module):
+    """
+    LTX-2 adaptive layer normalization for timestep conditioning.
+
+    Embeds a timestep via sinusoidal projection + MLP, then projects to
+    `embedding_coefficient * embedding_dim` modulation parameters (shift/scale/gate
+    groups for self-attn, cross-attn, and feedforward).
+
+    Reference: LTX-2 adaln.py AdaLayerNormSingle
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        embedding_coefficient: int = 6,
+        mesh_device=None,
+        dtype=ttnn.float32,
+    ):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.embedding_coefficient = embedding_coefficient
+        self.mesh_device = mesh_device
+
+        # Timestep embedding: sinusoidal(256) -> MLP(256 -> embedding_dim)
+        # Use fp32 for precision in sinusoidal projection
+        self.emb = _LTXTimestepEmbedding(embedding_dim, mesh_device=mesh_device, dtype=dtype)
+
+        # Project to modulation params: SiLU -> Linear(embedding_dim, coefficient * embedding_dim)
+        self.linear = Linear(
+            embedding_dim,
+            embedding_coefficient * embedding_dim,
+            bias=True,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # Remove "silu" entries (no weights in SiLU activation)
+        keys_to_remove = [k for k in state if k.startswith("silu")]
+        for k in keys_to_remove:
+            del state[k]
+
+    def forward(self, timestep: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        Args:
+            timestep: (B, 1, 1, 1) scalar timestep (already on device)
+
+        Returns:
+            (modulation_params, embedded_timestep) where:
+            - modulation_params: (1, 1, B, coefficient * embedding_dim)
+            - embedded_timestep: (1, 1, B, embedding_dim)
+        """
+        embedded_timestep = self.emb(timestep)
+        modulation_params = self.linear(ttnn.silu(embedded_timestep))
+        return modulation_params, embedded_timestep
+
+
+class _LTXTimestepEmbedding(Module):
+    """
+    Internal: PixArtAlphaCombinedTimestepSizeEmbeddings for LTX-2.
+
+    Timesteps(256, flip_sin_to_cos=True, downscale_freq_shift=0) + TimestepEmbedding(256, dim).
+    """
+
+    def __init__(self, embedding_dim: int, mesh_device=None, dtype=ttnn.bfloat16):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.timestep_embedder = TimestepEmbedding(
+            in_channels=256,
+            time_embed_dim=embedding_dim,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+        # Sinusoidal with cos first, no freq shift (matching LTX-2's flip_sin_to_cos=True)
+        self.time_proj = Timesteps(
+            num_channels=256,
+            cos_first=True,
+            downscale_freq_shift=0,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+
+    def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
+        timesteps_proj = self.time_proj(timestep)
+        return self.timestep_embedder(timesteps_proj)
