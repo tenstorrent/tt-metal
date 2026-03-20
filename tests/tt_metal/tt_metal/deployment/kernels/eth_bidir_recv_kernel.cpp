@@ -11,10 +11,10 @@ static inline void delay(uint64_t loops) {
     }
 }
 
-#define ARGS(X)       \
-    X(transfer_size)  \
-    X(transfer_count) \
-    X(barrier_address)
+#define ARGS(X)                 \
+    X(uint32_t, transfer_size)  \
+    X(uint32_t, transfer_count) \
+    X(uint32_t, barrier_address)
 
 void kernel_main() {
     ARG_INIT(ARGS);
