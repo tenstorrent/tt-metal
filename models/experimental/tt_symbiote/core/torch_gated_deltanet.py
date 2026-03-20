@@ -9,9 +9,12 @@ Extracted from FLA (Flash Linear Attention) library:
   https://github.com/fla-org/flash-linear-attention/blob/main/fla/layers/gated_deltanet.py
 """
 
+from typing import Optional
+
 import torch
 import torch.nn.functional as F
 
+from models.experimental.tt_symbiote.core.gdelta_debug import gdelta_torch_stats
 from models.experimental.tt_symbiote.core.torch_deltarule_ops import recurrent_gated_delta_rule, chunk_gated_delta_rule
 
 
@@ -103,6 +106,7 @@ def gated_deltanet_forward(
     conv_state_v=None,
     recurrent_state=None,
     output_final_state=False,
+    debug_layer_idx: Optional[int] = None,
 ):
     """
     Functional forward pass for the Gated DeltaNet layer.
@@ -138,6 +142,9 @@ def gated_deltanet_forward(
 
     B, T, _ = hidden_states.shape
     effective_mode = "fused_recurrent" if T <= 64 else mode
+
+    gdelta_torch_stats("in_hidden", "torch_func", debug_layer_idx, hidden_states)
+    gdelta_torch_stats("recurrent_state_in", "torch_func", debug_layer_idx, recurrent_state)
 
     # 1. Linear projections
     q = F.linear(hidden_states, q_proj_weight)
@@ -204,6 +211,10 @@ def gated_deltanet_forward(
     # 7. Reshape and project output
     o = o.reshape(B, T, num_v_heads * head_v_dim)
     o = F.linear(o, o_proj_weight)
+
+    gdelta_torch_stats("out_hidden", "torch_func", debug_layer_idx, o)
+    if new_recurrent is not None:
+        gdelta_torch_stats("new_recurrent_state", "torch_func", debug_layer_idx, new_recurrent)
 
     cache = None
     if output_final_state:
