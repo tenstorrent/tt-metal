@@ -96,5 +96,5 @@ def write_json(pydantic_model, output_filename):
         OSError: If the file cannot be opened or written.
     """
     pydantic_json = pydantic_model.model_dump(mode="json")
-    with open(f"{output_filename}", "w") as jsonfile:
+    with open(output_filename, "w") as jsonfile:
         json.dump(pydantic_json, jsonfile)
