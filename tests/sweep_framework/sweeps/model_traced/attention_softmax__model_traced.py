@@ -137,9 +137,10 @@ def run(
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
 
-    # Convert to TTNN tensors with mesh support and interleaved→sharded fallback
-    input_is_sharded = hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded()
-
+    # attention_softmax_ uses SoftmaxDefaultProgramConfig internally which requires
+    # DRAM / interleaved input. Traced configs often have HEIGHT_SHARDED input, but
+    # passing sharded input with the default (non-sharded) program config produces
+    # garbage output (PCC 0.0). Always keep input as DRAM interleaved.
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
             input_tensor = create_tensor_on_mesh(
@@ -150,22 +151,13 @@ def run(
                 input_a_memory_config,
                 input_a_tensor_placement,
             )
-        elif input_is_sharded:
-            input_tensor = ttnn.from_torch(
-                torch_input_tensor,
-                dtype=input_a_dtype,
-                layout=input_a_layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            input_tensor = ttnn.interleaved_to_sharded(input_tensor, input_a_memory_config)
         else:
             input_tensor = ttnn.from_torch(
                 torch_input_tensor,
                 dtype=input_a_dtype,
                 layout=input_a_layout,
                 device=device,
-                memory_config=input_a_memory_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
     else:
         input_tensor = ttnn.from_torch(torch_input_tensor, dtype=input_a_dtype, layout=input_a_layout)

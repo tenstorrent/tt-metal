@@ -175,9 +175,13 @@ def run(
     # It is NOT included in op_kwargs (arg* keys are filtered by build_op_kwargs),
     # so pass it explicitly. Pop from op_kwargs in case it snuck in via named key.
     op_kwargs.pop("num_heads", None)
+    # Force DRAM output: without an explicit memory_config the op infers a sharded
+    # output spec from the traced model's layout. That spec may encode more height-shards
+    # than the device grid has rows → TT_FATAL "num_shards_along_height > grid.y".
+    op_kwargs.pop("memory_config", None)
     # This operation splits QKV and heads - returns tuple of (Q, K, V)
     query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-        input_tensor_a, num_heads=num_heads, **op_kwargs
+        input_tensor_a, num_heads=num_heads, memory_config=ttnn.DRAM_MEMORY_CONFIG, **op_kwargs
     )
     query_tensor = mesh_tensor_to_torch(query_tensor, device if is_mesh_device else None)
     key_tensor = mesh_tensor_to_torch(key_tensor, device if is_mesh_device else None)
