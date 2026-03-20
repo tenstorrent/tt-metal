@@ -61,7 +61,7 @@ struct DeviceStorage {
     // Constructs a DeviceStorage from a device memory
 
     // Constructs DeviceStorage with coords covering the full mesh device shape.
-    explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
+    explicit DeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_);
 
     // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.

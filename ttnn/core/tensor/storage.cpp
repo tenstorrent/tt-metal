@@ -50,8 +50,8 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
         distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
 }
 
-DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
-    DeviceStorage(std::move(mesh_buffer_), CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(*mesh_buffer_->device())) {}
+DeviceStorage::DeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_) :
+    DeviceStorage(mesh_buffer_, CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(*mesh_buffer_->device())) {}
 
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords) :
