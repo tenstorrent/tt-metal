@@ -1,8 +1,10 @@
-# Conv3D Blocking Root Cause Analysis
+# Conv3D Blocking & FP32 Reduction
 
-## Problem Statement
+## Background
 
-PR #38579 introduced aggressive Conv3D blockings for the WAN VAE decoder. PR #39043 reverted 4 blocking entries because the two configs produced different video hashes. This document explains exactly why.
+PR #38579 introduced aggressive Conv3D blockings for the WAN VAE decoder. PR #39043 reverted 4 blocking entries because the two configs produced different video hashes. This document explains why, and documents the fp32 intermediate CB fix (tested on BH, not yet tested on WH).
+
+Related: https://github.com/tenstorrent/tt-metal/issues/40322
 
 ## The 4 Reverted Blocking Entries
 
@@ -16,9 +18,7 @@ Key: (in_channels, out_channels, kernel_size) → (C_in_block, C_out_block, T_ou
 (384, 768, (3,3,3)):         (128, 128, 1, 16, 2)    (96,  96, 1, 8,  4)
 ```
 
-## Which Entries Actually Matter
-
-Only `C_in_block` affects numerical output. `C_out_block` and spatial blocks (`H_out_block`, `W_out_block`) only affect memory layout and parallelism.
+Only `C_in_block` affects numerical output. `C_out_block` and spatial blocks only affect memory layout and parallelism.
 
 | Entry | C_in_block change | Decoder layers affected | Impact |
 |-------|-------------------|------------------------|--------|
@@ -29,11 +29,11 @@ Only `C_in_block` affects numerical output. `C_out_block` and spatial blocks (`H
 
 **Only 16 of the decoder's ~30 conv layers are affected, and only via C_in_block.**
 
-## Root Cause: C_in_block Changes Matmul Accumulation Order
+## Why C_in_block Changes the Hash
 
 ### The Conv3D matmul with C_in blocking
 
-When `C_in_block < C_in`, the conv3d splits the input channels into groups and runs one matmul per group. Each group's partial result is accumulated via `add_tiles` in fp32.
+When `C_in_block < C_in`, the conv3d splits the input channels into groups and runs one matmul per group. Each group's partial result is accumulated via multi-core NOC reduction.
 
 For `(384, 384, (3,3,3))` — the dominant entry:
 
@@ -51,15 +51,13 @@ AGGRESSIVE (C_in_block=96):
 
 ### Why different group counts produce different results
 
-The hardware uses **TF32** math fidelity (HiFi2 on WH):
-1. Each bf16 input element is promoted to fp32
-2. The mantissa is **truncated to 10 bits** (TF32 format, losing 13 bits)
-3. The truncated values are multiplied
-4. Products are accumulated in the fp32 dest register
-
 **fp32 addition is not associative.** Different group boundaries mean different subsets of products are accumulated together, producing different rounding at each step.
 
-### Measured per-layer error (CPU simulation with real weights)
+On WH (HiFi2/TF32): each bf16 input is truncated to 10-bit mantissa before multiply, amplifying the sensitivity significantly.
+
+On BH (HiFi4): full 23-bit mantissa is preserved, making rounding differences ~2^13 times smaller. However, when partial sums are truncated to bf16 between groups (in the reduction CB), the truncation reintroduces C_in_block sensitivity regardless of math fidelity.
+
+### Measured per-layer error (CPU simulation with real weights, WH)
 
 Single pixel, single layer (decoder.mid_block.resnets.0.conv1):
 ```
@@ -105,7 +103,7 @@ Frame 1: conv reads cache (output_0 + ε₀) as temporal context
 Frame N: error includes contributions from ALL previous frames
 ```
 
-The temporal upsample structure means 1 input frame produces 4 output frames (via two `upsample3d` blocks). This creates a **4-frame repeating PCC pattern** in the per-frame comparison:
+The temporal upsample structure creates a **4-frame repeating PCC pattern**:
 
 ```
 Frame  0: PCC=0.99996  (fresh input frame)
@@ -117,7 +115,7 @@ Frame  4: PCC=0.99996  (new input frame — cache refreshed)
 Frame 36: PCC=0.99994  (accumulated temporal drift)
 ```
 
-## Measured Impact on Video Output
+## Measured Impact on Video Output (WH Loud Box, bf16 intermediates)
 
 ### Test configuration
 - Platform: WH Loud Box (8-chip, 2x4 mesh)
@@ -145,16 +143,6 @@ Frame 36: PCC=0.99994  (accumulated temporal drift)
 | P99.9 | 0.01490 | 1.90 — flips by 2 values |
 | Max | 0.500 | 63.8 — 64 pixel values! |
 
-### Per-channel analysis
-
-| Channel | PCC | Max error |
-|---------|-----|-----------|
-| R | 0.99997 | 0.051 |
-| G | 1.00000 | 0.500 |
-| B | 0.99988 | 0.496 |
-
-The G and B channels show the largest max errors, likely from clamp-boundary interactions (values near ±1.0 where one config clamps and the other doesn't).
-
 ### Hash impact
 
 Per frame (480 × 832 × 3 = 1,198,080 pixel values):
@@ -172,7 +160,7 @@ C_in_block differs (128 vs 96)
   ├─ Different matmul K dimension (3456 vs 2592 elements)
   ├─ Different number of accumulation groups (3 vs 4)
   │
-  └─ TF32 truncation (13 mantissa bits) + non-associative fp32 add
+  └─ bf16 truncation between groups + non-associative fp32 add
        │
        └─ ~2.6e-06 max error per output channel, per pixel, per layer
             │
@@ -189,104 +177,125 @@ C_in_block differs (128 vs 96)
                       └─ Video hash is different
 ```
 
-## Implications
-
-1. **This is not a correctness bug.** Both configs produce equally valid bfloat16 approximations of the fp32 reference. Neither is "more correct."
-
-2. **The blocking parameters ARE the root cause** of the hash difference. Specifically, `C_in_block` changes the matmul accumulation order, which produces different TF32 rounding, which cascades through 16 layers + temporal cache to produce ~1% pixel-level differences.
-
-3. **Any change to C_in_block will change the video hash.** This is inherent to the hardware's TF32 math. There is no way to make two different C_in_block values produce identical results.
-
-4. **The 4 entries were not all necessary to revert:**
-   - `(32, 384, (3,3,3))`: C_in_block is the same (32) — reverting this had zero numerical effect
-   - `(384, 768, (3,3,3))`: Never matched by any decoder layer — reverting this had zero effect
-   - Only `(384, 384, (3,3,3))` and `(192, 384, (3,3,3))` needed to be reverted to restore the original hash
-
-5. **To re-enable aggressive blockings without changing the hash**, one would need to keep C_in_block the same while changing only C_out_block and spatial blocks. For the dominant entry `(384, 384, (3,3,3))`: keep C_in_block=128 but change (C_out_block, H, W) from (128, 8, 2) to something faster.
-
----
-
-## FP32 Intermediate CB Approach: Why It Fails on WH
+## FP32 Intermediate CB Fix
 
 ### Goal
 
-Eliminate C_in_block sensitivity entirely by accumulating the multi-C_in partial sums in fp32 precision instead of bf16. This would make the conv3d output invariant to C_in_block choice (different C_in_block values → bit-identical output).
+Eliminate C_in_block sensitivity by keeping partial sums in Float32 through the multi-core reduction, only truncating to bf16 at the final untilize. This removes the bf16 truncation between C_in groups that is the source of blocking sensitivity.
 
-### Proof of Concept
+### Status
 
-Setting `cb_matmul_interm_tiled` and `cb_reduction_tiled` to Float32 format makes GOOD, FIXED, and AGGRESSIVE blockings produce **bit-identical output** (max_abs_err = 0.0, PCC = 1.0). This proves the approach is correct in principle.
+- **Tested on BH**: Working (PCC=0.999996 vs torch)
+- **Not yet tested on WH**: The approach uses different techniques than the earlier failed WH attempts (see below). It may work on WH but needs verification.
 
-However, the output is **garbage vs torch** (PCC ~0.02–0.09) because the format conversion corrupts the data.
+### What changed (3 kernel files)
 
-### Approaches Attempted on WH
+**`conv3d_program_factory.cpp`**:
+- `use_fp32_partials` flag when `fp32_dest_acc_en && C_in_num_blocks > 1`
+- `cb_matmul_interm_tiled` and `cb_reduction_tiled` use Float32 format (4096-byte tiles)
+- Compile-time arg `use_fp32_partials` passed to compute kernel
 
-| # | Approach | GOOD=AGGR? | vs Torch | Failure Mode |
-|---|----------|-----------|----------|-------------|
-| 1 | fp32 `cb_matmul_interm` + `NoReconfigure` untilize | Bit-identical | PCC 0.087 | `pack_untilize` requires same page size for input/output CBs. fp32=4096B vs bf16=2048B → silent data corruption. |
-| 2 | fp32 `cb_matmul_interm` + typecast CB (copy_tile fp32→bf16) before untilize | Bit-identical | PCC 0.017 | `mm_init(in0, in1, out_cb)` with fp32 `out_cb` corrupts the matmul compute path on WH. The 3-arg `state_configure(SRCA, SRCB, PACK)` misconfigures the FPU when PACK format differs from input formats. |
-| 3 | Separate fp32 `cb_fp32_accum` (matmul stays bf16, only reduction in fp32) | Bit-identical | PCC 0.087 | `copy_tile` from bf16 CB + `pack_tile` to fp32 CB with `pack_reconfig_data_format` produces corrupt tiles. The packer format switch between bf16 and fp32 mid-kernel leaves stale configuration in the pack pipeline registers. |
-| 4 | Same as #3 + explicit `reconfig_data_format_srca` | Breaks determinism | PCC 0.04 | `reconfig_data_format_srca` in the middle of a matmul+reduction sequence corrupts the unpacker state for subsequent operations. The unpacker format registers are shared across the compute pipeline — reconfiguring between matmul and reduction breaks the matmul's cached state. |
+**`compute.cpp`**:
+- `reconfig_data_format_srca(cb_vol2col_rm)` before tilize — resets unpacker from Float32 (left by previous untilize) back to bf16. **This was the key bug fix.**
+- `pack_reconfig_data_format` around tilize to switch packer between bf16 (tilize) and fp32 (matmul)
+- `mm_block_init_short_with_both_dt` after tilize to reinit matmul unpackers
+- SFPU reduction: `copy_tile` + `add_binary_tile` (FPU `add_tiles` can't unpack Float32 from L1)
+- `reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled)` before bias add for mixed Float32+bf16
+- Untilize with `UnpackAndPackReconfigure` for Float32 → bf16
 
-### Root Cause on WH
+**`writer.cpp`**:
+- `partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled)` for fp32-aware NOC read sizes
 
-The Wormhole Tensix compute pipeline has three register-configuration domains that interact:
+### Root cause of PCC=0.789 (the bug that was fixed)
 
-1. **Unpacker** (SRCA, SRCB): Configured by `state_configure`, `llk_unpack_A_init`, `reconfig_data_format_srca`. Reads tiles from CBs, converts to the internal accumulation format.
+The fp32 untilize uses `UnpackAndPackReconfigure` which sets the unpacker to Float32. On the next spatial block, the tilize reads bf16 `cb_vol2col_rm` data with a Float32 unpacker, producing garbage. The first spatial block was correct because the unpacker starts in bf16 mode.
 
-2. **Math/FPU**: Operates in the DEST register format (fp32 when `fp32_dest_acc_en=True`). The math fidelity (HiFi2 on WH bf16) controls TF32 truncation of SRC inputs before multiply.
+Debugging path:
+1. DPRINT verified NOC read was correct (raw bytes matched between worker and reducer)
+2. Three different add methods (SFPU, FPU, L1 acc pack) all gave identical PCC=0.789 → issue upstream of add
+3. Element-by-element comparison showed position [0,0,0] correct but [0,16,16] wrong → spatial-dependent corruption
+4. Traced unpacker state: untilize's `UnpackAndPackReconfigure` left srcA in Float32, tilize's `NoReconfigure` didn't reset it
 
-3. **Packer** (PACK): Configured by `llk_pack_hw_configure`, `pack_reconfig_data_format`. Reads from DEST and packs to CB.
+### Earlier failed WH attempts (different approaches)
 
-**The problem**: On WH, these three domains share hardware state that is not fully isolated. When `mm_init` configures the pipeline for `(bf16_SRCA, bf16_SRCB, bf16_PACK)`, the internal FPU state (micro-op configuration, data routing) is set up for a homogeneous bf16 pipeline. Changing the PACK domain to fp32 mid-kernel (via `pack_reconfig_data_format`) leaves the micro-op configuration inconsistent — the FPU's data routing and accumulation logic still expects bf16-sized outputs, but the packer now writes fp32-sized tiles, corrupting the CB data layout.
+These used different techniques from our current fix and all failed on WH:
 
-This is further complicated by WH's constraint: **"Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues"** (documented in `vae_wan2_1.py:290`). This means WH uses HiFi2 for bf16 conv3d, which implies TF32 truncation in SRC registers. The truncation happens in the unpacker stage — fp32 values read from a CB are truncated to TF32 (10-bit mantissa) before entering the FPU. This is a hardware behavior that cannot be bypassed by software configuration on WH.
+| # | Approach | Failure Mode |
+|---|----------|-------------|
+| 1 | fp32 `cb_matmul_interm` + `NoReconfigure` untilize | `pack_untilize` requires same page size for input/output CBs |
+| 2 | fp32 `cb_matmul_interm` + typecast CB before untilize | `mm_init` with fp32 output CB corrupts matmul on WH |
+| 3 | Separate fp32 accum CB (matmul stays bf16) | Packer format switch mid-kernel leaves stale config |
+| 4 | Same as #3 + `reconfig_data_format_srca` | Unpacker reconfig mid-matmul corrupts state |
 
-### BH (Blackhole) Analysis: Why It Might Work
+Our current fix is architecturally different: the matmul directly outputs to a Float32 CB (not a bf16→fp32 typecast), and uses SFPU `copy_tile`+`add_binary_tile` for reduction (not FPU `add_tiles`). This avoids the FPU format-mismatch issues. Whether this approach also works on WH is untested.
 
-Blackhole has several architectural improvements over Wormhole that make the fp32 intermediate CB approach more likely to succeed:
+## Accuracy (BH)
 
-#### 1. Native HiFi4 + fp32_dest_acc Support
+### Per-op accuracy with aggressive blocking (C_in_block=32, C_in_num_blocks=3)
 
-BH supports `MathFidelity::HiFi4` with `fp32_dest_acc_en=True` (line 288-289 of `vae_wan2_1.py` uses HiFi4 on BH). HiFi4 means **no TF32 truncation** in the SRC registers — fp32 values pass through the FPU with full 23-bit mantissa precision. This eliminates the primary source of C_in_block sensitivity: the accumulation order no longer matters when all intermediate values retain full fp32 precision.
+| Intermediate format | PCC vs torch | MAE | Max Error |
+|---|---|---|---|
+| bf16 (original) | 0.999957 | 0.002874 | 0.024772 |
+| **fp32 (this fix)** | **0.999996** | **0.000775** | **0.005459** |
 
-Even without fp32 intermediate CBs, BH's HiFi4 math fidelity produces less C_in_block sensitivity than WH's HiFi2, because:
-- WH HiFi2: SRC truncates fp32→TF32 (10-bit mantissa) before every multiply → significant rounding differences between C_in_block choices
-- BH HiFi4: SRC preserves full fp32 (23-bit mantissa) → rounding differences are 2^13 times smaller
+fp32 intermediates reduce MAE by 3.7x and max error by 4.5x.
 
-#### 2. Wider DEST Registers
+### Good vs Aggressive blocking comparison
 
-BH has 140 Tensix cores (vs WH's 56) and wider DEST registers for fp32 accumulation. The larger DEST capacity means:
-- `fp32_dest_acc_en=True` with `dst_size = 8` tiles (vs WH's 4)
-- More room for in-register accumulation without spilling to CB
+Both produce PCC > 0.999 vs torch. Max difference is 1 bf16 ULP (0.007812) — inherent to bf16 output quantization since the computation order differs. They will NOT be bit-identical.
 
-#### 3. Independent Packer Configuration
+## Device Perf (BH P150, single chip)
 
-BH's Tensix v2 has a more modular pack pipeline where `pack_reconfig_data_format` can change the output format without corrupting the FPU data routing. This is because BH separates the pack format configuration from the micro-op generation more cleanly — the packer reads from DEST independently of how the FPU writes to DEST.
+Measured with `TT_METAL_DEVICE_PROFILER=1` using `DEVICE KERNEL DURATION [ns]` from `ttnn.ReadDeviceProfiler` / `ttnn.get_latest_programs_perf_data`. See `bench_conv3d_fp32_reduction.py` to reproduce.
 
-This means Approach #3 (separate fp32 accum CB with copy_tile typecast) is more likely to work on BH, because:
-- `copy_tile` from bf16 CB: unpacker reads bf16, promotes to fp32 in DEST (no truncation with HiFi4)
-- `pack_tile` to fp32 CB: packer reads fp32 from DEST, writes fp32 to CB (no format mismatch)
-- `add_tiles` between fp32 and bf16 CBs: both promoted to fp32 in DEST, added, packed to fp32 (clean pipeline)
-- `pack_reconfig_data_format` to bf16: packer now writes bf16 from fp32 DEST (standard truncation, well-tested path)
+### 192x192 k3, 32x32 (C_in_num_blocks: 1 vs 2)
 
-#### 4. Recommendation for BH
+| Config | Device Time | Speedup | PCC | MAE |
+|---|---|---|---|---|
+| Conservative C_in=192 | 192 μs | 1.0x | 0.999995 | 0.000822 |
+| Aggressive C_in=96, bf16 interm | 122 μs | 1.57x | 0.999867 | 0.005515 |
+| **Aggressive C_in=96, fp32 interm** | **122 μs** | **1.57x** | **0.999996** | **0.000731** |
 
-The fp32 intermediate CB approach should be attempted on BH with:
-1. `cb_matmul_interm_tiled` stays bf16 (matmul pipeline unchanged)
-2. New `cb_fp32_accum` in Float32 format for reduction accumulation
-3. Typecast bf16→fp32 via `copy_tile` + `pack_tile` with `pack_reconfig_data_format`
-4. After reduction: typecast fp32→bf16 back to `cb_matmul_interm_tiled`
-5. Bias + untilize proceed as before in bf16
+### 96x96 k3, 32x32 (C_in_num_blocks: 1 vs 3)
 
-If BH's HiFi4 already reduces C_in_block sensitivity sufficiently (possible since the TF32 truncation that drives the divergence on WH doesn't exist on BH), the fp32 accum CB may not even be needed — simply changing C_in_block on BH might produce the same hash. This should be tested first.
+| Config | Device Time | Speedup | PCC | MAE |
+|---|---|---|---|---|
+| Conservative C_in=96 | 91 μs | 1.0x | 0.999994 | 0.000852 |
+| Aggressive C_in=32, bf16 interm | 53 μs | 1.70x | 0.999957 | 0.002871 |
+| **Aggressive C_in=32, fp32 interm** | **66 μs** | **1.36x** | **0.999996** | **0.000768** |
 
-### Summary: WH vs BH
+### 384x384 k3, 90x160 (same C_in_block=128, C_in_num_blocks=3)
 
-| Property | WH (Wormhole) | BH (Blackhole) |
-|----------|--------------|----------------|
-| Math fidelity for bf16 conv3d | HiFi2 (TF32 truncation) | HiFi4 (no truncation) |
-| SRC register precision | TF32 (10-bit mantissa) | Full fp32 (23-bit mantissa) |
-| C_in_block sensitivity | High (~1e-3 per layer) | Expected low (~1e-7 per layer) |
-| fp32 pack_reconfig mid-kernel | Corrupts FPU state | Expected to work (modular pack pipeline) |
-| fp32 intermediate CB approach | **Fails** (corrupt output) | **Likely works** (needs testing) |
-| Preserve-C_in_block workaround | **Works** (bit-identical, no C++ changes) | May not be needed |
+| Config | Device Time | PCC | MAE |
+|---|---|---|---|
+| Conservative C_in=128 | 2288 μs | 0.999996 | 0.000779 |
+| Aggressive C_in=128, bf16 interm | 2283 μs | 0.999804 | 0.007408 |
+| **Aggressive C_in=128, fp32 interm** | **2293 μs** | **0.999996** | **0.000779** |
+
+### 384x384 k3, 32x32 (conservative OOMs — must use aggressive)
+
+| Config | Device Time | PCC | MAE |
+|---|---|---|---|
+| Conservative C_in=384 | **L1 OOM** | — | — |
+| Aggressive C_in=128, bf16 interm | 306 μs | 0.999807 | 0.007132 |
+| **Aggressive C_in=128, fp32 interm** | **312 μs** | **0.999996** | **0.000768** |
+
+### Perf summary
+
+- Aggressive blocking gives **1.4-1.7x device speedup** on layers where it increases parallelism
+- fp32 SFPU reduction adds ~25% overhead vs bf16 FPU add (66 vs 53 μs) but recovers full accuracy
+- For layers where conservative blocking OOMs, aggressive + fp32 is the only option with correct results
+
+## Test Commands
+
+```bash
+# Regression (original bf16 path, should pass)
+pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_conv3d and 1x1_h0_w1 and cache_none and bf16 and conv_0" -v -s --timeout=120
+
+# Blocking comparison (good vs aggressive)
+pytest models/tt_dit/tests/models/wan2_2/test_conv3d_blocking_comparison.py -v -s --timeout=600
+
+# Device perf benchmark
+TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 \
+  python models/tt_dit/tests/models/wan2_2/bench_conv3d_fp32_reduction.py
+```
