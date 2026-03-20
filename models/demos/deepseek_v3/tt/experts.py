@@ -17,6 +17,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     even_int_div,
     get_dequantized_tensor,
+    get_effective_num_experts,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -35,8 +36,13 @@ class Experts(AbstractModule):
 
     @classmethod
     def _get_num_experts_per_device(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
-        """Calculate the number of experts per device based on the total number of experts and the device shape."""
-        return even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
+        """Calculate the number of experts per device based on the total number of experts and the device shape.
+
+        For single galaxy (8 devices), uses 64 experts to maintain 8 experts/device.
+        For quad galaxy (32 devices), uses all 256 experts (8 experts/device).
+        """
+        effective_num_experts = get_effective_num_experts(hf_config, mesh_device)
+        return even_int_div(effective_num_experts, mesh_device.get_num_devices())
 
     @classmethod
     def convert_weights(
@@ -46,8 +52,9 @@ class Experts(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        assert hf_config.n_routed_experts % mesh_device.get_num_devices() == 0, (
-            f"Number of experts ({hf_config.n_routed_experts}) must be divisible by the number of devices "
+        effective_num_experts = get_effective_num_experts(hf_config, mesh_device)
+        assert effective_num_experts % mesh_device.get_num_devices() == 0, (
+            f"Number of experts ({effective_num_experts}) must be divisible by the number of devices "
             f"({mesh_device.get_num_devices()})"
         )
         (state_dict,) = state_dicts
@@ -56,7 +63,7 @@ class Experts(AbstractModule):
         def _load_expert_weight(hf_name: str) -> torch.Tensor:
             weight_name = f"{hf_name}.weight"
             expert_weights: list[torch.Tensor] = []
-            for expert_id in range(hf_config.n_routed_experts):
+            for expert_id in range(effective_num_experts):  # Load only the effective number of experts
                 full_weight_name = f"experts.{expert_id}.{weight_name}"
                 expert_weights.append(
                     get_dequantized_tensor(state_dict, full_weight_name, dtype=cls.WEIGHT_TORCH_DTYPE)

@@ -1225,3 +1225,33 @@ def get_mesh_coords(mesh_shape: list[int], row: int = None, col: int = None) -> 
     row_select = range(mesh_shape[0]) if row is None else [row]
     col_select = range(mesh_shape[1]) if col is None else [col]
     return [ttnn.MeshCoordinate(r, c) for r in row_select for c in col_select]
+
+
+def is_single_galaxy(mesh_device: ttnn.Device) -> bool:
+    """Check if running on a single galaxy (T3K) with 8 devices in a (1, 8) mesh.
+
+    Args:
+        mesh_device: TTNN mesh device
+
+    Returns:
+        True if single galaxy (8 devices, 1 row), False otherwise (quad galaxy with 32 devices, 4 rows)
+    """
+    return mesh_device.get_num_devices() == 8 and mesh_device.shape[0] == 1
+
+
+def get_effective_num_experts(hf_config, mesh_device: ttnn.Device) -> int:
+    """Get the effective number of routed experts based on device configuration.
+
+    For single galaxy (8 devices), use 64 experts to maintain 8 experts/device.
+    For quad galaxy (32 devices), use all 256 experts (8 experts/device).
+
+    Args:
+        hf_config: HuggingFace model configuration
+        mesh_device: TTNN mesh device
+
+    Returns:
+        Effective number of routed experts to use
+    """
+    if is_single_galaxy(mesh_device):
+        return 64  # 64 experts ÷ 8 devices = 8 experts/device
+    return hf_config.n_routed_experts  # 256 experts ÷ 32 devices = 8 experts/device

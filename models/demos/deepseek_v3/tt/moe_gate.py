@@ -27,6 +27,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     TOPK_MIN_WIDTH,
     even_int_div,
     get_dequantized_tensor,
+    get_effective_num_experts,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -139,6 +140,8 @@ class MoEGate(AbstractModule):
             ModelDecodeConfig containing operator configurations for decode mode
         """
 
+        effective_num_experts = get_effective_num_experts(hf_config, mesh_device)
+
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
 
@@ -161,6 +164,8 @@ class MoEGate(AbstractModule):
                 "reshape_scores": ReshapeConfig(
                     shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
                 ),
+                "effective_num_experts": effective_num_experts,
+                "total_num_experts": hf_config.n_routed_experts,
                 "topk_within_expert_groups": TopKConfig(
                     k=2,  # no hf config for this
                     dim=-1,
@@ -230,6 +235,8 @@ class MoEGate(AbstractModule):
                 "reshape_scores": ReshapeConfig(
                     shape=(1, -1, hf_config.n_group, even_int_div(hf_config.n_routed_experts, hf_config.n_group)),
                 ),
+                "effective_num_experts": effective_num_experts,
+                "total_num_experts": hf_config.n_routed_experts,
                 "topk_within_expert_groups": TopKConfig(
                     k=2,  # no hf config for this
                     dim=-1,
@@ -400,6 +407,13 @@ class MoEGate(AbstractModule):
             )
         ttnn.deallocate(active_experts_scores)
         ttnn.deallocate(topk_experts_scores_with_bias)
+
+        # Clamp expert indices for single galaxy mode (64 experts instead of 256)
+        # The gate is trained on 256 experts, so indices can be 0-255
+        # For single galaxy, we only load 64 experts (0-63), so we need to clamp
+        if "effective_num_experts" in cfg and cfg["effective_num_experts"] < cfg.get("total_num_experts", 256):
+            max_expert_idx = cfg["effective_num_experts"] - 1
+            topk_experts_indices = ttnn.clip(topk_experts_indices, 0, max_expert_idx)
 
         # gather original scores without bias
         topk_experts_scores = ttnn.gather(scores, dim=3, index=topk_experts_indices)

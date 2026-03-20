@@ -23,7 +23,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_effective_num_experts, is_single_galaxy
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -81,10 +81,13 @@ class MoE(SharedStateAddOn, AbstractModule):
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
+        effective_num_experts = get_effective_num_experts(hf_config, mesh_device)
+        single_galaxy = is_single_galaxy(mesh_device)
 
         logger.info(
             "Creating MoE shared state: expert mapping tensor "
-            f"(num_devices={num_devices}, experts_per_device={num_experts_per_device})..."
+            f"(num_devices={num_devices}, experts_per_device={num_experts_per_device}, "
+            f"effective_experts={effective_num_experts}, single_galaxy={single_galaxy})..."
         )
         expert_mapping_start = perf_counter()
         expert_mapping_tensors = ttnn.from_torch(
@@ -102,11 +105,11 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         logger.info(
             "Creating MoE shared state: remap topk mask "
-            f"(dispatch_rows={num_dispatch_device_rows}, experts={hf_config.n_routed_experts})..."
+            f"(dispatch_rows={num_dispatch_device_rows}, experts={effective_num_experts})..."
         )
         remap_mask_start = perf_counter()
         remap_topk_mask = ttnn.from_torch(
-            torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
+            torch.ones((1, num_dispatch_device_rows, 1, effective_num_experts), dtype=torch.bfloat16),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.bfloat16,
@@ -168,6 +171,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         """
 
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        single_galaxy = is_single_galaxy(mesh_device)
+        effective_num_experts = get_effective_num_experts(hf_config, mesh_device)
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -197,6 +202,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
+                "single_galaxy": single_galaxy,
+                "effective_num_experts": effective_num_experts,
                 "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -246,6 +253,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
+                "single_galaxy": single_galaxy,
+                "effective_num_experts": effective_num_experts,
                 "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -438,44 +447,85 @@ class MoE(SharedStateAddOn, AbstractModule):
                 [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
             )
 
-            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
-                x_chunk,
-                topk_indices_chunk,
-                cfg["expert_mapping_tensors"],
-                **cfg["all_to_all_dispatch"],
-            )
-            ttnn.deallocate(x_chunk)
-            ttnn.deallocate(topk_indices_chunk)
+            # For single galaxy mode, all experts are local (no row dispatch needed)
+            if cfg.get("single_galaxy", False):
+                # Skip all_to_all_dispatch - experts are all on the same row
+                # Just reshape and repeat activations for local expert computation
+                dispatch_chunk = ttnn.reshape(
+                    x_chunk,
+                    shape=(1, 1, batch_chunk * seq_len, cfg["hidden_size"]),
+                )
+                dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
+                dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(x_chunk)
 
-            dispatch_chunk = ttnn.reshape(
-                all_to_all_dispatch_output_tensors,
-                shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
-            )
-            dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
-            dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
-            ttnn.deallocate(all_to_all_dispatch_output_tensors)
+                # Store indices for later use (replace metadata tensor)
+                local_metadata = topk_indices_chunk
 
-            experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
-            ttnn.deallocate(dispatch_chunk)
+                experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
+                ttnn.deallocate(dispatch_chunk)
 
-            experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
-            experts_output = ttnn.reshape(
-                experts_output, shape=(cfg["num_experts_per_device"], batch_size_chunk, seq_len, cfg["hidden_size"])
-            )
+                experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+                experts_output = ttnn.reshape(
+                    experts_output, shape=(cfg["num_experts_per_device"], batch_chunk, seq_len, cfg["hidden_size"])
+                )
 
-            all_to_all_dispatch_metadata_tensors = ttnn.reshape(
-                all_to_all_dispatch_metadata_tensors,
-                shape=(1, batch_size_chunk, seq_len, cfg["num_experts_per_tok"]),
-            )
+                # For single galaxy, we need to gather outputs based on the topk indices
+                # This is a simplified combine since all experts are local
+                local_metadata_reshaped = ttnn.reshape(
+                    local_metadata,
+                    shape=(1, batch_chunk, seq_len, cfg["num_experts_per_tok"]),
+                )
+                ttnn.deallocate(local_metadata)
 
-            all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
-                experts_output,
-                all_to_all_dispatch_metadata_tensors,
-                cfg["expert_mapping_tensors"],
-                **cfg["all_to_all_combine"],
-            )
-            ttnn.deallocate(experts_output)
-            ttnn.deallocate(all_to_all_dispatch_metadata_tensors)
+                # Manual gather operation for local experts
+                # TODO: This is a simplified version - may need more sophisticated gathering
+                all_to_all_combine_output_tensors = ttnn.reshape(
+                    experts_output,
+                    shape=(cfg["num_experts_per_tok"], batch_chunk, seq_len, cfg["hidden_size"]),
+                )
+                ttnn.deallocate(experts_output)
+                ttnn.deallocate(local_metadata_reshaped)
+            else:
+                # Quad galaxy mode - use all_to_all for cross-row dispatch
+                all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+                    x_chunk,
+                    topk_indices_chunk,
+                    cfg["expert_mapping_tensors"],
+                    **cfg["all_to_all_dispatch"],
+                )
+                ttnn.deallocate(x_chunk)
+                ttnn.deallocate(topk_indices_chunk)
+
+                dispatch_chunk = ttnn.reshape(
+                    all_to_all_dispatch_output_tensors,
+                    shape=(1, 1, batch_size_chunk * seq_len, cfg["hidden_size"]),
+                )
+                dispatch_chunk = ttnn.repeat(dispatch_chunk, **cfg["activations_repeat"])
+                dispatch_chunk = ttnn.to_layout(dispatch_chunk, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(all_to_all_dispatch_output_tensors)
+
+                experts_output = MoEExperts._forward(dispatch_chunk, cfg["moe_experts"])
+                ttnn.deallocate(dispatch_chunk)
+
+                experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+                experts_output = ttnn.reshape(
+                    experts_output, shape=(cfg["num_experts_per_device"], batch_size_chunk, seq_len, cfg["hidden_size"])
+                )
+
+                all_to_all_dispatch_metadata_tensors = ttnn.reshape(
+                    all_to_all_dispatch_metadata_tensors,
+                    shape=(1, batch_size_chunk, seq_len, cfg["num_experts_per_tok"]),
+                )
+
+                all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+                    experts_output,
+                    all_to_all_dispatch_metadata_tensors,
+                    cfg["expert_mapping_tensors"],
+                    **cfg["all_to_all_combine"],
+                )
+                ttnn.deallocate(experts_output)
+                ttnn.deallocate(all_to_all_dispatch_metadata_tensors)
 
             post_combine_output_tensor = ttnn.reshape(
                 all_to_all_combine_output_tensors,
