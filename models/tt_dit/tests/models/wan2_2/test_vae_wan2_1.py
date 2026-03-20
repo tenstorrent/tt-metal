@@ -1277,10 +1277,6 @@ def test_wan_decoder3d(
         )
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-        # Trim padding on output channels
-        # DEBUG: REMOVING
-        logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
-        tt_output_torch = tt_output_torch[:, :out_channels]
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
@@ -1632,10 +1628,6 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         )
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-
-        # Trim padding on output channels
-        logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
-        tt_output_torch = tt_output_torch[:, :out_channels]
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
