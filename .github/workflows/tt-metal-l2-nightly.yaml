@@ -462,7 +462,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      timeout: 90
+      timeout: 10
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD Model Tests
   models-unit-tests:
