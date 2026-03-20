@@ -28,13 +28,10 @@ def test_bw_unary_fmod(input_shapes, scalar, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device, seed=0)
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True, seed=1)
 
-    scalar_data = torch.full(input_shapes, scalar, dtype=torch.bfloat16, requires_grad=True)
-    scalar_tensor = ttnn.from_torch(scalar_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    tt_output_tensor_on_device = ttnn.fmod_bw(grad_tensor, input_tensor, scalar_tensor)
+    tt_output_tensor_on_device = ttnn.fmod_bw(grad_tensor, input_tensor, scalar)
 
     golden_function = ttnn.get_golden_function(ttnn.fmod_bw)
-    golden_tensor = golden_function(grad_data, in_data, scalar_data)
+    golden_tensor = golden_function(grad_data, in_data, scalar)
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
 
