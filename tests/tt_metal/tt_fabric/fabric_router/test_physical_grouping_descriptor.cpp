@@ -421,53 +421,100 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Circular dependencies detected")));
 }
 
-TEST(PhysicalGroupingDescriptorTests, DuplicateNamesAreUniquified) {
-    const std::string text_proto = wrap_with_required_groupings(R"proto(
+TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanBeLeafNodes) {
+    // Test that MESH groupings can be leaf nodes (using ASIC locations directly)
+    // This verifies that MESH groupings are allowed to use ASIC locations without grouping references
+    const std::string text_proto = get_required_groupings() + R"proto(
         groupings {
-          name: "duplicate_name"
+          name: "mesh_leaf_1"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }
+            , { id: 2 asic_location: ASIC_LOCATION_3 }
+            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          row_major_mesh { dims: [ 2, 2 ] }
+        }
+        groupings {
+          name: "mesh_leaf_2"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_5 }
+            , { id: 1 asic_location: ASIC_LOCATION_6 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+    )proto";
+
+    // Should succeed - MESH groupings can be leaf nodes
+    EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto); });
+}
+
+TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanHaveDifferentStructures) {
+    // Test that different MESH groupings can have different structures:
+    // - Some MESH groupings can be leaf nodes (using ASIC locations)
+    // - Other MESH groupings can reference other groupings
+    // This verifies that validation checks individual groupings, not grouping types
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "mesh_leaf"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+        groupings {
+          name: "mesh_non_leaf"
+          preset_type: MESH
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "mesh_another_leaf"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_3 }
+            , { id: 1 asic_location: ASIC_LOCATION_4 }
+            , { id: 2 asic_location: ASIC_LOCATION_5 }
+            , { id: 3 asic_location: ASIC_LOCATION_6 }]
+          row_major_mesh { dims: [ 2, 2 ] }
+        }
+    )proto";
+
+    // Should succeed - different MESH groupings can have different structures
+    EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto); });
+}
+
+TEST(PhysicalGroupingDescriptorTests, SingleGroupingCannotMixASICLocationsAndGroupingRefs) {
+    // Test that a single grouping cannot mix ASIC locations and grouping references
+    // This verifies that ASIC locations must be leaf nodes (within a single grouping)
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "meshes_required"
           custom_type: "meshes"
           instances:
           [ { id: 0 asic_location: ASIC_LOCATION_1 }]
         }
         groupings {
-          name: "duplicate_name"
-          custom_type: "pods"
+          name: "mesh_mixed_bad"
+          preset_type: MESH
           instances:
           [ {
             id: 0
-            grouping_ref { custom_type: "meshes" }
+            grouping_ref { preset_type: TRAY_1 }
           }
-            , {
-              id: 1
-              grouping_ref { custom_type: "meshes" }
-            }]
-          all_to_all {}
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
         }
-    )proto");
+    )proto";
 
-    // Duplicate names should be automatically uniquified, not cause an error
-    EXPECT_NO_THROW({
-        PhysicalGroupingDescriptor desc(text_proto);
-
-        // Verify that names were uniquified (look up by type since both had same name initially)
-        auto meshes_groupings = desc.get_groupings_by_type("meshes");
-        auto pods_groupings = desc.get_groupings_by_type("pods");
-
-        EXPECT_EQ(meshes_groupings.size(), 1u);
-        EXPECT_EQ(pods_groupings.size(), 1u);
-
-        // First occurrence keeps original name, second gets uniquified
-        EXPECT_EQ(meshes_groupings[0].name, "duplicate_name");
-        EXPECT_EQ(pods_groupings[0].name, "duplicate_name_1");
-
-        // Verify all names are unique
-        std::set<std::string> all_names;
-        auto all_groupings = desc.get_all_groupings();
-        for (const auto& grouping : all_groupings) {
-            EXPECT_FALSE(all_names.contains(grouping.name)) << "Duplicate name found: " << grouping.name;
-            all_names.insert(grouping.name);
-        }
-    });
+    // Should fail - a single grouping cannot mix ASIC locations and grouping references
+    EXPECT_THAT(
+        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("uses ASIC locations but also has grouping references")));
 }
 
 // ============================================================================
@@ -1311,6 +1358,67 @@ TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple8x16PsdWi
         auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
 
         EXPECT_FALSE(asic_ids.empty()) << "Expected validation to pass: HOSTS grouping should map to mock cluster PSD";
+    }
+}
+
+TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+
+    // Try finding any for BH_galaxy_hosts
+    {
+        auto hosts_groupings = pgd.get_groupings_by_name("BH_galaxy_hosts");
+        ASSERT_FALSE(hosts_groupings.empty()) << "BH_galaxy_hosts grouping not found";
+        const auto& hosts_grouping = hosts_groupings[0];
+
+        auto asic_ids = pgd.find_any_in_psd(hosts_grouping, psd);
+
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: BH_galaxy_hosts grouping should map to mock cluster PSD";
+    }
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
+        const auto& mesh_grouping = mesh_groupings[0];
+
+        auto asic_ids = pgd.find_any_in_psd(mesh_grouping, psd);
+
+        EXPECT_FALSE(asic_ids.empty())
+            << "Expected validation to pass: 8x16_Mesh grouping should map to mock cluster PSD";
+    }
+
+    {
+        // get grouping names
+        auto grouping_names = pgd.get_all_grouping_names();
+        auto mesh_groupings = pgd.get_groupings_by_name("8x16_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "8x16_Mesh grouping not found";
+
+        std::vector<std::string> errors;
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+
+        // Test and see how it goes
+        EXPECT_EQ(asic_ids.size(), 3u)
+            << "Expected validation to pass: 8x16_Mesh grouping should map to mock cluster PSD";
+    }
+
+    {
+        // Test 4x4_Mesh BH groupings with find_all_in_psd (two variants: TRAY_3/TRAY_1 and TRAY_4/TRAY_2)
+        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh BH");
+        ASSERT_EQ(mesh_groupings.size(), 2u) << "4x4_Mesh BH grouping not found";
+
+        std::vector<std::string> errors;
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+
+        EXPECT_EQ(asic_ids.size(), 24u) << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to mock "
+                                           "cluster PSD (12 mappings each)";
     }
 }
 
