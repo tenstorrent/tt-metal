@@ -54,7 +54,6 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     // uint32 index tensor support
     const bool is_32_bit_data =
         index_tensor_cb_data_format == tt::DataFormat::UInt32 || input_tensor_cb_data_format == tt::DataFormat::Float32;
-    std::cout << "is_32_bit_data: " << (is_32_bit_data ? "true" : "false") << std::endl;
     // Calculate core range
     /**
      * Calculates the core range based on the input tensor shape (Ht) and the total number of cores available
@@ -205,11 +204,20 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         synchronization_cb_index};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_single_core.cpp";
+    std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = is_32_bit_data,
+            .unpack_to_dest_mode = unpack_to_dest_mode_vector,
+            .compile_args = compute_compile_time_args});
     SetRuntimeArgs(
         program,
         compute_kernel_id,
@@ -598,11 +606,22 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     };
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_cross_core_data_exchange.cpp";
+    std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_intermediate_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[value_tensor_peer_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = is_32_bit_data,
+            .unpack_to_dest_mode = unpack_to_dest_mode_vector,
+            .compile_args = compute_compile_time_args});
 
     return {std::move(program), {reader_kernel_id, compute_kernel_id, writer_kernel_id, core_range}};
 }
@@ -945,11 +964,20 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         log2Wt};
     const std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/sort_single_row_multi_core.cpp";
+    std::vector<UnpackToDestMode> unpack_to_dest_mode_vector(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (input_tensor_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode_vector[input_tensor_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_transposed_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode_vector[input_tensor_output_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+    }
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
         core_range,
-        tt::tt_metal::ComputeConfig{.fp32_dest_acc_en = is_32_bit_data, .compile_args = compute_compile_time_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = is_32_bit_data,
+            .unpack_to_dest_mode = unpack_to_dest_mode_vector,
+            .compile_args = compute_compile_time_args});
 
     return {
         std::move(program),
