@@ -131,6 +131,48 @@ def test_per_core_round_trip(device):
     assert torch.equal(data, result), "Round-trip data mismatch"
 
 
+def test_per_core_sharded_dealloc_realloc(device):
+    """Deallocate a per-core sharded tensor and reallocate — verifies deallocation frees per-core space.
+
+    1. Allocate a per-core sharded tensor across all cores
+    2. Record per-core addresses
+    3. Delete it
+    4. Allocate again — should get the same addresses (space was freed and reused)
+    """
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    cores = []
+    for y in range(grid.y):
+        for x in range(grid.x):
+            cores.append(ttnn.CoreCoord(x, y))
+
+    SHARD_BYTES = 2048
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    shard_spec = ttnn.ShardSpec(core_grid, [1, SHARD_BYTES], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+        per_core_allocation=True,
+    )
+    data = torch.zeros(num_cores, SHARD_BYTES, dtype=torch.uint8)
+
+    # First allocation
+    t1 = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
+    addrs1 = [t1.per_core_buffer_address(c) for c in cores]
+
+    # Deallocate
+    del t1
+
+    # Second allocation — should reuse the same per-core space
+    t2 = ttnn.from_torch(data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
+    addrs2 = [t2.per_core_buffer_address(c) for c in cores]
+
+    assert (
+        addrs1 == addrs2
+    ), f"Expected same addresses after dealloc/realloc:\n  first:  {[f'{a:#x}' for a in addrs1]}\n  second: {[f'{a:#x}' for a in addrs2]}"
+
+
 def test_per_core_tetris_allocation(device):
     """Tetris-style allocation across 4 cores with alloc/free/realloc patterns.
 
@@ -355,7 +397,7 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
         assert per_core_tensors[i].is_allocated()
 
 
-def test_triangle_allocation_then_sharded(device):
+def test_triangle_allocation_then_uniform_sharded(device):
     """Triangle per-core allocation on ALL compute cores, then a per-core sharded tensor.
 
     Phase 1: Create increasing-size per-core tensors (triangle pattern) on every

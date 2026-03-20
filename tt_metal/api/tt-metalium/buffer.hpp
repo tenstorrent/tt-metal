@@ -299,7 +299,6 @@ private:
     void deallocate();
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
-    friend class AllocatorImpl;
 
     DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
