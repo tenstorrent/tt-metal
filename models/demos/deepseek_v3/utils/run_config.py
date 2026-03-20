@@ -180,10 +180,6 @@ def _merge_run_config(
         logger.warning(f"Cached weight {weight_config_item.path} is not needed by the model config, ignoring it.")
         return None
 
-    # State-created tensors (e.g. from create_state) take precedence over cached weights
-    if isinstance(model_state_config_item, ttnn.Tensor):
-        return model_state_config_item
-
     raise ValueError(
         f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."
     )

@@ -56,29 +56,20 @@ def generate_reference_io(
     num_tokens: int,
     reference_model: ReferenceMoEGate,
     hf_config,
-    weight_type: str,
-    checkpoint_state_dict: dict[str, torch.Tensor] | None = None,
-    module_path: str | None = None,
+    checkpoint_state_dict: dict[str, torch.Tensor],
+    module_path: str,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
-    if weight_type == "random":
-        # Preserve random-init dtypes, especially the fp32 gate score-correction bias.
-        state_dict_out = _clone_state_dict(reference_model.state_dict())
-        torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
-    else:
-        assert weight_type == "real"
-        assert checkpoint_state_dict is not None
-        assert module_path is not None
-        moe_state_dict = {
-            name[5:]: tensor
-            for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
-            if name.startswith("gate.")
-        }
-        if not moe_state_dict:
-            pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
+    moe_state_dict = {
+        name[5:]: tensor
+        for name, tensor in sub_state_dict(checkpoint_state_dict, module_path + ".").items()
+        if name.startswith("gate.")
+    }
+    if not moe_state_dict:
+        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
 
-        state_dict_out = moe_state_dict
-        reference_model.load_state_dict(state_dict_out)
-        torch_input = load_real_moe_input(mode, module_path, num_tokens)
+    state_dict_out = moe_state_dict
+    reference_model.load_state_dict(state_dict_out)
+    torch_input = load_real_moe_input(mode, module_path, num_tokens)
 
     reference_model.eval()
     reference_model.to(torch.bfloat16)
@@ -105,7 +96,6 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         (True, True),
     ],
 )
-@pytest.mark.parametrize("weight_type", ["real"])
 def test_forward_pass(
     mode,
     batch_size_per_row,
@@ -117,21 +107,19 @@ def test_forward_pass(
     cache_path,
     mesh_device,
     set_deterministic_env,
-    weight_type,
     force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
-    module_path = "model.layers.3.mlp" if weight_type == "real" else None
+    module_path = "model.layers.3.mlp"
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort)
-    checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
+    checkpoint_state_dict = request.getfixturevalue("state_dict")
     num_tokens = batch_size_per_row * mesh_device.shape[0] if mode == "decode" else seq_len
     state_dict, torch_input, reference_topk_indices, reference_topk_weights = generate_reference_io(
         mode=mode,
         num_tokens=num_tokens,
         reference_model=reference_model,
         hf_config=hf_config,
-        weight_type=weight_type,
         checkpoint_state_dict=checkpoint_state_dict,
         module_path=module_path,
     )
@@ -144,7 +132,7 @@ def test_forward_pass(
         mesh_device,
         force_recalculate=force_recalculate_weight_config,
         test_name="test_moe_gate",
-        real_weights=weight_type == "real",
+        real_weights=True,
         layer_id=module_path,
     )
 
@@ -154,7 +142,7 @@ def test_forward_pass(
     )
 
     # Create a new model state
-    model_state = MoEGate.create_state(hf_config, mesh_device=mesh_device)
+    model_state = MoEGate.create_shared_state(mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -240,8 +228,10 @@ def test_forward_pass(
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    # assert total_diff <= 250, f"TopK experts indices output does not match: {total_diff}"
-    # here due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
+    assert (
+        total_diff <= 184 if mode == "decode" else total_diff <= 1000
+    ), f"TopK experts indices output does not match: {total_diff}"
+    # due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
 
 
 if __name__ == "__main__":

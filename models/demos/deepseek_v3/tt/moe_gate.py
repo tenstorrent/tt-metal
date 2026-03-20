@@ -110,17 +110,14 @@ class MoEGate(AbstractModule):
         }
 
     @classmethod
-    def create_state(
+    def create_shared_state(
         cls,
-        hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
     ) -> ModelState:
         """Create input_indices, output_indices and output_tensor for each MoE layer
 
         Args:
-            hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL instance for communication configuration
         Returns:
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
         """
