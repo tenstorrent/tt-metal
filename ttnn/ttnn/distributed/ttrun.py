@@ -78,6 +78,62 @@ def validate_network_interface(interface: str, verbose: bool = False) -> None:
         logger.info(f"{TT_RUN_PREFIX} Network interface '{interface}' found on local host")
 
 
+# Cached result for OpenMPI version detection (None = not yet checked)
+_openmpi_major_version: Optional[int] = None
+
+
+def _detect_openmpi_major_version() -> Optional[int]:
+    """Detect the major version of the installed OpenMPI by parsing mpirun --version.
+
+    Returns:
+        The major version number (e.g. 4 or 5), or None if detection fails.
+    """
+    global _openmpi_major_version
+    if _openmpi_major_version is not None:
+        return _openmpi_major_version
+
+    try:
+        result = subprocess.run(
+            ["mpirun", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # OpenMPI output looks like: "mpirun (Open MPI) 5.0.3" or similar
+        for line in result.stdout.splitlines():
+            if "Open MPI" in line:
+                # Extract version string after "Open MPI) "
+                # e.g. "mpirun (Open MPI) 5.0.3" -> "5.0.3"
+                parts = line.split(")")
+                if len(parts) >= 2:
+                    version_str = parts[-1].strip()
+                    major = int(version_str.split(".")[0])
+                    _openmpi_major_version = major
+                    return major
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        pass
+
+    return None
+
+
+def _get_abort_on_failure_mca_param() -> str:
+    """Return the MCA param name for 'abort all ranks on non-zero exit'.
+
+    OpenMPI 5.x replaced the ORTE runtime layer with PRRTE and renamed many
+    MCA parameters. ``orte_abort_on_non_zero_status`` still works as an alias
+    in 5.x, but the canonical name is ``prte_abort_on_non_zero_status``.
+
+    We detect the OpenMPI major version from ``mpirun --version`` and return
+    the correct parameter name. If detection fails, we default to the orte_
+    variant which is accepted (with a deprecation warning) on both 4.x and 5.x.
+    """
+    major = _detect_openmpi_major_version()
+    if major is not None and major >= 5:
+        return "prte_abort_on_non_zero_status"
+    # Safe default: works on 4.x natively and on 5.x via alias
+    return "orte_abort_on_non_zero_status"
+
+
 class RankBinding(BaseModel):
     """Binding between MPI rank to target MeshId and MeshHostRankId as defined in the mesh graph descriptor."""
 
@@ -1147,12 +1203,13 @@ def main(
         # These interfaces cannot route traffic between hosts and can cause MPI
         # process discovery issues if selected. For specific interface control,
         # use --tcp-interface.
+        abort_param = _get_abort_on_failure_mca_param()
         multihost_args = [
             # Abort all ranks immediately when any rank exits non-zero.
             # This is the primary safety net for jobs where ULFM is unavailable
             # or the failure doesn't surface through an MPI call.
             "--mca",
-            "orte_abort_on_non_zero_status",
+            abort_param,
             "1",
             "--mca",
             "btl",
@@ -1166,7 +1223,7 @@ def main(
             # If a specific interface is requested, use include instead of exclude
             multihost_args = [
                 "--mca",
-                "orte_abort_on_non_zero_status",
+                abort_param,
                 "1",
                 "--mca",
                 "btl",

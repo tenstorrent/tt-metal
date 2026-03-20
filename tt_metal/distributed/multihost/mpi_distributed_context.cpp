@@ -137,11 +137,20 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
     return result;
 }
 
-// Revoke the communicator (unblocking all surviving ranks from collectives),
-// print a clear diagnostic, then fast-exit via _exit() to avoid deadlock in
-// MPI_Finalize() on a revoked communicator.
-[[noreturn]] static void handle_rank_failure(
-    MPI_Comm comm, int cached_rank, int error_code, const char* operation) {
+// Handle a detected rank failure according to the active FailurePolicy.
+//
+// FAST_FAIL mode: revoke communicator, print diagnostic, call _exit(70).
+//   _exit() is used instead of exit()/throw to avoid MPI_Finalize() deadlock:
+//   once a communicator is revoked, MPI_Finalize() blocks indefinitely because
+//   it tries to synchronise with ranks that no longer exist.  _exit() bypasses
+//   all atexit handlers (including the one that calls MPI_Finalize).
+//
+// FAULT_TOLERANT mode: revoke communicator, print diagnostic, throw
+//   MPIRankFailureException.  Caller contract: the catcher MUST call
+//   revoke_and_shrink() before making any further MPI calls on this
+//   communicator — the old comm is revoked and unusable.
+static void handle_rank_failure(
+    MPI_Comm comm, int cached_rank, int error_code, const char* operation, FailurePolicy policy) {
     // Identify who died before revoking (failure_get_acked requires pre-revoke comm).
     std::string failed = "unknown";
     if (error_code != MPIX_ERR_REVOKED) {
@@ -154,20 +163,27 @@ static std::string identify_failed_ranks(MPI_Comm comm) {
         stderr,
         "\n"
         "================================================================\n"
-        "FATAL: MPI rank failure detected\n"
+        "%s: MPI rank failure detected\n"
         "  Detecting rank : %d\n"
         "  Failed rank(s) : %s\n"
         "  During         : %s\n"
         "  MPI error code : %d\n"
         "================================================================\n",
+        (policy == FailurePolicy::FAST_FAIL) ? "FATAL" : "WARNING",
         cached_rank,
         failed.c_str(),
         operation,
         error_code);
     fflush(stderr);
 
-    // Exit code 70 (EX_SOFTWARE) flags ULFM-initiated shutdown so ttrun.py
-    // can emit a targeted diagnostic.
+    if (policy == FailurePolicy::FAULT_TOLERANT) {
+        // Caller must catch MPIRankFailureException and call revoke_and_shrink()
+        // before making any further MPI calls on this communicator.
+        throw MPIRankFailureException(Rank{cached_rank}, error_code, failed);
+    }
+
+    // FAST_FAIL: exit code 70 (EX_SOFTWARE) flags ULFM-initiated shutdown so
+    // ttrun.py can emit a targeted diagnostic.
     _exit(70);
 }
 
@@ -188,16 +204,18 @@ inline void mpi_check(int error_code, const char* call_text) {
 }
 
 // Context-aware check: used in MPIContext member functions. Detects ULFM rank
-// failures and aborts with a diagnostic instead of throwing -- throwing would
-// leave other threads blocked on collectives.
-inline void mpi_check_ctx(int error_code, const char* call_text, MPI_Comm comm, int cached_rank) {
+// failures and dispatches to handle_rank_failure with the active policy.
+inline void mpi_check_ctx(
+    int error_code, const char* call_text, MPI_Comm comm, int cached_rank, FailurePolicy policy) {
     if (error_code == MPI_SUCCESS) {
         return;
     }
 #if OMPI_HAS_ULFM
     if (is_ulfm_failure(error_code)) {
-        handle_rank_failure(comm, cached_rank, error_code, call_text);
-        // [[noreturn]] -- never reaches here
+        handle_rank_failure(comm, cached_rank, error_code, call_text, policy);
+        // In FAST_FAIL mode this is [[noreturn]].
+        // In FAULT_TOLERANT mode handle_rank_failure throws, so we also never reach here.
+        return;  // unreachable, but silences compiler warnings
     }
 #endif
     throw MPIDistributedException(Rank{cached_rank}, error_code, std::string(call_text) + " failed");
@@ -213,7 +231,7 @@ bool was_mpi_finalized() noexcept {
 // MPI_CHECK     -- generic, for static methods and non-MPIContext contexts
 // MPI_CHECK_CTX -- ULFM-aware, for MPIContext member functions
 #define MPI_CHECK(call) mpi_check((call), #call)
-#define MPI_CHECK_CTX(call) mpi_check_ctx((call), #call, comm_, rank_)
+#define MPI_CHECK_CTX(call) mpi_check_ctx((call), #call, comm_, rank_, failure_policy_)
 
 MPIDistributedException::MPIDistributedException(Rank rank, int error_code, std::string msg) :
     rank_(rank), error_code_(error_code), message_(std::move(msg)) {
@@ -233,6 +251,23 @@ int MPIDistributedException::error_code() const noexcept { return error_code_; }
 const std::string& MPIDistributedException::message() const noexcept { return message_; }
 
 const std::string& MPIDistributedException::error_string() const noexcept { return error_string_; }
+
+/* ---------------------- MPIRankFailureException -------------------------- */
+
+MPIRankFailureException::MPIRankFailureException(Rank detecting_rank, int error_code, std::string failed_ranks_str) :
+    rank_(detecting_rank), error_code_(error_code), failed_ranks_(std::move(failed_ranks_str)) {
+    char buf[MPI_MAX_ERROR_STRING] = {0};
+    int len = 0;
+    MPI_Error_string(error_code_, buf, &len);
+    error_string_.assign(buf, len);
+    message_ = "MPI rank failure detected (failed ranks: " + failed_ranks_ + "): " + error_string_;
+}
+
+Rank MPIRankFailureException::rank() const noexcept { return rank_; }
+int MPIRankFailureException::error_code() const noexcept { return error_code_; }
+const std::string& MPIRankFailureException::message() const noexcept { return message_; }
+const std::string& MPIRankFailureException::error_string() const noexcept { return error_string_; }
+const std::string& MPIRankFailureException::failed_ranks() const noexcept { return failed_ranks_; }
 
 /* -------------------------- MPIRequest ---------------------------------- */
 
@@ -647,6 +682,15 @@ bool MPIContext::is_revoked() {
     // This is correct for both ULFM and non-ULFM builds: without ULFM, revocation
     // never happens so the flag is always false.
     return revoked_.load(std::memory_order_acquire);
+}
+
+void MPIContext::set_failure_policy(FailurePolicy policy) {
+#if (!OMPI_HAS_ULFM)
+    if (policy == FailurePolicy::FAULT_TOLERANT) {
+        TT_THROW("FAULT_TOLERANT failure policy requires ULFM support which is not available in this build");
+    }
+#endif
+    failure_policy_ = policy;
 }
 
 std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
