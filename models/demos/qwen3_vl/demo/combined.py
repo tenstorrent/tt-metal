@@ -22,7 +22,11 @@ from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "N300": (1, 2)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -60,8 +64,8 @@ from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 )
 @pytest.mark.parametrize(
     "use_tt_vision",
-    [False],
-    ids=["hf_vision"],
+    [True],
+    ids=["tt_vision"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_qwen_vl_end_to_end(

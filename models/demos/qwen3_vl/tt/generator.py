@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen3_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
+from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -56,36 +57,148 @@ class Generator(WarmupForwardMixin):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+        if not isinstance(prompt_lens, list):
+            prompt_lens = prompt_lens.tolist()
 
         if page_table is not None:
             assert isinstance(
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        for user_id in range(batch):
-            logger.info(f"Prefilling User {user_id + 1}")
-            seq_len = prompt_lens[user_id]
-            last_token_idx = seq_len - 1
+        prefill_seq_len = batch_seq_len
+        max_batch = getattr(self.model_args, "max_batched_prefill_size", 32)
+        use_batched_prefill = (
+            batch > 1
+            and prefill_seq_len * min(batch, max_batch) < MAX_BATCHED_PREFILL_SEQ_LEN
+            and self._ttt_generator.data_parallel == 1
+            and not getattr(self.model_args, "disable_batched_prefill", False)
+            and page_table is not None
+            and kv_cache is not None
+        )
 
-            if page_table is not None:
-                page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+        if use_batched_prefill:
+            chunk_size = min(batch, max_batch)
+            for chunk_start in range(0, batch, chunk_size):
+                chunk_end = min(chunk_start + chunk_size, batch)
+                chunk_tokens = tokens[chunk_start:chunk_end]
+                chunk_prompt_lens = prompt_lens[chunk_start:chunk_end]
+                chunk_page_table = page_table[chunk_start:chunk_end]
+                chunk_rot_mats = (
+                    (rot_mats[0][chunk_start:chunk_end], rot_mats[1][chunk_start:chunk_end])
+                    if rot_mats is not None
+                    else rot_mats
+                )
+                chunk_deepstack = (
+                    deepstack_visual_embeds[chunk_start:chunk_end] if deepstack_visual_embeds is not None else None
+                )
+                chunk_logits = self.__prefill_forward_batched_text(
+                    tokens=chunk_tokens,
+                    rot_mats=chunk_rot_mats,
+                    page_table=chunk_page_table,
+                    kv_cache=kv_cache,
+                    prompt_lens=chunk_prompt_lens,
+                    prefill_seq_len=prefill_seq_len,
+                    deepstack_visual_embeds=chunk_deepstack,
+                    slot_offset=chunk_start,
+                )
+                output_logits[chunk_start:chunk_end] = chunk_logits
+        else:
+            for user_id in range(batch):
+                logger.info(f"Prefilling User {user_id + 1}")
+                seq_len = prompt_lens[user_id]
+                last_token_idx = seq_len - 1
 
-            logits = self.__prefill_forward_single_user_text(
-                tokens[user_id : user_id + 1],
-                page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
-                last_token_idx=last_token_idx,
-                rot_mats=rot_mats,
-                kv_cache=kv_cache,
-                deepstack_visual_embeds=deepstack_visual_embeds[user_id]
-                if deepstack_visual_embeds is not None
-                else None,
-            )
+                if page_table is not None:
+                    page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
-            # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits
+                logits = self.__prefill_forward_single_user_text(
+                    tokens[user_id : user_id + 1],
+                    page_table=page_table_user if page_table is not None else None,
+                    user_id=user_id,
+                    last_token_idx=last_token_idx,
+                    rot_mats=rot_mats,
+                    kv_cache=kv_cache,
+                    deepstack_visual_embeds=deepstack_visual_embeds[user_id]
+                    if deepstack_visual_embeds is not None
+                    else None,
+                )
+
+                # Since we give unpadded_seq_len, only the tile containing the last token is returned
+                output_logits[user_id] = logits
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+
+        return output_logits
+
+    def __prefill_forward_batched_text(
+        self,
+        tokens: torch.Tensor,
+        rot_mats,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_len,
+        deepstack_visual_embeds=None,
+        slot_offset=0,
+    ):
+        batch_size = tokens.shape[0]
+        last_token_idx = [pl - 1 for pl in prompt_lens]
+        batch_user_ids = list(range(slot_offset, slot_offset + batch_size))
+
+        page_table_user = self._ttt_generator._get_prefill_user_page_table(
+            page_table,
+            kv_cache,
+            prefill_seq_len,
+            trace_enabled=False,
+            prefill_seq_len=prefill_seq_len,
+            use_batched_prefill=True,
+            user_id=batch_user_ids,
+        )
+
+        deepstack_batched = None
+        if deepstack_visual_embeds is not None:
+            num_layers = len(deepstack_visual_embeds[0])
+            deepstack_batched = []
+            for layer_idx in range(num_layers):
+                layer_tensors = [deepstack_visual_embeds[user_idx][layer_idx] for user_idx in range(batch_size)]
+                deepstack_batched.append(torch.stack(layer_tensors))
+
+        prefill_input, rot_mats_prefill, page_table_tt, _, deepstack_prefill = self.model.prepare_inputs_prefill(
+            tokens,
+            rot_mats=rot_mats,
+            page_table=page_table_user,
+            deepstack_visual_embeds=deepstack_batched,
+            batch_size=batch_size,
+        )
+
+        tt_logits = self.model.ttnn_prefill_forward(
+            prefill_input,
+            rot_mats_global=rot_mats_prefill,
+            user_id=batch_user_ids,
+            page_table=page_table_tt,
+            get_last_token=-1,
+            kv_cache=kv_cache,
+            deepstack_visual_embeds=deepstack_prefill,
+            batch_size=batch_size,
+        )
+
+        hidden_dim = tt_logits.shape[-1]
+        logits = ttnn.reshape(tt_logits, [batch_size, 1, prefill_seq_len, hidden_dim])
+
+        user_hidden = self.model.extract_last_tokens_batched_prefill(
+            logits, last_token_idx, batch_size, prefill_seq_len
+        )
+        batched_logits = self.model._apply_norm_and_lm_head(user_hidden)
+
+        output_logits = torch.zeros(batch_size, 1, self.model_args.vocab_size)
+        batched_logits_cpu = ttnn.to_torch(
+            batched_logits, mesh_composer=ttnn.ConcatMeshToTensor(self._ttt_generator.mesh_device, dim=-1)
+        )
+        output_logits[:, 0, :] = batched_logits_cpu[0, 0, :batch_size, : self.model_args.vocab_size]
+
+        ttnn.deallocate(tt_logits)
+        ttnn.deallocate(prefill_input)
+        ttnn.deallocate(page_table_tt)
 
         return output_logits
 
