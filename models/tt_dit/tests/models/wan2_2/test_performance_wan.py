@@ -108,6 +108,16 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     return pipeline_cls, image_prompt, expected_metrics
 
 
+def create_fabric_router_config():
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = 8192
+    return config
+
+
+device_params_8k = ring_params
+device_params_8k.update({"fabric_router_config": create_fabric_router_config()})
+
+
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
@@ -120,7 +130,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, device_params_8k, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
