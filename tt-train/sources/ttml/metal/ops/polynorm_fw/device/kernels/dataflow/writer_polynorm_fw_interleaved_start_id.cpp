@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// Writer kernel: drains output CB row-by-row to DRAM.
 void kernel_main() {
     uint32_t arg_idx = 0U;
     const uint32_t output_address = get_arg_val<uint32_t>(arg_idx++);
@@ -12,7 +13,6 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr auto cb_output = tt::CBIndex::c_14;
-    constexpr auto cb_debug = tt::CBIndex::c_18;
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
@@ -25,6 +25,7 @@ void kernel_main() {
     }
 
 #ifdef POLYNORM_DEBUG
+    constexpr auto cb_debug = tt::CBIndex::c_18;
     if (num_rows_to_process > 0U && start_row == 0U) {
         cb_wait_front(cb_debug, 6U);
         DPRINT << "POLYNORM_DEBUG: sum_x2" << ENDL();
