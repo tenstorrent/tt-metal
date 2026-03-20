@@ -169,6 +169,20 @@ def run_reduce_scatter_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
             )
+
+            # tt_reduce_scatter_output_tensor = ttnn.experimental.llama_reduce_scatter(
+            #    tt_input_tensor_mesh_list[i],
+            #    persistent_intermediate_buffers[i],
+            #    dim,
+            #    ccl_semaphore_handles[i][0],
+            #    worker_sub_device_id,
+            #    cluster_axis=cluster_axis,
+            #    mesh_device=mesh_device,
+            #    num_links=num_links,
+            #    memory_config=mem_config_rs,
+            #    topology=rs_topology,
+            #    use_noc1_only=False,
+            # )
         else:
             logger.info(f"Using experimental reduce scatter")
             tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
@@ -1427,3 +1441,87 @@ def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
     assert torch.allclose(
         torch_reference, torch_output, atol=1e-1, rtol=1e-2
     ), "Output mismatch between torch and ttnn reduce-scatter"
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters",
+    [
+        # Scatter on various dims
+        # ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # my tests
+        # ([1, 1, 32, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # ([2, 8, 512, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        # llama
+        (
+            [1, 1, 32, 256],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+        ),  # orig shape [1, 1, 32, 128] triggers composite RS
+        ([1, 1, 32, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        ([1, 1, 32, 2048], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        ([1, 1, 32, 3584], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),
+        ([2, 8, 512, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),  # custom giant shape
+    ],
+    ids=[f"config{i}" for i in range(5)],
+)
+@pytest.mark.parametrize("mem_config_input, mem_config_rs", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
+@pytest.mark.parametrize(
+    "ones_tensor",
+    [
+        False,
+    ],
+    ids=["random"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear", "fabric_ring"],
+)
+def test_rs_perf(
+    mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    use_new,
+    enable_trace,
+    num_iters,
+    mem_config_input,
+    mem_config_rs,
+    ones_tensor,
+    rs_topology,
+):
+    run_reduce_scatter_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        ones_tensor=ones_tensor,
+        use_barrier=True,
+        use_persistent_buffers=False,  # True for llama_rs
+        use_new=use_new,
+        cluster_axis=1,
+    )

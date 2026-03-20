@@ -571,3 +571,53 @@ def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
         for tt_torch_output_slice in tt_torch_output_slices:
             eq, output = comp_equal(tt_torch_output_slice, torch_reference)
             assert eq, f"Tensor{i} FAILED: {output}"
+
+
+@pytest.mark.parametrize(
+    "num_links, output_shape, layout, input_dtype, mem_config",
+    [
+        (1, [1, 1, 32, 256], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (1, [1, 1, 32, 2048], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (1, [1, 1, 32, 3584], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+        (1, [2, 8, 512, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+)
+@pytest.mark.parametrize("num_iters, trace_mode", [(10, True)])
+@pytest.mark.parametrize(
+    "device_params, ab_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear", "fabric_ring"],
+)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+def test_ab_perf(
+    mesh_device,
+    # pcie_mesh_device,
+    num_links,
+    output_shape,
+    layout,
+    input_dtype,
+    mem_config,
+    ab_topology,
+    num_iters,
+    trace_mode,
+    function_level_defaults,
+):
+    run_all_broadcast_impl(
+        mesh_device,
+        mesh_device.get_num_devices(),
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        all_broadcast_topology=ab_topology,
+        num_iters=num_iters,
+        trace_mode=trace_mode,
+        rand_tensor=True,
+        mem_config=mem_config,
+    )
