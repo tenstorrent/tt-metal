@@ -31,6 +31,7 @@ class ModelPipeline:
         lm_head_persistent_mode: bool = True,
         dense_layer_id_override: int | None = None,
         moe_layer_id_override: int | None = None,
+        io_socket_descriptor_prefix: str | None = None,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={})",
@@ -76,6 +77,13 @@ class ModelPipeline:
                 read_fn=self.pipeline.read_output,
                 batch_size=1,
             )
+            if io_socket_descriptor_prefix is not None:
+                pipeline_block = self.pipeline._pipeline_block
+                if pipeline_block is None:
+                    raise RuntimeError(
+                        "Pipeline.setup_and_run() must complete before exporting host socket descriptors"
+                    )
+                pipeline_block.export_host_socket_descriptors(io_socket_descriptor_prefix)
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
     def prefill_forward(self, tokens: list[int]) -> int:

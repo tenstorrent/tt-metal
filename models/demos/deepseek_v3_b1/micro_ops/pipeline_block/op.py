@@ -341,6 +341,14 @@ class PipelineBlock:
         ), "read_output requires a D2H socket: valid on stage 0 with loopback, or last stage without loopback"
         self.d2h_socket.read_tensor(output_tensor)
 
+    def export_host_socket_descriptors(self, io_socket_descriptor_prefix: str) -> None:
+        assert self.is_first_pipeline_stage(), "Host socket descriptors can only be exported from the first stage"
+        assert self.h2d_socket is not None, "Expected H2D socket on the first pipeline stage"
+        assert self.d2h_socket is not None, "Expected D2H socket on the first pipeline stage"
+
+        self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}_h2d")
+        self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}_d2h")
+
     def get_upstream_socket(self):
         if hasattr(self, "exit_socket_interface"):
             return self.exit_socket_interface.get_upstream_socket()
