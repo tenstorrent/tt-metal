@@ -375,7 +375,8 @@ std::map<ChipId, IDevice*> CreateDevices(
     const size_t worker_l1_size,
     bool init_profiler,
     [[maybe_unused]] bool ignored,
-    bool initialize_fabric_and_dispatch_fw) {
+    bool initialize_fabric_and_dispatch_fw,
+    AllocatorMode allocator_mode) {
     ZoneScoped;
     bool is_galaxy = MetalContext::instance().get_cluster().is_galaxy_cluster();
     MetalContext::instance().initialize_device_manager(
@@ -387,7 +388,8 @@ std::map<ChipId, IDevice*> CreateDevices(
         {},
         worker_l1_size,
         init_profiler,
-        initialize_fabric_and_dispatch_fw);
+        initialize_fabric_and_dispatch_fw,
+        allocator_mode);
 
     const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
     std::map<ChipId, IDevice*> ret_devices;
@@ -419,7 +421,8 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& /*l1_bank_remap*/,
     size_t worker_l1_size,
     bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw) {
+    bool initialize_fabric_and_dispatch_fw,
+    AllocatorMode allocator_mode) {
     ZoneScoped;
     auto& ctx = MetalContext::instance(context_id);
     bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
@@ -432,7 +435,8 @@ std::map<ChipId, IDevice*> CreateDevices(
         {},
         worker_l1_size,
         init_profiler,
-        initialize_fabric_and_dispatch_fw);
+        initialize_fabric_and_dispatch_fw,
+        allocator_mode);
 
     const auto devices = ctx.device_manager()->get_all_active_devices();
     std::map<ChipId, IDevice*> ret_devices;

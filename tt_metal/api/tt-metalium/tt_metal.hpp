@@ -46,7 +46,8 @@ std::map<ChipId, IDevice*> CreateDevices(
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
     bool init_profiler = true,
     [[deprecated]] bool ignored = false,  // This argument was not used
-    bool initialize_fabric_and_dispatch_fw = true);
+    bool initialize_fabric_and_dispatch_fw = true,
+    AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
 /**
  * Close all devices in the given map.

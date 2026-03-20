@@ -17,6 +17,7 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
+#include <tt-metalium/allocator_mode.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -151,7 +152,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) = 0;
+        bool minimal = false,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP) = 0;
     // Puts device into reset
     virtual bool close() = 0;
 

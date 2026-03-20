@@ -141,10 +141,12 @@ void MetalContext::initialize_device_manager(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw) {
+    bool initialize_fabric_and_dispatch_fw,
+    AllocatorMode allocator_mode) {
     initialize(dispatch_core_config, num_hw_cqs, {l1_bank_remap.begin(), l1_bank_remap.end()}, worker_l1_size);
     init_context_descriptor(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size);
-    device_manager_->initialize(device_ids, init_profiler, initialize_fabric_and_dispatch_fw, context_descriptor_);
+    device_manager_->initialize(
+        device_ids, init_profiler, initialize_fabric_and_dispatch_fw, context_descriptor_, allocator_mode);
 }
 
 void MetalContext::initialize(

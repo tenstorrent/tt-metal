@@ -44,7 +44,8 @@ public:
         bool minimal = false,
         uint32_t worker_thread_core = 0,
         uint32_t completion_queue_reader_core = 0,
-        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        std::size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
     ~Device() override;
 
@@ -135,7 +136,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+        bool minimal = false,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP) override;
     void init_command_queue_host();
     void init_command_queue_device();
 
@@ -200,7 +202,8 @@ private:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
     void configure_command_queue_programs(DispatchTopology* topology);
 

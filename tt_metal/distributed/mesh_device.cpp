@@ -81,7 +81,8 @@ std::map<ChipId, IDevice*> CreateDevices(
     const std::vector<uint32_t>& l1_bank_remap,
     size_t worker_l1_size,
     bool init_profiler,
-    bool initialize_fabric_and_dispatch_fw);
+    bool initialize_fabric_and_dispatch_fw,
+    AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 }  // namespace experimental
 
 }  // namespace tt::tt_metal
@@ -158,7 +159,8 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     size_t worker_l1_size,
     const DispatchCoreConfig& dispatch_core_config,
-    ContextId context_id) :
+    ContextId context_id,
+    AllocatorMode allocator_mode) :
     context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
     opened_local_devices_ = tt_metal::experimental::CreateDevices(
@@ -171,7 +173,8 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
         {},
         worker_l1_size,
         /* init_profiler */ false,
-        /* initialize_fabric_and_dispatch_fw */ false);
+        /* initialize_fabric_and_dispatch_fw */ false,
+        allocator_mode);
 
     for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
@@ -282,7 +285,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return MeshDeviceImpl::create(
         config,
         l1_small_size,
@@ -290,7 +294,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         num_command_queues,
         dispatch_core_config,
         l1_bank_remap,
-        worker_l1_size);
+        worker_l1_size,
+        allocator_mode);
 }
 
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
@@ -300,7 +305,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return create(
         DEFAULT_CONTEXT_ID,
         config,
@@ -309,7 +315,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         num_command_queues,
         dispatch_core_config,
         l1_bank_remap,
-        worker_l1_size);
+        worker_l1_size,
+        allocator_mode);
 }
 
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
@@ -320,7 +327,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     auto& ctx = MetalContext::instance(context_id);
     const auto& mesh_graph = ctx.get_control_plane().get_mesh_graph();
     auto [scoped_devices, fabric_node_ids, mesh_shape] =
@@ -349,7 +357,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                     num_command_queues,
                     worker_l1_size,
                     dispatch_core_config,
-                    context_id),
+                    context_id,
+                    allocator_mode),
                 mapped_devices.fabric_node_ids,
                 mapped_devices.mesh_shape);
         }  // Initialize fabric node ids manually.
@@ -380,7 +389,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
                 num_command_queues,
                 worker_l1_size,
                 dispatch_core_config,
-                context_id),
+                context_id,
+                allocator_mode),
             fabric_node_ids,
             config.mesh_shape().value());
     }();
@@ -394,7 +404,14 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
         std::shared_ptr<MeshDevice>(),
         context_id);
 
-    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
+    mesh_device->initialize(
+        num_command_queues,
+        l1_small_size,
+        trace_region_size,
+        worker_l1_size,
+        l1_bank_remap,
+        /*minimal=*/false,
+        allocator_mode);
 
     // TODO #20966: Remove these calls
     for (auto* device : extract_locals(root_devices)) {
@@ -419,7 +436,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return MeshDeviceImpl::create_unit_meshes(
         device_ids,
         l1_small_size,
@@ -427,7 +445,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
         num_command_queues,
         dispatch_core_config,
         l1_bank_remap,
-        worker_l1_size);
+        worker_l1_size,
+        allocator_mode);
 }
 
 std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
@@ -437,7 +456,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return create_unit_meshes(
         DEFAULT_CONTEXT_ID,
         device_ids,
@@ -446,7 +466,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         num_command_queues,
         dispatch_core_config,
         l1_bank_remap,
-        worker_l1_size);
+        worker_l1_size,
+        allocator_mode);
 }
 
 std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
@@ -457,7 +478,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     TT_FATAL(
         !device_ids.empty(), "Cannot create unit meshes with empty device_ids. At least one device ID is required.");
 
@@ -487,7 +509,8 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
         num_command_queues,
         worker_l1_size,
         dispatch_core_config,
-        context_id);
+        context_id,
+        allocator_mode);
 
     const auto root_devices = scoped_devices->root_devices();
 
@@ -523,7 +546,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return MeshDeviceImpl::create_unit_mesh(
         device_id,
         l1_small_size,
@@ -531,7 +555,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
         num_command_queues,
         dispatch_core_config,
         l1_bank_remap,
-        worker_l1_size);
+        worker_l1_size,
+        allocator_mode);
 }
 
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
@@ -541,7 +566,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return create_unit_mesh(
         DEFAULT_CONTEXT_ID,
         device_id,
@@ -550,7 +576,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
         num_command_queues,
         dispatch_core_config,
         l1_bank_remap,
-        worker_l1_size);
+        worker_l1_size,
+        allocator_mode);
 }
 
 std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
@@ -561,7 +588,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    AllocatorMode allocator_mode) {
     return create_unit_meshes(
                context_id,
                {device_id},
@@ -570,7 +598,8 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_unit_mesh(
                num_command_queues,
                dispatch_core_config,
                l1_bank_remap,
-               worker_l1_size)
+               worker_l1_size,
+               allocator_mode)
         .at(device_id);
 }
 
@@ -1247,7 +1276,8 @@ bool MeshDeviceImpl::initialize(
     size_t /*trace_region_size*/,
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
-    bool /*minimal*/) {
+    bool /*minimal*/,
+    AllocatorMode /*allocator_mode*/) {
     TT_THROW("initialize() is not supported on MeshDeviceImpl - use initialize_impl() instead");
     return false;
 }
@@ -1260,7 +1290,8 @@ bool MeshDeviceImpl::initialize_impl(
     size_t /*trace_region_size*/,
     size_t /*worker_l1_size*/,
     tt::stl::Span<const std::uint32_t> /*l1_bank_remap*/,
-    bool /*minimal*/) {
+    bool /*minimal*/,
+    AllocatorMode /*allocator_mode*/) {
     TT_FATAL(!this->is_initialized(), "MeshDevice is already initialized!");
 
     // If the mesh device has no local devices, do not attempt to initialize it.
@@ -1560,9 +1591,10 @@ bool MeshDevice::initialize(
     size_t trace_region_size,
     size_t worker_l1_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    bool minimal) {
+    bool minimal,
+    AllocatorMode allocator_mode) {
     return pimpl_->initialize_impl(
-        this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
+        this, num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal, allocator_mode);
 }
 bool MeshDevice::close() { return pimpl_->close_impl(this); }
 void MeshDevice::enable_program_cache() { pimpl_->enable_program_cache(); }

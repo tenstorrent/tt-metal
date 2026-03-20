@@ -17,6 +17,7 @@ DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
 Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
+AllocatorMode = ttnn._ttnn.device.AllocatorMode
 get_max_worker_l1_unreserved_size = ttnn._ttnn.device.get_max_worker_l1_unreserved_size
 get_optimal_dram_bank_to_logical_worker_assignment = (
     ttnn._ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment
@@ -160,6 +161,7 @@ def CreateDevice(
     dispatch_core_config: DispatchCoreConfig = None,
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    allocator_mode: AllocatorMode = AllocatorMode.LOCKSTEP,
 ):
     return ttnn._ttnn.device.CreateDevice(
         device_id,
@@ -168,6 +170,7 @@ def CreateDevice(
         trace_region_size,
         dispatch_core_config or DispatchCoreConfig(),
         worker_l1_size=worker_l1_size,
+        allocator_mode=allocator_mode,
     )
 
 
@@ -179,6 +182,7 @@ def CreateDevices(
     dispatch_core_config: DispatchCoreConfig = None,
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+    allocator_mode: AllocatorMode = AllocatorMode.LOCKSTEP,
 ):
     return ttnn._ttnn.device.CreateDevices(
         device_ids,
@@ -187,6 +191,7 @@ def CreateDevices(
         trace_region_size,
         dispatch_core_config or DispatchCoreConfig(),
         worker_l1_size=worker_l1_size,
+        allocator_mode=allocator_mode,
     )
 
 

@@ -1323,6 +1323,24 @@ void pytensor_module(nb::module_& mod) {
 
         )doc")
         .def(
+            "per_core_buffer_address",
+            [](const Tensor& self, const CoreCoord& core) -> uint32_t {
+                TT_FATAL(is_device_tensor(self), "{} doesn't support per_core_buffer_address", self.storage_type());
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return self.mesh_buffer().per_core_address(core);
+            },
+            nb::arg("core"),
+            R"doc(
+            Get the per-core L1 address for a specific core.
+
+            Only available for tensors allocated with per_core_allocation=True.
+
+            .. code-block:: python
+
+                address = tt_tensor.per_core_buffer_address(ttnn.CoreCoord(0, 0))
+
+        )doc")
+        .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
             Get memory layout of TT Tensor.
 

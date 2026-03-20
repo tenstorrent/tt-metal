@@ -116,7 +116,8 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
         bool init_profiler = true,
-        bool initialize_fabric_and_dispatch_fw = true);
+        bool initialize_fabric_and_dispatch_fw = true,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,

@@ -1,5 +1,6 @@
 set(TT_METAL_PUBLIC_API
     api/tt-metalium/allocator.hpp
+    api/tt-metalium/allocator_mode.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp
