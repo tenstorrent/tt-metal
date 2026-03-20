@@ -356,7 +356,8 @@ jobs:
             generated/artifacts/dual_demo_full_results.json
           if-no-files-found: warn
 
-      # Temporary skip: dual MTP smoke currently times out in CI and keeps the multihost workflow red.
+      # Temporary skip while https://github.com/tenstorrent/tt-metal/pull/40317
+      # attempts a proper fix; dual MTP smoke currently times out in CI.
       - name: Run dual MTP demo parity smoke test
         if: ${{ false && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
