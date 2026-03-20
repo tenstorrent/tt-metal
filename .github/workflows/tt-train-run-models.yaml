@@ -103,12 +103,6 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U07ASPTGJTS # Denys
-
       - name: Upload metrics data to AWS SFTP bucket
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
