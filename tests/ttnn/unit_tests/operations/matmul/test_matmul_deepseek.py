@@ -1146,7 +1146,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.95,
+            "expected_pcc": 0.999,
         },
         {
             "in0_shape": [1, 1, 1024, 256],
@@ -1154,7 +1154,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.95,
+            "expected_pcc": 0.999,
         },
         {
             "in0_shape": [1, 1, 3200, 512],
@@ -1162,7 +1162,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
             "in0_dtype": ttnn.bfloat8_b,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.95,
+            "expected_pcc": 0.999,
         },
         {
             "in0_shape": [1, 1, 6400, 512],  # Large M: Mt=200 > num_cores, forces per_core_M > 1
@@ -1170,7 +1170,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
             "in0_dtype": ttnn.bfloat16,
             "in1_dtype": ttnn.bfloat8_b,
             "out_dtype": ttnn.bfloat8_b,
-            "expected_pcc": 0.95,
+            "expected_pcc": 0.999,
         },
     ],
     ids=[
@@ -1219,7 +1219,7 @@ def test_kv_wm_matmul(device, test_case):
 
     in0_block_w = min(8, Kt)
 
-    out_block_h = 2
+    out_block_h = per_core_M  # Must match per_core_M for validation
     out_block_w = 4
 
     out_subblock_h = min(2, out_block_h)

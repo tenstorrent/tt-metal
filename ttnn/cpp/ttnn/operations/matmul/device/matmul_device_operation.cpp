@@ -190,9 +190,14 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             b_shape.rank());
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i] || a_shape[1] == 1,
+                a_shape[i] == b_shape[i] ||
+                    (i == 1 && a_shape[1] == 1 && !input_tensor_a.is_sharded() && !input_tensor_b.is_sharded()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or equivalent");
+                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (broadcasting only allowed on dim 1 when "
+                "a[1]=1)",
+                i,
+                a_shape[i],
+                b_shape[i]);
         }
     }
 
