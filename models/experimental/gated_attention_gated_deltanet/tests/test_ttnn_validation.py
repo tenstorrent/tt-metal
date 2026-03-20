@@ -471,8 +471,6 @@ def test_gated_deltanet_chunked_ttnn(seq_len=128, chunk_size=64):
                 ttnn_params[key] = val
 
         ttnn_params["device"] = device
-        # Align TTNN mode with torch: recurrent for T<64, chunk for T>=64.
-        # At T=64, use chunk to avoid 64 sequential device steps in recurrent.
         ttnn_params["mode"] = "recurrent" if seq_len < 64 else "chunk"
         ttnn_params["chunk_size"] = chunk_size
         ttnn_out, _ = gated_deltanet_forward_ttnn(**ttnn_params)

@@ -218,7 +218,6 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
     if out_subblock_h < 1 or out_subblock_w < 1:
         return None
 
-    # TTNN requires per_core_M % out_subblock_h == 0 and per_core_N % out_subblock_w == 0
     if per_core_M % out_subblock_h != 0 or per_core_N % out_subblock_w != 0:
         return None
 
@@ -272,13 +271,9 @@ def _recurrent_outer_product_program_config(device, K, V):
     if per_core_M < 1:
         per_core_M = 1
 
-    # out_subblock must divide per_core; profiler suggests out_subblock_h * out_subblock_w >= 2
-    # Optimize: Try to maximize subblock size for better performance
-    # Ensure product >= 2 as suggested by profiler
     out_subblock_h = min(2, per_core_M) if per_core_M >= 2 else 1
     out_subblock_w = min(2, per_core_N) if per_core_N >= 2 else 1
 
-    # If product is 1, try to increase one dimension if possible
     if out_subblock_h * out_subblock_w == 1:
         if per_core_M >= 2:
             out_subblock_h = 2
@@ -311,13 +306,12 @@ def _recurrent_read_query_program_config(device, K, V):
     per_core_M = 1
     in0_block_w = K_tiles
     out_subblock_h = 1
-    # Optimize: Ensure output subblock product >= 2 when possible (profiler suggestion)
+    # Optimize: Ensure output subblock product >= 2 when possible
     out_subblock_w = min(2, per_core_N) if per_core_N >= 2 else 1
 
     # If we can't get product >= 2, at least ensure we're using the maximum possible
     # This helps with performance even if we can't meet the >= 2 requirement
     if out_subblock_w == 1 and per_core_N > 1:
-        # Try to use a larger subblock if it divides per_core_N
         for w in range(min(4, per_core_N), 1, -1):
             if per_core_N % w == 0:
                 out_subblock_w = w
@@ -366,9 +360,6 @@ def fused_decay_and_write_ttnn(
     K = h.shape[2]
     V = h.shape[3]
 
-    # decay: [B, H] -> [B, H, 1, 1]
-    # decay_t is already exp(g_t); keep recurrent path in BF16.
-    # Optimize: combine typecast and reshape into single operation
     decay = ttnn.reshape(
         ttnn.typecast(decay_t, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG),
         [B, H, 1, 1],
@@ -378,7 +369,6 @@ def fused_decay_and_write_ttnn(
     # beta: [B, H] -> [B, H, 1, 1]
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # k_t: [B, H, K] -> [B, H, K, 1] - ensure TILE_LAYOUT and L1 in one go
     k_col = ttnn.to_layout(
         ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG),
         ttnn.TILE_LAYOUT,
@@ -669,6 +659,7 @@ def chunk_gated_delta_rule_ttnn(
     initial_state=None,
     device=None,
     mem_cfg_large_t=None,
+    batch_l1_threshold=16,
 ):
     """
     Chunked gated delta rule using TTNN ops. Used for prefill.
@@ -691,6 +682,8 @@ def chunk_gated_delta_rule_ttnn(
         scale: float
         initial_state: [B, H, K, V]
         device: ttnn device
+        mem_cfg_large_t: optional memory config for large-T activations (from layer forward).
+        batch_l1_threshold: use L1 for batched matmul path when BH*num_chunks <= this value.
 
     Returns:
         output: [B, T, H, V]
@@ -703,7 +696,6 @@ def chunk_gated_delta_rule_ttnn(
     V = v.shape[3]
     BH = B * H
 
-    # Use DRAM when inputs are large (T>128) to avoid L1 OOM
     mem_cfg_in = mem_cfg_large_t if mem_cfg_large_t is not None else ttnn.L1_MEMORY_CONFIG
 
     q = l2_norm_ttnn(q, dim=-1, memory_config=mem_cfg_in)
@@ -729,9 +721,7 @@ def chunk_gated_delta_rule_ttnn(
     num_chunks = L // chunk_size
     batch = BH * num_chunks
 
-    # Use DRAM and skip program config for batched matmuls when batch is large to avoid L1 OOM
-    BATCH_L1_THRESHOLD = 16
-    use_l1_for_batch = batch <= BATCH_L1_THRESHOLD
+    use_l1_for_batch = batch <= batch_l1_threshold
     mem_cfg_batch = ttnn.DRAM_MEMORY_CONFIG if not use_l1_for_batch else ttnn.L1_MEMORY_CONFIG
 
     # Flatten to [BH, T, D]
@@ -905,7 +895,6 @@ def chunk_gated_delta_rule_ttnn(
     else:
         k_cumdecay = ttnn.matmul(attn, k_beta_decay, memory_config=mem_cfg_batch)
 
-    # 4D tensors scale with num_chunks - use DRAM when batch is large
     q_c_4d = ttnn.reshape(q_c, [BH, num_chunks, chunk_size, K], memory_config=mem_cfg_batch)
     q_c_4d = ttnn.to_layout(q_c_4d, ttnn.TILE_LAYOUT, memory_config=mem_cfg_batch)
     k_c_4d = ttnn.reshape(k_c, [BH, num_chunks, chunk_size, K], memory_config=mem_cfg_batch)
@@ -936,9 +925,6 @@ def chunk_gated_delta_rule_ttnn(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    # Use DRAM for per-chunk loop when batch is large to avoid L1 OOM and circular buffer clash
-    mem_cfg_loop = mem_cfg_batch if not use_l1_for_batch else ttnn.L1_MEMORY_CONFIG
-
     prog_config_qk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
     prog_config_vprime = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
     prog_config_o_inter = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
@@ -954,68 +940,67 @@ def chunk_gated_delta_rule_ttnn(
         L_mask_i = L_mask_4d[:, i]
         decay_i = decay_3d[:, i]
 
-        k_i_t = ttnn.transpose(k_i, 1, 2, memory_config=mem_cfg_loop)
+        k_i_t = ttnn.transpose(k_i, 1, 2, memory_config=mem_cfg_batch)
         if prog_config_qk:
-            qk = ttnn.matmul(q_i, k_i_t, program_config=prog_config_qk, memory_config=mem_cfg_loop)
+            qk = ttnn.matmul(q_i, k_i_t, program_config=prog_config_qk, memory_config=mem_cfg_batch)
         else:
-            qk = ttnn.matmul(q_i, k_i_t, memory_config=mem_cfg_loop)
-        combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=mem_cfg_loop)
-        intra_attn = ttnn.multiply(qk, combined_mask, memory_config=mem_cfg_loop)
+            qk = ttnn.matmul(q_i, k_i_t, memory_config=mem_cfg_batch)
+        combined_mask = ttnn.multiply(L_mask_i, lower_causal, memory_config=mem_cfg_batch)
+        intra_attn = ttnn.multiply(qk, combined_mask, memory_config=mem_cfg_batch)
 
         if prog_config_vprime:
-            v_prime = ttnn.matmul(k_cum_i, S, program_config=prog_config_vprime, memory_config=mem_cfg_loop)
+            v_prime = ttnn.matmul(k_cum_i, S, program_config=prog_config_vprime, memory_config=mem_cfg_batch)
         else:
-            v_prime = ttnn.matmul(k_cum_i, S, memory_config=mem_cfg_loop)
-        v_new = ttnn.subtract(v_i, v_prime, memory_config=mem_cfg_loop)
+            v_prime = ttnn.matmul(k_cum_i, S, memory_config=mem_cfg_batch)
+        v_new = ttnn.subtract(v_i, v_prime, memory_config=mem_cfg_batch)
 
         decay_i_exp = ttnn.reshape(
-            ttnn.exp(decay_i, memory_config=mem_cfg_loop),
+            ttnn.exp(decay_i, memory_config=mem_cfg_batch),
             [BH, chunk_size, 1],
-            memory_config=mem_cfg_loop,
+            memory_config=mem_cfg_batch,
         )
-        q_decay = ttnn.multiply(q_i, decay_i_exp, memory_config=mem_cfg_loop)
+        q_decay = ttnn.multiply(q_i, decay_i_exp, memory_config=mem_cfg_batch)
         if prog_config_o_inter:
-            o_inter = ttnn.matmul(q_decay, S, program_config=prog_config_o_inter, memory_config=mem_cfg_loop)
+            o_inter = ttnn.matmul(q_decay, S, program_config=prog_config_o_inter, memory_config=mem_cfg_batch)
         else:
-            o_inter = ttnn.matmul(q_decay, S, memory_config=mem_cfg_loop)
+            o_inter = ttnn.matmul(q_decay, S, memory_config=mem_cfg_batch)
 
         if prog_config_intra:
-            intra_v = ttnn.matmul(intra_attn, v_new, program_config=prog_config_intra, memory_config=mem_cfg_loop)
+            intra_v = ttnn.matmul(intra_attn, v_new, program_config=prog_config_intra, memory_config=mem_cfg_batch)
         else:
-            intra_v = ttnn.matmul(intra_attn, v_new, memory_config=mem_cfg_loop)
+            intra_v = ttnn.matmul(intra_attn, v_new, memory_config=mem_cfg_batch)
 
-        o_i = ttnn.add(o_inter, intra_v, memory_config=mem_cfg_loop)
-        outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=mem_cfg_loop))
+        o_i = ttnn.add(o_inter, intra_v, memory_config=mem_cfg_batch)
+        outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=mem_cfg_batch))
 
         dl_i = decay_last[:, i]
-        dl_i_exp = ttnn.exp(dl_i, memory_config=mem_cfg_loop)
+        dl_i_exp = ttnn.exp(dl_i, memory_config=mem_cfg_batch)
         S = ttnn.multiply(
             S,
-            ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=mem_cfg_loop),
-            memory_config=mem_cfg_loop,
+            ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=mem_cfg_batch),
+            memory_config=mem_cfg_batch,
         )
 
         decay_diff = ttnn.subtract(
-            ttnn.reshape(dl_i, [BH, 1], memory_config=mem_cfg_loop),
+            ttnn.reshape(dl_i, [BH, 1], memory_config=mem_cfg_batch),
             decay_i,
-            memory_config=mem_cfg_loop,
+            memory_config=mem_cfg_batch,
         )
-        decay_diff_exp = ttnn.exp(decay_diff, memory_config=mem_cfg_loop)
+        decay_diff_exp = ttnn.exp(decay_diff, memory_config=mem_cfg_batch)
         k_decay = ttnn.multiply(
             k_i,
-            ttnn.reshape(decay_diff_exp, [BH, chunk_size, 1], memory_config=mem_cfg_loop),
-            memory_config=mem_cfg_loop,
+            ttnn.reshape(decay_diff_exp, [BH, chunk_size, 1], memory_config=mem_cfg_batch),
+            memory_config=mem_cfg_batch,
         )
-        k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=mem_cfg_loop)
+        k_decay_t = ttnn.transpose(k_decay, 1, 2, memory_config=mem_cfg_batch)
         if prog_config_state:
-            state_update = ttnn.matmul(k_decay_t, v_new, program_config=prog_config_state, memory_config=mem_cfg_loop)
+            state_update = ttnn.matmul(k_decay_t, v_new, program_config=prog_config_state, memory_config=mem_cfg_batch)
         else:
-            state_update = ttnn.matmul(k_decay_t, v_new, memory_config=mem_cfg_loop)
-        S = ttnn.add(S, state_update, memory_config=mem_cfg_loop)
+            state_update = ttnn.matmul(k_decay_t, v_new, memory_config=mem_cfg_batch)
+        S = ttnn.add(S, state_update, memory_config=mem_cfg_batch)
 
     o = ttnn.concat(outputs, dim=1, memory_config=mem_cfg_in)
 
-    # Reshape [BH, num_chunks, chunk_size, V] -> [BH, L, V], then un-pad if needed
     o = ttnn.reshape(o, [BH, L, V], memory_config=mem_cfg_in)
     if pad_len > 0:
         o = o[:, :T, :]
