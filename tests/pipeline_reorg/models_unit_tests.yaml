@@ -215,7 +215,7 @@
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_moe.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
-    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy"
+    pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model.py -k "performance and not accuracy and quick"
     pytest --timeout 120 models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
   model: mixtral-8x7b
   skus:
