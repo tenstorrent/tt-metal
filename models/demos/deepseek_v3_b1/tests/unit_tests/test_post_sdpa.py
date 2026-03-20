@@ -26,8 +26,7 @@ but skip matmul2 via is_matmul2_core=false.
 Core Layout:
 - SDPA Workers: FlashMLADecode.output_cores(0, SDPA_INPUT_NUM_CORES)
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
-- TP All-Reduce Receiver = Gather core (12, 9): already has local data after Gather2
-- TP All-Reduce Sender = Adjacent core (11, 9): reads from gather core, sends via fabric
+- TP All-Reduce core = Gather core (12, 9)
 
 Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168] per device,
 then all-reduce across devices with optional residual add.
@@ -159,6 +158,7 @@ def test_post_sdpa(
 
     # Create submesh - fabric requires opening full system mesh first
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    ccl_num_links = 1
 
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
@@ -513,6 +513,7 @@ def test_post_sdpa(
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
         ccl_enabled=ccl_enabled,
+        ccl_num_links=ccl_num_links,
         sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
     )
     ttnn.synchronize_device(submesh)
@@ -941,6 +942,7 @@ def test_post_sdpa_with_sdpa_phase(
     semaphore1 = ttnn.create_global_semaphore(submesh, available_cores, 0)
     semaphore2 = ttnn.create_global_semaphore(submesh, available_cores, 0)
     semaphores = [semaphore1, semaphore2]
+    ccl_num_links = 1
 
     # ========================================================================
     # Create SDPA tensors
@@ -1094,6 +1096,7 @@ def test_post_sdpa_with_sdpa_phase(
         residual_tensor_mesh=ttnn_residual,
         fp32_dest_acc_en=False,
         ccl_enabled=True,
+        ccl_num_links=ccl_num_links,
         # SDPA parameters
         sdpa_input_l_mesh=ttnn_sdpa_input_l,
         sdpa_input_ms_mesh=ttnn_sdpa_input_ms,
