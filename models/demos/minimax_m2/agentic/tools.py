@@ -106,6 +106,78 @@ TOOL_SCHEMAS: List[Dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_image",
+            "description": (
+                "Generates an image from a text description using Stable Diffusion. "
+                "Use when the user asks to create, draw, or generate an image."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "Text description of the image to generate",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Output image path (default: /tmp/generated.png)",
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "detect_faces",
+            "description": (
+                "Detects faces in an image and returns bounding boxes with facial keypoints. "
+                "Use when the user asks about faces or people in an image."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "image_path": {
+                        "type": "string",
+                        "description": "Path to the image file",
+                    },
+                },
+                "required": ["image_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "translate_text",
+            "description": (
+                "Translates text between languages. Supports English, German, French, Romanian. "
+                "Use when the user asks to translate text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text to translate",
+                    },
+                    "source_lang": {
+                        "type": "string",
+                        "description": "Source language code (en, de, fr, ro)",
+                    },
+                    "target_lang": {
+                        "type": "string",
+                        "description": "Target language code (en, de, fr, ro)",
+                    },
+                },
+                "required": ["text", "target_lang"],
+            },
+        },
+    },
 ]
 
 
@@ -140,6 +212,19 @@ def dispatch_tool(name: str, args: Dict[str, Any], models) -> Any:
     elif name == "answer_from_context":
         return models.bert.qa(args["question"], args["context"])
 
+    elif name == "generate_image":
+        output_path = args.get("output_path", "/tmp/generated.png")
+        return models.sd.generate(args["prompt"], output_path)
+
+    elif name == "detect_faces":
+        detections = models.yunet.detect(args["image_path"])
+        return _format_face_detections(detections)
+
+    elif name == "translate_text":
+        source_lang = args.get("source_lang", "en")
+        target_lang = args.get("target_lang", "de")
+        return models.t5.translate(args["text"], source_lang, target_lang)
+
     else:
         return f"Unknown tool: {name}"
 
@@ -157,4 +242,15 @@ def _format_detections(detections: List[Dict]) -> str:
         bbox = d.get("bbox", [])
         bbox_str = ", ".join(f"{v:.3f}" for v in bbox) if bbox else "unknown"
         lines.append(f"- {d['label']} (score={d['score']:.3f}, bbox=[{bbox_str}])")
+    return "\n".join(lines)
+
+
+def _format_face_detections(detections: List[Dict]) -> str:
+    if not detections:
+        return "No faces detected."
+    lines = [f"Found {len(detections)} face(s):"]
+    for i, d in enumerate(detections, 1):
+        box = d.get("box", (0, 0, 0, 0))
+        conf = d.get("confidence", 0)
+        lines.append(f"- Face {i}: bbox=({box[0]}, {box[1]}, {box[2]}, {box[3]}), confidence={conf:.3f}")
     return "\n".join(lines)

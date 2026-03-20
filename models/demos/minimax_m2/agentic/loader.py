@@ -38,6 +38,9 @@ class ModelBundle:
     speecht5: object = None
     owlvit: object = None
     bert: object = None
+    sd: object = None  # Stable Diffusion
+    yunet: object = None  # Face detection
+    t5: object = None  # Translation
 
 
 def open_n300_device(enable_fabric: bool = True) -> ttnn.MeshDevice:
@@ -86,6 +89,9 @@ def load_all_models(
     load_speecht5: bool = True,
     load_owlvit: bool = True,
     load_bert: bool = True,
+    load_sd: bool = False,  # Stable Diffusion (disabled by default - large model)
+    load_yunet: bool = False,  # Face detection
+    load_t5: bool = False,  # Translation
 ) -> ModelBundle:
     """
     Load all specialist models into device DRAM.
@@ -105,38 +111,59 @@ def load_all_models(
 
     # --- LLM (Llama 3.1 8B Instruct — orchestrator) ----------------------
     if load_llm:
-        logger.info("[1/5] Loading LLM orchestrator (Llama 3.1 8B Instruct on TTNN)...")
+        logger.info("[1/8] Loading LLM orchestrator (Llama 3.1 8B Instruct on TTNN)...")
         from models.demos.minimax_m2.agentic.tool_wrappers.llm_tool import LLMTool
 
         bundle.llm = LLMTool(mesh_device=mesh_device)
 
     # --- Whisper (STT + translate) --------------------------------------
     if load_whisper:
-        logger.info("[2/5] Loading Whisper STT (distil-large-v3)...")
+        logger.info("[2/8] Loading Whisper STT (distil-large-v3)...")
         from models.demos.minimax_m2.agentic.tool_wrappers.whisper_tool import WhisperTool
 
         bundle.whisper = WhisperTool(mesh_device=mesh_device)
 
     # --- SpeechT5 (TTS) -------------------------------------------------
     if load_speecht5:
-        logger.info("[3/5] Loading SpeechT5 TTS...")
+        logger.info("[3/8] Loading SpeechT5 TTS...")
         from models.demos.minimax_m2.agentic.tool_wrappers.speecht5_tool import SpeechT5Tool
 
         bundle.speecht5 = SpeechT5Tool(mesh_device=mesh_device)
 
     # --- OWL-ViT (object detection) -------------------------------------
     if load_owlvit:
-        logger.info("[4/5] Loading OWL-ViT object detection...")
+        logger.info("[4/8] Loading OWL-ViT object detection...")
         from models.demos.minimax_m2.agentic.tool_wrappers.owlvit_tool import OWLViTTool
 
         bundle.owlvit = OWLViTTool(mesh_device=mesh_device)
 
     # --- BERT Large (extractive QA) -------------------------------------
     if load_bert:
-        logger.info("[5/5] Loading BERT Large QA...")
+        logger.info("[5/8] Loading BERT Large QA...")
         from models.demos.minimax_m2.agentic.tool_wrappers.bert_tool import BERTTool
 
         bundle.bert = BERTTool(mesh_device=mesh_device)
+
+    # --- Stable Diffusion (text-to-image) -------------------------------
+    if load_sd:
+        logger.info("[6/8] Loading Stable Diffusion...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.sd_tool import StableDiffusionTool
+
+        bundle.sd = StableDiffusionTool(mesh_device=mesh_device)
+
+    # --- YUNet (face detection) -----------------------------------------
+    if load_yunet:
+        logger.info("[7/8] Loading YUNet face detection...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.yunet_tool import YUNetTool
+
+        bundle.yunet = YUNetTool(mesh_device=mesh_device)
+
+    # --- T5 (translation) -----------------------------------------------
+    if load_t5:
+        logger.info("[8/8] Loading T5 translation...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.t5_tool import T5Tool
+
+        bundle.t5 = T5Tool(mesh_device=mesh_device)
 
     logger.info("All models loaded. Agentic system ready.")
     return bundle
@@ -185,5 +212,24 @@ def cleanup_models(bundle: ModelBundle) -> None:
             bundle.bert.close()
         except Exception as e:
             logger.warning(f"BERT cleanup failed: {e}")
+
+    # New models - SD, YUNet, T5
+    if bundle.sd is not None and hasattr(bundle.sd, "close"):
+        try:
+            bundle.sd.close()
+        except Exception as e:
+            logger.warning(f"Stable Diffusion cleanup failed: {e}")
+
+    if bundle.yunet is not None and hasattr(bundle.yunet, "close"):
+        try:
+            bundle.yunet.close()
+        except Exception as e:
+            logger.warning(f"YUNet cleanup failed: {e}")
+
+    if bundle.t5 is not None and hasattr(bundle.t5, "close"):
+        try:
+            bundle.t5.close()
+        except Exception as e:
+            logger.warning(f"T5 cleanup failed: {e}")
 
     logger.info("Model cleanup complete.")

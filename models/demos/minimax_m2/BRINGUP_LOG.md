@@ -212,6 +212,55 @@ Device closed.  # No segfault!
 - `orchestrator.py` — Added duplicate tool prevention, improved system prompt
 - `demo.py` — Call `cleanup_models()` before device close
 
+### Session 2026-03-20: Expanded Tool Suite — T5, YUNet, Stable Diffusion
+
+**Status:** ✅ 3 new tools integrated and tested
+
+**New Tools Added:**
+
+| Tool | Model | Purpose | Status |
+|------|-------|---------|--------|
+| T5 (translate_text) | t5-base | Translation (EN↔DE/FR/RO) | ✅ PASS |
+| YUNet (detect_faces) | YUNet | Face detection with keypoints | ✅ PASS |
+| Stable Diffusion (generate_image) | SD v1.4 | Text-to-image generation | ✅ Tool wrapper created |
+
+**Test Results:**
+```
+# T5 translation
+"Hello world" → French: "Bonjour au monde" ✅
+"Good morning" → German: "Guten Morgen" ✅
+
+# YUNet face detection
+Test image processed, 0 faces detected (synthetic image) ✅
+
+# dispatch_tool routing
+translate_text dispatched correctly to T5Tool ✅
+```
+
+**Files Created:**
+- `tool_wrappers/t5_tool.py` — T5 translation wrapper (translate, summarize methods)
+- `tool_wrappers/yunet_tool.py` — YUNet face detection wrapper (detect method)
+- `tool_wrappers/sd_tool.py` — Stable Diffusion wrapper (generate method)
+
+**Files Modified:**
+- `tools.py` — Added 3 new TOOL_SCHEMAS (generate_image, detect_faces, translate_text), updated dispatch_tool()
+- `loader.py` — Added ModelBundle fields (sd, yunet, t5), load flags, cleanup for new models
+- `demo.py` — Added sd, yunet, t5 to _ALL_TOOLS
+
+**Fixes Applied:**
+- `models/experimental/t5/tt/t5_dense_act_dense.py` — Fixed stale API: `output_mem_config` → `memory_config`
+
+**Tool Suite (8 total):**
+```
+Available tools: bert, llm, owlvit, sd, speecht5, t5, whisper, yunet
+```
+
+**Notes:**
+- T5, YUNet use chip0 submesh (single-device models)
+- SD uses chip0 submesh (UNet TTNN implementation)
+- All 3 new models tested standalone on N300 (1,2) mesh with fabric enabled
+- Full LLM + tool integration pending (LLM load time ~2-3 min)
+
 ### Shared N300 multi-model run — issues & blockers (detail)
 
 See **`models/demos/minimax_m2/agentic/SHARED_DEVICE_BLOCKERS.md`** for:
