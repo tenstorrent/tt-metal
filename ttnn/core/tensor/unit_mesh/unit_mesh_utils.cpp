@@ -81,13 +81,13 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
     auto mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
         reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
 
-    tt::tt_metal::DeviceStorage device_storage(std::move(mesh_buffer));
+    tt::tt_metal::DeviceStorage device_storage(mesh_buffer);
     TT_ASSERT(
         device_storage.get_coords().size() == 1 &&
         device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0));
 
     return Tensor(
-        tt::tt_metal::DeviceStorage(std::move(mesh_buffer)),
+        std::move(device_storage),
         reference_spec,
         tt::tt_metal::TensorTopology::create_sharded_tensor_topology(
             tt::tt_metal::distributed::MeshShape(parent_mesh->shape().mesh_size()), /*shard_dim=*/0));
