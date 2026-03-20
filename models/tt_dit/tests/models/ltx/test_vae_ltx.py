@@ -241,6 +241,13 @@ def test_ltx_video_decoder(mesh_device: ttnn.MeshDevice):
     )
     torch_decoder.eval()
 
+    # Set per-channel stats to identity so denormalization is a no-op
+    # (random weights produce garbage stats)
+    torch_state = torch_decoder.state_dict()
+    torch_state["per_channel_statistics.mean-of-means"] = torch.zeros(128)
+    torch_state["per_channel_statistics.std-of-means"] = torch.ones(128)
+    torch_decoder.load_state_dict(torch_state)
+
     # TT decoder
     tt_decoder = LTXVideoDecoder(
         decoder_blocks=decoder_blocks,

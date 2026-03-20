@@ -120,26 +120,34 @@ class LTXCausalConv3d(Module):
 
             state["weight"], state["bias"] = prepare_conv3d_weights(weight, bias, self.conv_config)
 
-    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
         """
         Args:
             x_BTHWC: (B, T, H, W, C) in ROW_MAJOR layout
+            causal: If True, pad temporally at front only (causal).
+                    If False, pad symmetrically at front and back.
 
         Returns:
             (B, T_out, H_out, W_out, C_out) in ROW_MAJOR layout
         """
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
-        # Causal temporal padding: repeat first frame
+        # Temporal padding
         if self.time_pad > 0:
             first_frame = x_BTHWC[:, :1, :, :, :]
-            # Build padding by repeating first frame
-            B, T, H, W, C = x_BTHWC.shape
-            # Concat first_frame repeated time_pad times with the input
-            padding_frames = []
-            for _ in range(self.time_pad):
-                padding_frames.append(first_frame)
-            x_BTHWC = ttnn.concat([*padding_frames, x_BTHWC], dim=1)
+            if causal:
+                # Causal: repeat first frame at front only
+                padding_frames = [first_frame] * self.time_pad
+                x_BTHWC = ttnn.concat([*padding_frames, x_BTHWC], dim=1)
+            else:
+                # Symmetric: repeat first frame at front, last frame at back
+                last_frame = x_BTHWC[:, -1:, :, :, :]
+                front_pad = self.time_pad // 2
+                back_pad = self.time_pad // 2
+                front_frames = [first_frame] * front_pad
+                back_frames = [last_frame] * back_pad
+                parts = front_frames + [x_BTHWC] + back_frames
+                x_BTHWC = ttnn.concat(parts, dim=1)
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -241,10 +249,11 @@ class LTXResnetBlock3D(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
         """
         Args:
             x_BTHWC: (B, T, H, W, C) in ROW_MAJOR layout
+            causal: Temporal padding mode for convolutions
 
         Returns:
             (B, T, H, W, C_out) in ROW_MAJOR layout
@@ -255,23 +264,22 @@ class LTXResnetBlock3D(Module):
         h = self.norm1(x_BTHWC)
         h = ttnn.silu(h)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) if h.layout != ttnn.ROW_MAJOR_LAYOUT else h
-        h = self.conv1(h)
+        h = self.conv1(h, causal=causal)
 
         h = self.norm2(h)
         h = ttnn.silu(h)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) if h.layout != ttnn.ROW_MAJOR_LAYOUT else h
-        h = self.conv2(h)
+        h = self.conv2(h, causal=causal)
 
         # Skip connection
         if self.has_shortcut:
-            # GroupNorm(1) = LayerNorm over channels: normalize, then scale + bias
             residual = ttnn.layer_norm(residual, weight=self.norm3_weight.data, bias=self.norm3_bias.data)
             residual = (
                 ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
                 if residual.layout != ttnn.ROW_MAJOR_LAYOUT
                 else residual
             )
-            residual = self.conv_shortcut(residual)
+            residual = self.conv_shortcut(residual, causal=causal)
 
         return ttnn.add(residual, h)
 
@@ -306,11 +314,11 @@ class LTXDepthToSpaceUpsample(Module):
             in_channels, conv_out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
         )
 
-    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
         B, T, H, W, _ = x_BTHWC.shape
         p1, p2, p3 = self.stride
 
-        x_BTHWC = self.conv(x_BTHWC)
+        x_BTHWC = self.conv(x_BTHWC, causal=causal)
 
         # Infer C from the conv output: total channels = C * p1 * p2 * p3
         total_c = x_BTHWC.shape[-1]
@@ -525,17 +533,17 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
 
         # conv_in
-        sample_tt = self.conv_in(sample_tt)
+        sample_tt = self.conv_in(sample_tt, causal=False)
 
         # Up blocks
         for up_block in self.up_blocks:
-            sample_tt = up_block(sample_tt)
+            sample_tt = up_block(sample_tt, causal=False)
 
         # Output: PixelNorm → SiLU → conv_out
         sample_tt = self.norm_out(sample_tt)
         sample_tt = ttnn.silu(sample_tt)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-        sample_tt = self.conv_out(sample_tt)
+        sample_tt = self.conv_out(sample_tt, causal=False)
 
         # Convert back to host
         result = ttnn.to_torch(sample_tt)  # (B, T_out, H_out, W_out, C_out)
