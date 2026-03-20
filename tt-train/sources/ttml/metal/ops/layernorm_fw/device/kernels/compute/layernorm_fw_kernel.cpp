@@ -42,8 +42,6 @@ constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_13;                // normalize
 
 constexpr uint32_t cb_output_intermediate_idx = tt::CBIndex::c_14;  // intermediate for x_hat * gamma
 
-constexpr uint32_t onetile = 1;
-
 #ifdef DO_MASK_W
 constexpr bool do_mask_w = true;
 #else
