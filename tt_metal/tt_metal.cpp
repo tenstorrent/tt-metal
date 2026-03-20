@@ -818,6 +818,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            HalProgrammableCoreType programmable_core_type =
+                hal.get_programmable_core_type(programmable_core_type_index);
+
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                 auto runtime_id = program.get_runtime_id();
@@ -835,7 +838,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     physical_core,
                     kg->launch_msg.view(),
                     kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                    hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
