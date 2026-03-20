@@ -65,16 +65,6 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0
         with: { pattern: "sweeps-vectors-*", path: /work/tests/sweep_framework/vectors_export, merge-multiple: true }
-      - name: Print device info
-        run: |
-          python3 -c "
-          import ttnn
-          device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
-          grid = device.compute_with_storage_grid_size()
-          print(f'Device grid: {grid.x}x{grid.y} = {grid.x * grid.y} cores')
-          print(f'Arch: {device.arch()}')
-          ttnn.close_device(device)
-          "
       - name: Run sweeps
         env:
           MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter }}
