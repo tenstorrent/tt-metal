@@ -184,3 +184,52 @@ Some matmul vectors only had `arg0`/`arg1` in JSON because `input_a_*` were `__A
   - Signal is not random brute force: the same regime/policy is being tested under controlled alternating baseline-first A/B.
   - Decode output-L1 appears to affect end-to-end behavior (likely boundary/data-movement interaction) more than kernel core math time.
   - Stability is still insufficient for promotion: keep as exploration-only candidate until variance controls are tightened further (more iters/rounds and outlier-resistant aggregation).
+
+### Regime-first screening update (stabilized settings)
+
+- Method:
+  - Alternating A/B with Tracy for each regime independently (decode / prefill / tiny), baseline-first.
+  - Settings: `rounds=2`, `warmup_iters=2`, `measure_iters=8`.
+  - Candidate under test: regime-scoped `--output-memory-override l1`.
+- Decode regime (`decode_1d_dram_bound_small_m`):
+  - Report: `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_n150_decode_profiler_ab_r2_stabilized.json`.
+  - e2e deltas: `overall_e2e_p50_ms` ~`-11.32%`, `overall_e2e_p95_ms` ~`-1.75%` (strict gate pass on regime slice).
+  - kernel deltas: `overall_kernel_p50_ns` ~`+0.32%`, `overall_kernel_p95_ns` ~`-0.81%` (small/mixed kernel movement).
+- Prefill regime (`prefill_ff_2d_larger_m`):
+  - Report: `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_n150_prefill_profiler_ab_r2_stabilized.json`.
+  - e2e deltas: `overall_e2e_p50_ms` ~`+6.83%`, `overall_e2e_p95_ms` ~`+3.81%` (strict gate fail).
+  - kernel deltas: `overall_kernel_p50_ns` ~`+0.56%`, `overall_kernel_p95_ns` ~`-0.53%`.
+- Tiny/irregular regime (`tiny_tile_or_irregular_k_n`):
+  - Report: `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_n150_tiny_profiler_ab_r2_stabilized.json`.
+  - e2e deltas: `overall_e2e_p50_ms` ~`-1.64%`, `overall_e2e_p95_ms` ~`-0.61%` (strict gate pass on regime slice).
+  - kernel deltas: near-flat (`overall_kernel_p50_ns` ~`+0.02%`, `overall_kernel_p95_ns` ~`-0.003%`).
+- Conclusion:
+  - Regime behavior is now confirmed explicitly: decode and tiny can benefit from output-L1, prefill regresses.
+  - Kernel-level changes are small while e2e shifts are larger; this candidate behaves like a boundary/data-movement policy rather than a compute-kernel optimization.
+  - Per mission criteria, this candidate remains exploration-only (not mergeable as a broad/shared default).
+
+### 20-minute regime-aware candidate check (all regimes, stabilized)
+
+- Candidate tested:
+  - Not global override.
+  - `output-memory-override=l1` only for regimes:
+    - `decode_1d_dram_bound_small_m`
+    - `tiny_tile_or_irregular_k_n`
+  - Prefill regime intentionally left at baseline behavior.
+- Command/report:
+  - `tests/sweep_framework/benchmark_protocol/generated/deepseek_oriented/matmul_n150_all_regimes_decode_tiny_l1_ab_r3_stabilized.json`
+  - Settings: alternating baseline-first, `rounds=3`, `warmup_iters=2`, `measure_iters=8`, profiler enabled.
+- Aggregate result:
+  - `overall_e2e_p50_ms`: improved `~-18.94%`
+  - `overall_e2e_p95_ms`: regressed `~+13.21%`
+  - Strict gate: failed.
+- Tracy/kernel signal:
+  - `overall_kernel_p50_ns`: slight regression `~+0.38%`
+  - `overall_kernel_p95_ns`: slight improvement `~-0.15%`
+  - Reinforces boundary/runtime-tail sensitivity over pure kernel-time gain.
+- Primary tail source in failed round (`candidate_r2`):
+  - `edge_vit_197x197x64` had two large e2e samples (`~3.80-3.83ms`) while kernel p95 stayed near-flat.
+  - Round-level `overall_e2e_p95_ms` jumped to `~2.919ms` (vs baseline rounds `~1.91-2.04ms`).
+- Decision:
+  - This is a meaningful regime-aware experiment but still non-mergeable.
+  - Keep as exploration-only; do not promote as shared default rule.

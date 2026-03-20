@@ -2,64 +2,36 @@
 
 ## Objective
 
-Improve matmul efficiency in shared paths that can benefit multiple models on non-Galaxy hardware (N150/T3K), using the DeepSeek N150 finding as a clue:
-- Short-M prefill shapes can improve when compute grid Y is right-sized instead of always using full grid height.
+Improve matmul efficiency in shared paths for N150/T3K with regime-aware rules keyed on inspectable properties
+(`M,K,N`, layout, memory/sharding), not model-specific logic.
 
 ## Current Status
 
-- [x] Baseline insight captured from N150 DeepSeek experiments
-- [x] Experiment 1: Shared TTNN auto-config grid right-sizing (C++ matmul config path)
-- [x] Experiment 1 validation on N150 (model-traced matmul protocol)
-- [x] Experiment 2: Common MLP1D prefill config right-sizing (shared Python module)
-- [x] Experiment 2 validation on N150 (targeted benchmark/protocol)
-- [ ] Optional quick T3K sanity workflow recommendation update
-- [x] Summarize findings + keep/revert decision per experiment
-
-## Experiment 1 Plan (Shared C++ auto path)
-
-- [x] Update `ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp`
-  - Scope: `create_simple_matmul_program_config(...)`
-  - Change: cap active `compute_with_storage_grid_size` by work tiles (`num_blocks_x`, `num_blocks_y`) for all-DRAM-interleaved 2D mcast path.
-  - Goal: avoid over-parallelizing short-M/N shapes.
-- [x] Validate no obvious correctness/perf regressions on N150 with existing benchmark protocol subset.
-
-## Experiment 2 Plan (Shared Python MLP path)
-
-- [x] Update `models/common/modules/mlp/mlp_1d.py`
-  - Scope: default prefill program-config builders (`prefill_w1_w3_prg_config`, `prefill_w2_prg_config`)
-  - Change: derive an effective grid per `seq_len` bounded by tile demand.
-  - Goal: bring same right-sizing behavior to non-DeepSeek shared MLP path.
-- [x] Fast unit sanity for shared MLP module (`test_mlp_1d_config_*`)
-- [x] Device perf/correctness validation for shared MLP path on N150/T3K
-- [x] Validate on N150 with targeted run(s) and compare to pre-change baseline.
+- [x] Regime manifest and kernelbench infrastructure in place (`matmul_n150_regimes.json`, `matmul_n150_kernelbench.py`)
+- [x] Alternating baseline-first A/B runner in place (`matmul_n150_alternating_ab.py`)
+- [x] Exploration scoreboard in place for non-mergeable mixed outcomes
+- [x] Regime-by-regime memory-policy screening workflow validated (decode/prefill/tiny independently)
+- [ ] Promote a first mergeable regime-aware shared-path rule
 
 ## Idea Backlog (Next)
 
-- Add stricter no-regression benchmark policy for new experiments:
-  - require both `overall_p50` and `overall_p95` to decrease across repeated runs.
-  - auto-revert experiment candidates that fail this gate.
-- Add a separate exploration track (non-merge gate):
-  - preserve mixed but informative candidates in an explicit scoreboard.
-  - keep strict `p50+p95` gate only for merge decisions.
-- Explore memory-traffic bottlenecks around matmul boundaries:
-  - reduce unnecessary DRAM round-trips for intermediate tensors.
-  - prefer scoped, shape-gated changes with safe fallbacks.
-- Expand coverage with additional N150/T3K-safe shape families before broad rollout.
-- Add regime-aware kernel microbench workflow:
-  - maintain a fixed small regime manifest (6-10 shapes).
-  - use low-noise microbench runs to screen candidates before protocol A/B.
-- Add alternating-run variance controls:
-  - baseline/candidate interleaving in fresh processes for A/B fairness.
-  - track both per-run and per-shape variance.
-- Add reusable A/B orchestration utility:
-  - command-template based alternating runner over kernelbench outputs.
-  - emit aggregate means/stdevs + strict merge-gate verdict in JSON.
-- Validate decode-subset winner on broader coverage:
-  - promote decode kernelbench winner candidates to `matmul_n150` protocol smoke/train/holdout checks.
-  - require strict merge gate on broader set before considering any shared-path code change.
-- Add tail-robust decode policy search:
-  - constrain candidate to decode-like vectors only where it helps without large p95 outliers.
-  - evaluate p95 stability with repeated reruns before promoting to full-protocol checks.
+- [ ] Build discrete per-regime config search (not global overrides):
+  - focus knobs: `in0_block_w`, `per_core_M`, `per_core_N`, `out_subblock_w`.
+  - constrain by existing LLK/matmul validity rules.
+  - screen with kernelbench first; require clear kernel gain before promotion.
+- [ ] Add regime predicate schema for candidate rules:
+  - predicates on `M,K,N`, batch volume, layout (`INTERLEAVED`/`SHARDED`), buffer types.
+  - avoid model-name and input-hash conditions.
+- [ ] Implement first shared C++ regime-aware rule in `create_simple_matmul_program_config(...)`:
+  - target one regime with strongest repeated signal.
+  - keep fallback path unchanged outside predicate.
+- [ ] Validate each promoted rule in three stages:
+  - target regime A/B,
+  - cross-regime A/B (other classes),
+  - full `matmul_n150` protocol strict gate.
+- [ ] Add neutral-band reporting (exploration only) while keeping strict merge gate unchanged:
+  - report when non-target regimes are statistically neutral vs regressive.
+- [ ] Expand regime manifest with additional canonical non-DeepSeek shapes (Llama/Mistral/ViT/SDXL paths) if gaps remain.
 
 ## Notes
 
