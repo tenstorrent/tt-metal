@@ -315,6 +315,12 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
     fused_activation = cfg.get("fused_activation")
     if fused_activation is None or fused_activation == "None" or str(fused_activation) == "std::nullopt":
         fused_activation = None
+    elif isinstance(fused_activation, dict) and "op_type" in fused_activation:
+        # Convert dict {"op_type": 2, "param": [1.0]} to UnaryWithParam
+        op_type = int(fused_activation["op_type"])
+        param = fused_activation.get("param", [])
+        param_val = float(param[0]) if isinstance(param, list) and param else 0.0
+        fused_activation = ttnn.UnaryWithParam(ttnn.UnaryOpType(op_type), param_val)
 
     grid = cfg.get("compute_with_storage_grid_size")
     core_coord = None

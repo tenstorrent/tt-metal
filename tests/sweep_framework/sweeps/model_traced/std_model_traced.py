@@ -85,8 +85,11 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
-    # Read keepdim from op_kwargs if present (traced config), falling back to function param
+    # Read keepdim from op_kwargs if present (traced config), falling back to function param.
+    # Convert to bool — V2 JSON stores as 1.0/0.0 float, named param may receive float too.
     keepdim = op_kwargs.get("keepdim", keepdim)
+    if keepdim is not None:
+        keepdim = bool(keepdim)
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
