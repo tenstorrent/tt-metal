@@ -152,6 +152,15 @@
   team: models
   model-name: mistral
 
+- name: t3k_mistral-small-3.1-24b-vision_tests
+  cmd: run_t3000_mistral-small-3.1-24b-vision_unit_tests
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U0896VBAKFC # Pratikkumar Prajapati
+  team: models
+  model-name: mistral-small-3.1-24b-vision
+
 - name: t3k_qwen25_vl_tests
   cmd: run_t3000_qwen25_vl_unit_tests
   skus:
