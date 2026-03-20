@@ -155,37 +155,6 @@ ALWI void tilize_block(
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
-// clang-format off
-/**
- * Conditionally reconfigure srcA and srcB unpacker data formats when switching
- * between circular buffer operands. SrcA reconfiguration uses explicit face
- * geometry (num_faces, srca_face_r_dim) rather than deriving it from operand
- * metadata. SrcB reconfiguration is driven purely by operand comparison.
- *
- * Return value: None
- *
- * | Param Type | Name             | Description                              | Type         | Valid Range | Required |
- * |------------|------------------|------------------------------------------|--------------|-------------|----------|
- * | Template   | dst_accum_mode   | Enable FP32 accumulation in dest register| bool         | true/false  | True     |
- * | Function   | old_icb0         | Previous srcA circular buffer identifier | uint32_t     | 0 to 31     | True     |
- * | Function   | new_icb0         | New srcA circular buffer identifier      | uint32_t     | 0 to 31     | True     |
- * | Function   | old_icb1         | Previous srcB circular buffer identifier | uint32_t     | 0 to 31     | True     |
- * | Function   | new_icb1         | New srcB circular buffer identifier      | uint32_t     | 0 to 31     | True     |
- * | Function   | num_faces        | Number of faces per tile (srcA override) | uint32_t     | 1 to 4      | False    |
- * | Function   | srca_face_r_dim  | Number of rows in each face (srcA override)| uint32_t  | 1 to 16     | False    |
- */
-// clang-format on
-template <bool dst_accum_mode>
-ALWI void unpack_reconfig_A_B_block(
-    const std::uint32_t old_icb0,
-    const std::uint32_t new_icb0,
-    const std::uint32_t old_icb1,
-    const std::uint32_t new_icb1,
-    uint32_t num_faces = 4,
-    uint32_t srca_face_r_dim = 16) {
-    UNPACK((llk_unpack_reconfig_data_format_srca<dst_accum_mode>(old_icb0, new_icb0, srca_face_r_dim, num_faces)));
-    UNPACK((llk_unpack_reconfig_data_format_srcb<dst_accum_mode>(old_icb1, new_icb1)));
-}
 
 // clang-format off
 /**

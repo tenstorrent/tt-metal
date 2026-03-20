@@ -131,34 +131,6 @@ ALWI void pack_reconfig_data_format(const uint32_t new_cb_id) {
 
 // clang-format off
 /**
- * Reconfigures the packer output data format by specifying the CB ID of the new operand. This function
- * call will always perform the reconfiguration, regardless of the data format of the old operand.
- * If the new CB ID is the same as the current one, reconfiguration will still occur.
- *
- * NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense
- * that they are called before the call to the packer function that uses the new configuration. It is
- * recommended to call this function right after other op-specific initialization functions.
- *
- * Return value: None
- *
- * | Param Type | Name                    | Description                   | Type     | Valid Range | Required |
- * |------------|-------------------------|-------------------------------|----------|-------------|----------|
- * | Template   | is_tile_dim_reconfig_en | Toggle tile reconfiguration   | bool     | true/false  | False    |
- * | Function   | new_cb_id               | New data format operand value | uint32_t | Any         | True     |
- * | Function   | face_r_dim              | Face row dimension            | uint32_t | Any         | True     |
- * | Function   | num_faces               | Number of faces               | uint32_t | Any         | True     |
- */
-// clang-format on
-template <bool is_tile_dim_reconfig_en = false>
-ALWI void pack_reconfig_data_format_custom_face_r_dim(const uint32_t new_cb_id, const uint32_t face_r_dim) {
-#ifndef ARCH_QUASAR
-    PACK((llk_pack_reconfig_data_format_custom_face_r_dim<DST_ACCUM_MODE, is_tile_dim_reconfig_en>(
-        new_cb_id, face_r_dim)));
-#endif  // TODO: AM; add Quasar implementation
-}
-
-// clang-format off
-/**
  * Reconfigures the packer output data format by specifying the CB IDs of the old and new operands.
  * This function internally calls the reconfiguration function with the new CB ID, but before it does so,
  * it checks if the old and new data formats are different. If they are the same, it does not perform

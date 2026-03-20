@@ -366,37 +366,6 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
 }
 
 /**
- * Reconfigure the packer data format with explicit face geometry.
- *
- * Unlike the single-argument overload, which derives face_r_dim and num_faces
- * from the output operand metadata, this overload accepts caller-supplied
- * values. This is useful when the actual tile layout differs from what is
- * recorded in the CB interface (e.g. non-standard tile dimensions).
- *
- * @tparam is_fp32_dest_acc_en       Enable FP32 accumulation in the destination register.
- * @tparam is_tile_dim_reconfig_en   Enable tile dimension reconfiguration.
- * @param  new_output                Output operand index to configure the packer for.
- * @param  face_r_dim                Row dimension of each face (overrides operand metadata).
- */
-template <bool is_fp32_dest_acc_en, bool is_tile_dim_reconfig_en = false>
-inline void llk_pack_reconfig_data_format_custom_face_r_dim(
-    const std::uint32_t new_output, const std::uint32_t face_r_dim) {
-    const std::uint32_t output_id = get_output_id(new_output);
-    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
-    const std::uint32_t num_faces = get_output_num_faces(output_id);
-
-    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, is_tile_dim_reconfig_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        tile_c_dim,
-        num_faces,
-        false,   // partial_face
-        false);  // narrow_tile
-}
-
-/**
  * Conditionally reconfigure the packer data format when switching output operands.
  *
  * Compares the old and new output formats; reconfiguration is only performed

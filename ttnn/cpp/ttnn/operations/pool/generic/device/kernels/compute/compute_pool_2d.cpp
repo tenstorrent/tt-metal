@@ -137,13 +137,6 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
-                unpack_reconfig_A_B_block<DST_ACCUM_MODE>(
-                    in_cb_id_0,
-                    curr_in_cb_id,
-                    in_scalar_cb_id_0,
-                    curr_scalar_cb_id,
-                    num_faces_in_input_tile,
-                    face_r_dim);
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -199,11 +192,6 @@ void kernel_main() {
                     cb_pop_front(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
                     cb_reserve_back(pre_tilize_cb_id, TILE_HEIGHT * in_ntiles_c);
 
-                    constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;  // face_r_dim = 1 => one-row faces (stick packing)
-                    if constexpr (is_output_block_format) {
-                        pack_reconfig_data_format_custom_face_r_dim(pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK);
-                    }
-
                     tilize_stick_counter = 0;
 
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
@@ -214,6 +202,12 @@ void kernel_main() {
                     // need this on BH to set swizzle bit before pack untilize dest
                     MATH((llk_math_reconfig_remap(true)));
 #endif
+
+                    constexpr uint32_t PACKER_FACE_R_DIM_STICK = 1;  // face_r_dim = 1 => one-row faces (stick packing)
+                    if constexpr (is_output_block_format) {
+                        PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
+                            pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
+                    }
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                         pre_tilize_cb_id, PACKER_FACE_R_DIM_STICK, num_faces_in_output_tile)));
                 }
