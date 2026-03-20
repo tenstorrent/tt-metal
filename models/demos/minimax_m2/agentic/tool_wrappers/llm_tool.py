@@ -181,6 +181,20 @@ class LLMTool:
         """Parse a tool call from the LLM output. Returns (name, args) or None."""
         return _parse_tool_call(text)
 
+    def close(self):
+        """
+        Release traces before device close to prevent segfault.
+
+        Must be called before ttnn.close_mesh_device() to ensure proper cleanup.
+        The Generator's __del__ releases traces, but if called after device close
+        it causes a segfault. Explicitly deleting the generator forces cleanup.
+        """
+        if self._generator is not None:
+            # Force the generator's __del__ to run now by deleting it
+            del self._generator
+            self._generator = None
+        logger.info("LLMTool closed (traces released).")
+
     # ------------------------------------------------------------------
     # TTNN generation
     # ------------------------------------------------------------------

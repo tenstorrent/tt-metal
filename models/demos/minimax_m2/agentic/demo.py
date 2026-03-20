@@ -38,7 +38,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(_REPO_ROOT))
 
 import ttnn
-from models.demos.minimax_m2.agentic.loader import load_all_models, open_n300_device
+from models.demos.minimax_m2.agentic.loader import cleanup_models, load_all_models, open_n300_device
 from models.demos.minimax_m2.agentic.orchestrator import process_single_query, run_agentic_loop
 
 _ALL_TOOLS = {"llm", "whisper", "speecht5", "owlvit", "bert"}
@@ -125,6 +125,9 @@ def main():
             run_agentic_loop(models=models, device=mesh_device)
 
     finally:
+        # Release all traces BEFORE closing device to prevent segfault
+        cleanup_models(models)
+
         if hasattr(mesh_device, "get_num_devices"):
             ttnn.close_mesh_device(mesh_device)
         else:

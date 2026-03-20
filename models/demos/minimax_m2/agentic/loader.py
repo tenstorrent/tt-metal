@@ -140,3 +140,50 @@ def load_all_models(
 
     logger.info("All models loaded. Agentic system ready.")
     return bundle
+
+
+def cleanup_models(bundle: ModelBundle) -> None:
+    """
+    Release all model traces before closing the device.
+
+    MUST be called before ttnn.close_mesh_device() to prevent segfault.
+    The issue is that Python's garbage collection runs __del__ methods
+    after the device is closed, causing trace release to fail.
+    """
+    logger.info("Cleaning up models (releasing traces)...")
+
+    # LLM - release decode traces
+    if bundle.llm is not None and hasattr(bundle.llm, "close"):
+        try:
+            bundle.llm.close()
+        except Exception as e:
+            logger.warning(f"LLM cleanup failed: {e}")
+
+    # Whisper - release decoder trace
+    if bundle.whisper is not None and hasattr(bundle.whisper, "close"):
+        try:
+            bundle.whisper.close()
+        except Exception as e:
+            logger.warning(f"Whisper cleanup failed: {e}")
+
+    # SpeechT5 - release any traces
+    if bundle.speecht5 is not None and hasattr(bundle.speecht5, "close"):
+        try:
+            bundle.speecht5.close()
+        except Exception as e:
+            logger.warning(f"SpeechT5 cleanup failed: {e}")
+
+    # OWL-ViT and BERT don't use traces, but call close if available
+    if bundle.owlvit is not None and hasattr(bundle.owlvit, "close"):
+        try:
+            bundle.owlvit.close()
+        except Exception as e:
+            logger.warning(f"OWL-ViT cleanup failed: {e}")
+
+    if bundle.bert is not None and hasattr(bundle.bert, "close"):
+        try:
+            bundle.bert.close()
+        except Exception as e:
+            logger.warning(f"BERT cleanup failed: {e}")
+
+    logger.info("Model cleanup complete.")
