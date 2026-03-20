@@ -67,8 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="generated_metrics",
-        help="Directory for generated logs and JSON (default: generated_metrics)",
+        default="generated/tt-train-metrics",
+        help="Directory for generated logs and JSON (default: generated/tt-train-metrics)",
     )
     return parser.parse_args()
 

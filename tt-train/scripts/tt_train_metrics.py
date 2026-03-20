@@ -98,3 +98,4 @@ def write_json(pydantic_model, output_filename):
     pydantic_json = pydantic_model.model_dump(mode="json")
     with open(output_filename, "w") as jsonfile:
         json.dump(pydantic_json, jsonfile)
+        print(f"Saved {output_filename}")
