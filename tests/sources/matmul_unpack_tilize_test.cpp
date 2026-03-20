@@ -16,8 +16,8 @@ std::uint32_t math_sync_tile_dst_index = 0;
 std::uint32_t tile_size                = 128;
 
 // Remove later
-constexpr std::uint32_t buffer_A_tilized = 0x1e000;
-constexpr std::uint32_t buffer_B_tilized = 0x1f000;
+constexpr std::uint32_t buffer_A_tilized = 0xA0000;
+constexpr std::uint32_t buffer_B_tilized = 0xA1000;
 
 // Translation of these lines:
 // const FormatConfig(&formats_array)[2] = params.formats;
