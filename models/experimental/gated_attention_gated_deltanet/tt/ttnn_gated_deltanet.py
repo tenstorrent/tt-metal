@@ -14,39 +14,33 @@ from tt.ttnn_delta_rule_ops import (
 )
 
 
-def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5):
+def rms_norm_gated_ttnn(x, gate, weight, eps=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG):
     """RMSNorm with SiLU gating using TTNN ops."""
-    x_sq = ttnn.multiply(x, x, memory_config=ttnn.L1_MEMORY_CONFIG)
-    variance = ttnn.mean(x_sq, dim=-1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
-    inv_rms = ttnn.rsqrt(
-        ttnn.add(variance, eps, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    x_normed = ttnn.multiply(x, inv_rms, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_normed = ttnn.multiply(x_normed, weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    gate_act = ttnn.silu(gate, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return ttnn.multiply(x_normed, gate_act, memory_config=ttnn.L1_MEMORY_CONFIG)
+    x_sq = ttnn.multiply(x, x, memory_config=memory_config)
+    variance = ttnn.mean(x_sq, dim=-1, keepdim=True, memory_config=memory_config)
+    inv_rms = ttnn.rsqrt(ttnn.add(variance, eps, memory_config=memory_config), memory_config=memory_config)
+    x_normed = ttnn.multiply(x, inv_rms, memory_config=memory_config)
+    x_normed = ttnn.multiply(x_normed, weight, memory_config=memory_config)
+    gate_act = ttnn.silu(gate, memory_config=memory_config)
+    return ttnn.multiply(x_normed, gate_act, memory_config=memory_config)
 
 
-def rms_norm_ttnn(x, weight, eps=1e-5):
+def rms_norm_ttnn(x, weight, eps=1e-5, memory_config=ttnn.L1_MEMORY_CONFIG):
     """Standard RMSNorm using TTNN ops."""
-    x_sq = ttnn.multiply(x, x, memory_config=ttnn.L1_MEMORY_CONFIG)
-    variance = ttnn.mean(x_sq, dim=-1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
-    inv_rms = ttnn.rsqrt(
-        ttnn.add(variance, eps, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-    x_normed = ttnn.multiply(x, inv_rms, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return ttnn.multiply(x_normed, weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    x_sq = ttnn.multiply(x, x, memory_config=memory_config)
+    variance = ttnn.mean(x_sq, dim=-1, keepdim=True, memory_config=memory_config)
+    inv_rms = ttnn.rsqrt(ttnn.add(variance, eps, memory_config=memory_config), memory_config=memory_config)
+    x_normed = ttnn.multiply(x, inv_rms, memory_config=memory_config)
+    return ttnn.multiply(x_normed, weight, memory_config=memory_config)
 
 
-def _causal_conv1d_fir(x, weight, bias, kernel_size, device):
+def _causal_conv1d_fir(x, weight, bias, kernel_size, device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     """
     Manual FIR decomposition of depthwise causal conv1d + SiLU.
 
     Used for large T where native ttnn.conv1d would OOM in L1.
     Decomposes the convolution into K element-wise multiply+accumulate
-    operations on shifted slices.
-
-    Args / Returns: same as causal_conv1d_ttnn.
+    operations on shifted slices. Uses DRAM by default for large-T buffers.
     """
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
 
@@ -55,41 +49,41 @@ def _causal_conv1d_fir(x, weight, bias, kernel_size, device):
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=memory_config,
     )
-    x_padded = ttnn.concat([pad, x], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, T+K-1, D]
+    x_padded = ttnn.concat([pad, x], dim=1, memory_config=memory_config)  # [B, T+K-1, D]
 
     weight_torch = ttnn.to_torch(weight)  # [D, 1, K]
 
     out = None
     for k in range(kernel_size):
         x_slice = x_padded[:, k : k + T]
-        x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+        x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT, memory_config=memory_config)
 
         w_k = weight_torch[:, 0, k].reshape(1, 1, D).contiguous()
         w_k_dev = ttnn.from_torch(
             w_k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-        term = ttnn.multiply(x_slice, w_k_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = term if out is None else ttnn.add(out, term, memory_config=ttnn.L1_MEMORY_CONFIG)
+        term = ttnn.multiply(x_slice, w_k_dev, memory_config=memory_config)
+        out = term if out is None else ttnn.add(out, term, memory_config=memory_config)
 
     if bias is not None:
         bias_torch = ttnn.to_torch(bias).reshape(1, 1, D).contiguous()
         bias_dev = ttnn.from_torch(
             bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        out = ttnn.add(out, bias_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = ttnn.add(out, bias_dev, memory_config=memory_config)
 
-    return ttnn.silu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+    return ttnn.silu(out, memory_config=memory_config)
 
 
-def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
+def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=128):
     """
     Depthwise causal conv1d + SiLU using native ttnn.conv1d.
 
     Falls back to manual FIR decomposition for T > max_conv_len to
-    avoid L1 OOM in the conv1d kernel.
+    avoid L1 OOM in the conv1d kernel.     Default 128 keeps T<=128 on native path while avoiding L1 OOM at T>=256.
 
     Args:
         x: [B, T, D] input (TILE_LAYOUT on device)
@@ -105,7 +99,7 @@ def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
 
     if T > max_conv_len:
-        return _causal_conv1d_fir(x, weight, bias, kernel_size, device)
+        return _causal_conv1d_fir(x, weight, bias, kernel_size, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # conv1d requires ROW_MAJOR NLC input
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -222,10 +216,14 @@ def gated_deltanet_forward_ttnn(
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
 
+    # Use DRAM for large-T to avoid L1 OOM (linear/conv outputs scale with T)
+    T_DRAM_THRESHOLD = 128
+    mem_cfg = ttnn.DRAM_MEMORY_CONFIG if T > T_DRAM_THRESHOLD else ttnn.L1_MEMORY_CONFIG
+
     # 1. Linear projections
-    q = ttnn.linear(hidden_states, q_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    k = ttnn.linear(hidden_states, k_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v = ttnn.linear(hidden_states, v_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q = ttnn.linear(hidden_states, q_proj_weight, memory_config=mem_cfg)
+    k = ttnn.linear(hidden_states, k_proj_weight, memory_config=mem_cfg)
+    v = ttnn.linear(hidden_states, v_proj_weight, memory_config=mem_cfg)
 
     # 2. Causal conv1d + SiLU
     q = causal_conv1d_ttnn(q, q_conv_weight, q_conv_bias, conv_kernel_size, device)
@@ -245,19 +243,19 @@ def gated_deltanet_forward_ttnn(
 
     # 4. Compute beta and g
     beta = ttnn.sigmoid(
-        ttnn.linear(hidden_states, b_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG),
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        ttnn.linear(hidden_states, b_proj_weight, memory_config=mem_cfg),
+        memory_config=mem_cfg,
     )
     if allow_neg_eigval:
-        beta = ttnn.multiply(beta, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        beta = ttnn.multiply(beta, 2.0, memory_config=mem_cfg)
 
-    a = ttnn.linear(hidden_states, a_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    a = ttnn.linear(hidden_states, a_proj_weight, memory_config=mem_cfg)
     # g = -A * softplus(a + dt_bias)
-    a_biased = ttnn.add(a, dt_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
-    sp = ttnn.softplus(a_biased, memory_config=ttnn.L1_MEMORY_CONFIG)
+    a_biased = ttnn.add(a, dt_bias, memory_config=mem_cfg)
+    sp = ttnn.softplus(a_biased, memory_config=mem_cfg)
     A = ttnn.exp(A_log, memory_config=ttnn.L1_MEMORY_CONFIG)
     A_neg = ttnn.neg(A, memory_config=ttnn.L1_MEMORY_CONFIG)
-    g = ttnn.multiply(A_neg, sp, memory_config=ttnn.L1_MEMORY_CONFIG)
+    g = ttnn.multiply(A_neg, sp, memory_config=mem_cfg)
 
     # 5. Gated delta rule (recurrent or chunked)
     if mode == "chunk":
@@ -270,6 +268,7 @@ def gated_deltanet_forward_ttnn(
             chunk_size=chunk_size,
             initial_state=recurrent_state,
             device=device,
+            mem_cfg_large_t=mem_cfg,
         )
     else:
         o, new_state = recurrent_gated_delta_rule_ttnn(
@@ -282,16 +281,16 @@ def gated_deltanet_forward_ttnn(
             device=device,
         )
 
-    # 6. Output normalization
+    # 6. Output normalization (use DRAM for large T to avoid L1 OOM)
     if use_gate and g_proj_weight is not None:
-        gate = ttnn.linear(hidden_states, g_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+        gate = ttnn.linear(hidden_states, g_proj_weight, memory_config=mem_cfg)
         gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim])
-        o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps)
+        o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps, memory_config=mem_cfg)
     else:
-        o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps)
+        o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps, memory_config=mem_cfg)
 
     # 7. Reshape and project output
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
-    o = ttnn.linear(o, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    o = ttnn.linear(o, o_proj_weight, memory_config=mem_cfg)
 
     return o, new_state
