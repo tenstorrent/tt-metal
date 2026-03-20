@@ -35,3 +35,10 @@ def pytest_addoption(parser):
         default=False,
         help="Whether to use HF-style rope, if not passed, the default mllama will be used",
     )
+    parser.addoption(
+        "--rope-perf-mode",
+        action="store",
+        default="full",
+        choices=("full", "prefill", "decode"),
+        help="For test_rope_performance: full = prefill+decode Tracy runs; prefill or decode = that phase only",
+    )
