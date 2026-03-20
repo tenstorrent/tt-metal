@@ -156,3 +156,116 @@ class LTXCausalConv3d(Module):
         )
 
         return x_BTHWC
+
+
+class LTXPixelNorm(Module):
+    """
+    Per-pixel RMS normalization: x / sqrt(mean(x², dim=channel) + eps).
+
+    No learned parameters. In BTHWC layout, normalizes along the last (channel) dim.
+    """
+
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # x shape: (B, T, H, W, C) or (1, B, T*H*W, C)
+        # PixelNorm: x / sqrt(mean(x², dim=-1, keepdim=True) + eps)
+        x_sq = ttnn.multiply(x, x)
+        mean_sq = ttnn.mean(x_sq, dim=-1, keepdim=True)
+        rms = ttnn.sqrt(ttnn.add(mean_sq, self.eps))
+        return ttnn.multiply(x, ttnn.reciprocal(rms))
+
+
+class LTXResnetBlock3D(Module):
+    """
+    LTX-2 Residual block: PixelNorm → SiLU → CausalConv3d × 2 with skip connection.
+
+    Architecture:
+        x → norm1 → silu → conv1 → norm2 → silu → conv2 → + residual
+        x → [norm3 → conv_shortcut if in_c != out_c] ------↗
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int | None = None,
+        eps: float = 1e-6,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+
+        out_channels = in_channels if out_channels is None else out_channels
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.norm1 = LTXPixelNorm()
+        self.conv1 = LTXCausalConv3d(
+            in_channels, out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+        )
+
+        self.norm2 = LTXPixelNorm()
+        self.conv2 = LTXCausalConv3d(
+            out_channels, out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+        )
+
+        self.has_shortcut = in_channels != out_channels
+        if self.has_shortcut:
+            # 1x1x1 conv for channel projection (no spatial/temporal change)
+            self.conv_shortcut = LTXCausalConv3d(
+                in_channels, out_channels, kernel_size=1, stride=1, mesh_device=mesh_device, dtype=dtype
+            )
+            self.norm3 = LTXPixelNorm()  # Simplified: use PixelNorm instead of GroupNorm(1)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if not self.has_shortcut:
+            # Remove shortcut/norm3 keys when using nn.Identity
+            keys_to_remove = [k for k in state if k.startswith("conv_shortcut") or k.startswith("norm3")]
+            for k in keys_to_remove:
+                del state[k]
+        else:
+            # norm3 is GroupNorm(1) in PyTorch — we use PixelNorm (no params), drop the weights
+            keys_to_remove = [k for k in state if k.startswith("norm3")]
+            for k in keys_to_remove:
+                del state[k]
+
+        # Remove non_linearity, dropout (no params)
+        keys_to_remove = [k for k in state if k.startswith("non_linearity") or k.startswith("dropout")]
+        for k in keys_to_remove:
+            del state[k]
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Args:
+            x_BTHWC: (B, T, H, W, C) in ROW_MAJOR layout
+
+        Returns:
+            (B, T, H, W, C_out) in ROW_MAJOR layout
+        """
+        residual = x_BTHWC
+
+        # Main path: norm → silu → conv → norm → silu → conv
+        h = self.norm1(x_BTHWC)
+        h = ttnn.silu(h)
+        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) if h.layout != ttnn.ROW_MAJOR_LAYOUT else h
+        h = self.conv1(h)
+
+        h = self.norm2(h)
+        h = ttnn.silu(h)
+        h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT) if h.layout != ttnn.ROW_MAJOR_LAYOUT else h
+        h = self.conv2(h)
+
+        # Skip connection
+        if self.has_shortcut:
+            residual = self.norm3(residual)
+            residual = (
+                ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
+                if residual.layout != ttnn.ROW_MAJOR_LAYOUT
+                else residual
+            )
+            residual = self.conv_shortcut(residual)
+
+        return ttnn.add(residual, h)
