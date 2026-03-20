@@ -10,6 +10,7 @@ This module provides utilities to load real-world operation configurations
 from the master JSON file and convert them into sweep test parameters.
 """
 
+import ast
 import json
 import os
 import sys
@@ -1183,6 +1184,31 @@ class MasterConfigLoader:
                 raise ValueError(f"Missing 'shape' in shard_spec: {shard_spec_dict}")
             if not orientation_str:
                 raise ValueError(f"Missing 'orientation' in shard_spec: {shard_spec_dict}")
+
+            orientation_str = str(orientation_str)
+            if "::" in orientation_str:
+                orientation_str = orientation_str.rsplit("::", 1)[-1]
+
+            if isinstance(shard_shape, str):
+                try:
+                    shard_shape = ast.literal_eval(shard_shape)
+                except (ValueError, SyntaxError) as e:
+                    raise ValueError(
+                        f"Invalid shard_spec shape (expected list or '[h,w]' string): {shard_shape!r}"
+                    ) from e
+            if not isinstance(shard_shape, (list, tuple)):
+                raise ValueError(
+                    f"shard_spec shape must be a sequence of ints, got {type(shard_shape)}: {shard_shape!r}"
+                )
+            shard_shape = [int(x) for x in shard_shape]
+
+            def _is_xy_corner_dict(d):
+                return isinstance(d, dict) and "x" in d and "y" in d and "start" not in d and "end" not in d
+
+            # Single rectangle as two corner dicts (common in bundled traces / nd_shard_spec):
+            # [{"x":0,"y":0},{"x":7,"y":1}] → one CoreRange (0,0)-(7,1), not two 1×1 cores.
+            if len(grid_list) == 2 and _is_xy_corner_dict(grid_list[0]) and _is_xy_corner_dict(grid_list[1]):
+                grid_list = [[grid_list[0], grid_list[1]]]
 
             # Create CoreRangeSet from grid. Bundled traces use several shapes:
             # - [{"start": {x,y}, "end": {x,y}}, ...]

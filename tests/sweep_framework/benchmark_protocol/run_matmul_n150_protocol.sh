@@ -33,7 +33,7 @@ Usage: $0 <command>
   write-json — write slice JSON files + combined protocol file for --vector-source file
   run        — sweeps_runner on combined protocol vectors (perf + optional memory)
   report     — summarize results_export using manifest
-  all        — generate && partition && write-json && run && report
+  all        — generate && partition && write-json && run && report (also: -all, --all)
 
 Environment:
   ARCH_NAME           — wormhole_b0 (default) or blackhole
@@ -102,6 +102,10 @@ run_report() {
 }
 
 cmd="${1:-}"
+# Accept common typos / flag-style invocations
+case "${cmd}" in
+  -all|--all) cmd="all" ;;
+esac
 case "${cmd}" in
   generate) run_generate ;;
   partition) run_partition ;;

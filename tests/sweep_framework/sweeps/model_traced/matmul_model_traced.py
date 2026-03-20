@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import ast
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
@@ -25,6 +26,70 @@ TIMEOUT = 300
 
 # Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
+
+
+def _coerce_matmul_shape(shape):
+    if shape is None:
+        return None
+    if isinstance(shape, (list, tuple)):
+        return tuple(int(x) for x in shape)
+    if isinstance(shape, str):
+        return tuple(int(x) for x in ast.literal_eval(shape.strip()))
+    return tuple(int(x) for x in shape)
+
+
+def _matmul_leading_batch_volume(shape_tuple):
+    if not shape_tuple or len(shape_tuple) < 3:
+        return 1
+    v = 1
+    for d in shape_tuple[:-2]:
+        v *= int(d)
+    return v
+
+
+def _promote_arg01_tensors_to_inputs(loader_inst: MasterConfigLoader, kwargs: dict) -> tuple | None:
+    """
+    Some exported vectors carry only raw trace keys arg0/arg1 (nested {"Tensor": ...}) while
+    input_a_* / input_b_* were serialized as __ABSENT__ and dropped from JSON. Reconstruct
+    the sweep tensor fields so run() receives the same structure as fully-promoted configs.
+    Returns (input_a_tuple, input_b_tuple) or None if arg0 is not a promotable trace tensor.
+    Each tuple is (shape, dtype, layout, memory_config, tensor_placement_or_None).
+    """
+    raw0 = kwargs.get("arg0")
+    if raw0 is None or raw0 == "__ABSENT__":
+        return None
+
+    def _one(arg_key: str):
+        raw = kwargs.pop(arg_key, None)
+        if raw is None or raw == "__ABSENT__":
+            return None
+        try:
+            tc = loader_inst.extract_tensor_config(raw)
+            if not tc:
+                kwargs[arg_key] = raw
+                return None
+            parsed_mem = loader_inst.parse_memory_config(tc.memory_config, tc.shape)
+            if parsed_mem is None:
+                kwargs[arg_key] = raw
+                return None
+            return (
+                tuple(tc.shape),
+                loader_inst.parse_dtype(tc.dtype),
+                loader_inst.parse_layout(tc.layout),
+                parsed_mem,
+                tc.tensor_placement,
+            )
+        except Exception:
+            kwargs[arg_key] = raw
+            return None
+
+    a = _one("arg0")
+    b = _one("arg1")
+    if a is None:
+        return None
+    return a, b
+
+
 # Default: Run exact traced configs from real models with all parameter values in vectors
 model_traced_params = loader.get_suite_parameters("matmul")
 
@@ -80,10 +145,10 @@ def mesh_device_fixture():
 
 
 def run(
-    input_a_shape,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
+    input_a_shape=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
     input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
@@ -95,6 +160,25 @@ def run(
     **kwargs,  # Accept scalar, placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
+
+    if input_a_shape is None:
+        promoted = _promote_arg01_tensors_to_inputs(loader, kwargs)
+        if promoted:
+            pa, pb = promoted
+            input_a_shape, input_a_dtype, input_a_layout, input_a_memory_config, pl_a = pa
+            if pl_a is not None:
+                kwargs.setdefault("input_a_tensor_placement", pl_a)
+            if pb is not None:
+                input_b_shape, input_b_dtype, input_b_layout, input_b_memory_config, pl_b = pb
+                if pl_b is not None:
+                    kwargs.setdefault("input_b_tensor_placement", pl_b)
+
+    if input_a_shape is None or input_a_dtype is None or input_a_layout is None or input_a_memory_config is None:
+        # sweeps_runner expects results[0] to be (pass_bool, message), results[1] e2e time in ns
+        return [
+            (False, "run() missing tensor inputs: expected input_a_* fields or promotable arg0/arg1 trace tensors"),
+            0,
+        ]
 
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
@@ -121,9 +205,9 @@ def run(
     if "memory_config" not in op_kwargs and output_memory_config is not None:
         op_kwargs["memory_config"] = output_memory_config
 
-    # V2 format provides separate shapes for each input
-    shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
-    shape_b = tuple(input_b_shape) if input_b_shape and isinstance(input_b_shape, (list, tuple)) else shape_a
+    # V2 format provides separate shapes for each input (vectors may stringify tuples for JSON)
+    shape_a = _coerce_matmul_shape(input_a_shape)
+    shape_b = _coerce_matmul_shape(input_b_shape) if input_b_shape is not None else shape_a
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -240,6 +324,15 @@ def run(
                 input_tensor_b = ttnn.interleaved_to_sharded(input_tensor_b_interleaved, input_b_memory_config)
             else:
                 input_tensor_b = input_tensor_b_interleaved
+
+    batch_vol_a = _matmul_leading_batch_volume(shape_a)
+    batch_vol_b = _matmul_leading_batch_volume(shape_b)
+    if not is_host and batch_vol_a > 1 and batch_vol_b > 1 and ttnn.is_sharded(input_tensor_a):
+        # MatmulDeviceOperation (MatmulMultiCoreReuseProgramConfig) requires M % out_subblock_h when
+        # both inputs are multi-batch; auto-picked program config can TT_FATAL for height-sharded A
+        # on e.g. Whisper (2, 20, 1, 64) × (2, 20, 64, N) on a single WH card. Interleaved A
+        # preserves logical matmul vs torch golden while avoiding that sharded program path.
+        input_tensor_a = ttnn.sharded_to_interleaved(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
 
     start_time = start_measuring_time()
     output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b, **op_kwargs)
