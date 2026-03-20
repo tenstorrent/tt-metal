@@ -100,25 +100,49 @@ def run(
         shape = input_a_shape
 
     # Traced configs may have 4D [batch, 1, seq_len, hidden_dim].
-    # The standard op expects 3D; the experimental op handles 4D natively.
-    use_experimental = len(shape) == 4 and shape[1] == 1
+    # The experimental op handles 4D natively but requires 12+ column grid.
+    # Fall back to standard op (3D) if device grid is too small.
+    device_grid = device.compute_with_storage_grid_size()
+    use_experimental = len(shape) == 4 and shape[1] == 1 and device_grid.x >= 12
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
-    # Golden function expects 3D input — squeeze 4D for golden, unsqueeze output to match TTNN
-    golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
-    golden_input = torch_input_tensor_a.squeeze(1) if use_experimental else torch_input_tensor_a
-    (
-        torch_query_tensor,
-        torch_key_tensor,
-        torch_value_tensor,
-    ) = golden_function(golden_input, num_heads=num_heads)
-    # No unsqueeze needed — both golden and TTNN return 4D [B, H, S, D]
+    if use_experimental:
+        # Experimental op golden from bert_large reference test:
+        # Input [batch, 1, seq, hidden] → split hidden into 3 equal parts (Q, K, V)
+        # → reshape each [batch, seq, num_heads, head_dim] → transpose to [batch, num_heads, seq, head_dim]
+        # K gets extra transpose to [batch, num_heads, head_dim, seq]
+        batch = shape[0]
+        seq_len = shape[2]
+        hidden = shape[3]
+        head_dim = hidden // (3 * num_heads)
+        per_head = num_heads * head_dim  # size of each Q/K/V chunk
+
+        ref_q, ref_k, ref_v = torch.split(torch_input_tensor_a.float(), per_head, dim=-1)
+        torch_query_tensor = ref_q.reshape(batch, seq_len, num_heads, head_dim).transpose(-3, -2)
+        torch_key_tensor = ref_k.reshape(batch, seq_len, num_heads, head_dim).transpose(-3, -2).transpose(-2, -1)
+        torch_value_tensor = ref_v.reshape(batch, seq_len, num_heads, head_dim).transpose(-3, -2)
+    else:
+        # Standard op needs 3D input — squeeze 4D if needed
+        golden_function = ttnn.get_golden_function(ttnn.transformer.split_query_key_value_and_split_heads)
+        needs_squeeze = len(shape) == 4 and shape[1] == 1
+        golden_input = torch_input_tensor_a.squeeze(1) if needs_squeeze else torch_input_tensor_a
+        if needs_squeeze:
+            torch_input_tensor_a = torch_input_tensor_a.squeeze(1)
+        (
+            torch_query_tensor,
+            torch_key_tensor,
+            torch_value_tensor,
+        ) = golden_function(golden_input, num_heads=num_heads)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)
+
+    # When falling back to standard op (needs_squeeze), use DRAM — the traced sharded
+    # config was for 4D shape and won't work with the squeezed 3D tensor.
+    safe_mem = input_a_memory_config if not needs_squeeze else ttnn.DRAM_MEMORY_CONFIG
 
     if not is_host:
         if is_mesh_device and input_a_tensor_placement:
@@ -127,11 +151,10 @@ def run(
                 device,
                 input_a_dtype,
                 input_a_layout,
-                input_a_memory_config,
+                safe_mem,
                 input_a_tensor_placement,
             )
         else:
-            # Create on DRAM first, then move to traced sharded config if needed
             input_tensor_a = ttnn.from_torch(
                 torch_input_tensor_a,
                 dtype=input_a_dtype,
@@ -139,11 +162,15 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            if hasattr(input_a_memory_config, "is_sharded") and input_a_memory_config.is_sharded():
+            if (
+                not needs_squeeze
+                and hasattr(input_a_memory_config, "is_sharded")
+                and input_a_memory_config.is_sharded()
+            ):
                 try:
                     input_tensor_a = ttnn.to_memory_config(input_tensor_a, input_a_memory_config)
                 except Exception:
-                    pass  # Stay on DRAM
+                    pass
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
@@ -164,8 +191,11 @@ def run(
             input_tensor_a, grid, **op_kwargs
         )
     else:
+        # Standard op: don't pass memory_config when falling back from experimental
+        # (sharded output memory_config produces wrong results on standard op)
+        std_kwargs = {k: v for k, v in op_kwargs.items() if k != "memory_config"} if needs_squeeze else op_kwargs
         query_tensor, key_tensor, value_tensor = ttnn.transformer.split_query_key_value_and_split_heads(
-            input_tensor_a, **op_kwargs
+            input_tensor_a, **std_kwargs
         )
     query_tensor = mesh_tensor_to_torch(query_tensor, device if is_mesh_device else None)
     key_tensor = mesh_tensor_to_torch(key_tensor, device if is_mesh_device else None)
