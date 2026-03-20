@@ -344,15 +344,28 @@ class StableSort(Enum):
 
 
 class MailboxesPerf(Enum):
-    Unpacker = 0x1FFC4
-    Math = 0x1FFC8
-    Packer = 0x1FFCC
+    Unpacker = 0x1FFB8
+    Math = Unpacker + 4
+    Packer = Unpacker + 8
+    BriscCommand0 = Unpacker + 12
+    BriscCommand1 = Unpacker + 16
+    BriscCounter = Unpacker + 20
 
 
 class MailboxesDebug(Enum):
-    Unpacker = 0x6DFC4
-    Math = 0x6DFC8
-    Packer = 0x6DFCC
+    Unpacker = 0x6DFB8
+    Math = Unpacker + 4
+    Packer = Unpacker + 8
+    BriscCommand0 = Unpacker + 12
+    BriscCommand1 = Unpacker + 16
+    BriscCounter = Unpacker + 20
+
+
+class BriscCmd(Enum):
+    IDLE_STATE = 0
+    START_TRISCS = 1
+    RESET_TRISCS = 2
+    UPDATE_START_ADDR_CACHE_AND_START = 3
 
 
 format_tile_sizes = {

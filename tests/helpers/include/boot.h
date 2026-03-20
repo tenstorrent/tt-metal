@@ -9,6 +9,7 @@
 
 #include "cfg_defines.h"
 #include "ckernel.h"
+#include "ckernel_helper.h"
 
 // C-runtime related linker symbols
 extern volatile char __ldm_bss_start[], __ldm_bss_end[];
@@ -67,15 +68,20 @@ void _fini(void)
 {
 }
 
-inline void device_setup()
+using mailbox_t = volatile std::uint32_t*;
+
+#ifdef ARCH_WORMHOLE
+constexpr std::uint32_t TRISC_START_BASE    = 0x16DFF0;
+constexpr std::uint32_t TRISC_CONFIG_REGS[] = {TRISC_RESET_PC_SEC0_PC_ADDR32, TRISC_RESET_PC_SEC1_PC_ADDR32, TRISC_RESET_PC_SEC2_PC_ADDR32};
+
+mailbox_t trisc_start_addresses = reinterpret_cast<mailbox_t>(TRISC_START_BASE);
+#endif
+
+TT_ALWAYS_INLINE void device_setup()
 {
 #if defined(ARCH_WORMHOLE)
     // Use array-based initialization for consecutive TRISC addresses
-    constexpr std::uint32_t TRISC_START_BASE    = 0x16DFF0;
-    constexpr std::uint32_t TRISC_CONFIG_REGS[] = {TRISC_RESET_PC_SEC0_PC_ADDR32, TRISC_RESET_PC_SEC1_PC_ADDR32, TRISC_RESET_PC_SEC2_PC_ADDR32};
-
-    volatile std::uint32_t* const trisc_start_addresses = reinterpret_cast<volatile std::uint32_t*>(TRISC_START_BASE);
-    volatile std::uint32_t tt_reg_ptr* cfg_regs         = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
+    volatile std::uint32_t tt_reg_ptr* cfg_regs = reinterpret_cast<volatile std::uint32_t tt_reg_ptr*>(TENSIX_CFG_BASE);
 
     for (unsigned int i = 0; i < std::size(TRISC_CONFIG_REGS); ++i)
     {
@@ -117,23 +123,54 @@ inline void device_setup()
 #endif
 }
 
-inline void clear_trisc_soft_reset()
-{
 #ifdef ARCH_QUASAR
-    constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x3000;
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x3000;
 #else
-    constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
+constexpr std::uint32_t TRISC_SOFT_RESET_MASK = 0x7000;
 #endif
 
-    volatile std::uint32_t* reset_before = reinterpret_cast<std::uint32_t*>(0x64FF0);
-    volatile std::uint32_t* reset_after  = reinterpret_cast<std::uint32_t*>(0x64FF4);
-
+TT_ALWAYS_INLINE void clear_trisc_soft_reset()
+{
     std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
-    *reset_before            = soft_reset;
-
     soft_reset &= ~TRISC_SOFT_RESET_MASK;
     ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
 
-    soft_reset   = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
-    *reset_after = soft_reset;
+    do
+    {
+        ckernel::invalidate_data_cache();
+    } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
+}
+
+TT_ALWAYS_INLINE void set_triscs_soft_reset()
+{
+    std::uint32_t soft_reset = ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0);
+    soft_reset |= TRISC_SOFT_RESET_MASK;
+    ckernel::reg_write(RISCV_DEBUG_REG_SOFT_RESET_0, soft_reset);
+    do
+    {
+        ckernel::invalidate_data_cache();
+    } while (ckernel::reg_read(RISCV_DEBUG_REG_SOFT_RESET_0) != soft_reset);
+}
+
+TT_ALWAYS_INLINE void enable_branch_prediction()
+{
+    volatile std::uint32_t* tt_reg_ptr cfg_ptr = ckernel::get_cfg_pointer();
+    cfg_ptr[DISABLE_RISC_BP_Disable_main_ADDR32] &= ~DISABLE_RISC_BP_Disable_main_MASK;
+}
+
+TT_ALWAYS_INLINE void disable_branch_prediction()
+{
+    volatile std::uint32_t* tt_reg_ptr cfg_ptr = ckernel::get_cfg_pointer();
+    cfg_ptr[DISABLE_RISC_BP_Disable_main_ADDR32] |= DISABLE_RISC_BP_Disable_main_MASK;
+}
+
+template <typename T, typename U, typename = std::enable_if_t<std::is_trivially_copyable_v<T> && std::is_trivially_assignable_v<T&, U>>>
+inline void commit_store(volatile T* ptr, U&& val)
+{
+    ckernel::store_blocking(ptr, val);
+
+    do
+    {
+        asm volatile("nop");
+    } while (ckernel::load_blocking(ptr) != val);
 }

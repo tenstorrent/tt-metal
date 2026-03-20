@@ -363,7 +363,6 @@ class PerfConfig(TestConfig):
                 self.write_runtimes_to_L1(location)
                 elfs = self.run_elf_files(location)
                 wait_for_tensix_operations_finished(elfs, location)
-
                 profiler_data = Profiler.get_data(
                     self.test_name, self.variant_id, location
                 )
