@@ -119,7 +119,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map);
 tt::tt_metal::KernelSource MakeKernelSource(const KernelSpec& kernel_spec);
 tt::tt_metal::experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
-    const KernelSpec& kernel_spec);
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
 tt::tt_metal::experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id);
 std::set<tt::tt_metal::DataMovementProcessor> GetDMProcessorSet(DMProcessorMask mask);
@@ -167,15 +167,13 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
         std::shared_ptr<Kernel> kernel;
 
         if (kernel_spec.is_dm_kernel()) {
-            auto config = MakeQuasarDataMovementConfig(kernel_spec);
+            auto config = MakeQuasarDataMovementConfig(kernel_spec, dfb_name_to_id);
             auto processors = GetDMProcessorSet(kernel_to_dm_processor_mask_map.at(&kernel_spec));
-            // TODO: Get DFB local accessor names -> DFB ID; find a way to get this down through the headergen mechanism
             kernel = std::make_shared<experimental::quasar::QuasarDataMovementKernel>(
                 kernel_src, node_ranges, config, processors);
         } else {
             auto config = MakeQuasarComputeConfig(kernel_spec, dfb_name_to_id);
             auto processors = GetComputeProcessorSet(kernel_to_compute_processor_mask_map.at(&kernel_spec));
-            // TODO: Get DFB local accessor names -> DFB ID; find a way to get this down through the headergen mechanism
             kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
                 kernel_src, node_ranges, config, processors);
         }
@@ -837,7 +835,8 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec) {
 // MakeQuasarDataMovementConfig: Create a QuasarDataMovementConfig from a KernelSpec
 // ----------------------------------------------------------------------------
 
-experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(const KernelSpec& kernel_spec) {
+experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
+    const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
     TT_FATAL(kernel_spec.is_dm_kernel(), "Expected a DM kernel");
 
     // Convert defines from vector<pair> to map
@@ -846,11 +845,21 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(cons
         defines_map[key] = value;
     }
 
+    // Start with user-provided compile-time args, then add DFB accessor mappings
+    // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
+    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
+    //    for creating DFBs from local accessor names.
+    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        named_compile_args[dfb_binding.local_accessor_name] = dfb_id;
+    }
+
     return experimental::quasar::QuasarDataMovementConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = defines_map,
-        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .named_compile_args = named_compile_args,
         .is_legacy_kernel = false,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
@@ -893,6 +902,16 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         unpack_modes[dfb_id] = mode;
     }
 
+    // Start with user-provided compile-time args, then add DFB accessor mappings
+    // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
+    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
+    //    for creating DFBs from local accessor names.
+    auto named_compile_args = kernel_spec.compile_time_arg_bindings;
+    for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
+        uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+        named_compile_args[dfb_binding.local_accessor_name] = dfb_id;
+    }
+
     return experimental::quasar::QuasarComputeConfig{
         .num_threads_per_cluster = kernel_spec.num_threads,
         .math_fidelity = compute_config.math_fidelity,
@@ -903,7 +922,7 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
         .math_approx_mode = compute_config.math_approx_mode,
         .compile_args = {},  // Compile args are passed via named_compile_args
         .defines = defines_map,
-        .named_compile_args = kernel_spec.compile_time_arg_bindings,
+        .named_compile_args = named_compile_args,
         .opt_level = kernel_spec.compiler_options.opt_level,
     };
 }
