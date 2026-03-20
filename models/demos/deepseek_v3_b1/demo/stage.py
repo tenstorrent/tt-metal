@@ -42,6 +42,7 @@ class StageContext:
     pipeline_config: list
     my_stage_idx: int
     my_local_submeshes: dict[int, ttnn.MeshDevice]
+    prev_stage_exit_socket: object = None
 
 
 class StageKind(ABC):
@@ -81,6 +82,7 @@ class EmbeddingStage(StageKind):
             pipeline_config=ctx.pipeline_config,
             stage_idx=ctx.my_stage_idx,
             my_local_submeshes=ctx.my_local_submeshes,
+            prev_stage_exit_socket=ctx.prev_stage_exit_socket,
         )
 
 
@@ -111,6 +113,9 @@ class PassthroughStage(StageKind):
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
             pipeline_config=ctx.pipeline_config,
+            stage_idx=ctx.my_stage_idx,
+            my_local_submeshes=ctx.my_local_submeshes,
+            prev_stage_exit_socket=ctx.prev_stage_exit_socket,
         )
 
 
@@ -130,6 +135,9 @@ class MoEDecoderStage(StageKind):
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             pipeline_config=ctx.pipeline_config,
+            stage_idx=ctx.my_stage_idx,
+            my_local_submeshes=ctx.my_local_submeshes,
+            prev_stage_exit_socket=ctx.prev_stage_exit_socket,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -155,6 +163,9 @@ class DenseDecoderStage(StageKind):
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             pipeline_config=ctx.pipeline_config,
+            stage_idx=ctx.my_stage_idx,
+            my_local_submeshes=ctx.my_local_submeshes,
+            prev_stage_exit_socket=ctx.prev_stage_exit_socket,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -193,6 +204,7 @@ class LMHeadStage(StageKind):
         self._lmhead_state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        print(f"LMHeadStage creating pipeline block for mesh device: {ctx.mesh_device}")
         mesh_device = ctx.mesh_device
         my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
@@ -214,6 +226,7 @@ class LMHeadStage(StageKind):
             pipeline_config=ctx.pipeline_config,
             stage_idx=ctx.my_stage_idx,
             my_local_submeshes=ctx.my_local_submeshes,
+            prev_stage_exit_socket=ctx.prev_stage_exit_socket,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:

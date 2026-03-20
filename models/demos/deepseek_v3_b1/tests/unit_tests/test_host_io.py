@@ -630,3 +630,202 @@ def test_multi_stage_pipeline_loopback_with_embedding(
     socket_interface_5.terminate(False)
     socket_interface_6.terminate(False)
     socket_interface_7.terminate(True)
+
+
+@pytest.mark.parametrize(
+    "tensor_size_bytes, fifo_size, num_iterations",
+    [
+        (64, 128, 512),
+    ],
+)
+@pytest.mark.parametrize(
+    "h2d_mode",
+    [
+        ttnn.H2DMode.HOST_PUSH,
+        #  ttnn.H2DMode.DEVICE_PULL,
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(8, 4)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(7168),
+        }
+    ],
+    indirect=True,
+)
+def test_multi_stage_pipeline_loopback_with_submeshes(
+    mesh_device, tensor_size_bytes, fifo_size, num_iterations, h2d_mode
+):
+    if ttnn.get_num_devices() < 32:
+        pytest.skip("Test requires a full galaxy")
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    tensor_size_datums = tensor_size_bytes // 4
+
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
+    start_device_coord = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord_2 = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord_3 = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord_4 = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord_5 = ttnn.MeshCoordinate(0, 0)
+    intermed_device_coord_6 = ttnn.MeshCoordinate(0, 0)
+    end_device_coord = ttnn.MeshCoordinate(0, 0)
+
+    entry_core_coord = ttnn.CoreCoord(0, 0)
+    exit_core_coord = ttnn.CoreCoord(1, 1)
+
+    h2d_core = ttnn.MeshCoreCoord(start_device_coord, entry_core_coord)
+    fwd_core_0 = ttnn.MeshCoreCoord(start_device_coord, exit_core_coord)
+    fwd_core_1 = ttnn.MeshCoreCoord(intermed_device_coord, entry_core_coord)
+    fwd_core_2 = ttnn.MeshCoreCoord(intermed_device_coord, exit_core_coord)
+    fwd_core_3 = ttnn.MeshCoreCoord(intermed_device_coord_2, entry_core_coord)
+    fwd_core_4 = ttnn.MeshCoreCoord(intermed_device_coord_2, exit_core_coord)
+    fwd_core_5 = ttnn.MeshCoreCoord(intermed_device_coord_3, entry_core_coord)
+    fwd_core_6 = ttnn.MeshCoreCoord(intermed_device_coord_3, exit_core_coord)
+    fwd_core_7 = ttnn.MeshCoreCoord(intermed_device_coord_4, entry_core_coord)
+    fwd_core_8 = ttnn.MeshCoreCoord(intermed_device_coord_4, exit_core_coord)
+    fwd_core_9 = ttnn.MeshCoreCoord(intermed_device_coord_5, entry_core_coord)
+    fwd_core_10 = ttnn.MeshCoreCoord(intermed_device_coord_5, exit_core_coord)
+    fwd_core_11 = ttnn.MeshCoreCoord(intermed_device_coord_6, entry_core_coord)
+    fwd_core_12 = ttnn.MeshCoreCoord(intermed_device_coord_6, exit_core_coord)
+    fwd_core_13 = ttnn.MeshCoreCoord(end_device_coord, entry_core_coord)
+    d2h_core = ttnn.MeshCoreCoord(end_device_coord, exit_core_coord)
+
+    logger.info("Creating and Running Host Interface")
+
+    h2d_socket = ttnn.H2DSocket(submeshes[0], h2d_core, ttnn.BufferType.L1, fifo_size, h2d_mode)
+    d2h_socket = ttnn.D2HSocket(submeshes[0], d2h_core, fifo_size)
+
+    host_io = HostInterface(
+        h2d_socket,
+        d2h_socket,
+        tensor_size_bytes,
+        tensor_size_bytes,
+        core_to_core_socket_buffer_size=fifo_size,
+        h2d_downstream_core=fwd_core_0,
+        d2h_upstream_core=fwd_core_13,
+    )
+    socket_interface_1 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_0,
+        fwd_core_1,
+        upstream_socket=host_io.get_downstream_socket(),
+        downstream_core_coord=fwd_core_2,
+        sender_mesh=MeshWrapper(submeshes[0]),
+        receiver_mesh=MeshWrapper(submeshes[1]),
+    )
+    socket_interface_2 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_2,
+        fwd_core_3,
+        upstream_socket=socket_interface_1.get_downstream_socket(),
+        downstream_core_coord=fwd_core_4,
+        sender_mesh=MeshWrapper(submeshes[1]),
+        receiver_mesh=MeshWrapper(submeshes[2]),
+    )
+    socket_interface_3 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_4,
+        fwd_core_5,
+        upstream_socket=socket_interface_2.get_downstream_socket(),
+        downstream_core_coord=fwd_core_6,
+        sender_mesh=MeshWrapper(submeshes[2]),
+        receiver_mesh=MeshWrapper(submeshes[3]),
+    )
+    socket_interface_4 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_6,
+        fwd_core_7,
+        upstream_socket=socket_interface_3.get_downstream_socket(),
+        downstream_core_coord=fwd_core_8,
+        sender_mesh=MeshWrapper(submeshes[3]),
+        receiver_mesh=MeshWrapper(submeshes[4]),
+    )
+    socket_interface_5 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_8,
+        fwd_core_9,
+        upstream_socket=socket_interface_4.get_downstream_socket(),
+        downstream_core_coord=fwd_core_10,
+        sender_mesh=MeshWrapper(submeshes[4]),
+        receiver_mesh=MeshWrapper(submeshes[5]),
+    )
+    socket_interface_6 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_10,
+        fwd_core_11,
+        upstream_socket=socket_interface_5.get_downstream_socket(),
+        downstream_core_coord=fwd_core_12,
+        sender_mesh=MeshWrapper(submeshes[5]),
+        receiver_mesh=MeshWrapper(submeshes[6]),
+    )
+    socket_interface_7 = SocketInterface(
+        tensor_size_bytes,
+        fifo_size,
+        tensor_size_bytes,
+        fwd_core_12,
+        fwd_core_13,
+        upstream_socket=socket_interface_6.get_downstream_socket(),
+        downstream_socket=host_io.get_upstream_socket(),
+        sender_mesh=MeshWrapper(submeshes[6]),
+        receiver_mesh=MeshWrapper(submeshes[7]),
+    )
+    host_io.run()
+    socket_interface_1.run()
+    socket_interface_2.run()
+    socket_interface_3.run()
+    socket_interface_4.run()
+    socket_interface_5.run()
+    socket_interface_6.run()
+    socket_interface_7.run()
+
+    logger.info(f"Transferring Data Over H <-> D Interface for {num_iterations} iterations")
+    logger.info(f"Tensor Size: {tensor_size_bytes} bytes, FIFO Size: {fifo_size} bytes")
+    logger.info(f"H2D Mode: {h2d_mode}")
+    logger.info(f"FIFO Size: {fifo_size} bytes")
+    for i in range(num_iterations):
+        torch_input = torch.arange(i * tensor_size_datums, (i + 1) * tensor_size_datums, dtype=torch.int32).reshape(
+            1, tensor_size_datums
+        )
+        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        torch_output = torch.zeros(1, tensor_size_datums, dtype=torch.int32)
+        output_tensor = ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        h2d_socket.write_tensor(input_tensor)
+        d2h_socket.read_tensor(output_tensor)
+
+        result_torch = ttnn.to_torch(output_tensor).to(torch.int32)
+        match = torch.equal(torch_input, result_torch)
+        assert match, f"H2D → D2H loopback data mismatch!\nExpected: {torch_input}\nGot: {result_torch}"
+
+    host_io.terminate(False)
+    socket_interface_1.terminate(False)
+    socket_interface_2.terminate(False)
+    socket_interface_3.terminate(False)
+    socket_interface_4.terminate(False)
+    socket_interface_5.terminate(False)
+    socket_interface_6.terminate(False)
+    socket_interface_7.terminate(True)

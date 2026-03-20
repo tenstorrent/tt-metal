@@ -81,7 +81,7 @@ class SocketInterface:
                 assert upstream_socket.get_mesh_device().get_system_mesh_id() == sender_mesh.get_mesh_id()
                 self.upstream_socket = upstream_socket
                 assert upstream_core_coord is None
-            else:
+            elif upstream_core_coord is not None:
                 # Upstream socket not provided, create a new socket, on the sender mesh
                 socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
                 socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
@@ -96,7 +96,7 @@ class SocketInterface:
                 assert downstream_socket.get_mesh_device().get_system_mesh_id() == receiver_mesh.get_mesh_id()
                 self.downstream_socket = downstream_socket
                 assert downstream_core_coord is None
-            else:
+            elif downstream_core_coord is not None:
                 socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
                 socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
                 socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
@@ -354,7 +354,7 @@ class SocketInterface:
                 ttnn.synchronize_device(self.mesh_device)
 
     def get_downstream_socket(self):
-        return self.downstream_socket_pair[1]
+        return self.downstream_socket
 
     def get_upstream_socket(self):
-        return self.upstream_socket_pair[0]
+        return self.upstream_socket

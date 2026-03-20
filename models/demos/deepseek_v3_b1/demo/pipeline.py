@@ -217,6 +217,7 @@ class Pipeline:
         pipeline_config: list | None = None,
         stage_idx: int | None = None,
         my_local_submeshes: dict[int, ttnn.MeshDevice] = {},
+        pipeline_block: PipelineBlock | None = None,
     ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
@@ -233,15 +234,17 @@ class Pipeline:
             my_stage_idx=self._my_stage_idx,
             my_local_submeshes=my_local_submeshes,
         )
-        self._pipeline_block: PipelineBlock | None = None
+        self._pipeline_block = pipeline_block
 
     @property
     def my_stage_idx(self) -> int:
         return self._my_stage_idx
 
-    def configure_block(self) -> None:
+    def configure_block(self, prev_stage_exit_socket=None) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
-        self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
+        if self._pipeline_block is None:
+            self._ctx.prev_stage_exit_socket = prev_stage_exit_socket
+            self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
 
     def setup(self) -> None:
         """Phase 2: Allocate tensors, weights, semaphores on device."""
@@ -282,6 +285,11 @@ class Pipeline:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.setup_and_run() or configure_block() must be called first")
         self._pipeline_block.read_output(output_tensor)
+
+    def get_exit_downstream_socket(self):
+        if self._pipeline_block is None:
+            raise RuntimeError("Pipeline.configure_block() must be called first")
+        return self._pipeline_block.get_exit_downstream_socket()
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
@@ -379,7 +387,12 @@ class PipelineBuilder:
             ), f"Exit node {pipeline_socket_config.exit_node_coord} and entry node {next_pipeline_socket_config.entry_node_coord} are not neighbours in submesh {pipeline_socket_config.submesh_idx} and {next_pipeline_socket_config.submesh_idx}"
 
     def create_pipeline_stages(self, submeshes: list[ttnn.MeshDevice]) -> list[Pipeline]:
-        """Create a Pipeline for each stage, calling each factory with its submesh."""
+        """Create a Pipeline for each stage, calling each factory with its submesh.
+
+        Pipeline blocks are created in order and chained: each stage's exit
+        socket creates a downstream socket pair that the next stage receives
+        as its upstream, following the SocketInterface chaining pattern.
+        """
         assert len(submeshes) == self.num_stages, "Number of submeshes must match number of stages"
         pipeline_configs = self.generate_pipeline_socket_configs(submeshes)
         pipeline_stages = []
@@ -388,6 +401,8 @@ class PipelineBuilder:
             submesh_idx = pipeline_configs[stage_idx].submesh_idx
             my_local_submeshes[stage_idx] = submeshes[submesh_idx]
 
+        print("my local submeshes: ", my_local_submeshes)
+        prev_stage_exit_socket = None
         for stage_idx, stage_factory in self._stage_factories.items():
             submesh_idx = pipeline_configs[stage_idx].submesh_idx
             stage_kind = stage_factory(submeshes[submesh_idx])
@@ -398,6 +413,8 @@ class PipelineBuilder:
                 stage_idx=stage_idx,
                 my_local_submeshes=my_local_submeshes,
             )
+            pipeline_stage.configure_block(prev_stage_exit_socket=prev_stage_exit_socket)
+            prev_stage_exit_socket = pipeline_stage.get_exit_downstream_socket()
             pipeline_stages.append(pipeline_stage)
 
         return pipeline_stages
