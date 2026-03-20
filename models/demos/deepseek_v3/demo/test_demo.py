@@ -4,9 +4,11 @@
 import json
 import os
 import unicodedata
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
+from loguru import logger
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
@@ -14,6 +16,17 @@ MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
+
+
+@lru_cache(maxsize=1)
+def get_total_model_layers(model_path: Path) -> int:
+    with open(model_path / "config.json", "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    total_layers = config.get("num_hidden_layers")
+    if not isinstance(total_layers, int):
+        raise ValueError(f"Expected integer num_hidden_layers in {(model_path / 'config.json')}, got {total_layers!r}")
+    return total_layers
 
 
 def is_allowed_unicode_letter(char: str) -> bool:
@@ -58,6 +71,16 @@ def validate_english_keyboard_output(results: dict) -> None:
             "Punctuation/symbols and Latin letters (including accents, e.g. é) are allowed; "
             "other scripts (e.g. CJK) are not."
         )
+
+
+def maybe_validate_english_keyboard_output(results: dict, override_num_layers: int | None) -> None:
+    total_layers = get_total_model_layers(MODEL_PATH)
+    num_layers = override_num_layers if override_num_layers is not None else total_layers
+    if num_layers < total_layers:
+        logger.info(f"Output validation is skipped as {num_layers} < {total_layers} layers.")
+        return
+
+    validate_english_keyboard_output(results)
 
 
 def _demo_case(
@@ -223,7 +246,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         run_kwargs["stop_at_eos"] = case["stop_at_eos"]
 
     results = run_demo(**run_kwargs)
-    validate_english_keyboard_output(results)
+    maybe_validate_english_keyboard_output(results, case["override_num_layers"])
 
     # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
     # should always produce the requested token count.
