@@ -484,7 +484,9 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
 
 @dataclass
 class MorehFullConfig(OpConfigBase):
-    shape: ttnn.Shape
+    """Common parameters for a ttnn.moreh_full op"""
+
+    shape: list[int]
     fill_value: int
     device: ttnn.Device
     dtype: ttnn.DataType
@@ -518,6 +520,28 @@ class SelectiveReduceCombineConfig(OpConfigBase):
     topology: ttnn.Topology = ttnn.Topology.Ring
     num_links: int = 4
     optional_cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+
+
+@dataclass
+class DeepseekMoEPostCombineTilizeConfig(OpConfigBase):
+    """Common parameters for a ttnn.deepseek_moe_post_combine_tilize op"""
+
+    @classmethod
+    def get_sharded_memory_config(cls):
+        return ttnn.MemoryConfig(
+            buffer_type=ttnn.BufferType.L1,
+            nd_shard_spec=ttnn.NdShardSpec(
+                shard_shape=[32, 1024],
+                grid=ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7)),
+                    }
+                ),
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    output_memory_config: ttnn.MemoryConfig
 
 
 @dataclass

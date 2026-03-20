@@ -18,6 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
     AllToAllDispatchMetadataConfig,
+    DeepseekMoEPostCombineTilizeConfig,
     DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
     MoEComputeConfig,
@@ -308,10 +309,10 @@ class MoE(SharedStateAddOn, AbstractModule):
                 USERS_PER_ROW, hf_config.num_experts_per_tok
             )
             config["quad_ring_moreh_full"] = MorehFullConfig(
-                shape=ttnn.Shape([hf_config.num_experts_per_tok, USERS_PER_ROW, hf_config.hidden_size]),
+                shape=[hf_config.num_experts_per_tok, USERS_PER_ROW, hf_config.hidden_size],
                 fill_value=0,
                 device=mesh_device,
-                dtype=torch.bfloat16,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -331,6 +332,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                 data_parallel_core_dim=4,
                 worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
                 mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
+            )
+            config["quad_ring_deepseek_moe_post_combine_tilize_config"] = DeepseekMoEPostCombineTilizeConfig(
+                output_memory_config=DeepseekMoEPostCombineTilizeConfig.get_sharded_memory_config(),
             )
 
             # TODO: this is a temporary measure until we either a) uplift the optimized ops to support prefill shapes, or b) uplift prefill MMs to read from decode formatted weights
@@ -562,6 +566,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             for batch_start in range(0, batch_size_per_device, chunk_size):
                 batch_end = min(batch_start + chunk_size, batch_size_per_device)
                 batch_chunk = batch_end - batch_start
+                pad_amount = cfg["moe_chunk_size"] - batch_chunk
 
                 x_rm_chunk = ttnn.slice(
                     x_rm,
@@ -570,7 +575,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 x_rm_chunk = ttnn.pad(
                     x_rm_chunk,
-                    padding=((0, cfg["moe_chunk_size"]), (0, 0), (0, 0), (0, 0)),
+                    padding=((0, pad_amount), (0, 0), (0, 0), (0, 0)),
                     value=0.0,
                 )
 
@@ -581,7 +586,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 topk_experts_indices_rm_chunk = ttnn.pad(
                     topk_experts_indices_rm_chunk,
-                    padding=((0, cfg["moe_chunk_size"]), (0, 0), (0, 0), (0, 0)),
+                    padding=((0, pad_amount), (0, 0), (0, 0), (0, 0)),
                     value=0.0,
                 )
 
@@ -592,7 +597,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 topk_experts_weights_rm_chunk = ttnn.pad(
                     topk_experts_weights_rm_chunk,
-                    padding=((0, cfg["moe_chunk_size"]), (0, 0), (0, 0), (0, 0)),
+                    padding=((0, pad_amount), (0, 0), (0, 0), (0, 0)),
                     value=0.0,
                 )
 
@@ -788,8 +793,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             dispatch_output_expert_indices,
             dispatch_output_expert_scores,
             cfg["expert_mapping_tensor"],
-            cfg["moe_experts"]["quad_ring_w0_w1_experts"],
-            cfg["moe_experts"]["quad_ring_w2_experts"],
+            cfg["moe_experts"]["quad_ring_w0_w1_experts"]["input_tensor_b"],
+            cfg["moe_experts"]["quad_ring_w2_experts"]["input_tensor_b"],
             layer_id=0,  # each layer is composed of distinct tensors, as apposed to all layers fused together
             **cfg["quad_ring_moe_compute"],
         )
@@ -810,12 +815,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(compute_ouput_dense_e_t)
         ttnn.deallocate(compute_output_token_counts)
 
-        combine_output = ttnn.to_layout(
-            combine_output,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
         combine_output = ttnn.unsqueeze(combine_output, dim=1)
+        combine_output = ttnn.experimental.deepseek_moe_post_combine_tilize(
+            combine_output, **cfg["quad_ring_deepseek_moe_post_combine_tilize_config"]
+        )
 
         post_combine_output_tensor = ttnn.mul(
             combine_output, topk_experts_weights_for_scaling, **cfg["mul_experts_output_with_weights"]
