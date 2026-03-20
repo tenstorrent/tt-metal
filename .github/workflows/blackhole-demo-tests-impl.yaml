@@ -77,8 +77,9 @@ jobs:
 
   blackhole-demo-tests:
     needs: load-test-matrix
-    # Skip entire job when test matrix is empty (to prevent GHA from erroring out the workflow on an empty strategy.matrix)
-    if: ${{ length(fromJSON(needs.load-test-matrix.outputs.matrix)) > 0 }}
+    # Skip entire job when test matrix is empty (to prevent GHA from erroring out the workflow on an empty strategy.matrix).
+    # Matrix JSON is jq -c compact; empty is exactly []. (length() is not available in all GHA expression versions.)
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:
