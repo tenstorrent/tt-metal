@@ -4,9 +4,9 @@
 
 #include "args.hpp"
 
-#define ARGS(X)      \
-    X(transfer_size) \
-    X(transfer_count)
+#define ARGS(X)                \
+    X(uint32_t, transfer_size) \
+    X(uint32_t, transfer_count)
 
 void kernel_main() {
     ARG_INIT(ARGS);
