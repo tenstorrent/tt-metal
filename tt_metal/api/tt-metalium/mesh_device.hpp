@@ -166,7 +166,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+        bool minimal = false,
+        bool enable_per_core_allocation = false) override;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
@@ -293,7 +294,8 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        bool enable_per_core_allocation = false);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -301,7 +303,8 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        bool enable_per_core_allocation = false);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -309,7 +312,8 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        bool enable_per_core_allocation = false);
 
     // Only for internal and testing purposes
     const MeshDeviceImpl& impl() const { return *pimpl_; }

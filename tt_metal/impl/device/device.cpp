@@ -139,7 +139,8 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool enable_per_core_allocation) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
     auto& dispatch_core_manager = context_->get_dispatch_core_manager();
@@ -152,6 +153,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
         trace_region_size,
         worker_l1_unreserved_start,
         {l1_bank_remap.begin(), l1_bank_remap.end()});
+    config.enable_per_core_allocation = enable_per_core_allocation;
 
     for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->ethernet_cores_.insert({core.x, core.y});
@@ -401,7 +403,8 @@ bool Device::initialize(
     size_t trace_region_size,
     size_t worker_l1_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
-    bool minimal) {
+    bool minimal,
+    bool enable_per_core_allocation) {
     ZoneScoped;
     // Every initialization call should enable program cache
     this->program_cache_.enable();
@@ -439,8 +442,8 @@ bool Device::initialize(
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) +
             hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - worker_l1_size,
         max_alignment);
-    default_allocator_ =
-        initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap);
+    default_allocator_ = initialize_allocator(
+        l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap, enable_per_core_allocation);
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
     if (minimal) {

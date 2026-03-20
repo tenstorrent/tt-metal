@@ -32,7 +32,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const DispatchCoreConfig& dispatch_core_config,
     const std::optional<MeshCoordinate>& offset,
     const std::vector<int>& physical_device_ids,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    bool enable_per_core_allocation) {
     return MeshDevice::create(
         MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
         l1_small_size,
@@ -40,7 +41,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         num_command_queues,
         dispatch_core_config,
         {},
-        worker_l1_size);
+        worker_l1_size,
+        enable_per_core_allocation);
 }
 
 std::shared_ptr<MeshDevice> open_mesh_device(
@@ -51,7 +53,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::optional<MeshShape>& mesh_shape,
     const std::optional<MeshCoordinate>& offset,
     const std::vector<int>& physical_device_ids,
-    size_t worker_l1_size) {
+    size_t worker_l1_size,
+    bool enable_per_core_allocation) {
     return MeshDevice::create(
         MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
         l1_small_size,
@@ -59,7 +62,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         num_command_queues,
         dispatch_core_config,
         {},
-        worker_l1_size);
+        worker_l1_size,
+        enable_per_core_allocation);
 }
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }

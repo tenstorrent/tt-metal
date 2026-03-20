@@ -574,7 +574,8 @@ void py_module(nb::module_& mod) {
             const std::optional<MeshShape>&,
             const std::optional<MeshCoordinate>&,
             const std::vector<int>&,
-            size_t>(&open_mesh_device),
+            size_t,
+            bool>(&open_mesh_device),
         nb::kw_only(),
         nb::arg("l1_small_size"),
         nb::arg("trace_region_size"),
@@ -583,7 +584,8 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_shape") = nb::none(),
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
+        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
+        nb::arg("enable_per_core_allocation") = false);
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"));
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));

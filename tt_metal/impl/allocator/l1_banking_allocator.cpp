@@ -118,28 +118,39 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
     uint64_t interleaved_address_limit = static_cast<uint64_t>(config_->worker_l1_size - l1_bank_size);
     uint64_t allocatable_l1_size =
         static_cast<uint64_t>(config_->worker_l1_size) - config_->l1_unreserved_base - config_->l1_small_size;
-    // Always build per-core dependency graph (N+1 allocators: lockstep + per-bank)
-    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>> deps_map;
-    ttsl::SmallVector<AllocatorID> lockstep_deps;
-    for (uint32_t i = 1; i <= num_l1_banks; i++) {
-        lockstep_deps.push_back(AllocatorID{i});
-        deps_map[AllocatorID{i}] = {AllocatorID{0}};
-    }
-    deps_map[AllocatorID{0}] = lockstep_deps;
-    BankManager::AllocatorDependencies l1_deps{deps_map};
-
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
-    l1_manager_ = std::make_unique<BankManager>(
-        BufferType::L1,
-        bank_id_to_bank_offset,
-        allocatable_l1_size,
-        interleaved_address_limit,
-        config_->l1_alignment,
-        config_->dram_alignment,
-        config_->l1_unreserved_base,
-        config_->disable_interleaved,
-        l1_deps);
+    if (config_->enable_per_core_allocation) {
+        // Build per-core dependency graph (N+1 allocators: lockstep + per-bank)
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        std::unordered_map<AllocatorID, ttsl::SmallVector<AllocatorID>> deps_map;
+        ttsl::SmallVector<AllocatorID> lockstep_deps;
+        for (uint32_t i = 1; i <= num_l1_banks; i++) {
+            lockstep_deps.push_back(AllocatorID{i});
+            deps_map[AllocatorID{i}] = {AllocatorID{0}};
+        }
+        deps_map[AllocatorID{0}] = lockstep_deps;
+        BankManager::AllocatorDependencies l1_deps{deps_map};
+        l1_manager_ = std::make_unique<BankManager>(
+            BufferType::L1,
+            bank_id_to_bank_offset,
+            allocatable_l1_size,
+            interleaved_address_limit,
+            config_->l1_alignment,
+            config_->dram_alignment,
+            config_->l1_unreserved_base,
+            config_->disable_interleaved,
+            l1_deps);
+    } else {
+        l1_manager_ = std::make_unique<BankManager>(
+            BufferType::L1,
+            bank_id_to_bank_offset,
+            allocatable_l1_size,
+            interleaved_address_limit,
+            config_->l1_alignment,
+            config_->dram_alignment,
+            config_->l1_unreserved_base,
+            config_->disable_interleaved);
+    }
     log_debug(
         tt::LogMetal,
         "Configured partition params: worker_l1_size:0x{:X}, "

@@ -151,7 +151,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) = 0;
+        bool minimal = false,
+        bool enable_per_core_allocation = false) = 0;
     // Puts device into reset
     virtual bool close() = 0;
 

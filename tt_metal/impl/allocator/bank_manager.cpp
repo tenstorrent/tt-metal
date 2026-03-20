@@ -415,13 +415,25 @@ uint64_t BankManager::allocate_buffer(
         TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
 
-    // If there are no dependent allocators, fall back to allocator's single allocator strategy
+    // If there are no dependent allocators, or all dependent allocators have zero allocations,
+    // fall back to the allocator's single allocator strategy (simpler and avoids allocate_at_address issues).
     const auto& dependent_allocators = allocator_dependencies_.dependencies[allocator_id.get()];
+
+    bool all_deps_empty = dependent_allocators.empty();
+    if (!all_deps_empty) {
+        all_deps_empty = true;
+        for (const auto dep_id : dependent_allocators) {
+            if (!allocated_buffers_[dep_id.get()].empty()) {
+                all_deps_empty = false;
+                break;
+            }
+        }
+    }
 
     // If using single allocator strategy, Algorithm::allocate handles address limit, which means it can only be used
     // with top-down allocation. Otherwise, address limit is used to clamp the available ranges regardless of bottom_up
     // vs. top-down allocation
-    if (dependent_allocators.empty()) {
+    if (all_deps_empty) {
         auto address = alloc->allocate(size_per_bank, bottom_up, address_limit);
         if (!address.has_value()) {
             auto mem_stats = alloc->get_statistics();
@@ -631,12 +643,7 @@ MemoryBlockTable BankManager::get_memory_block_table(
 
 void BankManager::shrink_size(
     DeviceAddr shrink_size, bool bottom_up, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    for (uint32_t i = 0; i < allocator_dependencies_.num_allocators(); i++) {
-        if (i == allocator_id.get()) {
-            continue;
-        }
-        TT_FATAL(allocated_buffers_[i].empty(), "Cannot shrink allocator size: allocator {} has active allocations", i);
-    }
+    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
     auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->shrink_size(shrink_size, bottom_up);
@@ -644,12 +651,7 @@ void BankManager::shrink_size(
 }
 
 void BankManager::reset_size(BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    for (uint32_t i = 0; i < allocator_dependencies_.num_allocators(); i++) {
-        if (i == allocator_id.get()) {
-            continue;
-        }
-        TT_FATAL(allocated_buffers_[i].empty(), "Cannot reset allocator size: allocator {} has active allocations", i);
-    }
+    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
     auto* alloc = this->get_allocator_from_id(allocator_id);
     if (alloc) {
         alloc->reset_size();

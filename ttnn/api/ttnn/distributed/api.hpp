@@ -19,7 +19,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
     const std::optional<MeshCoordinate>& offset = std::nullopt,
     const std::vector<int>& physical_device_ids = {},
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    bool enable_per_core_allocation = false);
 
 // Open a mesh device with optionally-provided mesh shape, defaults to system mesh global shape if not provided.
 std::shared_ptr<MeshDevice> open_mesh_device(
@@ -30,7 +31,8 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::optional<MeshShape>& mesh_shape,
     const std::optional<MeshCoordinate>& offset = std::nullopt,
     const std::vector<int>& physical_device_ids = {},
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+    bool enable_per_core_allocation = false);
 
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device);
 

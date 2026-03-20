@@ -125,6 +125,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
 
     // Per-core allocation path: each core gets an independent address
     if (buffer->per_core_allocation()) {
+        TT_FATAL(
+            config_->enable_per_core_allocation,
+            "Per-core allocation requires enable_per_core_allocation=true when opening the device");
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
         TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");

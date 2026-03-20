@@ -135,7 +135,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+        bool minimal = false,
+        bool enable_per_core_allocation = false) override;
     void init_command_queue_host();
     void init_command_queue_device();
 
@@ -200,7 +201,8 @@ private:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_unreserved_start,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool enable_per_core_allocation = false);
 
     void configure_command_queue_programs(DispatchTopology* topology);
 

@@ -179,34 +179,24 @@ TEST(OverlappedAllocators, InvalidAllocator) {
             ::testing::HasSubstr("Invalid allocator ID 2 (num_allocators=2)")));
 }
 
-TEST(OverlappedAllocators, ResetAndShrinkSucceedWhenOtherAllocatorsEmpty) {
-    // Create bank manager with 2 allocators (0 and 1), no allocations
-    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
-    BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
-
-    // reset_size and shrink_size succeed when other allocators have no active allocations
-    EXPECT_NO_THROW(bank_manager.reset_size(AllocatorID{0}));
-    EXPECT_NO_THROW(bank_manager.reset_size(AllocatorID{1}));
-    EXPECT_NO_THROW(bank_manager.shrink_size(1024, true, AllocatorID{0}));
-    EXPECT_NO_THROW(bank_manager.shrink_size(1024, true, AllocatorID{1}));
-}
-
-TEST(OverlappedAllocators, ResetAndShrinkFailWhenOtherAllocatorsActive) {
+TEST(OverlappedAllocators, InvalidAPIsForOverlappedAllocators) {
     // Create bank manager with 2 allocators (0 and 1)
     BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {}}, {AllocatorID{1}, {}}}};
     BankManager bank_manager = get_bank_manager_with_allocator_dependencies(1024 * 1024, 1024, deps);
-    const CoreRangeSet grid({CoreRange({0, 0}, {0, 0})});
 
-    // Allocate on allocator 1
-    bank_manager.allocate_buffer(1024, 1024, false, grid, std::nullopt, AllocatorID{1});
-
-    // reset_size/shrink_size on allocator 0 should fail because allocator 1 has active allocations
+    // Test accessing an API that only works for single allocator
     EXPECT_THAT(
         [&]() { bank_manager.reset_size(AllocatorID{0}); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has active allocations")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
+    EXPECT_THAT(
+        [&]() { bank_manager.reset_size(AllocatorID{1}); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
     EXPECT_THAT(
         [&]() { bank_manager.shrink_size(1024, true, AllocatorID{0}); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has active allocations")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
+    EXPECT_THAT(
+        [&]() { bank_manager.shrink_size(1024, true, AllocatorID{1}); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Expected single allocator!")));
 }
 
 TEST(OverlappedAllocators, DeallocateAllAndClear) {

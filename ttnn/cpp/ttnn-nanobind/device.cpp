@@ -61,6 +61,7 @@ void ttnn_device(nb::module_& mod) {
         nb::arg("num_command_queues") = 1,
         nb::arg("dispatch_core_config") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
+        nb::arg("enable_per_core_allocation") = false,
         nb::rv_policy::reference,  // cleanup has to happen in c++ land
         R"doc(
             Open a device with the given device_id. If the device is already open, return the existing device.
@@ -178,7 +179,8 @@ void device_module(nb::module_& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
-           size_t worker_l1_size) {
+           size_t worker_l1_size,
+           bool enable_per_core_allocation) {
             return MeshDevice::create_unit_mesh(
                 device_id,
                 l1_small_size,
@@ -186,7 +188,8 @@ void device_module(nb::module_& m_device) {
                 num_command_queues,
                 dispatch_core_config,
                 /*l1_bank_remap=*/{},
-                worker_l1_size);
+                worker_l1_size,
+                enable_per_core_allocation);
         },
         R"doc(
         Creates an instance of TT device.
@@ -203,7 +206,8 @@ void device_module(nb::module_& m_device) {
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
         nb::kw_only(),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
+        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
+        nb::arg("enable_per_core_allocation") = false);
     m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
@@ -211,7 +215,8 @@ void device_module(nb::module_& m_device) {
            size_t l1_small_size,
            size_t trace_region_size,
            const tt::tt_metal::DispatchCoreConfig& dispatch_core_config,
-           size_t worker_l1_size) {
+           size_t worker_l1_size,
+           bool enable_per_core_allocation) {
             return MeshDevice::create_unit_meshes(
                 device_ids,
                 l1_small_size,
@@ -219,7 +224,8 @@ void device_module(nb::module_& m_device) {
                 num_command_queues,
                 dispatch_core_config,
                 /*l1_bank_remap=*/{},
-                worker_l1_size);
+                worker_l1_size,
+                enable_per_core_allocation);
         },
         R"doc(
         Creates an instance of TT device.
@@ -236,7 +242,8 @@ void device_module(nb::module_& m_device) {
         nb::arg("trace_region_size") = DEFAULT_TRACE_REGION_SIZE,
         nb::arg("DispatchCoreConfig") = nb::cast(tt::tt_metal::DispatchCoreConfig{}),
         nb::kw_only(),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
+        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
+        nb::arg("enable_per_core_allocation") = false);
     m_device.def("CloseDevice", [](MeshDevice* device) { device->close(); }, R"doc(
         Reset an instance of TT accelerator device to default state and relinquish connection to device.
 
