@@ -8,13 +8,19 @@
  * Active only during ring steps 1 .. ring_size-1 (skips step 0, where the
  * reader sends tiles directly to the writer via reader_output_cb).
  *
- * Waits for input_cb and intermediate_cb from the reader, performs element-wise
- * addition (acc = input + intermediate), and pushes the result to output_cb
- * for the writer to forward or write.
+ * Normal reduction (steps 1 .. ring_size-2, and ring_size-1 without addcmul):
+ *   Waits for input_cb and intermediate_cb from the reader, performs element-wise
+ *   addition (acc = input + intermediate), and pushes the result to output_cb
+ *   for the writer to forward or write.
+ *
+ * When FUSE_RS_ADDCMUL is enabled, the final ring step (i = ring_size-1) fuses
+ * an addcmul operation: output = a + scalar * (input + intermediate) * b.
  */
 
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
 
@@ -37,10 +43,19 @@ void kernel_main() {
     constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
     constexpr uint32_t my_chip_id = get_compile_time_arg_val(15);
 
+#ifdef FUSE_RS_ADDCMUL
+    constexpr uint32_t addcmul_temp_cb = get_compile_time_arg_val(16);
+    constexpr uint32_t addcmul_a_cb = get_compile_time_arg_val(17);
+    constexpr uint32_t addcmul_b_cb = get_compile_time_arg_val(18);
+#endif
+
     uint32_t arg_idx = 0;
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
+#ifdef FUSE_RS_ADDCMUL
+    const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(arg_idx++);
+#endif
 
     const uint32_t batch_size = input_tensor_B;
     const uint32_t last_mm_core_idx = mm_cores_y - 1;
@@ -67,6 +82,9 @@ void kernel_main() {
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
                     const uint32_t mm_N_full_blocks_per_slice =
                         get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt).first;
+#ifdef FUSE_RS_ADDCMUL
+                    const bool is_final_ring_step = (i == ring_size - 1);
+#endif
 
                     for (uint32_t chunk_piece_idx = 0; chunk_piece_idx < mm_N_full_blocks_per_slice;
                          chunk_piece_idx++) {
@@ -95,19 +113,97 @@ void kernel_main() {
                             const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
-                            // Ring accumulation step: acc = input + intermediate
-                            cb_wait_front(input_cb, tile_granularity);
-                            cb_wait_front(intermediate_cb, tile_granularity);
-                            cb_reserve_back(output_cb, tile_granularity);
-                            acquire_dst();
-                            for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
-                                add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
-                                pack_tile(tile_id, output_cb);
-                            }
-                            release_dst();
-                            cb_pop_front(input_cb, tile_granularity);
-                            cb_pop_front(intermediate_cb, tile_granularity);
-                            cb_push_back(output_cb, tile_granularity);
+#ifdef FUSE_RS_ADDCMUL
+                            if (is_final_ring_step) {
+                                // -------------------------------------------------------
+                                // Fused addcmul at the final ring step:
+                                //   output = a + scalar * (input + intermediate) * b
+                                //
+                                // Step 1: acc = input + intermediate -> addcmul_temp_cb
+                                // -------------------------------------------------------
+                                cb_wait_front(input_cb, tile_granularity);
+                                cb_wait_front(intermediate_cb, tile_granularity);
+                                cb_reserve_back(addcmul_temp_cb, tile_granularity);
+
+                                add_tiles_init(input_cb, intermediate_cb, false);
+                                reconfig_data_format(input_cb, intermediate_cb);
+                                pack_reconfig_data_format(addcmul_temp_cb);
+
+                                acquire_dst();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
+                                    pack_tile(tile_id, addcmul_temp_cb);
+                                }
+                                release_dst();
+                                cb_pop_front(input_cb, tile_granularity);
+                                cb_pop_front(intermediate_cb, tile_granularity);
+                                cb_push_back(addcmul_temp_cb, tile_granularity);
+
+                                // -------------------------------------------------------
+                                // Step 2: scalar * acc * b -> pack back to addcmul_temp_cb
+                                // b has 1 row per tile, broadcast across acc's rows.
+                                // -------------------------------------------------------
+                                cb_wait_front(addcmul_temp_cb, tile_granularity);
+                                cb_wait_front(addcmul_b_cb, tile_granularity);
+
+                                mul_bcast_rows_init_short(addcmul_temp_cb, addcmul_b_cb);
+                                reconfig_data_format(addcmul_temp_cb, addcmul_b_cb);
+                                pack_reconfig_data_format(addcmul_temp_cb);
+                                binop_with_scalar_tile_init();
+
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    tile_regs_acquire();
+                                    mul_tiles_bcast<BroadcastType::ROW>(
+                                        addcmul_temp_cb, addcmul_b_cb, tile_id, tile_id, 0);
+                                    mul_unary_tile(0, fused_ternary_scalar_uint);
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    pack_tile(0, addcmul_temp_cb);
+                                    tile_regs_release();
+                                }
+                                cb_pop_front(addcmul_b_cb, tile_granularity);
+                                cb_pop_front(addcmul_temp_cb, tile_granularity);
+                                cb_reserve_back(addcmul_temp_cb, tile_granularity);
+                                cb_push_back(addcmul_temp_cb, tile_granularity);
+
+                                // -------------------------------------------------------
+                                // Step 3: a + scalar*acc*b -> output_cb
+                                // -------------------------------------------------------
+                                cb_wait_front(addcmul_temp_cb, tile_granularity);
+                                cb_wait_front(addcmul_a_cb, tile_granularity);
+                                cb_reserve_back(output_cb, tile_granularity);
+
+                                add_tiles_init(addcmul_temp_cb, addcmul_a_cb, false);
+                                reconfig_data_format(addcmul_temp_cb, addcmul_a_cb);
+                                pack_reconfig_data_format(output_cb);
+
+                                acquire_dst();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    add_tiles(addcmul_temp_cb, addcmul_a_cb, tile_id, tile_id, tile_id);
+                                    pack_tile(tile_id, output_cb);
+                                }
+                                release_dst();
+                                cb_pop_front(addcmul_temp_cb, tile_granularity);
+                                cb_pop_front(addcmul_a_cb, tile_granularity);
+                                cb_push_back(output_cb, tile_granularity);
+                            } else {
+#endif
+                                // Normal ring accumulation step: acc = input + intermediate
+                                cb_wait_front(input_cb, tile_granularity);
+                                cb_wait_front(intermediate_cb, tile_granularity);
+                                cb_reserve_back(output_cb, tile_granularity);
+                                acquire_dst();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
+                                    pack_tile(tile_id, output_cb);
+                                }
+                                release_dst();
+                                cb_pop_front(input_cb, tile_granularity);
+                                cb_pop_front(intermediate_cb, tile_granularity);
+                                cb_push_back(output_cb, tile_granularity);
+#ifdef FUSE_RS_ADDCMUL
+                            }  // end else (non-final ring step)
+#endif
                         }
                     }
                     slice_idx += direction ? -1 : 1;

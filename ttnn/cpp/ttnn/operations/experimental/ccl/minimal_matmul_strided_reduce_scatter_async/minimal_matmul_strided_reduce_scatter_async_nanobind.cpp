@@ -22,6 +22,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
+
 void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
     ttnn::bind_function<"minimal_matmul_strided_reduce_scatter_async", "ttnn.experimental.">(
         mod,
