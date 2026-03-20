@@ -1,0 +1,308 @@
+name: "ttnn - Sweep Trace Validation"
+
+run-name: >-
+  ttnn - sweep validation (${{ github.event.inputs.module_name }}, ${{ github.event.inputs.arch }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      module_name:
+        type: string
+        description: >
+          Sweep module name (e.g. model_traced.add_model_traced) or "all" to
+          run all model_traced modules.
+        required: true
+        default: "all"
+      arch:
+        type: choice
+        description: "Architecture"
+        required: true
+        default: wormhole_b0
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        type: choice
+        description: "Runner label for hardware jobs"
+        required: true
+        default: "topology-6u"
+        options:
+          - N150
+          - N300
+          - topology-6u
+          - BH-LLMBox
+      mesh_shape:
+        type: string
+        description: >-
+          Mesh device shape (e.g. 4x8, 2x4, 1x1). This influences placement,
+          sharding, and config hashes; use the same mesh shape as the model trace
+          capture for accurate validation.
+        required: true
+        default: "4x8"
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+
+  generate-model-trace:
+    name: Generate model trace from DB
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+
+      - name: Reconstruct model trace JSON from database
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        run: |
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct \
+            model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json \
+            ttnn_ops_v2_5
+
+      - name: Split model trace by operation
+        run: |
+          MODEL_JSON=model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json
+
+          python model_tracer/traced_operations/split_model_trace.py \
+            "$MODEL_JSON" \
+            -o "${MODEL_JSON%.json}_split"
+
+      - name: Upload model trace artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-trace
+          path: |
+            model_tracer/traced_operations/ttnn_operations_master_*_reconstructed.json
+            model_tracer/traced_operations/ttnn_operations_master_*_reconstructed_split/
+          retention-days: 7
+
+  run-pipeline:
+    name: Run sweep under tracer (${{ github.event.inputs.arch }} ${{ github.event.inputs['runner-label'] }})
+    needs: [build-artifact, generate-model-trace]
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ github.event.inputs.arch }}
+        RUNNER_LABEL: ${{ github.event.inputs['runner-label'] }}
+        MESH_DEVICE_SHAPE: ${{ github.event.inputs.mesh_shape }}
+        LEAD_MODELS_RUN: "1"
+        LOGURU_LEVEL: INFO
+        TT_LOGGER_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ github.event.inputs['runner-label'] == 'topology-6u' && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
+        TRACY_NO_INVARIANT_CHECK: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 120
+    runs-on: >-
+      ${{
+        (github.event.inputs['runner-label'] == 'topology-6u' || github.event.inputs['runner-label'] == 'BH-LLMBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', github.event.inputs['runner-label']))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', github.event.inputs['runner-label'])
+      }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+
+      - name: Setup job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+      - name: Download model trace
+        uses: actions/download-artifact@v4
+        with:
+          name: model-trace
+          path: /work/model_tracer/traced_operations/
+
+      - name: Display configuration
+        run: |
+          echo "========================================"
+          echo " Sweep Validation Pipeline"
+          echo "========================================"
+          echo "  Module:       ${{ github.event.inputs.module_name }}"
+          echo "  Arch:         ${{ github.event.inputs.arch }}"
+          echo "  Runner:       ${{ github.event.inputs['runner-label'] }}"
+          echo "  Mesh shape:   ${{ github.event.inputs.mesh_shape }}"
+          echo "  Trace ver:    v2 (fixed)"
+          echo "========================================"
+
+      - name: Resolve model trace path
+        id: trace-path
+        run: |
+          echo "model_trace=model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json" >> "$GITHUB_OUTPUT"
+
+      - name: Run validation pipeline (single module)
+        if: github.event.inputs.module_name != 'all'
+        run: |
+          python3 tests/sweep_framework/validate_sweep_pipeline.py \
+            --model-trace "${{ steps.trace-path.outputs.model_trace }}" \
+            --module-name "${{ github.event.inputs.module_name }}" \
+            --suite model_traced \
+            --mesh-shape "${{ github.event.inputs.mesh_shape }}" \
+            --arch-name "${{ github.event.inputs.arch }}" \
+            --force
+
+      - name: Run validation pipeline (all model_traced modules)
+        if: github.event.inputs.module_name == 'all'
+        run: |
+          MODEL_TRACE="${{ steps.trace-path.outputs.model_trace }}"
+          MESH_SHAPE="${{ github.event.inputs.mesh_shape }}"
+          ARCH_NAME="${{ github.event.inputs.arch }}"
+
+          # Step 1: Generate vectors for all model_traced modules
+          python3 tests/sweep_framework/sweeps_parameter_generator.py \
+            --model-traced lead \
+            --suite-name model_traced \
+            --master-trace "$MODEL_TRACE"
+
+          # Step 2: Discover generated vector files and run each module under the tracer
+          for VECTOR_FILE in tests/sweep_framework/vectors_export/model_traced.*__*.json; do
+            [ -f "$VECTOR_FILE" ] || continue
+            BASENAME=$(basename "$VECTOR_FILE" .json)
+            # Extract module name: model_traced.add_model_traced__mesh_4x8 -> model_traced.add_model_traced
+            MODULE_NAME=$(echo "$BASENAME" | sed 's/__.*$//')
+
+            # Derive sweep trace output path from module basename
+            MODULE_TAIL="${MODULE_NAME#model_traced.}"
+            SWEEP_TRACE="model_tracer/traced_operations/sweep_trace_${MODULE_TAIL}.json"
+            SWEEP_TRACE_SPLIT="${SWEEP_TRACE%.json}_split"
+
+            echo "========================================"
+            echo " Running: $MODULE_NAME"
+            echo " Sweep trace: $SWEEP_TRACE"
+            echo "========================================"
+
+            # Run sweep under tracer
+            python3 model_tracer/generic_ops_tracer.py \
+              tests/sweep_framework/sweeps_runner.py \
+              -o "$SWEEP_TRACE" \
+              -- \
+              --module-name "$MODULE_NAME" \
+              --suite-name model_traced \
+              --vector-source vectors_export \
+              --result-dest results_export \
+              --main-proc-verbose || {
+                echo "WARNING: Module $MODULE_NAME failed, continuing..."
+                continue
+              }
+
+            # Split sweep trace
+            python3 model_tracer/traced_operations/split_model_trace.py \
+              "$SWEEP_TRACE" \
+              -o "$SWEEP_TRACE_SPLIT" || true
+          done
+
+      - name: Upload sweep traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-traces
+          path: |
+            /work/model_tracer/traced_operations/sweep_trace_*.json
+            /work/model_tracer/traced_operations/sweep_trace_*_split/
+          retention-days: 7
+
+      - name: Upload sweep results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweep-results
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 7
+
+  validate:
+    name: Validate traces
+    needs: [run-pipeline, generate-model-trace]
+    if: always() && needs.run-pipeline.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Download model trace
+        uses: actions/download-artifact@v4
+        with:
+          name: model-trace
+          path: model_tracer/traced_operations/
+
+      - name: Download sweep traces
+        uses: actions/download-artifact@v4
+        with:
+          name: sweep-traces
+          path: model_tracer/traced_operations/
+
+      - name: Resolve model trace split path
+        id: split-path
+        run: |
+          echo "model_split=model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed_split" >> "$GITHUB_OUTPUT"
+
+      - name: List available trace splits
+        run: |
+          echo "=== Model trace split ==="
+          ls "${{ steps.split-path.outputs.model_split }}/" 2>/dev/null | head -30 || echo "(not found)"
+          echo ""
+          echo "=== Sweep trace splits ==="
+          ls -d model_tracer/traced_operations/sweep_trace_*_split/ 2>/dev/null | head -30 || echo "(none found)"
+
+      - name: Run validation
+        run: |
+          python tests/sweep_framework/validate_all_traces.py \
+            --model-trace-split "${{ steps.split-path.outputs.model_split }}" \
+            --sweep-traces-dir model_tracer/traced_operations \
+            --output-report validation_report.txt
+
+      - name: Print validation report
+        if: always()
+        run: |
+          if [ -f validation_report.txt ]; then
+            echo "::group::Validation Report"
+            cat validation_report.txt
+            echo "::endgroup::"
+          else
+            echo "WARNING: No validation report generated"
+          fi
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: validation_report.txt
+          retention-days: 30
