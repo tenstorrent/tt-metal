@@ -6,6 +6,7 @@
 
 #include "device/device_impl.hpp"
 #include "firmware_initializer.hpp"
+#include <unordered_map>
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -38,9 +39,15 @@ private:
     // Compute the fabric router sync timeout from runtime options.
     uint32_t get_fabric_router_sync_timeout_ms() const;
 
+    // Clears internal state
+    void cleanup_state(std::unordered_set<InitializerKey>& init_done);
+
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
     bool initialized_ = false;
+
+    // Fabric program that was created for each of the devices from init()
+    std::unordered_map<Device*, std::unique_ptr<Program>> fabric_programs_;
 };
 
 }  // namespace tt::tt_metal

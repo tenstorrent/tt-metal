@@ -20,8 +20,51 @@
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
+#include "fabric/fabric_init.hpp"
+#include "llrt.hpp"
+#include "program/program_impl.hpp"
 
 namespace tt::tt_metal {
+
+namespace detail {
+
+void configure_device(MetalEnv& env, Device* dev, std::unique_ptr<Program>& fabric_program) {
+    tt::tt_fabric::configure_fabric_cores(dev);
+
+    fabric_program->impl().finalize_offsets(dev);
+
+    bool using_fast_dispatch = MetalEnvAccessor(env).impl().get_rtoptions().get_fast_dispatch();
+    detail::WriteRuntimeArgsToDevice(dev, *fabric_program, using_fast_dispatch);
+    detail::ConfigureDeviceWithProgram(dev, *fabric_program, using_fast_dispatch);
+
+    // Note: the l1_barrier below is needed to be sure writes to cores that
+    // don't get the GO mailbox have all landed
+    MetalEnvImpl& env_impl = MetalEnvAccessor(env).impl();
+    env_impl.get_cluster().l1_barrier(dev->id());
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program->impl().logical_cores();
+    const auto& hal = env_impl.get_hal();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            auto* kg = fabric_program->impl().kernels_on_core(logical_core, programmable_core_type_index);
+            dev_msgs::launch_msg_t::View msg = kg->launch_msg.view();
+            dev_msgs::go_msg_t::ConstView go_msg = kg->go_msg.view();
+            msg.kernel_config().host_assigned_id() = fabric_program->get_runtime_id();
+
+            auto physical_core = dev->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                dev->id(),
+                physical_core,
+                msg,
+                go_msg,
+                hal.get_dev_addr(dev->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
+        }
+    }
+    log_info(tt::LogMetal, "Fabric initialized on Device {}", dev->id());
+}
+
+}  // namespace detail
 
 FabricFirmwareInitializer::FabricFirmwareInitializer(
     std::shared_ptr<const ContextDescriptor> descriptor, tt::tt_fabric::ControlPlane& control_plane) :
@@ -49,7 +92,7 @@ void FabricFirmwareInitializer::init(
     } else if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         log_info(tt::LogMetal, "Compiling fabric to setup fabric context for fabric termination");
         for (auto* dev : devices_) {
-            dev->compile_fabric();
+            tt::tt_fabric::create_and_compile_fabric_program(dev, MetalEnvAccessor(descriptor_->env()).impl());
         }
     } else {
         log_info(tt::LogMetal, "Fabric initialized through Fabric Manager");
@@ -63,27 +106,28 @@ void FabricFirmwareInitializer::configure() {
     initialized_ = true;
 }
 
+void FabricFirmwareInitializer::cleanup_state(std::unordered_set<InitializerKey>& init_done) {
+    init_done.erase(key);
+    devices_.clear();
+    initialized_ = false;
+    fabric_programs_.clear();
+}
+
 void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
     TT_FATAL(
         !init_done.contains(InitializerKey::Dispatch),
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (descriptor_->is_mock_device()) {
         log_info(tt::LogMetal, "Skipping fabric teardown for mock devices");
-        init_done.erase(key);
-        return;
-    }
-    if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
-        devices_.clear();
-        initialized_ = false;
-        init_done.erase(key);
+        cleanup_state(init_done);
         return;
     }
 
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
-    if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
-        devices_.clear();
-        initialized_ = false;
-        init_done.erase(key);
+    // Might want to skip terminating fabric if we want to leave fabric routers running
+    if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC) ||
+        !tt_fabric::is_tt_fabric_config(fabric_config)) {
+        cleanup_state(init_done);
         return;
     }
 
@@ -132,9 +176,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
             dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
     }
 
-    devices_.clear();
-    initialized_ = false;
-    init_done.erase(key);
+    cleanup_state(init_done);
 }
 
 void FabricFirmwareInitializer::post_teardown() {
@@ -147,14 +189,18 @@ bool FabricFirmwareInitializer::is_initialized() const { return initialized_; }
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
     std::vector<std::shared_future<Device*>> events;
     events.reserve(devices_.size());
+
+    std::mutex fabric_programs_mutex;
     for (auto* dev : devices_) {
-        events.emplace_back(detail::async([dev]() {
-            if (dev->compile_fabric()) {
-                return dev;
+        events.emplace_back(detail::async([dev, &fabric_programs_mutex, this]() {
+            auto fabric_program =
+                tt::tt_fabric::create_and_compile_fabric_program(dev, MetalEnvAccessor(descriptor_->env()).impl());
+            // nullptr if no builders
+            if (fabric_program) {
+                std::lock_guard lock(fabric_programs_mutex);
+                fabric_programs_[dev] = std::move(fabric_program);
             }
-            // Compile failure mostly comes from Nebula (TG)
-            log_trace(tt::LogMetal, "Did not build fabric on Device {}", dev->id());
-            return static_cast<Device*>(nullptr);
+            return dev;
         }));
     }
 
@@ -162,10 +208,11 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         return;
     }
 
+    // Serial execution due to UMD writes not being thread safe
     for (const auto& event : events) {
         auto* dev = event.get();
-        if (dev) {
-            dev->configure_fabric();
+        if (fabric_programs_.contains(dev)) {
+            detail::configure_device(descriptor_->env(), dev, fabric_programs_[dev]);
         }
     }
 }

@@ -10,7 +10,9 @@
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include <tt-metalium/experimental/context/metal_env.hpp>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -20,10 +22,11 @@ bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
 
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::tt_metal::IDevice* device) {
+std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(
+    tt::tt_metal::IDevice* device, tt::tt_metal::MetalEnvImpl& env) {
     auto fabric_program_ptr = std::make_unique<tt::tt_metal::Program>();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = env.get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
     // Use FabricBuilder to coordinate the build phases
@@ -41,18 +44,9 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     builder.create_kernels();
 
     // Compile the program
-    tt::tt_metal::detail::CompileProgram(
-        device, *fabric_program_ptr, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
+    tt::tt_metal::detail::CompileProgram(device, *fabric_program_ptr, env.get_rtoptions().get_fast_dispatch());
 
     return fabric_program_ptr;
-}
-
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device) {
-    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    if (tt_fabric::is_tt_fabric_config(fabric_config)) {
-        return create_and_compile_tt_fabric_program(device);
-    }
-    return nullptr;
 }
 
 void configure_fabric_cores(tt::tt_metal::IDevice* device) {
