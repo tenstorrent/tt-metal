@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import time
 from collections import defaultdict
 
@@ -33,50 +34,59 @@ from ...utils.test import line_params
     ],
     ids=["target-4x8", "target-4x32"],
 )
-def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape):
+@pytest.mark.parametrize(
+    "T0, resolution",  # For T0 use num_latent_frames for uncached VAE, or 4 for cached VAE.
+    [
+        4,
+        (720, 1280),
+        4,
+        (480, 832),
+        128,
+        (720, 1280),
+        128,
+        (480, 832),
+        128,
+        (768, 512),
+    ],
+    ids=[
+        "uncached-720p",
+        "uncached-480p",
+        "cached-720p",
+        "cached-480p",
+        "cached-768x512",
+    ],
+)
+def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape, T0, resolution):
     """
     Sweep over blocking configurations for conv3d to find optimal settings.
     """
 
     # Per-device input/weight shapes and baseline blockings from VAE decoder
     # (T, H, W, C_in, kernel_size, C_out, (T_block, H_block, W_block, C_in_block, C_out_block))
-    if target_mesh_shape == (4, 8):
-        # On 4x8 mesh final shape is (184, 160) + conv padding = (186, 162), since H is padded so latent size (90, 160) divides (4, 8).
-        conv_configs = [
-            (3, 25, 22, 32, (3, 3, 3), 384, (1, 8, 8, 32, 384)),
-            (3, 25, 22, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
-            (3, 48, 42, 192, (3, 3, 3), 384, (1, 32, 1, 96, 128)),
-            (3, 48, 42, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
-            (3, 94, 82, 192, (3, 3, 3), 192, (1, 8, 4, 96, 96)),
-            (3, 186, 162, 96, (3, 3, 3), 96, (1, 8, 8, 96, 96)),
-            (3, 186, 162, 96, (3, 3, 3), 32, (1, 16, 8, 96, 32)),
-            (3, 23, 20, 384, (3, 1, 1), 768, (1, 1, 1, 32, 1)),
-            (4, 48, 42, 192, (3, 3, 3), 384, (1, 32, 1, 96, 128)),
-            (4, 48, 42, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
-            (4, 46, 40, 384, (3, 1, 1), 768, (1, 1, 1, 32, 1)),
-            (6, 94, 82, 192, (3, 3, 3), 192, (1, 8, 4, 96, 96)),
-            (6, 186, 162, 96, (3, 3, 3), 96, (1, 8, 8, 96, 96)),
-            (6, 186, 162, 96, (3, 3, 3), 32, (1, 16, 8, 96, 32)),
-        ]
-    elif target_mesh_shape == (4, 32):
-        conv_configs = [
-            (3, 25, 7, 32, (3, 3, 3), 384, (1, 8, 1, 32, 384)),
-            (3, 25, 7, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
-            (3, 48, 12, 192, (3, 3, 3), 384, (1, 8, 4, 96, 128)),
-            (3, 48, 12, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
-            (3, 94, 22, 192, (3, 3, 3), 192, (1, 8, 4, 96, 96)),
-            (3, 186, 42, 96, (3, 3, 3), 96, (1, 4, 8, 96, 96)),
-            (3, 186, 42, 96, (3, 3, 3), 32, (1, 16, 8, 96, 32)),
-            (3, 23, 5, 384, (3, 1, 1), 768, (1, 1, 1, 32, 1)),
-            (4, 48, 12, 192, (3, 3, 3), 384, (1, 8, 4, 96, 128)),
-            (4, 48, 12, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
-            (4, 46, 10, 384, (3, 1, 1), 768, (1, 1, 1, 32, 1)),
-            (6, 94, 22, 192, (3, 3, 3), 192, (1, 8, 4, 96, 96)),
-            (6, 186, 42, 96, (3, 3, 3), 96, (1, 4, 8, 96, 96)),
-            (6, 186, 42, 96, (3, 3, 3), 32, (1, 16, 8, 96, 32)),
-        ]
-    else:
-        pytest.skip(f"Target mesh shape {target_mesh_shape} not supported")
+    # The convolution padding is applied externally so the shapes should include padding.
+    H0 = resolution[0] // target_mesh_shape[0]
+    W0 = resolution[1] // target_mesh_shape[1]
+    H0 = math.ceil(H0 / 8) * 8  # Account for H padding.
+
+    conv_configs = [
+        (3, H0 // 8 + 2, W0 // 8 + 2, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
+        (3, H0 // 8 + 2, W0 // 8 + 2, 384, (3, 3, 3), 32, (1, 4, 4, 384, 32)),
+        (3, H0 // 4 + 2, W0 // 4 + 2, 192, (3, 3, 3), 384, (1, 32, 1, 96, 128)),
+        (3, H0 // 4 + 2, W0 // 4 + 2, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
+        (3, H0 // 2 + 2, W0 // 2 + 2, 96, (3, 3, 3), 192, (1, 4, 4, 96, 192)),
+        (3, H0 // 2 + 2, W0 // 2 + 2, 192, (3, 3, 3), 192, (1, 8, 4, 96, 96)),
+        (3, H0 + 2, W0 + 2, 32, (3, 3, 3), 96, (1, 4, 4, 32, 96)),
+        (3, H0 + 2, W0 + 2, 96, (3, 3, 3), 96, (1, 8, 8, 96, 96)),
+        (T0 // 4 + 2, H0 // 8, W0 // 8, 384, (3, 1, 1), 768, (1, 1, 1, 32, 1)),  # no padding for this case.
+        (T0 // 4 + 2, H0 // 8 + 2, W0 // 8 + 2, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
+        (T0 // 4 + 2, H0 // 8 + 2, W0 // 8 + 2, 32, (3, 3, 3), 384, (1, 8, 8, 32, 384)),
+        (T0 // 2 + 2, H0 // 4, W0 // 4, 384, (3, 1, 1), 768, (1, 1, 1, 32, 1)),  # no padding for this case.
+        (T0 // 2 + 2, H0 // 4 + 2, W0 // 4 + 2, 192, (3, 3, 3), 384, (1, 32, 1, 96, 128)),
+        (T0 // 2 + 2, H0 // 4 + 2, W0 // 4 + 2, 384, (3, 3, 3), 384, (1, 8, 2, 128, 128)),
+        (T0 + 2, H0 // 2 + 2, W0 // 2 + 2, 192, (3, 3, 3), 192, (1, 8, 4, 96, 96)),
+        (T0 + 2, H0 + 2, W0 + 2, 96, (3, 3, 3), 96, (1, 8, 8, 96, 96)),
+        (T0 + 2, H0 + 2, W0 + 2, 96, (3, 3, 3), 32, (1, 16, 8, 96, 32)),
+    ]
 
     grid_size = mesh_device.compute_with_storage_grid_size()
 
@@ -141,7 +151,8 @@ def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape):
             return c >= 32 and c <= C_out and C_out % c == 0 and c % 32 == 0
 
         # Enumerate all valid C_in_block and C_out_block values (multiples of 32)
-        valid_cins = [c for c in range(32, padded_C_in + 1, 32) if valid_cin(c)]
+        # valid_cins = [c for c in range(32, padded_C_in + 1, 32) if valid_cin(c)]
+        valid_cins = [C_in]  # For now fix C_in.
         valid_couts = [c for c in range(32, C_out + 1, 32) if valid_cout(c)]
 
         variations = set()
@@ -240,6 +251,7 @@ def test_conv3d_blocking_sweep(mesh_device, target_mesh_shape):
         for C_in_block, C_out_block in cin_cout_variations:
             for h, w in hw_variations:
                 blockings_to_test.append((C_in_block, C_out_block, h, w, False))
+        blockings_to_test.append((C_in_block_base, C_out_block_base, H_base, W_base, True))
         print(f"Testing {len(blockings_to_test)} blocking configurations...")
 
         for C_in_block, C_out_block, H_out_block, W_out_block, is_baseline in blockings_to_test:
