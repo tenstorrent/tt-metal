@@ -217,7 +217,7 @@ def test_per_core_tetris_allocation(device):
             t = _create_single_core_tensor(device, cores[core_idx], size)
             if mem is None:
                 mem = PerCoreMemMap(t.buffer_address(), size)
-            addr = mem.alloc(label, core_idx, size)
+            mem.alloc(label, core_idx, size)
             actual[label] = t.buffer_address()
             tensors[label] = t
         elif action == "free":
