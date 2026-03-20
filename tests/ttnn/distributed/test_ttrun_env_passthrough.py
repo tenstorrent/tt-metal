@@ -6,10 +6,18 @@
 
 Covers env propagation, blocklisting, path safety validation, rank-scoped path
 scoping, MPI export classification, and end-to-end rank environment assembly.
-No MPI runtime or hardware is required.
+
+Unit tests (marked @pytest.mark.unit) require no MPI runtime or hardware.
+Multihost integration tests (@pytest.mark.multihost) require a real MPI environment
+with tt-run available and a dual-T3K rank binding configuration.
 """
 
+import json
+import os
+import shutil
 import socket
+import subprocess
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -79,6 +87,7 @@ def _build_config(tmp_path: Path, binding: RankBinding, global_env: dict | None 
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.unit
 class TestValidatePathSafety:
     def test_empty_path_is_allowed(self):
         validate_path_safety("", "TEST_VAR")
@@ -122,6 +131,7 @@ class TestValidatePathSafety:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.unit
 class TestApplyRankScopedPaths:
     def test_scopes_logs_and_scratch(self):
         hostname = socket.gethostname()
@@ -166,6 +176,7 @@ class TestApplyRankScopedPaths:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.unit
 class TestClassifyMpiEnvExports:
     def test_simple_values_go_to_direct_exports(self):
         rank_env = {"TT_METAL_HOME": "/opt/tt-metal", "TT_MESH_ID": "0"}
@@ -214,6 +225,7 @@ class TestClassifyMpiEnvExports:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.unit
 class TestStripBlocklistedEnvVars:
     def test_removes_exact_blocklist_keys(self):
         env = {"TT_VISIBLE_DEVICES": "0,1", "SAFE_VAR": "value"}
@@ -247,6 +259,7 @@ class TestStripBlocklistedEnvVars:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.unit
 class TestShouldUseNameOnlyMpiExport:
     def test_plain_value_returns_false(self):
         assert not should_use_name_only_mpi_export("MY_VAR", "simple_value", {})
@@ -277,6 +290,7 @@ class TestShouldUseNameOnlyMpiExport:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.unit
 class TestEnvPrefixHelpers:
     def test_has_auto_passthrough_prefix_tt(self):
         assert has_auto_passthrough_prefix("TT_METAL_HOME")
@@ -324,6 +338,7 @@ class TestEnvPrefixHelpers:
 # ===========================================================================
 
 
+@pytest.mark.unit
 def test_tt_visible_devices_host_value_is_not_passed_without_rank_override(monkeypatch, tmp_path):
     monkeypatch.setenv("TT_VISIBLE_DEVICES", "31")
     monkeypatch.setenv("TTNN_CONFIG_OVERRIDES", '{"foo": "bar"}')
@@ -337,6 +352,7 @@ def test_tt_visible_devices_host_value_is_not_passed_without_rank_override(monke
     assert env["TTNN_CONFIG_OVERRIDES"] == '{"foo": "bar"}'
 
 
+@pytest.mark.unit
 def test_tt_visible_devices_rank_override_takes_precedence(monkeypatch, tmp_path):
     monkeypatch.setenv("TT_VISIBLE_DEVICES", "31")
 
@@ -348,6 +364,7 @@ def test_tt_visible_devices_rank_override_takes_precedence(monkeypatch, tmp_path
     assert env["TT_VISIBLE_DEVICES"] == "0,1"
 
 
+@pytest.mark.unit
 def test_launcher_environment_strips_blocklisted_variables(monkeypatch):
     monkeypatch.setenv("TT_VISIBLE_DEVICES", "31")
     monkeypatch.setenv("TT_MESH_ID", "7")
@@ -374,6 +391,7 @@ def test_launcher_environment_strips_blocklisted_variables(monkeypatch):
     assert launcher_env["TTNN_CONFIG_OVERRIDES"] == '{"foo": "bar"}'
 
 
+@pytest.mark.unit
 def test_rank_environment_does_not_auto_passthrough_non_prefixed_vars(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_SHA", "deadbeef")
     monkeypatch.setenv("RUNNER_OS", "Linux")
@@ -389,6 +407,7 @@ def test_rank_environment_does_not_auto_passthrough_non_prefixed_vars(monkeypatc
     assert "RUNNER_OS" not in env
 
 
+@pytest.mark.unit
 def test_mpi_export_uses_name_only_for_complex_dispatch_timeout_command(monkeypatch, tmp_path):
     command = "/opt/venv/bin/python3 /work/tools/tt-triage.py --disable-progress 1>&2"
     monkeypatch.setenv("TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE", command)
@@ -405,6 +424,7 @@ def test_mpi_export_uses_name_only_for_complex_dispatch_timeout_command(monkeypa
     assert "TT_VISIBLE_DEVICES=0,1" in exported_tokens
 
 
+@pytest.mark.unit
 def test_rank_environment_provides_default_cache_when_unset(monkeypatch, tmp_path):
     """When TT_METAL_CACHE is not set, ttrun provides a shared default path.
     Cache remains shared across ranks; only logs and JIT scratch are rank-scoped."""
@@ -419,6 +439,7 @@ def test_rank_environment_provides_default_cache_when_unset(monkeypatch, tmp_pat
     assert env["TT_METAL_CACHE"] == "/home/testuser/.cache"
 
 
+@pytest.mark.unit
 def test_rank_environment_provides_default_cache_when_unset_no_home(monkeypatch, tmp_path):
     """When both TT_METAL_CACHE and HOME are unset, fall back to /tmp/tt-metal-cache."""
     monkeypatch.delenv("TT_METAL_CACHE", raising=False)
@@ -431,6 +452,7 @@ def test_rank_environment_provides_default_cache_when_unset_no_home(monkeypatch,
     assert env["TT_METAL_CACHE"] == "/tmp/tt-metal-cache"
 
 
+@pytest.mark.unit
 def test_rank_environment_keeps_cache_shared_but_scopes_logs_path_per_rank(monkeypatch, tmp_path):
     monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
     monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
@@ -445,6 +467,7 @@ def test_rank_environment_keeps_cache_shared_but_scopes_logs_path_per_rank(monke
     assert env["TT_METAL_LOGS_PATH"] == f"/nfs/shared/tt-metal-logs/{rank_suffix}"
 
 
+@pytest.mark.unit
 def test_rank_environment_does_not_double_append_rank_scoped_suffix(monkeypatch, tmp_path):
     rank_suffix = f"{socket.gethostname()}_rank_2"
     monkeypatch.setenv("TT_METAL_CACHE", f"/nfs/shared/tt-metal-cache/{rank_suffix}")
@@ -459,6 +482,7 @@ def test_rank_environment_does_not_double_append_rank_scoped_suffix(monkeypatch,
     assert env["TT_METAL_LOGS_PATH"] == f"/nfs/shared/tt-metal-logs/{rank_suffix}"
 
 
+@pytest.mark.unit
 def test_rank_environment_preserves_explicit_global_env_rank_scoped_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
     monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
@@ -476,6 +500,7 @@ def test_rank_environment_preserves_explicit_global_env_rank_scoped_paths(monkey
     assert env["TT_METAL_LOGS_PATH"] == "/custom/global/logs"
 
 
+@pytest.mark.unit
 def test_rank_environment_preserves_explicit_rank_override_rank_scoped_paths(monkeypatch, tmp_path):
     monkeypatch.setenv("TT_METAL_CACHE", "/nfs/shared/tt-metal-cache")
     monkeypatch.setenv("TT_METAL_LOGS_PATH", "/nfs/shared/tt-metal-logs")
@@ -497,6 +522,7 @@ def test_rank_environment_preserves_explicit_rank_override_rank_scoped_paths(mon
 # --- TT_METAL_JIT_SCRATCH tests ---
 
 
+@pytest.mark.unit
 def test_rank_environment_provides_default_jit_scratch(monkeypatch, tmp_path):
     """When TT_METAL_JIT_SCRATCH is not set, ttrun provides /tmp/tt-jit-build
     and rank-scopes it so each rank compiles to a local scratch directory."""
@@ -512,6 +538,7 @@ def test_rank_environment_provides_default_jit_scratch(monkeypatch, tmp_path):
     assert env["TT_METAL_JIT_SCRATCH"] == f"/tmp/tt-jit-build/{rank_suffix}"
 
 
+@pytest.mark.unit
 def test_rank_environment_scopes_explicit_jit_scratch(monkeypatch, tmp_path):
     """When TT_METAL_JIT_SCRATCH is set in the parent, ttrun still rank-scopes it."""
     monkeypatch.setenv("TT_METAL_JIT_SCRATCH", "/fast-local/jit")
@@ -525,6 +552,7 @@ def test_rank_environment_scopes_explicit_jit_scratch(monkeypatch, tmp_path):
     assert env["TT_METAL_JIT_SCRATCH"] == f"/fast-local/jit/{rank_suffix}"
 
 
+@pytest.mark.unit
 def test_rank_environment_preserves_explicit_global_env_jit_scratch(monkeypatch, tmp_path):
     """When TT_METAL_JIT_SCRATCH is set via global_env in the config YAML, it
     is not overridden by the default and not rank-scoped (explicit key)."""
@@ -542,6 +570,7 @@ def test_rank_environment_preserves_explicit_global_env_jit_scratch(monkeypatch,
     assert env["TT_METAL_JIT_SCRATCH"] == "/custom/jit"
 
 
+@pytest.mark.unit
 def test_rank_environment_preserves_explicit_rank_override_jit_scratch(monkeypatch, tmp_path):
     """When TT_METAL_JIT_SCRATCH is set via rank env_overrides, it is preserved."""
     monkeypatch.delenv("TT_METAL_JIT_SCRATCH", raising=False)
@@ -559,6 +588,7 @@ def test_rank_environment_preserves_explicit_rank_override_jit_scratch(monkeypat
     assert env["TT_METAL_JIT_SCRATCH"] == "/rank-local/jit"
 
 
+@pytest.mark.unit
 def test_cli_wraps_popen_failures_in_click_exception(monkeypatch, tmp_path):
     rank_binding = tmp_path / "rank_binding.yaml"
     rank_binding.write_text("rank_bindings: []\n")
@@ -587,6 +617,7 @@ def test_cli_wraps_popen_failures_in_click_exception(monkeypatch, tmp_path):
 # --- Additional passthrough prefix tests ---
 
 
+@pytest.mark.unit
 def test_arch_prefix_passthrough(monkeypatch, tmp_path):
     """Test that ARCH_ prefixed variables are auto-propagated."""
     monkeypatch.setenv("ARCH_NAME", "wormhole_b0")
@@ -599,6 +630,7 @@ def test_arch_prefix_passthrough(monkeypatch, tmp_path):
     assert env["ARCH_NAME"] == "wormhole_b0"
 
 
+@pytest.mark.unit
 def test_wh_prefix_passthrough(monkeypatch, tmp_path):
     """Test that WH_ prefixed variables (Wormhole-specific) are auto-propagated."""
     monkeypatch.setenv("WH_ARCH_YAML", "/path/to/wh_arch.yaml")
@@ -611,6 +643,7 @@ def test_wh_prefix_passthrough(monkeypatch, tmp_path):
     assert env["WH_ARCH_YAML"] == "/path/to/wh_arch.yaml"
 
 
+@pytest.mark.unit
 def test_deepseek_prefix_passthrough(monkeypatch, tmp_path):
     """Test that DEEPSEEK_ prefixed variables are auto-propagated."""
     monkeypatch.setenv("DEEPSEEK_V3_HF_MODEL", "deepseek-ai/deepseek-v3")
@@ -623,6 +656,7 @@ def test_deepseek_prefix_passthrough(monkeypatch, tmp_path):
     assert env["DEEPSEEK_V3_HF_MODEL"] == "deepseek-ai/deepseek-v3"
 
 
+@pytest.mark.unit
 def test_mesh_prefix_passthrough(monkeypatch, tmp_path):
     """Test that MESH_ prefixed variables are auto-propagated."""
     monkeypatch.setenv("MESH_DEVICE", "T3000")
@@ -635,6 +669,7 @@ def test_mesh_prefix_passthrough(monkeypatch, tmp_path):
     assert env["MESH_DEVICE"] == "T3000"
 
 
+@pytest.mark.unit
 def test_loguru_prefix_passthrough(monkeypatch, tmp_path):
     """Test that LOGURU_ prefixed variables are auto-propagated."""
     monkeypatch.setenv("LOGURU_LEVEL", "DEBUG")
@@ -647,6 +682,7 @@ def test_loguru_prefix_passthrough(monkeypatch, tmp_path):
     assert env["LOGURU_LEVEL"] == "DEBUG"
 
 
+@pytest.mark.unit
 def test_launcher_only_blocklist_keys_stripped(monkeypatch):
     """Test that launcher-only blocklist keys are stripped from launcher environment."""
     monkeypatch.setenv("ACTIONS_ORCHESTRATION_ID", "12345")
@@ -664,6 +700,7 @@ def test_launcher_only_blocklist_keys_stripped(monkeypatch):
     assert "HOSTNAME" not in launcher_env
 
 
+@pytest.mark.unit
 def test_pythonhome_not_set_by_default(monkeypatch, tmp_path):
     """Test that PYTHONHOME is not set unless explicitly provided."""
     monkeypatch.delenv("PYTHONHOME", raising=False)
@@ -676,6 +713,7 @@ def test_pythonhome_not_set_by_default(monkeypatch, tmp_path):
     assert "PYTHONHOME" not in env
 
 
+@pytest.mark.unit
 def test_pythonhome_preserved_when_explicitly_set(monkeypatch, tmp_path):
     """Test that PYTHONHOME is preserved when explicitly set in parent environment."""
     monkeypatch.setenv("PYTHONHOME", "/custom/python/home")
@@ -688,6 +726,7 @@ def test_pythonhome_preserved_when_explicitly_set(monkeypatch, tmp_path):
     assert env["PYTHONHOME"] == "/custom/python/home"
 
 
+@pytest.mark.unit
 def test_multi_rank_binding_scopes_paths_correctly(monkeypatch, tmp_path):
     """Cache is shared; logs are rank-scoped."""
     monkeypatch.setenv("TT_METAL_CACHE", "/shared/cache")
@@ -707,3 +746,304 @@ def test_multi_rank_binding_scopes_paths_correctly(monkeypatch, tmp_path):
     assert env1["TT_METAL_CACHE"] == "/shared/cache"
     assert env0["TT_METAL_LOGS_PATH"] == f"/shared/logs/{hostname}_rank_0"
     assert env1["TT_METAL_LOGS_PATH"] == f"/shared/logs/{hostname}_rank_1"
+
+
+# ===========================================================================
+# Multihost integration tests — real MPI env propagation via tt-run
+# ===========================================================================
+#
+# These tests invoke tt-run (which wraps mpirun) to launch a small probe
+# script on each MPI rank.  The probe dumps its environment as JSON to stdout,
+# and the test parses the output to verify env propagation behaviour.
+#
+# Requirements:
+#   - mpirun (or mpirun-ulfm) on PATH
+#   - tt-run on PATH
+#   - /etc/mpirun/hostfile present (dual-T3K CI topology)
+#   - TT_METAL_HOME set to the repo root
+#
+# Run only tests in this section:
+#   pytest tests/ttnn/distributed/test_ttrun_env_passthrough.py -m multihost -v
+# ===========================================================================
+
+# Sentinel printed by the probe script so we can extract rank env JSON
+# from the (possibly noisy) mpirun tagged output.
+_ENV_PROBE_SENTINEL = "TT_ENV_PROBE"
+
+# Path to the dual-T3K mesh graph descriptor (relative to TT_METAL_HOME)
+_DUAL_T3K_MESH_GRAPH_DESC = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto"
+
+# Default timeout for tt-run subprocess calls (seconds)
+_TTRUN_TIMEOUT = 120
+
+
+def _tt_run_available() -> bool:
+    """Return True if tt-run is on PATH."""
+    return shutil.which("tt-run") is not None
+
+
+def _mpi_hostfile_exists() -> bool:
+    """Return True if the standard multihost hostfile is present."""
+    return Path("/etc/mpirun/hostfile").is_file()
+
+
+def _write_probe_script(path: Path) -> None:
+    """Write a small Python script that dumps its environment as JSON.
+
+    Output format per rank (one line):
+        TT_ENV_PROBE:<rank>:<json-encoded env dict>
+
+    The sentinel prefix lets us reliably parse rank env data from mpirun's
+    tagged output which may include other log lines.
+    """
+    path.write_text(
+        textwrap.dedent(
+            """\
+            import json, os, sys
+            rank = os.environ.get("OMPI_COMM_WORLD_RANK", "?")
+            payload = json.dumps(dict(os.environ), separators=(",", ":"))
+            # Flush explicitly — mpirun buffers stdout across ranks
+            sys.stdout.write(f"TT_ENV_PROBE:{rank}:{payload}\\n")
+            sys.stdout.flush()
+        """
+        )
+    )
+
+
+def _write_rank_binding_yaml(
+    path: Path,
+    *,
+    num_ranks: int = 2,
+    global_env: dict | None = None,
+    rank_env_overrides: dict[int, dict[str, str]] | None = None,
+) -> None:
+    """Write a rank binding YAML suitable for dual-T3K topology.
+
+    Each rank gets mesh_id = rank index (matching the production dual_t3k config).
+    """
+    lines = ["rank_bindings:"]
+    for r in range(num_ranks):
+        lines.append(f"  - rank: {r}")
+        lines.append(f"    mesh_id: {r}")
+        overrides = (rank_env_overrides or {}).get(r)
+        if overrides:
+            lines.append("    env_overrides:")
+            for k, v in overrides.items():
+                lines.append(f'      {k}: "{v}"')
+    if global_env:
+        lines.append("global_env:")
+        for k, v in global_env.items():
+            lines.append(f'  {k}: "{v}"')
+    lines.append(f'mesh_graph_desc_path: "{_DUAL_T3K_MESH_GRAPH_DESC}"')
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _run_tt_run(
+    rank_binding_path: Path,
+    probe_script_path: Path,
+    extra_env: dict[str, str] | None = None,
+    timeout: int = _TTRUN_TIMEOUT,
+) -> dict[int, dict[str, str]]:
+    """Invoke tt-run with the probe script and return per-rank env dicts.
+
+    Returns:
+        {rank_id: {env_key: env_value, ...}, ...}
+
+    Raises:
+        subprocess.TimeoutExpired: if tt-run does not exit within *timeout* seconds.
+        RuntimeError: if we cannot parse rank env output for any expected rank.
+    """
+    mpi_args = "--hostfile /etc/mpirun/hostfile"
+    cmd = [
+        "tt-run",
+        "--rank-binding",
+        str(rank_binding_path),
+        "--mpi-args",
+        mpi_args,
+        "python3",
+        str(probe_script_path),
+    ]
+
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+    )
+
+    # Parse rank environments from stdout
+    rank_envs: dict[int, dict[str, str]] = {}
+    for line in result.stdout.splitlines():
+        # mpirun --tag-output prefixes lines like: [1,0]<stdout>:TT_ENV_PROBE:0:{...}
+        # Strip the tag prefix if present
+        if _ENV_PROBE_SENTINEL not in line:
+            continue
+        idx = line.index(_ENV_PROBE_SENTINEL)
+        payload = line[idx:]  # "TT_ENV_PROBE:<rank>:<json>"
+        parts = payload.split(":", 2)
+        if len(parts) < 3:
+            continue
+        rank_id = int(parts[1])
+        rank_envs[rank_id] = json.loads(parts[2])
+
+    if not rank_envs:
+        raise RuntimeError(
+            f"No rank env output parsed from tt-run.\n"
+            f"  stdout: {result.stdout[:2000]}\n"
+            f"  stderr: {result.stderr[:2000]}\n"
+            f"  returncode: {result.returncode}"
+        )
+
+    return rank_envs
+
+
+# Skip the entire multihost class if prerequisites are missing
+_skip_reason = None
+if not _tt_run_available():
+    _skip_reason = "tt-run not found on PATH"
+elif not _mpi_hostfile_exists():
+    _skip_reason = "/etc/mpirun/hostfile not present (not a multihost CI environment)"
+elif not os.environ.get("TT_METAL_HOME"):
+    _skip_reason = "TT_METAL_HOME not set"
+
+
+@pytest.mark.multihost
+@pytest.mark.skipif(_skip_reason is not None, reason=_skip_reason or "")
+class TestMultihostEnvPassthrough:
+    """Integration tests that invoke tt-run with real MPI to verify env propagation."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path: Path):
+        """Create probe script and rank binding YAML in tmp_path."""
+        self.probe_script = tmp_path / "env_probe.py"
+        _write_probe_script(self.probe_script)
+        self.tmp_path = tmp_path
+
+    def test_tt_vars_propagated_to_all_ranks(self):
+        """Set a TT_ prefixed var and verify both ranks see it rank-scoped."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(binding_path)
+
+        rank_envs = _run_tt_run(
+            binding_path,
+            self.probe_script,
+            extra_env={"TT_METAL_LOGS_PATH": "/tmp/test-multihost-logs"},
+        )
+
+        assert len(rank_envs) >= 2, f"Expected at least 2 ranks, got {sorted(rank_envs.keys())}"
+
+        for rank_id, env in rank_envs.items():
+            assert "TT_METAL_LOGS_PATH" in env, f"Rank {rank_id} missing TT_METAL_LOGS_PATH"
+            logs_path = env["TT_METAL_LOGS_PATH"]
+            assert (
+                "/tmp/test-multihost-logs/" in logs_path
+            ), f"Rank {rank_id}: expected rank-scoped path under /tmp/test-multihost-logs/, got {logs_path}"
+            assert f"rank_{rank_id}" in logs_path, f"Rank {rank_id}: expected rank_{rank_id} suffix in {logs_path}"
+
+    def test_tt_visible_devices_per_rank_override(self):
+        """Set different TT_VISIBLE_DEVICES per rank via env_overrides."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(
+            binding_path,
+            rank_env_overrides={
+                0: {"TT_VISIBLE_DEVICES": "0,1,2,3"},
+                1: {"TT_VISIBLE_DEVICES": "4,5,6,7"},
+            },
+        )
+
+        rank_envs = _run_tt_run(binding_path, self.probe_script)
+
+        assert (
+            rank_envs[0]["TT_VISIBLE_DEVICES"] == "0,1,2,3"
+        ), f"Rank 0: expected '0,1,2,3', got {rank_envs[0].get('TT_VISIBLE_DEVICES')}"
+        assert (
+            rank_envs[1]["TT_VISIBLE_DEVICES"] == "4,5,6,7"
+        ), f"Rank 1: expected '4,5,6,7', got {rank_envs[1].get('TT_VISIBLE_DEVICES')}"
+
+    def test_blocklisted_vars_not_propagated(self):
+        """Set GITHUB_TOKEN and RUNNER_OS; verify they are NOT on remote ranks."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(binding_path)
+
+        rank_envs = _run_tt_run(
+            binding_path,
+            self.probe_script,
+            extra_env={
+                "GITHUB_TOKEN": "ghp_fake_secret_12345",
+                "RUNNER_OS": "Linux",
+                "ACTIONS_ORCHESTRATION_ID": "12345",
+            },
+        )
+
+        for rank_id, env in rank_envs.items():
+            assert "GITHUB_TOKEN" not in env, f"Rank {rank_id} leaked GITHUB_TOKEN"
+            assert "RUNNER_OS" not in env, f"Rank {rank_id} leaked RUNNER_OS"
+            assert "ACTIONS_ORCHESTRATION_ID" not in env, f"Rank {rank_id} leaked ACTIONS_ORCHESTRATION_ID"
+
+    def test_global_env_propagated(self):
+        """Set global_env in rank binding YAML; verify all ranks see it."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(
+            binding_path,
+            global_env={"TT_CUSTOM_GLOBAL_VAR": "hello_multihost"},
+        )
+
+        rank_envs = _run_tt_run(binding_path, self.probe_script)
+
+        for rank_id, env in rank_envs.items():
+            assert env.get("TT_CUSTOM_GLOBAL_VAR") == "hello_multihost", (
+                f"Rank {rank_id}: expected TT_CUSTOM_GLOBAL_VAR='hello_multihost', "
+                f"got {env.get('TT_CUSTOM_GLOBAL_VAR')!r}"
+            )
+
+    def test_rank_scoped_paths(self):
+        """Verify TT_METAL_LOGS_PATH is uniquely rank-scoped with hostname+rank suffix."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(binding_path)
+
+        rank_envs = _run_tt_run(
+            binding_path,
+            self.probe_script,
+            extra_env={"TT_METAL_LOGS_PATH": "/tmp/test-scoped-logs"},
+        )
+
+        seen_paths: set[str] = set()
+        for rank_id, env in rank_envs.items():
+            logs_path = env.get("TT_METAL_LOGS_PATH", "")
+            assert logs_path not in seen_paths, f"Rank {rank_id}: duplicate logs path {logs_path}"
+            seen_paths.add(logs_path)
+            assert f"rank_{rank_id}" in logs_path, f"Rank {rank_id}: expected rank_{rank_id} in {logs_path}"
+            assert logs_path.startswith(
+                "/tmp/test-scoped-logs/"
+            ), f"Rank {rank_id}: expected path under /tmp/test-scoped-logs/, got {logs_path}"
+
+    def test_mesh_id_set_per_rank(self):
+        """Verify TT_MESH_ID matches the rank binding config (rank N -> mesh_id N)."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(binding_path)
+
+        rank_envs = _run_tt_run(binding_path, self.probe_script)
+
+        for rank_id, env in rank_envs.items():
+            assert env.get("TT_MESH_ID") == str(
+                rank_id
+            ), f"Rank {rank_id}: expected TT_MESH_ID='{rank_id}', got {env.get('TT_MESH_ID')!r}"
+
+    def test_tt_metal_home_propagated(self):
+        """Verify TT_METAL_HOME is set on all ranks and matches the launcher value."""
+        binding_path = self.tmp_path / "binding.yaml"
+        _write_rank_binding_yaml(binding_path)
+
+        rank_envs = _run_tt_run(binding_path, self.probe_script)
+
+        expected_home = os.environ.get("TT_METAL_HOME", "")
+        for rank_id, env in rank_envs.items():
+            assert "TT_METAL_HOME" in env, f"Rank {rank_id} missing TT_METAL_HOME"
+            assert env["TT_METAL_HOME"] == expected_home, (
+                f"Rank {rank_id}: expected TT_METAL_HOME='{expected_home}', " f"got {env['TT_METAL_HOME']!r}"
+            )
