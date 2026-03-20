@@ -89,8 +89,8 @@ class DeepseekMoeGateSingleCore:
             enable_sigmoid: Whether to enable sigmoid activation
 
         Returns:
-            output_tensor with top8 normalized scores (shape [1, 8])
-            output_indices_tensor with top8 indices (shape [1, 8])
+            output_tensor with top8 normalized scores (shape [32, 32], but only [0, :8] is valid)
+            output_indices_tensor with top8 indices (shape [32, 32], but only [0, :8] is valid)
 
         Note:
             For the output_tensor and output_indices_tensor, it should be 32x32.

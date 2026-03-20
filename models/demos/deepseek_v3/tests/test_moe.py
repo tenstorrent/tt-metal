@@ -65,7 +65,6 @@ def generate_reference_io(
     mode: str,
     num_tokens: int,
     reference_model: DeepseekV3MoE,
-    hf_config,
     checkpoint_state_dict: dict[str, torch.Tensor],
     module_path: str,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
@@ -127,7 +126,6 @@ def test_forward_pass(
     mesh_device,
     ccl,
     topk_fallback,
-    force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
@@ -138,7 +136,6 @@ def test_forward_pass(
         mode=mode,
         num_tokens=num_tokens,
         reference_model=reference_model,
-        hf_config=hf_config,
         checkpoint_state_dict=checkpoint_state_dict,
         module_path=module_path,
     )
@@ -149,7 +146,7 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=force_recalculate_weight_config,
+        force_recalculate=False,
         test_name="test_moe",
         real_weights=True,
         layer_id=module_path,
