@@ -309,7 +309,7 @@ class SFTTrainer:
         # should sum to B*T (one entry per token position).  A large deviation
         # usually indicates a custom collate that forgot to normalise.
         if batch.loss_mask is not None:
-            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32)
+            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer)
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
