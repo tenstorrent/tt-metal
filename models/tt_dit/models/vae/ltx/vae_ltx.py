@@ -51,6 +51,7 @@ class LTXCausalConv3d(Module):
         *,
         kernel_size: int = 3,
         stride: Sequence[int] | int = 1,
+        spatial_padding_mode: str = "zeros",
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
@@ -67,14 +68,21 @@ class LTXCausalConv3d(Module):
         self.stride = _ntuple(stride, 3)
         self.mesh_device = mesh_device
         self.dtype = dtype
+        self.spatial_padding_mode = spatial_padding_mode
 
         # Temporal padding: repeat first frame (kernel_t - 1) times
         self.time_pad = self.kernel_size[0] - 1
 
-        # Spatial padding is handled by the conv3d op
-        padding_h = self.kernel_size[1] // 2
-        padding_w = self.kernel_size[2] // 2
-        self.internal_padding = (0, padding_h, padding_w)
+        # Spatial padding amounts
+        self.pad_h = self.kernel_size[1] // 2
+        self.pad_w = self.kernel_size[2] // 2
+
+        # For reflect mode, we do manual padding and pass (0,0,0) to conv3d
+        # For zeros mode, let conv3d handle it internally
+        if spatial_padding_mode == "reflect":
+            self.internal_padding = (0, 0, 0)
+        else:
+            self.internal_padding = (0, self.pad_h, self.pad_w)
 
         # Get conv3d config (blocking)
         self.conv_config = get_conv3d_config(
@@ -148,6 +156,19 @@ class LTXCausalConv3d(Module):
                 back_frames = [last_frame] * back_pad
                 parts = front_frames + [x_BTHWC] + back_frames
                 x_BTHWC = ttnn.concat(parts, dim=1)
+
+        # Reflect spatial padding: manually pad H and W dims before conv
+        if self.spatial_padding_mode == "reflect" and (self.pad_h > 0 or self.pad_w > 0):
+            if self.pad_h > 0:
+                # Reflect pad H: front=reversed slice from index 1, back=reversed slice from index -2
+                front_h = x_BTHWC[:, :, 1 : self.pad_h + 1, :, :]
+                back_h = x_BTHWC[:, :, -(self.pad_h + 1) : -1, :, :]
+                x_BTHWC = ttnn.concat([front_h, x_BTHWC, back_h], dim=2)
+            if self.pad_w > 0:
+                # Reflect pad W
+                front_w = x_BTHWC[:, :, :, 1 : self.pad_w + 1, :]
+                back_w = x_BTHWC[:, :, :, -(self.pad_w + 1) : -1, :]
+                x_BTHWC = ttnn.concat([front_w, x_BTHWC, back_w], dim=3)
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -300,6 +321,7 @@ class LTXDepthToSpaceUpsample(Module):
         in_channels: int,
         stride: tuple[int, int, int],
         out_channels_reduction_factor: int = 1,
+        spatial_padding_mode: str = "zeros",
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
     ) -> None:
@@ -311,7 +333,13 @@ class LTXDepthToSpaceUpsample(Module):
         conv_out_channels = math.prod(stride) * in_channels // out_channels_reduction_factor
 
         self.conv = LTXCausalConv3d(
-            in_channels, conv_out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            in_channels,
+            conv_out_channels,
+            kernel_size=3,
+            stride=1,
+            spatial_padding_mode=spatial_padding_mode,
+            mesh_device=mesh_device,
+            dtype=dtype,
         )
 
     def forward(self, x_BTHWC: ttnn.Tensor, causal: bool = True) -> ttnn.Tensor:
@@ -444,7 +472,13 @@ class LTXVideoDecoder(Module):
 
         # conv_in: 128 → 1024
         self.conv_in = LTXCausalConv3d(
-            in_channels, feature_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            in_channels,
+            feature_channels,
+            kernel_size=3,
+            stride=1,
+            spatial_padding_mode="reflect",
+            mesh_device=mesh_device,
+            dtype=dtype,
         )
 
         # Up blocks (decoder_blocks reversed)
@@ -466,6 +500,7 @@ class LTXVideoDecoder(Module):
                         in_channels=ch,
                         stride=stride_map[block_name],
                         out_channels_reduction_factor=multiplier,
+                        spatial_padding_mode="reflect",
                         mesh_device=mesh_device,
                         dtype=dtype,
                     )
@@ -484,7 +519,13 @@ class LTXVideoDecoder(Module):
         # Output: PixelNorm → SiLU → conv_out
         self.norm_out = LTXPixelNorm()
         self.conv_out = LTXCausalConv3d(
-            ch, out_channels_with_patch, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+            ch,
+            out_channels_with_patch,
+            kernel_size=3,
+            stride=1,
+            spatial_padding_mode="reflect",
+            mesh_device=mesh_device,
+            dtype=dtype,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
