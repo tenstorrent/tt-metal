@@ -102,6 +102,7 @@ class Transformer(LightweightModule):
                 use_paged_kv_cache=use_paged_kv_cache,
                 attention_class=attention_class,
                 prefetcher=prefetcher,
+                first_layer=(i == 0),
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -691,7 +692,9 @@ class Transformer(LightweightModule):
             if mode == Mode.DECODE and not self.args.is_galaxy:
                 x = ttnn.to_memory_config(
                     x,
-                    self.args.get_residual_mem_config(mode, self.prefetcher),
+                    self.args.get_residual_mem_config(
+                        mode, self.prefetcher, residual_replicated=i > 0 and layer.pre_ff_norm is not None
+                    ),  # Optimization for models that use replicated residuals in decode - for now models that use pre and post ff norms in decoder (Gemma3 only)
                     activation_dtype,
                 )
             elif activation_dtype is not None and x.dtype != activation_dtype:
@@ -719,6 +722,13 @@ class Transformer(LightweightModule):
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+        if mode == Mode.DECODE and self.layers[0].pre_ff_norm is not None:
+            x = ttnn.mesh_partition(
+                x,
+                memory_config=x.memory_config(),
+                dim=3,
+                cluster_axis=1,
+            )
         if get_last_token != -1:
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
