@@ -1,6 +1,6 @@
 # SFT Trainer
 
-Supervised Fine-Tuning (SFT) trainer for adapting language models on a single Tenstorrent device.
+Supervised Fine-Tuning (SFT) trainer for adapting language models on Tenstorrent devices.
 The API is inspired by [TRL's SFTTrainer](https://huggingface.co/docs/trl/en/sft_trainer) so that
 users who know TRL face minimal friction.
 
@@ -79,6 +79,7 @@ SFTTrainer(
     lr_schedule=None,
     callbacks=None,
     compute_loss_func=None,
+    loss_composer=None,
 )
 ```
 
@@ -93,6 +94,7 @@ SFTTrainer(
 | `lr_schedule` | `Callable[[int], float] \| None` | Custom `step -> lr` schedule. Overrides the default linear-warmup-then-constant. |
 | `callbacks` | `list[TrainerCallback] \| None` | Hooks into the training loop (see [Callbacks](#callbacks)). |
 | `compute_loss_func` | `Callable \| None` | Custom `(logits, batch) -> loss` replacing the default masked cross-entropy. |
+| `loss_composer` | `Any \| None` | Mesh composer passed to `loss.to_numpy(composer=...)` for multi-device loss aggregation (see [DDP / Multi-device](#ddp--multi-device)). |
 
 ### Methods
 
@@ -179,6 +181,7 @@ trainer = SFTTrainer(..., callbacks=[WandbLogger()])
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | After `model.train()`, before first step. |
+| `on_before_optimizer_step` | `(trainer)` | After backward / gradient accumulation, before grad clipping and `optimizer.step()`. |
 | `on_step_end` | `(trainer, step, loss, lr)` | Every `log_interval` steps. |
 | `on_eval_end` | `(trainer, step, eval_loss)` | After each evaluation pass. |
 | `on_save` | `(trainer, step, path)` | After each checkpoint save. |
@@ -282,6 +285,58 @@ SFTConfig(max_grad_norm=1.0)
 
 Uses `ttml.core.clip_grad_norm` (L2 norm) after gradient accumulation and before the
 optimizer step. Set to `0.0` (default) to disable.
+
+---
+
+## DDP / Multi-device
+
+`SFTTrainer` supports distributed data-parallel (DDP) training without any
+DDP-specific configuration flags. Instead, three generic extension points are
+combined:
+
+1. **Collate function** -- create batch tensors with a `shard_tensor_to_mesh_mapper`
+   so that each device receives a slice of the global batch.
+2. **`on_before_optimizer_step` callback** -- call
+   `ttml.core.distributed.synchronize_gradients` to all-reduce gradients before
+   the optimiser step.
+3. **`loss_composer`** -- pass a `concat_mesh_to_tensor_composer` so that logged
+   loss values are aggregated across devices.
+
+```python
+import ttml
+from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+
+# -- device setup (caller responsibility) --
+autograd_ctx = ttml.autograd.AutoContext.get_instance()
+ttml.core.distributed.enable_fabric(num_devices)
+autograd_ctx.open_device([1, num_devices])
+autograd_ctx.initialize_parallelism_context(
+    ttml.autograd.DistributedConfig(enable_ddp=True)
+)
+
+device = autograd_ctx.get_device()
+shard_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+loss_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
+# -- gradient-sync callback --
+class DDPCallback(TrainerCallback):
+    def on_before_optimizer_step(self, trainer):
+        ttml.core.distributed.synchronize_gradients(trainer.model.parameters())
+
+# -- collate that shards along the batch dimension --
+def my_collate(examples, mapper=None):
+    ...  # pass mapper to Tensor.from_numpy(...)
+
+trainer = SFTTrainer(
+    ...,
+    callbacks=[DDPCallback()],
+    loss_composer=loss_composer,
+)
+trainer.train()
+```
+
+See [`sources/examples/lora_llama/train_lora_llama_sft.py`](../sources/examples/lora_llama/train_lora_llama_sft.py)
+for a complete DDP + LoRA example.
 
 ---
 
