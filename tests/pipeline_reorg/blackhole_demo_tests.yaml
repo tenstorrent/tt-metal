@@ -10,7 +10,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: whisper performance
-  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation" --timeout=1800
   skus:
     bh_p150_perf:
       timeout: 10
@@ -19,7 +19,7 @@
   model-name: whisper
 
 - name: whisper nightly
-  cmd: pytest tests/nightly/single_card/whisper
+  cmd: pytest tests/nightly/single_card/whisper --timeout=1800
   skus:
     bh_p150:
       timeout: 10
