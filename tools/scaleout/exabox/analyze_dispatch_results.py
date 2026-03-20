@@ -91,22 +91,27 @@ class LogAnalysis:
 
     @property
     def num_failed(self) -> int:
+        """Number of failed tests."""
         return len(self.tests_failed)
 
     @property
     def num_passed(self) -> int:
+        """Number of passed tests."""
         return len(self.tests_passed)
 
     @property
     def has_failures(self) -> bool:
+        """Whether any tests failed."""
         return len(self.tests_failed) > 0
 
     @property
     def has_critical(self) -> bool:
+        """Whether critical errors were detected."""
         return len(self.critical_errors) > 0
 
     @property
     def has_warnings(self) -> bool:
+        """Whether warnings were detected."""
         return len(self.warnings) > 0
 
     @property
@@ -127,6 +132,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
 
     lines = content.split("\n")
 
+    # Count MPI processes (GTest instances)
     result.total_processes = content.count("Running main() from gmock_main.cc")
 
     for match in re.finditer(r"\[ RUN      \] (.+)", content):
@@ -142,6 +148,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
 
     for match in re.finditer(r"\[  SKIPPED \] ([^\(]+)", content):
         test_name = match.group(1).strip()
+        # Filter out summary lines
         if not re.match(r"\d+ tests?", test_name):
             result.tests_skipped.add(test_name)
 
@@ -155,10 +162,11 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
         elif in_failure:
             if any(kw in line for kw in ["FAILED", "exception", "description", "Failure"]):
                 failure_context.append(line)
-            if len(failure_context) >= 5:
+            if len(failure_context) >= 5:  # Limit context lines
                 result.failure_details.extend(failure_context)
                 in_failure = False
                 failure_context = []
+    # Capture any remaining failure context if loop ended mid-collection
     if failure_context:
         result.failure_details.extend(failure_context)
 
@@ -167,6 +175,7 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
         if "Skipped$" in line and i > 0:
             prev_line = lines[i - 1]
             if any(kw in prev_line for kw in ["This suite must be run with", "requires", "needs"]):
+                # Extract the reason part
                 reason_match = re.search(r"\| info.*\| (.+)", prev_line)
                 if reason_match:
                     result.skip_reasons.append(reason_match.group(1).strip())

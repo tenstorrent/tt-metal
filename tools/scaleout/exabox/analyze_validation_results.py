@@ -39,10 +39,10 @@ except ImportError:
 
 # Constants
 EXPECTED_ITERATIONS = 50
-TIMEOUT_ESCALATION_THRESHOLD = 10.0
-SUCCESS_RATE_EXCELLENT = 90.0
-SUCCESS_RATE_GOOD = 70.0
-SUCCESS_RATE_STABLE = 80.0
+TIMEOUT_ESCALATION_THRESHOLD = 10.0  # 10% failure rate
+SUCCESS_RATE_EXCELLENT = 90.0  # Green success rate color threshold
+SUCCESS_RATE_GOOD = 70.0  # Yellow success rate color threshold
+SUCCESS_RATE_STABLE = 80.0  # "Ready for workloads" threshold in recommendations
 MAX_DISPLAY_FILES = 10
 MAX_HISTOGRAM_ENTRIES = 20
 MAX_ERROR_MESSAGES = 15
@@ -306,11 +306,11 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
     COL_CHANNEL = 3
     COL_PORT_ID = 4
     COL_PORT_TYPE = 5
-    COL_UNIQUE_ID = 6
+    COL_UNIQUE_ID = 6  # May be inserted if port_type is glued to unique_id
     COL_RETRAINS = 7
     COL_CRC = 8
-    COL_UNCORRECTED_CW = 10
-    COL_MISMATCH_START = 11
+    COL_UNCORRECTED_CW = 10  # CorrectedCW at 9 is skipped (not used)
+    COL_MISMATCH_START = 11  # MismatchWords may be missing, starts here or later
 
     links = []
     in_report = header_seen = False
@@ -333,9 +333,13 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
 
         if header_seen and re.match(r"^[a-zA-Z][\w\-]+", c):
             parts = c.split()
+            # Minimum required columns: Host, Tray, ASIC, Ch, PortID, PortType, UniqueID, Retrains, CRC, CorrectedCW, UncorrectedCW
+            # That's 11 columns minimum. If unique_id is glued to port_type, we'll need to split it.
             if len(parts) < 11:
                 continue
             try:
+                # Handle port_type glued to unique_id (e.g., "TRACE0x...")
+                # This shifts all subsequent indices, so we need to rebuild parts
                 port_type_raw = parts[COL_PORT_TYPE]
                 if "0x" in port_type_raw and not port_type_raw.startswith("0x"):
                     idx = port_type_raw.find("0x")
@@ -345,9 +349,14 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
                 else:
                     port_type = port_type_raw
 
+                # After potential rebuild, verify we have enough columns for all accesses
+                # We need at least: Host(0), Tray(1), ASIC(2), Ch(3), PortID(4), PortType(5),
+                # UniqueID(6), Retrains(7), CRC(8), CorrectedCW(9), UncorrectedCW(10)
                 if len(parts) <= COL_UNCORRECTED_CW:
                     continue
 
+                # Find where failure type starts (first non-numeric after UncorrectedCW)
+                # MismatchWords column is often missing - detect if parts[11] is numeric or failure type
                 ft_start = COL_MISMATCH_START
                 mismatch = 0
                 for i in range(COL_MISMATCH_START, min(COL_MISMATCH_START + 2, len(parts))):
@@ -358,15 +367,19 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
                     else:
                         break
 
+                # Capture failure type (until we hit packet size like "64 B" or "64B")
                 failure_parts = []
                 for i in range(ft_start, min(ft_start + 10, len(parts))):
                     p = parts[i]
+                    # Stop at packet size indicators
                     if p == "B" or re.match(r"^\d+$", p):
                         break
+                    # Clean up concatenated strings like "Mismatch64"
                     if re.match(r"^[A-Za-z]+\d+$", p):
                         p = re.sub(r"\d+$", "", p)
                     failure_parts.append(p)
                 failure_type = " ".join(failure_parts)
+                # If failure type mentions "Mismatch" but count is 0, set to 1 (indicates mismatch occurred)
                 if mismatch == 0 and "Mismatch" in failure_type:
                     mismatch = 1
 
@@ -626,15 +639,18 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
 
 def print_details(analyses: list[LogAnalysis]) -> None:
     """Print detailed faulty links and missing connections with proper formatting."""
+    # Faulty links with table formatting
     all_links = [(os.path.basename(a.filepath), l) for a in analyses for l in a.faulty_links]
     if all_links:
         print("=" * 120)
         print("Faulty Links Detail")
         print("=" * 120 + "\n")
 
+        # Calculate dynamic column widths
         host_w = max(len("Host"), max(len(l.host) for _, l in all_links))
         type_w = max(len("Type"), max(len(l.port_type) for _, l in all_links))
 
+        # Header
         print(
             f"{'Log':<25}  {'Host':<{host_w}}  {'Tray':>4}  {'ASIC':>4}  {'Ch':>2}  "
             f"{'Type':<{type_w}}  {'Port':>4}  {'Retrains':>8}  {'CRC':>8}  {'Uncorr':>6}  {'Mismatch':>8}"
@@ -650,6 +666,7 @@ def print_details(analyses: list[LogAnalysis]) -> None:
             )
         print()
 
+        # Failure type breakdown
         failure_types: dict[str, int] = {}
         for _, l in all_links:
             failure_types[l.failure_type] = failure_types.get(l.failure_type, 0) + 1
@@ -659,12 +676,14 @@ def print_details(analyses: list[LogAnalysis]) -> None:
                 print(f"  {count:>3}x  {ftype}")
             print()
 
+    # Missing connections grouped by type
     all_missing = [(os.path.basename(a.filepath), c) for a in analyses for c in a.missing_connections]
     if all_missing:
         print("=" * 100)
         print("Missing Connections")
         print("=" * 100 + "\n")
 
+        # Group by connection type
         port_conns = [(log, c) for log, c in all_missing if c[0] == "port"]
         chan_conns = [(log, c) for log, c in all_missing if c[0] == "channel"]
 
@@ -685,6 +704,7 @@ def print_details(analyses: list[LogAnalysis]) -> None:
                 )
             print()
 
+        # Host pair summary
         host_pairs: dict[tuple, int] = {}
         for _, (_, ep1, ep2) in all_missing:
             pair = tuple(sorted([ep1[0], ep2[0]]))
@@ -710,6 +730,8 @@ def print_link_histogram(analyses: list[LogAnalysis]) -> None:
     if not sorted_links:
         return
 
+    # Dynamic column widths
+    # Key format: (host, tray, asic, channel, port_type)
     host_w = max(len("Host"), max(len(k[0]) for k, _ in sorted_links))
     type_w = max(len("Type"), max(len(k[4]) for k, _ in sorted_links))
 
@@ -872,6 +894,7 @@ def _recommend_aiclk_timeout(cats: dict, total: int, analyses: list[LogAnalysis]
 
 @register_recommendation("mpi_error")
 def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    """Generate recommendations for MPI errors."""
     if not cats.get("mpi_error"):
         return []
     return [f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network."]
@@ -879,6 +902,7 @@ def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
 
 @register_recommendation("ssh_error")
 def _recommend_ssh_error(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    """Generate recommendations for SSH errors."""
     if not cats.get("ssh_error"):
         return []
     return [f"- {Colors.YELLOW}SSH errors:{Colors.NC} Authentication failed. Ensure ssh-agent running and keys added."]
@@ -886,6 +910,7 @@ def _recommend_ssh_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
 
 @register_recommendation("unhealthy")
 def _recommend_unhealthy_links(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    """Generate recommendations for unhealthy links."""
     if not cats.get("unhealthy"):
         return []
     return [
@@ -895,6 +920,7 @@ def _recommend_unhealthy_links(cats: dict, total: int, analyses: list[LogAnalysi
 
 @register_recommendation("inconclusive")
 def _recommend_inconclusive(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    """Generate recommendations for inconclusive results."""
     if not cats.get("inconclusive"):
         return []
     return [

@@ -141,6 +141,8 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
             result.error_category = "ethernet_core_timeout"
             result.exit_code = EXIT_CODE_ETHERNET_CORE_TIMEOUT
         else:
+            # Check if test is hanging - log ends with output format indicating test was still running
+            # Pattern: [1,X]<stdout>: or [1,X]<stderr>: followed by timestamp and log level (| info | etc)
             lines_stripped = [line.strip() for line in result.content.split("\n") if line.strip()]
             if lines_stripped and re.match(
                 r"^\[1,\d+\]<std(?:out|err)>:\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+\|", lines_stripped[-1]
@@ -183,11 +185,13 @@ def register_recommendation(category: str):
 
 @register_recommendation("passed")
 def _recommend_passed(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for passed tests."""
     return [f"{Colors.GREEN}✓ All fabric tests passed successfully. Cluster fabric is healthy.{Colors.NC}"]
 
 
 @register_recommendation("mgd_error")
 def _recommend_mgd_error(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for MGD topology mismatch."""
     return [
         f"{Colors.RED}• MGD topology mismatch detected.{Colors.NC}",
         "• Check host order in host variables against cabling descriptors.",
@@ -198,6 +202,7 @@ def _recommend_mgd_error(analysis: LogAnalysis) -> list[str]:
 
 @register_recommendation("fw_init_failed")
 def _recommend_fw_init_failed(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for firmware initialization failures."""
     return [
         f"{Colors.RED}• Firmware initialization failed.{Colors.NC}",
         "• Reset boards with: tt-smi -r",
@@ -208,6 +213,7 @@ def _recommend_fw_init_failed(analysis: LogAnalysis) -> list[str]:
 
 @register_recommendation("fabric_router_sync_timeout")
 def _recommend_fabric_router_sync_timeout(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for fabric router sync timeout."""
     return [
         f"{Colors.RED}• Fabric Router Sync timeout detected.{Colors.NC}",
         "• Check fabric connectivity and router status.",
@@ -218,6 +224,7 @@ def _recommend_fabric_router_sync_timeout(analysis: LogAnalysis) -> list[str]:
 
 @register_recommendation("test_hanging")
 def _recommend_test_hanging(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for hanging tests."""
     return [
         f"{Colors.YELLOW}• Test appears to be hanging (incomplete log).{Colors.NC}",
         "• Log shows test was running but never completed.",
@@ -229,6 +236,7 @@ def _recommend_test_hanging(analysis: LogAnalysis) -> list[str]:
 
 @register_recommendation("noc_conflict")
 def _recommend_noc_conflict(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for NOC address conflicts."""
     return [
         f"{Colors.RED}• NOC address conflict detected.{Colors.NC}",
         "• UMD detected mismatch between expected and actual NOC addresses.",
@@ -240,6 +248,7 @@ def _recommend_noc_conflict(analysis: LogAnalysis) -> list[str]:
 
 @register_recommendation("ethernet_core_timeout")
 def _recommend_ethernet_core_timeout(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for ethernet core timeout."""
     return [
         f"{Colors.RED}• Ethernet core activation timeout detected.{Colors.NC}",
         "• One or more ethernet cores failed to become active.",
@@ -252,6 +261,7 @@ def _recommend_ethernet_core_timeout(analysis: LogAnalysis) -> list[str]:
 
 @register_recommendation("inconclusive")
 def _recommend_inconclusive(analysis: LogAnalysis) -> list[str]:
+    """Generate recommendations for inconclusive results."""
     return [
         f"{Colors.YELLOW}• Fabric test failed with unrecognized error pattern.{Colors.NC}",
         "• Review critical errors and warnings above.",
@@ -269,6 +279,7 @@ def print_recommendations(analysis: LogAnalysis) -> None:
     if analysis.error_category in RECOMMENDATION_GENERATORS:
         recs.extend(RECOMMENDATION_GENERATORS[analysis.error_category](analysis))
 
+    # Add critical errors notice if present and test failed
     if analysis.critical_errors and analysis.error_category != "passed":
         recs.append("")
         recs.append(f"{Colors.RED}• Critical errors detected - check logs above for details.{Colors.NC}")
