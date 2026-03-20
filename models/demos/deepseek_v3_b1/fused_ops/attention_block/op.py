@@ -705,9 +705,7 @@ class AttentionBlock:
         sdpa_bwd_r2_sem_id = 11
 
         # Convert scale to FP32 bits
-        import struct
-
-        sdpa_scale_fp32_bits = struct.unpack(">I", struct.pack(">f", sdpa_scale_fp32))[0]
+        sdpa_scale_fp32_bits = float_to_uint32(sdpa_scale_fp32)
 
         # ========================================================================
         # Matmul4 parameters: [1, 512] x [512, 128] -> [1, 128]
