@@ -34,6 +34,7 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
+from models.tt_transformers.tt.model_config import CheckpointType
 
 # Maximum total sequence length for batched prefill (batch_size * per_user_seq_len)
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
@@ -895,6 +896,7 @@ class Generator(WarmupForwardMixin):
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
                     batch_size=batch_size,
+                    **kwargs,
                 )
 
                 if chunk_start_relative == last_chunk_start:
@@ -924,7 +926,7 @@ class Generator(WarmupForwardMixin):
             return tt_logits
 
     # Note: This function is called by vLLM
-    def decode_forward(
+    def decode_forward_text(
         self,
         tokens,
         start_pos,
@@ -936,6 +938,7 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
+        **kwargs,
     ):
         mode_switched = False
         if self.mode != Mode.DECODE:
@@ -1299,7 +1302,7 @@ class Generator(WarmupForwardMixin):
         empty_slots=None,
         **kwargs,
     ):
-        if not self.model_args[0].is_llama_vision():
+        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
             logits = self.prefill_forward_text(
                 tokens,
                 page_table=page_table,
@@ -1500,6 +1503,12 @@ class Generator(WarmupForwardMixin):
             return self.process_decode_output_host(to_host)
         else:
             return tt_logits
+
+    def decode_forward(self, *args, **kwargs):
+        if self.model_args[0].checkpoint_type == CheckpointType.HuggingFace:
+            return self.decode_forward_text(*args, **kwargs)
+        else:
+            return self.decode_forward_llama_vision(*args, **kwargs)
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, async_read=False):
