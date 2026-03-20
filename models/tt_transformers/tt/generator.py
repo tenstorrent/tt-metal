@@ -119,11 +119,15 @@ class Generator(WarmupForwardMixin):
         self.already_warmed_up_prefill = True
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
+        warmup_batch_sizes = (1,)
 
         skip_sequence_lengths = False
 
         # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
         sampling_parameters_sweeped = False
+
+        if enable_trace:
+            logger.info("Using batch-1-only traced prefill warmup; runtime batched prefill remains enabled")
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
@@ -134,7 +138,7 @@ class Generator(WarmupForwardMixin):
 
                 # Token-limit guard below skips combinations that would
                 # exceed MAX_BATCHED_PREFILL_SEQ_LEN.
-                for batch_size in SUPPORTED_PREFILL_BATCH_SIZES:
+                for batch_size in warmup_batch_sizes:
                     if batch_size > 1 and batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
                         logger.info(
                             f"Skipping batched prefill warmup for batch_size={batch_size}, "
