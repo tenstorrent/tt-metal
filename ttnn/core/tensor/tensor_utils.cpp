@@ -49,7 +49,7 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
 std::vector<CoreCoord> get_optimal_worker_cores_in_sharded_tensor(const Tensor& tensor, NOC noc) {
     /**
     This function takes in a sharded device tensor (can be legacy 2D sharded or ND sharded) and returns the optimal
-    worker cores for the tensor.
+    worker cores to launch programs on for the tensor.
 
     If the tensor is L1 sharded, the function returns a vector of CoreCoords of all the cores that have shards on them
     in order (based on if the shard orientation is in row or column major order).
