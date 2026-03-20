@@ -197,6 +197,7 @@ class Generator(WarmupForwardMixin):
                 model_id_warmup=model_id,
                 sampling_params=None,
                 pixel_values=warmup_pixel_values,
+                image_sizes=[(vision_chunk_size, vision_chunk_size)],
             )
             logger.info("Vision encoder warmup completed")
 
