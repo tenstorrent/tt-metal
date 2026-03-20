@@ -10,19 +10,20 @@
 
 namespace ttnn::operations::complex_binary {
 
-ComplexTensor _add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
+ComplexTensor add(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
     return ComplexTensor(
         {ttnn::add(input_a[0], input_b[0], std::nullopt, output_mem_config),
          ttnn::add(input_a[1], input_b[1], std::nullopt, output_mem_config)});
 }
 
-ComplexTensor _sub(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
+ComplexTensor subtract(
+    const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
     return ComplexTensor(
         {ttnn::subtract(input_a[0], input_b[0], std::nullopt, output_mem_config),
          ttnn::subtract(input_a[1], input_b[1], std::nullopt, output_mem_config)});
 }
 
-ComplexTensor _mul(const ComplexTensor& ab, const ComplexTensor& cd, const MemoryConfig& output_mem_config) {
+ComplexTensor multiply(const ComplexTensor& ab, const ComplexTensor& cd, const MemoryConfig& output_mem_config) {
     // (a + ib)*(c + id) = (ac - bd) + i(bc + ad)
     Tensor re_part = ttnn::subtract(
         ttnn::multiply(ab[0], cd[0], std::nullopt, output_mem_config),
@@ -39,8 +40,9 @@ ComplexTensor _mul(const ComplexTensor& ab, const ComplexTensor& cd, const Memor
     return ComplexTensor({re_part, im_part});
 }
 
-ComplexTensor _div(const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
-    return ttnn::operations::complex_binary::_mul(
+ComplexTensor divide(
+    const ComplexTensor& input_a, const ComplexTensor& input_b, const MemoryConfig& output_mem_config) {
+    return ttnn::operations::complex_binary::multiply(
         input_a, ttnn::reciprocal(input_b, output_mem_config), output_mem_config);
 }
 
