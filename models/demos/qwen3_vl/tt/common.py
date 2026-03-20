@@ -56,8 +56,8 @@ def merge_vision_tokens_ttnn(
 ):
     """
     input_ids are the input ids of the text tokens
-    input_embeds are torch embedded text tokens
-    image_embeds are torch embedded vision tokens
+    input_embeds are ttnn embedded text tokens
+    image_embeds are ttnn embedded vision tokens
     """
 
     B, S, H = input_embeds.shape

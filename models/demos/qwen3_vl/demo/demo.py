@@ -443,7 +443,6 @@ def test_demo(
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")
         # FIXME: on-host embeddings - run as part of vision model prefill when merge_vision_tokens is ported to ttnn
         text_embeds = reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        # pad to multiple of 128
         text_embeds_tt = ttnn.from_torch(
             text_embeds,
             device=mesh_device,
