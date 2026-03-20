@@ -7,24 +7,22 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
-from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
-def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
-    """Test TTNN Deepseek Moe Gate operation on a 16x16 tile"""
+def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid, seed):
+    """Test TTNN Deepseek Moe Gate operation on a 32x32 tile"""
 
     # Tensor dimensions - full 32x32 tile
     input_shape = (batch_size, 8, 32)
     reshaped_input_shape = (batch_size, 16, 16)
-    input_shard_shape = (16, 16)
+    input_shard_shape = (32, 32)
     input_tile = ttnn.Tile(input_shard_shape)
     output_shape = (batch_size, 1, 16)
-    output_shard_shape = (1, 16)
+    output_shard_shape = (32, 32)
     output_tile = ttnn.Tile(output_shard_shape)
 
     logger.info(f"Testing Deepseek Moe Gate with input shape {input_shape}")
@@ -127,6 +125,7 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
 
     # Run Deepseek Moe Gate operation
     logger.info("Running Deepseek Moe Gate operation...")
+
     ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
         ttnn_input,
         ttnn_bias,
@@ -146,6 +145,7 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     output_indices_torch = output_indices_torch[:, 0, :8]
 
     sorted_output_indices_torch, i = torch.sort(output_indices_torch, dim=-1)
+    sorted_output_indices_torch = sorted_output_indices_torch.squeeze(1)
     sorted_output_torch = torch.gather(output_torch, dim=-1, index=i)
 
     top8_indices, i = torch.sort(top8_indices, dim=-1)

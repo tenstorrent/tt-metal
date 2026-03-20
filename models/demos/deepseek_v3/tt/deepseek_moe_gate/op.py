@@ -1,15 +1,21 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
+import struct
 
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+from models.demos.deepseek_v3.tt.deepseek_moe_gate.unified_kernel_descriptor import (
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+
+
+def float_to_uint32(value):
+    """Convert float to uint32"""
+    return int.from_bytes(struct.pack("f", value), byteorder="little")
 
 
 class DeepseekMoeGateSingleCore:
@@ -75,17 +81,20 @@ class DeepseekMoeGateSingleCore:
         Args:
             input_tensor: Input tensor with values to sort (must be sharded, shape [16, 16])
             bias_tensor: Transposed bias tensor with values to add (must be sharded, shape [16, 16])
-            output_tensor: Pre-allocated output tensor for top8 normalized scores (must be sharded, shape [16, 16])
+            output_tensor: Pre-allocated output tensor for top8 normalized scores (must be sharded, shape [32, 32])
             input_indices_tensor: Input tensor with transposed indices to sort (must be sharded, shape [16, 16])
-            output_indices_tensor: Pre-allocated output tensor for top8 indices (must be sharded, shape [16, 16])
+            output_indices_tensor: Pre-allocated output tensor for top8 indices (must be sharded, shape [32, 32])
             eps: Epsilon value for normalization
             scaling_factor: Scaling factor for normalization
             enable_sigmoid: Whether to enable sigmoid activation
 
         Returns:
-            output_tensor with top8 normalized scores (must be sharded, shape [16, 16])
-            output_indices_tensor with top8 indices (must be sharded, shape [16, 16])
-            Note: Only the first 8 values are relevant
+            output_tensor with top8 normalized scores (shape [1, 8])
+            output_indices_tensor with top8 indices (shape [1, 8])
+
+        Note:
+            For the output_tensor and output_indices_tensor, it should be 32x32.
+            And we will just return the first 8 values from the 32x32 tensor.
         """
         # Get tensor properties
         input_shape = input_tensor.shape
@@ -102,6 +111,13 @@ class DeepseekMoeGateSingleCore:
         input_shard_spec = input_tensor.memory_config().shard_spec
         output_shard_spec = output_tensor.memory_config().shard_spec
         all_cores = input_shard_spec.grid
+        # In deepseek_v3_b1, the input and input indices are tiled with a size of 16x16.
+        # Since there is currently no function to change the tile size, we use a tile size of 32x32 here.
+        # Note that the input is still 16x16 from the projection before the gate, and its layout matches the 16x16 tiling.
+        # For the output, the op in deepseek_v3_b1 expects a 1x16 tiling, but we use 32x32 tiling.
+        # However, the first 8 elements of the output are consistent with the 1x16 tiled layout.
+        assert input_shape[-1] * input_shape[-2] == 256, "Input tensor must have 256 elements"
+        assert input_indices_shape[-1] * input_indices_shape[-2] == 256, "Input indices tensor must have 256 elements"
         assert input_shard_spec == bias_tensor.memory_config().shard_spec
         assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
         assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
@@ -111,11 +127,11 @@ class DeepseekMoeGateSingleCore:
         input_tile = input_tensor.tile
         input_tile_height, input_tile_width = input_tile.tile_shape
         input_tile_size = input_tile.get_tile_size(input_tensor.dtype)
-        expected_input_tile_size = (16, 16)
+        expected_input_tile_size = (32, 32)
         output_tile = output_tensor.tile
         output_tile_height, output_tile_width = output_tile.tile_shape
         output_tile_size = output_tile.get_tile_size(output_tensor.dtype)
-        expected_output_tile_size = (1, 16)
+        expected_output_tile_size = (32, 32)
         assert input_tile == bias_tensor.tile
         assert input_tile == input_indices_tensor.tile
         assert output_tile == output_indices_tensor.tile
@@ -160,34 +176,35 @@ class DeepseekMoeGateSingleCore:
         input_indices_tile_descriptor = ttnn.TileDescriptor(input_indices_tile)
         output_indices_tile_descriptor = ttnn.TileDescriptor(output_indices_tile)
 
+        # Page size must divide total_size (circular_buffer_config constraint).
+        # total_size cannot exceed the L1 buffer (e.g. 2048 B). Use page_size = total_size to satisfy both.
+        def _set_page_size(desc, tile_descriptor, tile_size):
+            desc.format_descriptors[0].tile = tile_descriptor
+            desc.format_descriptors[0].page_size = tile_size if desc.total_size % tile_size == 0 else desc.total_size
+
         # CB: Input values (created from sharded tensor)
         in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_cb, input_tensor)
-        in_cb_descriptor.format_descriptors[0].tile = input_tile_descriptor
-        in_cb_descriptor.format_descriptors[0].page_size = input_tile_size
+        _set_page_size(in_cb_descriptor, input_tile_descriptor, input_tile_size)
 
         # CB: Bias values (created from sharded tensor)
         bias_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor)
-        bias_cb_descriptor.format_descriptors[0].tile = bias_tile_descriptor
-        bias_cb_descriptor.format_descriptors[0].page_size = bias_tile_size
+        _set_page_size(bias_cb_descriptor, bias_tile_descriptor, bias_tile_size)
 
         # CB: Output values (created from sharded tensor)
         out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_cb, output_tensor)
-        out_cb_descriptor.format_descriptors[0].tile = output_tile_descriptor
-        out_cb_descriptor.format_descriptors[0].page_size = output_tile_size
+        _set_page_size(out_cb_descriptor, output_tile_descriptor, output_tile_size)
 
         # CB: Input indices (created from sharded tensor)
         in_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(input_indices_cb, input_indices_tensor)
-        in_indices_cb_descriptor.format_descriptors[0].tile = input_indices_tile_descriptor
-        in_indices_cb_descriptor.format_descriptors[0].page_size = input_indices_tile_size
+        _set_page_size(in_indices_cb_descriptor, input_indices_tile_descriptor, input_indices_tile_size)
 
         # CB: Output indices (created from sharded tensor)
         out_indices_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(output_indices_cb, output_indices_tensor)
-        out_indices_cb_descriptor.format_descriptors[0].tile = output_indices_tile_descriptor
-        out_indices_cb_descriptor.format_descriptors[0].page_size = output_indices_tile_size
+        _set_page_size(out_indices_cb_descriptor, output_indices_tile_descriptor, output_indices_tile_size)
 
         # ========== UNIFIED KERNEL DESCRIPTOR ==========
         # Core logic is in unified_kernels/deepseek_moe_gate.hpp
-        KERNEL_PATH = "models/demos/deepseek_v3_b1/micro_ops/deepseek_moe_gate/kernels/deepseek_moe_gate_kernel.cpp"
+        KERNEL_PATH = "models/demos/deepseek_v3/tt/deepseek_moe_gate/kernels/deepseek_moe_gate_kernel.cpp"
 
         # Named compile-time args for NCRISC (reader - signals tensor-backed CBs ready)
         ncrisc_named_compile_time_args = [
