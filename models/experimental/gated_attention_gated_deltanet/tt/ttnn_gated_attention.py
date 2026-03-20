@@ -143,13 +143,13 @@ def gated_attention_forward_ttnn(
     query_states = ttnn.transpose(query_states, 1, 2)
 
     # K projection + norm + transpose to [B, H_kv, T, D]
-    key_states = ttnn.linear(hidden_states, k_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    key_states = ttnn.linear(hidden_states, k_proj_weight)
     key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
     key_states = rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
     key_states = ttnn.transpose(key_states, 1, 2)
 
     # V projection + transpose to [B, H_kv, T, D]
-    value_states = ttnn.linear(hidden_states, v_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    value_states = ttnn.linear(hidden_states, v_proj_weight)
     value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
     value_states = ttnn.transpose(value_states, 1, 2)
 
@@ -181,6 +181,6 @@ def gated_attention_forward_ttnn(
     attn_output = ttnn.multiply(attn_output, gate)
 
     # Output projection
-    attn_output = ttnn.linear(attn_output, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
+    attn_output = ttnn.linear(attn_output, o_proj_weight)
 
     return attn_output
