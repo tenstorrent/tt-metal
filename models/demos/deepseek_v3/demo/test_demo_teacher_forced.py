@@ -8,6 +8,7 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3.demo.demo import run_demo
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
@@ -29,6 +30,11 @@ CACHE_DIR = Path(
 # Must match the path used in generate_teacher_forced_file.py
 # REFERENCE_FILE = Path(__file__).with_name("deepseek_v3_teacher_forcing.refpt")
 REFERENCE_FILE = Path(__file__).with_name("gpqa_diamond_racemic.refpt")
+
+
+def _tile_align(length: int) -> int:
+    tile_size = int(ttnn.TILE_SIZE)
+    return ((int(length) + tile_size - 1) // tile_size) * tile_size
 
 
 @pytest.mark.timeout(3600)
@@ -87,16 +93,6 @@ def test_demo_teacher_forcing_accuracy(
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
-    configured_max_seq_len = 32768
-    max_supported_new_tokens = configured_max_seq_len - tf_prompt_len
-    if max_supported_new_tokens <= 0:
-        pytest.skip(f"Prompt length {tf_prompt_len} exceeds max_seq_len {configured_max_seq_len}.")
-    if max_new_tokens > max_supported_new_tokens:
-        pytest.skip(
-            f"Requested max_new_tokens={max_new_tokens} exceeds generator capacity: "
-            f"max_seq_len={configured_max_seq_len}, prompt_len={tf_prompt_len} -> max_new_tokens<={max_supported_new_tokens}."
-        )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         pytest.fail("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, TG, or T3K.")
@@ -146,10 +142,15 @@ def test_demo_teacher_forcing_accuracy(
             f"in {reference_file}. Regenerate the reference with a larger max_new_tokens."
         )
 
+    # Teacher forcing only needs enough configured context for the prompt plus the
+    # number of forced decode steps under test.
+    configured_max_seq_len = _tile_align(tf_prompt_len + max_new_tokens)
+
     logger.info("=== Phase 2: Run teacher forcing ===")
     logger.info("Loaded reference from: {}", reference_file)
     logger.info("Total reference tokens: {}, prompt length: {}", total_ref_tokens, tf_prompt_len)
     logger.info("Using max_new_tokens={}", max_new_tokens)
+    logger.info("Using configured max_seq_len={}", configured_max_seq_len)
 
     # Run the demo with teacher forcing
     results = run_demo(
