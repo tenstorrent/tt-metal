@@ -23,7 +23,7 @@ Features:
 - Trace capture and execution for maximum performance
 - 2-command-queue (2CQ) support for async operations
 - Warm-up phase for kernel compilation
-- Long text support via automatic chunking (texts > 300 chars split at sentence boundaries)
+- Long text support via automatic chunking (texts > 150 chars split at sentence boundaries)
 
 Usage:
     # Basic usage with short text:
@@ -35,7 +35,7 @@ Usage:
     python models/experimental/speecht5_tts/demo_ttnn.py \\
         --text "Very long text here..." \\
         --output speech.wav \\
-        --max_chunk_size 300
+        --max_chunk_size 150
 
     # Multiple texts:
     python models/experimental/speecht5_tts/demo_ttnn.py \\
@@ -57,50 +57,124 @@ import time
 import re
 from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 from datasets import load_dataset
+from num2words import num2words
 
-DEFAULT_CHUNK_SIZE = 300
+DEFAULT_CHUNK_SIZE = 256
+
+# Maximum KV cache slots pre-allocated in the generator.
+# ~3 mel frames per input token * 256 max tokens = 768, rounded up to 800.
+MAX_KV_STEPS = 800
+
+# Encoder sizes to warm-up and trace in demo_ttnn.py.
+# 32/64 cover short texts; 128/192/256 cover typical chunked inputs.
+# 384 causes L1 OOM on N150 — max supported is 256.
+DEMO_WARMUP_SIZES = [32, 64, 128, 160, 192, 256]
 
 
-def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE):
-    """Split long text into smaller chunks at sentence/word boundaries."""
+def normalize_text_for_tts(text: str) -> str:
+    """Normalize text for SpeechT5 by converting numbers to spoken-word form.
+
+    SpeechT5 was not trained robustly on digit tokens, so bare numbers like
+    "9" or "133.9" are often skipped or garbled. Converting them to words
+    ("nine", "one hundred and thirty-three point nine") gives the model tokens
+    it can pronounce reliably.
+
+    Handles: ordinals (1st, 2nd), decimals (133.9), number+unit (250cc),
+    and plain integers (9, 122).
+    """
+
+    # Ordinals first (e.g. "1st", "23rd") — before plain integers
+    def _ordinal(m):
+        return num2words(int(m.group(1)), to="ordinal")
+
+    text = re.sub(r"\b(\d+)(?:st|nd|rd|th)\b", _ordinal, text, flags=re.IGNORECASE)
+
+    # Decimals (e.g. "133.9") — before plain integers so the dot isn't stranded
+    def _decimal(m):
+        return num2words(float(m.group(0)))
+
+    text = re.sub(r"\b\d+\.\d+\b", _decimal, text)
+
+    # Number+unit (e.g. "250cc") — split into "two hundred and fifty cc"
+    def _number_unit(m):
+        return num2words(int(m.group(1))) + " " + m.group(2)
+
+    text = re.sub(r"\b(\d+)([a-zA-Z]+)\b", _number_unit, text)
+
+    # Plain integers (e.g. "9", "122")
+    def _integer(m):
+        return num2words(int(m.group(0)))
+
+    text = re.sub(r"\b\d+\b", _integer, text)
+
+    return text
+
+
+def chunk_text(text, max_chunk_size=DEFAULT_CHUNK_SIZE, processor=None):
+    """Split text into chunks that always end at sentence boundaries.
+
+    Sentences are packed greedily into chunks until adding the next sentence
+    would exceed max_chunk_size characters. A single sentence that exceeds
+    max_chunk_size is kept as one chunk (never split mid-sentence), since
+    TTS quality degrades badly on sentence fragments.
+
+    The only exception: if a sentence exceeds MAX_ENCODER_TOKENS tokens (hard
+    device limit), it is split at the last clause boundary (,;) within that
+    token budget to avoid L1 OOM.
+    """
+    MAX_ENCODER_TOKENS = 250  # conservative limit below the 256 padded size
+
     if len(text) <= max_chunk_size:
         return [text]
 
-    chunks = []
-    remaining = text.strip()
+    # Split into sentences at .!? boundaries
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    if not sentences:
+        return [text]
 
-    while remaining:
-        if len(remaining) <= max_chunk_size:
-            chunks.append(remaining)
-            break
-
-        chunk_candidate = remaining[:max_chunk_size]
-        sentence_end = -1
-        for match in re.finditer(r"[.!?]\s+", chunk_candidate):
-            sentence_end = match.end()
-
-        if sentence_end > max_chunk_size // 3:
-            chunk = remaining[:sentence_end].strip()
-            remaining = remaining[sentence_end:].strip()
-        else:
-            clause_end = -1
-            for match in re.finditer(r"[,;]\s+", chunk_candidate):
-                clause_end = match.end()
-
-            if clause_end > max_chunk_size // 2:
-                chunk = remaining[:clause_end].strip()
-                remaining = remaining[clause_end:].strip()
+    # If a sentence exceeds the token limit, split at clause boundaries
+    def split_oversized(sentence):
+        if processor is None:
+            return [sentence]
+        n_tokens = processor(text=sentence, return_tensors="pt")["input_ids"].shape[1]
+        if n_tokens <= MAX_ENCODER_TOKENS:
+            return [sentence]
+        clauses = re.split(r"(?<=[,;])\s+", sentence)
+        parts = []
+        current = ""
+        for clause in clauses:
+            candidate = (current + " " + clause).strip() if current else clause
+            n = processor(text=candidate, return_tensors="pt")["input_ids"].shape[1]
+            if n <= MAX_ENCODER_TOKENS:
+                current = candidate
             else:
-                last_space = chunk_candidate.rfind(" ")
-                if last_space > max_chunk_size // 2:
-                    chunk = remaining[:last_space].strip()
-                    remaining = remaining[last_space:].strip()
-                else:
-                    chunk = remaining[:max_chunk_size].strip()
-                    remaining = remaining[max_chunk_size:].strip()
+                if current:
+                    parts.append(current)
+                current = clause
+        if current:
+            parts.append(current)
+        return parts if parts else [sentence]
 
-        if chunk:
-            chunks.append(chunk)
+    # Flatten sentences, splitting any oversized ones at clause boundaries
+    flat_sentences = []
+    for s in sentences:
+        s = s.strip()
+        if s:
+            flat_sentences.extend(split_oversized(s))
+
+    chunks = []
+    current = ""
+    for sentence in flat_sentences:
+        if not current:
+            current = sentence
+        elif len(current) + 1 + len(sentence) <= max_chunk_size:
+            current = current + " " + sentence
+        else:
+            chunks.append(current)
+            current = sentence
+
+    if current:
+        chunks.append(current)
 
     return chunks
 
@@ -123,7 +197,7 @@ from models.experimental.speecht5_tts.tt.ttnn_speecht5_postnet import (
 )
 from models.experimental.speecht5_tts.tt.ttnn_speecht5_generator import (
     SpeechT5Generator,
-    SUPPORTED_ENCODER_SEQ_LENS,
+    get_padded_encoder_seq_len,
 )
 
 
@@ -174,9 +248,31 @@ def generate_speech_fp32(
     # Process input
     inputs = processor(text=text, return_tensors="pt")
     token_ids = inputs["input_ids"]
+    real_seq_len = token_ids.shape[1]
 
-    # Convert to TTNN
+    # Pad token_ids to the canonical encoder size using the model's PAD token (id=1),
+    # NOT zero. Token id 0 is a real vocabulary entry in SpeechT5 and corrupts encoder
+    # representations. Token id 1 is the actual <pad> token the model was trained with,
+    # so the encoder treats those positions as padding, not content.
+    # This gives us a fixed encoder input shape → same kernel reused across calls →
+    # fast TTFT on warm cache, and the cross-attention mask (-1e9 on padded positions)
+    # prevents the decoder from attending to the padded encoder outputs.
+    padded_seq_len = get_padded_encoder_seq_len(real_seq_len)
+    if real_seq_len < padded_seq_len:
+        pad_token_id = 1  # SpeechT5 <pad> token
+        pad = torch.full((1, padded_seq_len - real_seq_len), pad_token_id, dtype=token_ids.dtype)
+        token_ids = torch.cat([token_ids, pad], dim=1)
+
     ttnn_input_ids = ttnn.from_torch(token_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Build encoder self-attention mask so pad tokens cannot corrupt real token
+    # representations. Shape [1, 1, padded_seq_len] broadcasts over
+    # [batch*heads, seq_len, seq_len] inside each encoder attention layer.
+    encoder_self_attn_mask = None
+    if real_seq_len < padded_seq_len:
+        mask = torch.zeros(1, 1, padded_seq_len, dtype=torch.float32)
+        mask[:, :, real_seq_len:] = -1e9
+        encoder_self_attn_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     # Trace enabled when KV cache is enabled and generator is provided
     enable_trace = use_kv_cache and generator is not None
@@ -186,13 +282,15 @@ def generate_speech_fp32(
     if not warmup_mode:
         print("🔄 Encoding text...")
     encoder_start = time.time()
-    encoder_output = ttnn_encoder(ttnn_input_ids)[0]
+    encoder_output = ttnn_encoder(ttnn_input_ids, attention_mask=encoder_self_attn_mask)[0]
     encoder_time = time.time() - encoder_start
     encoder_output = ttnn.unsqueeze(encoder_output, dim=1)  # Add batch dimension for decoder
 
-    # If using trace with generator, copy encoder output to pre-allocated tensor
+    # If using trace with generator, copy encoder output to pre-allocated tensor.
+    # Pass real_seq_len so the generator sets the cross-attention mask correctly —
+    # masking out the <pad>-token positions from the encoder input.
     if enable_trace:
-        generator.copy_encoder_output(encoder_output)
+        generator.copy_encoder_output(encoder_output, real_seq_len=real_seq_len)
         # Use generator's pre-allocated encoder_hidden_states for decoder
         encoder_output_for_decoder = generator.encoder_hidden_states
     else:
@@ -518,7 +616,7 @@ def generate_speech_long_text(
         tuple: (speech, stats_dict) if return_stats=True
     """
     # Split text into chunks
-    chunks = chunk_text(text, max_chunk_size)
+    chunks = chunk_text(text, max_chunk_size, processor=processor)
     num_chunks = len(chunks)
 
     if num_chunks == 1:
@@ -562,9 +660,14 @@ def generate_speech_long_text(
     for i, chunk in enumerate(chunks):
         print(f"\n   Chunk {i+1}/{num_chunks}: '{chunk[:50]}{'...' if len(chunk) > 50 else ''}'")
 
-        # Reset KV caches between chunks
+        # Reset KV caches between chunks and synchronize device to avoid
+        # L1 memory state from the previous chunk affecting stop logits.
         if generator is not None:
             generator._reset_kv_caches()
+        ttnn.synchronize_device(device)
+
+        chunk_token_count = processor(text=chunk, return_tensors="pt")["input_ids"].shape[1]
+        chunk_max_steps = min(max_steps, MAX_KV_STEPS)
 
         # Generate mel for this chunk (skip vocoder)
         mel, chunk_stats = generate_speech_fp32(
@@ -576,7 +679,7 @@ def generate_speech_long_text(
             ttnn_decoder=ttnn_decoder,
             ttnn_postnet=ttnn_postnet,
             device=device,
-            max_steps=max_steps,
+            max_steps=chunk_max_steps,
             return_stats=True,
             return_mel_only=True,  # Return mel instead of audio
             generator=generator,
@@ -654,7 +757,7 @@ def main():
         "--output", type=str, default="speech_fp32.wav", help="Output audio file path (for single text)"
     )
     parser.add_argument("--output_dir", type=str, default=".", help="Output directory for multiple texts")
-    parser.add_argument("--max_steps", type=int, default=200, help="Maximum generation steps per chunk")
+    parser.add_argument("--max_steps", type=int, default=MAX_KV_STEPS, help="Maximum generation steps per chunk")
     parser.add_argument(
         "--max_chunk_size",
         type=int,
@@ -676,6 +779,9 @@ def main():
         # Default text if none provided
         texts = ["Hello world! This is a test of the hybrid FP32+BF16 SDPA decoder."]
         single_text_mode = True
+
+    # Normalize numbers to words so SpeechT5 pronounces them correctly
+    texts = [normalize_text_for_tts(t) for t in texts]
 
     print("=" * 80)
     print("TTNN SpeechT5 TTS Demo - Hybrid FP32+BF16 SDPA Edition")
@@ -705,14 +811,30 @@ def main():
     vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
     hf_model.eval()
 
-    # Load speaker embeddings
-    embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
-    speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+    # Load speaker embeddings.
+    # datasets 2.9.0 + fsspec >=2024 has a LocalFileSystem incompatibility; fall back
+    # to reading the cached Arrow file directly when load_dataset raises NotImplementedError.
+    try:
+        embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+        speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+    except NotImplementedError:
+        import pyarrow as pa, glob, os, numpy as np
+
+        cache_root = os.path.expanduser("~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors")
+        arrow_files = glob.glob(os.path.join(cache_root, "**", "*validation*.arrow"), recursive=True)
+        if not arrow_files:
+            raise RuntimeError(
+                "Could not find cached cmu-arctic-xvectors arrow file. "
+                "Delete ~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors and re-run."
+            )
+        with pa.memory_map(arrow_files[0], "r") as src:
+            table = pa.ipc.open_stream(src).read_all()
+        speaker_embeddings = torch.tensor(np.array(table["xvector"][7306].as_py())).unsqueeze(0)
 
     # Initialize TTNN device
     print("Initializing TTNN device...")
     device = ttnn.open_device(
-        device_id=device_id, l1_small_size=300000, trace_region_size=10000000, num_command_queues=2
+        device_id=device_id, l1_small_size=300000, trace_region_size=15000000, num_command_queues=2
     )
     device.enable_program_cache()
 
@@ -774,7 +896,7 @@ def main():
         postnet=ttnn_postnet,
         device=device,
         decoder_config=decoder_config,
-        max_steps=max_steps,
+        max_steps=MAX_KV_STEPS,
         max_batch_size=1,
         encoder_seq_len=estimated_encoder_seq_len,
     )
@@ -793,43 +915,60 @@ def main():
     ttnn.deallocate(dummy_decoder_output)
     print("   Postnet kernels compiled!")
 
-    # Warm-up phase to compile TTNN operations
+    # Warm-up: compile kernels for ALL supported encoder sizes using the generate_speech_fp32
+    # pipeline with synthetic texts that map to each canonical encoder size.
+    # This mirrors the LLM approach (simple_text_demo.py / warmup_model_prefill) of sweeping
+    # all canonical padded lengths with synthetic inputs, making warm-up fully input-independent.
+    # Any subsequent real input text reuses the already-compiled kernels and traces.
     print("\n🔥 Warming up TTNN operations with FP32 + KV cache + Trace...")
-    print("   This may take ~30-60 seconds as TTNN compiles kernels for optimal performance")
+    print("   Compiling kernels for all supported encoder sizes (input-independent warm-up)...")
     warmup_start_time = time.time()
 
-    # Use a short warmup text
-    warmup_chunks = chunk_text(texts[0], max_chunk_size=max_chunk_size)
-    warmup_text = warmup_chunks[0]  # Use only the first chunk for warm-up
-    print(f"   Warm-up: Running {max_steps} steps...")
-    warmup_speech = generate_speech_fp32(
-        warmup_text,
-        speaker_embeddings,
-        processor,
-        vocoder,
-        ttnn_encoder,
-        ttnn_decoder,
-        ttnn_postnet,
-        device,
-        max_steps=max_steps,
-        warmup_mode=True,
-        generator=generator,
-        use_kv_cache=True,
-        decoder_config=decoder_config,
-    )
-    warmup_duration = time.time() - warmup_start_time
-    print(f"✅ Initial warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
-    print("   FP32 + KV cache + Trace enabled - optimal precision & performance!")
+    # Synthetic texts: chosen so that tokenized length lands in each encoder bucket.
+    # With chunk sizes up to 256 chars, real inputs land in [32, 64, 128, 160, 192, 256].
+    # This mirrors the LLM approach (simple_text_demo / warmup_model_prefill) of sweeping
+    # all canonical padded lengths with synthetic inputs, making warm-up input-independent.
+    warmup_texts_per_size = {
+        32: "A " * 15,  # ~31 tokens -> pads to 32
+        64: "A " * 31,  # ~63 tokens -> pads to 64
+        128: "A " * 63,  # ~127 tokens -> pads to 128
+        160: "A " * 79,  # ~159 tokens -> pads to 160
+        192: "A " * 95,  # ~191 tokens -> pads to 192
+        256: "A " * 127,  # ~255 tokens -> pads to 256
+    }
 
-    # Capture traces for size 128 only (FP32 compatibility)
-    # NOTE: Multi-size trace capture disabled for FP32 due to dtype mixing
-    # (FP32 decoder states + BF16 speaker embeddings cause concat errors)
-    print(f"\n🔧 Trace already captured for encoder_seq_len=128 during warm-up")
-    # generator.capture_all_traces(processor, batch_size=1)  # Disabled for FP32
-    print(f"✅ Trace ready! (encoder_seq_len=128 only)")
+    for enc_size in DEMO_WARMUP_SIZES:
+        warmup_text = warmup_texts_per_size[enc_size]
+        print(f"   Warm-up: target encoder_size={enc_size}, running generate pipeline...")
+        _ = generate_speech_fp32(
+            warmup_text,
+            speaker_embeddings,
+            processor,
+            vocoder,
+            ttnn_encoder,
+            ttnn_decoder,
+            ttnn_postnet,
+            device,
+            max_steps=max_steps,
+            warmup_mode=True,
+            generator=generator,
+            use_kv_cache=True,
+            decoder_config=decoder_config,
+        )
+        actual_enc_size = get_padded_encoder_seq_len(
+            processor(text=warmup_text, return_tensors="pt")["input_ids"].shape[1]
+        )
+        print(f"      Done: actual padded encoder_size={actual_enc_size}")
+
+    warmup_duration = time.time() - warmup_start_time
+    print(f"✅ Initial warm-up completed in {warmup_duration:.1f}s")
+    print("   Encoder sizes [32, 64, 128, 160, 192, 256] compiled — consistent performance for any input text!")
+
+    print(f"\n🔧 Capturing traces for encoder sizes: {DEMO_WARMUP_SIZES}...")
+    generator.capture_all_traces(batch_size=1, sizes=DEMO_WARMUP_SIZES)
 
     # Report trace status
-    compiled_sizes = [s for s in SUPPORTED_ENCODER_SEQ_LENS if generator.trace_compiled_per_size.get(s, False)]
+    compiled_sizes = [s for s in DEMO_WARMUP_SIZES if generator.trace_compiled_per_size.get(s, False)]
     print(f"   Compiled traces for encoder sizes: {compiled_sizes}")
 
     # Reset KV caches after warm-up

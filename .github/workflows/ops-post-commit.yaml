@@ -73,6 +73,8 @@ on:
 
 jobs:
   define-ops-tests:
+    # Test suite is not supported on P100a runners (Blackhole P100 CIv2 label).
+    if: ${{ inputs.runner-label != 'P100a' }}
     runs-on: ubuntu-latest
     outputs:
       ops-tests: ${{ steps.compute-tests.outputs.ops-tests }}
@@ -171,12 +173,6 @@ jobs:
         run: |
           export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U08VC9954CE # David Popov
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
