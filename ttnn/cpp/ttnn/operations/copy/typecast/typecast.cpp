@@ -7,9 +7,7 @@
 #include "ttnn/operations/core/core.hpp"  // for to_dtype
 #include "ttnn/tensor/tensor_utils.hpp"   // for is_cpu_tensor
 
-namespace ttnn::operations::copy {
-
-namespace detail {
+namespace ttnn::operations::copy::detail {
 
 inline Tensor typecast_impl(
     const Tensor& input_tensor,
@@ -55,9 +53,8 @@ inline Tensor typecast_impl(
         optional_output_tensor,
         sub_core_grids);
 }
-}  // namespace detail
 
-}  // namespace ttnn::operations::copy
+}  // namespace ttnn::operations::copy::detail
 
 namespace ttnn {
 

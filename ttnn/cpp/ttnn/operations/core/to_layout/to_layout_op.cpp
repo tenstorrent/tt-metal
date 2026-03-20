@@ -18,9 +18,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::core {
-
-namespace CMAKE_UNIQUE_NAMESPACE {
+namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
@@ -236,9 +234,8 @@ Tensor to_layout_impl(
     TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
 }
 }  // namespace
-}  // namespace CMAKE_UNIQUE_NAMESPACE
 
-}  // namespace ttnn::operations::core
+}  // namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE
 
 namespace ttnn {
 
