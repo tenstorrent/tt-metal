@@ -5,6 +5,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -96,14 +97,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
     };
 
     // Kernels
-    auto gatherer_kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
-        master_core_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = test_config.noc_id,
-            .compile_args = gatherer_compile_args});
+    KernelHandle gatherer_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        gatherer_kernel = experimental::quasar::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
+            master_core_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = gatherer_compile_args});
+    } else {
+        gatherer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/one_from_all/kernels/gatherer.cpp",
+            master_core_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = test_config.noc_id,
+                .compile_args = gatherer_compile_args});
+    }
 
     // Runtime Arguments
     vector<uint32_t> master_runtime_args;
