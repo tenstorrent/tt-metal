@@ -716,6 +716,10 @@ def build_mpi_command(
 
     cmd = [mpi_launcher]
 
+    # Enable ULFM fault-tolerance mode when using mpirun-ulfm
+    if mpi_launcher and "ulfm" in os.path.basename(mpi_launcher):
+        cmd.extend(["--with-ft", "ulfm"])
+
     # Check if --bind-to is already specified in mpi_args
     bind_to_already_specified = False
     if mpi_args:
@@ -1144,6 +1148,12 @@ def main(
         # process discovery issues if selected. For specific interface control,
         # use --tcp-interface.
         multihost_args = [
+            # Abort all ranks immediately when any rank exits non-zero.
+            # This is the primary safety net for jobs where ULFM is unavailable
+            # or the failure doesn't surface through an MPI call.
+            "--mca",
+            "orte_abort_on_non_zero_status",
+            "1",
             "--mca",
             "btl",
             "self,tcp",
@@ -1155,6 +1165,9 @@ def main(
         if tcp_interface:
             # If a specific interface is requested, use include instead of exclude
             multihost_args = [
+                "--mca",
+                "orte_abort_on_non_zero_status",
+                "1",
                 "--mca",
                 "btl",
                 "self,tcp",
@@ -1250,7 +1263,19 @@ def main(
     signal.signal(signal.SIGINT, _signal_handler)
 
     try:
-        proc.wait()
+        # Respect an optional wall-clock timeout so CI jobs don't hang forever
+        # when a remote rank crashes without triggering ULFM or orte abort.
+        # Set TT_RUN_TIMEOUT (seconds) in the environment to enable.
+        _timeout_str = os.environ.get("TT_RUN_TIMEOUT", "")
+        _timeout: Optional[float] = float(_timeout_str) if _timeout_str else None
+        try:
+            proc.wait(timeout=_timeout)
+        except subprocess.TimeoutExpired:
+            logger.error(
+                f"{TT_RUN_PREFIX} MPI job exceeded TT_RUN_TIMEOUT={_timeout_str}s — killing process group"
+            )
+            _kill_process_group()
+            sys.exit(124)  # same convention as the Unix `timeout` command
         sys.exit(proc.returncode)
     except OSError as e:
         _kill_process_group()
