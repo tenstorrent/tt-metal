@@ -43,8 +43,8 @@ def test_downblock2d(
     sdxl_base_vae_location,
     reset_seeds,
 ):
-    if is_blackhole():
-        pytest.skip("Not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     vae = AutoencoderKL.from_pretrained(
         sdxl_base_vae_location,
         torch_dtype=torch.float32,
