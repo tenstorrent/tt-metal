@@ -80,15 +80,18 @@ static void watcher_sanitize_host_noc(
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const bool dram_l1_available = hal.has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM);
+    const uint64_t dram_l1_noc_offset =
+        dram_l1_available ? hal.get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) : 0;
+
     if (coord_found_p(soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        if (coord_found_p(virtual_dram_hw_cores, core) &&
-            addr >= tt::tt_metal::MetalContext::instance().hal().get_l1_noc_offset(
-                        tt::tt_metal::HalProgrammableCoreType::DRAM)) {
+        if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core) && addr >= dram_l1_noc_offset) {
             if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
                 print_stack_trace();
                 TT_THROW("Host watcher: bad {} dram L1 address {}", what, noc_address(core, addr, lbytes));
@@ -102,7 +105,7 @@ static void watcher_sanitize_host_noc(
                 TT_THROW("Host watcher: bad {} dram address {}", what, noc_address(core, addr, lbytes));
             }
         }
-    } else if (coord_found_p(virtual_dram_hw_cores, core)) {
+    } else if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core)) {
         if (!DEBUG_VALID_DRAM_L1_ADDR(addr, lbytes)) {
             print_stack_trace();
             TT_THROW("Host watcher: bad {} dram hw core address {}", what, noc_address(core, addr, lbytes));
