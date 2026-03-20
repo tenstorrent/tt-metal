@@ -32,7 +32,7 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 
 // ─── read_sticks_for_tilize ─────────────────────────────────────────────────
 //
-// TILE granularity example (reader kernel):
+// TILE granularity example (reader kernel, single-core):
 //
 //   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 //   void kernel_main() {
@@ -45,6 +45,15 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 //   //   compute_kernel_lib::tilize<width_tiles, cb_in, cb_out>(num_blocks);
 //   // CB config: page_size = tile_size
 //
+// Multi-core example (reader kernel):
+//
+//   void kernel_main() {
+//       uint32_t start_row = get_arg_val<uint32_t>(1);  // per-core offset
+//       uint32_t num_rows  = get_arg_val<uint32_t>(2);  // per-core count
+//       dataflow_kernel_lib::read_sticks_for_tilize<cb_in>(
+//           accessor, num_rows, row_bytes, start_row);
+//   }
+//
 // ROW granularity example (reader kernel):
 //
 //   dataflow_kernel_lib::read_sticks_for_tilize<cb_in, TilizeGranularity::ROW>(
@@ -56,7 +65,8 @@ constexpr uint32_t div_up(uint32_t a, uint32_t b) {
 //   //   instead of width_in_tiles tile-pages (which always span 32 rows).
 //
 template <uint32_t cb_id, TilizeGranularity granularity, typename Accessor>
-FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes) {
+FORCE_INLINE void read_sticks_for_tilize(
+    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page) {
     // Derive tile geometry from CB configuration (all constexpr)
     constexpr uint32_t tile_h = unpack_tile_r_dim[cb_id];
     constexpr uint32_t tile_w = unpack_tile_c_dim[cb_id];
@@ -94,8 +104,8 @@ FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t tota
         }
 
         for (uint32_t block = 0; block < total_blocks; block++) {
-            uint32_t start_row = block * tile_h;
-            uint32_t rows_this_block = total_num_rows - start_row;
+            uint32_t block_row = block * tile_h;
+            uint32_t rows_this_block = total_num_rows - block_row;
             if (rows_this_block > tile_h) {
                 rows_this_block = tile_h;
             }
@@ -104,7 +114,7 @@ FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t tota
             uint32_t l1_addr = get_write_ptr(cb_id);
 
             for (uint32_t row = 0; row < rows_this_block; row++) {
-                uint64_t noc_addr = accessor.get_noc_addr(start_row + row);
+                uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row);
                 noc_async_read(noc_addr, l1_addr, row_bytes);
                 l1_addr += padded_row_bytes;
             }
@@ -135,7 +145,7 @@ FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t tota
             cb_reserve_back(cb_id, 1);
             uint32_t l1_addr = get_write_ptr(cb_id);
 
-            uint64_t noc_addr = accessor.get_noc_addr(row);
+            uint64_t noc_addr = accessor.get_noc_addr(start_page + row);
             noc_async_read(noc_addr, l1_addr, row_bytes);
 
             noc_async_read_barrier();
@@ -146,7 +156,7 @@ FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t tota
 
 // ─── write_sticks_after_untilize ────────────────────────────────────────────
 //
-// Example (writer kernel):
+// Example (writer kernel, single-core):
 //
 //   #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 //   void kernel_main() {
@@ -159,8 +169,18 @@ FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t tota
 //   //   compute_kernel_lib::untilize<width_tiles, cb_in, cb_out>(num_blocks);
 //   // CB config: page_size = tile_size (untilize always outputs tile-sized pages)
 //
+// Multi-core example (writer kernel):
+//
+//   void kernel_main() {
+//       uint32_t start_row = get_arg_val<uint32_t>(1);  // per-core offset
+//       uint32_t num_rows  = get_arg_val<uint32_t>(2);  // per-core count
+//       dataflow_kernel_lib::write_sticks_after_untilize<cb_out>(
+//           accessor, num_rows, row_bytes, start_row);
+//   }
+//
 template <uint32_t cb_id, typename Accessor>
-FORCE_INLINE void write_sticks_after_untilize(const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes) {
+FORCE_INLINE void write_sticks_after_untilize(
+    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page) {
     // Derive tile geometry from CB configuration (all constexpr)
     constexpr uint32_t tile_h = unpack_tile_r_dim[cb_id];
     constexpr uint32_t tile_w = unpack_tile_c_dim[cb_id];
@@ -192,8 +212,8 @@ FORCE_INLINE void write_sticks_after_untilize(const Accessor& accessor, uint32_t
     }
 
     for (uint32_t block = 0; block < total_blocks; block++) {
-        uint32_t start_row = block * tile_h;
-        uint32_t rows_this_block = total_num_rows - start_row;
+        uint32_t block_row = block * tile_h;
+        uint32_t rows_this_block = total_num_rows - block_row;
         if (rows_this_block > tile_h) {
             rows_this_block = tile_h;
         }
@@ -202,7 +222,7 @@ FORCE_INLINE void write_sticks_after_untilize(const Accessor& accessor, uint32_t
         uint32_t l1_addr = get_read_ptr(cb_id);
 
         for (uint32_t row = 0; row < rows_this_block; row++) {
-            uint64_t noc_addr = accessor.get_noc_addr(start_row + row);
+            uint64_t noc_addr = accessor.get_noc_addr(start_page + block_row + row);
             noc_async_write(l1_addr, noc_addr, row_bytes);
             l1_addr += padded_row_bytes;
         }

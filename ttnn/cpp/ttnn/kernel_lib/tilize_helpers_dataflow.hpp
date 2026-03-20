@@ -70,9 +70,13 @@ enum class TilizeGranularity : uint8_t {
  * @param accessor TensorAccessor for the source tensor (stick-indexed)
  * @param total_num_rows Total number of sticks to read
  * @param row_bytes Actual bytes per stick (may be non-tile-aligned)
+ * @param start_page Starting page/stick index in the accessor (default 0).
+ *        For multi-core work distribution, pass the per-core start_row offset
+ *        so the accessor reads from the correct tensor slice.
  */
 template <uint32_t cb_id, TilizeGranularity granularity = TilizeGranularity::TILE, typename Accessor>
-FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes);
+FORCE_INLINE void read_sticks_for_tilize(
+    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page = 0);
 
 /**
  * @brief Write untilized sticks from a CB to DRAM
@@ -96,9 +100,13 @@ FORCE_INLINE void read_sticks_for_tilize(const Accessor& accessor, uint32_t tota
  * @param accessor TensorAccessor for the destination tensor (stick-indexed)
  * @param total_num_rows Total number of sticks to write
  * @param row_bytes Actual bytes per stick to write (may be non-tile-aligned)
+ * @param start_page Starting page/stick index in the accessor (default 0).
+ *        For multi-core work distribution, pass the per-core start_row offset
+ *        so the accessor writes to the correct tensor slice.
  */
 template <uint32_t cb_id, typename Accessor>
-FORCE_INLINE void write_sticks_after_untilize(const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes);
+FORCE_INLINE void write_sticks_after_untilize(
+    const Accessor& accessor, uint32_t total_num_rows, uint32_t row_bytes, uint32_t start_page = 0);
 
 }  // namespace dataflow_kernel_lib
 
