@@ -89,11 +89,21 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
-    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
-    if (!is_native_L1_sharding(a, b, c.memory_config()) || is_uneven(c)) {
-        // treat as interleaved
+    if (!is_native_L1_sharding(a, b, c.memory_config())) {
         return std::nullopt;
+    }
+
+    // If the output is unevenly sharded, only allow when all tensors share the same shard spec
+    // (each core sees identical tile counts for a, b, c -- no deadlock risk).
+    if (is_uneven(c)) {
+        bool all_specs_match =
+            b.has_value() && a_sharded && b_sharded && c_sharded && a.memory_config().shard_spec().has_value() &&
+            b->memory_config().shard_spec().has_value() && c.memory_config().shard_spec().has_value() &&
+            *a.memory_config().shard_spec() == *b->memory_config().shard_spec() &&
+            *a.memory_config().shard_spec() == *c.memory_config().shard_spec();
+        if (!all_specs_match) {
+            return std::nullopt;
+        }
     }
 
     const auto& a_shape = a.padded_shape();
@@ -266,6 +276,14 @@ void set_or_update_runtime_arguments(
     ShardShapeGenerator b_shard_shape_generator;
     ShardShapeGenerator c_shard_shape_generator;
 
+    // When all tensors share the same shard spec, use the full shard tile count on every core
+    // (including edge cores with uneven shards). This matches legacy binary behavior: garbage
+    // tiles on edge cores land in the output's padding area and are never read back.
+    bool all_same_shard_spec = has_sharding && a.memory_config().is_sharded() && b.has_value() &&
+                               b->memory_config().is_sharded() && c.memory_config().is_sharded() &&
+                               shard_specs->a_shard_spec == shard_specs->b_shard_spec &&
+                               shard_specs->a_shard_spec == shard_specs->c_shard_spec;
+
     if (has_sharding) {
         core_group_1 = grid;
         a_shard_shape_generator = ShardShapeGenerator(shard_specs->a_shard_spec, a);
@@ -320,11 +338,17 @@ void set_or_update_runtime_arguments(
         uint32_t c_start_id = 0;
         uint32_t c_current_shard_width = 0;
         if (has_sharding) {
-            auto c_shard_shape = c_shard_shape_generator(core);
-            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];  // actual
-            c_current_shard_width = c_shard_shape[1];           // actual
-            auto a_shard_shape = a_shard_shape_generator(core);
-            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];  // actual
+            if (all_same_shard_spec) {
+                c_num_tiles = c_shard_height * c_shard_width;
+                c_current_shard_width = c_shard_width;
+                a_num_tiles = c_shard_height * c_shard_width;
+            } else {
+                auto c_shard_shape = c_shard_shape_generator(core);
+                c_num_tiles = c_shard_shape[0] * c_shard_shape[1];
+                c_current_shard_width = c_shard_shape[1];
+                auto a_shard_shape = a_shard_shape_generator(core);
+                a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
+            }
             c_start_id =
                 (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
         } else {
@@ -345,8 +369,12 @@ void set_or_update_runtime_arguments(
 
         if (b.has_value()) {
             if (has_sharding) {
-                auto b_shard_shape = b_shard_shape_generator(core);
-                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
+                if (all_same_shard_spec) {
+                    b_num_tiles = c_shard_height * c_shard_width;
+                } else {
+                    auto b_shard_shape = b_shard_shape_generator(core);
+                    b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+                }
             }
             std::array writer_runtime_args = {
                 c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
@@ -460,7 +488,8 @@ KernelName get_reader_kernel_name_and_defines(
 void overwrite_compute_kernel_name_and_defines(
     KernelName& kernel_name,
     const SubtileBroadcastType subtile_broadcast_type,
-    std::map<std::string, std::string>& compute_defines) {
+    std::map<std::string, std::string>& compute_defines,
+    bool is_where_op) {
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
         compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::ROW_A ? "1" : "0";
@@ -470,6 +499,18 @@ void overwrite_compute_kernel_name_and_defines(
         subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
         kernel_name = KernelName::ComputeRowColBcastNg;
+    } else if (
+        not is_where_op && (subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+                            subtile_broadcast_type == SubtileBroadcastType::COL_B)) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::COL_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::COL_B ? "1" : "0";
+        kernel_name = KernelName::ComputeColBcastNg;
+    } else if (
+        not is_where_op && (subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+                            subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        compute_defines["SRC_BCAST"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ? "1" : "0";
+        compute_defines["SRC_BCAST_B"] = subtile_broadcast_type == SubtileBroadcastType::SCALAR_B ? "1" : "0";
+        kernel_name = KernelName::ComputeScalarBcastNg;
     }
 }
 
@@ -477,17 +518,20 @@ bool is_llk_bcast(
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
-    const DataType c_dtype) {
-    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
-            return true;
-        }
-    }
+    [[maybe_unused]] const DataType c_dtype) {
+    auto all_match = [&](DataType dt) { return a_dtype == dt && b_dtype == dt; };
 
-    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
-        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
-        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
+    if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+        subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+        if (all_match(DataType::BFLOAT16) || all_match(DataType::BFLOAT8_B) || all_match(DataType::BFLOAT4_B) ||
+            all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
+            all_match(DataType::UINT16)) {
             return true;
         }
     }
@@ -550,11 +594,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto c_num_tiles_per_shard = has_sharding ? shard_volumes->c_shard_volume : std::nullopt;
 
     const auto a_dtype = a.dtype();
-    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    const auto b_dtype = b.has_value() ? b->dtype()
-                         : is_quant_op ? DataType::FLOAT32
-                         : is_sfpu_op  ? a_dtype
-                                       : DataType::BFLOAT16;
+    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar.
+    // When b is a scalar, it is packed as bfloat16 for block-float input types (BFLOAT8_B,
+    // BFLOAT4_B), so the CB format must be BFLOAT16 to match — not the block-float a_dtype.
+    const auto b_dtype = b.has_value()                              ? b->dtype()
+                         : is_quant_op                              ? DataType::FLOAT32
+                         : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
+                                                                    : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
@@ -591,6 +637,23 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
         if (op_config.process_rhs.has_value()) {
             rhs_activations.push_back(*op_config.process_rhs);
+        }
+
+        // LDEXP decomposes to EXP2(rhs) then MUL on the FPU path.  The RHS
+        // intermediate CB is Float16_b (due to op_has_exp), but LHS has no
+        // activation and stays in its original block-float format (BFLOAT8_B /
+        // BFLOAT4_B).  The resulting data-format mismatch between the two FPU
+        // binary operands produces incorrect results.  Adding a typecast for
+        // LHS forces it through a Float16_b intermediate CB so both operands
+        // use the same format.
+        // Note: LOGADDEXP / LOGADDEXP2 are not affected because they process
+        // both sides (EXP/EXP2), so lhs_activations is never empty for them.
+        if (!is_sfpu_op && lhs_activations.empty() && !rhs_activations.empty() && op_type == BinaryOpType::LDEXP &&
+            (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B)) {
+            lhs_activations.push_back({
+                unary::UnaryOpType::TYPECAST,
+                {static_cast<int>(a_dtype), static_cast<int>(DataType::BFLOAT16)},
+            });
         }
 
         if (op_config.postprocess.has_value()) {
@@ -670,11 +733,15 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     }
 
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B) {
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
     }
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
     }
 
@@ -743,6 +810,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_5] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[tt::CBIndex::c_6] = UnpackToDestMode::UnpackToDestFp32;
         } else {
             unpack_to_dest_mode[src0_cb_index] =
                 (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
@@ -752,15 +821,37 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
             unpack_to_dest_mode[src1interim_cb_index] =
                 (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_5] =
+                (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[tt::CBIndex::c_6] =
+                (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
         }
     }
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
+    bool use_llk_bcast =
+        CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
+
+    // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
+    // amplifies beyond acceptable tolerance.
+    if (use_llk_bcast && op_has_exp) {
+        use_llk_bcast = false;
+    }
+
+    // Where op does not support LLK bcast for scalar and col broadcast
+    if (use_llk_bcast && is_where_op &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        use_llk_bcast = false;
+    }
+
+    if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
-            compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
+            compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines, is_where_op);
         reader_defines["BCAST_LLK"] = "1";
     } else {
         reader_defines["BCAST_LLK"] = "0";
