@@ -1,8 +1,4 @@
 import torch
-from transformers.configuration_utils import PretrainedConfig
-
-import ttnn
-from models.demos.deepseek_v3.tt.rope import get_cos_sin_matrix, get_rot_transformation_mat
 
 
 def create_balanced_chunk_order(sp_factor: int) -> list[int]:
@@ -59,54 +55,3 @@ def reverse_reorder_tensor_chunks(tensor: torch.Tensor, chunk_order: list[int], 
         inverse_order[orig_pos] = new_pos
 
     return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
-
-
-def get_rope_tensors(
-    hf_config: PretrainedConfig,
-    seq_len: int,
-    mesh_device: ttnn.MeshDevice,
-    sp_axis: int = 0,
-    is_balanced: bool = False,
-) -> dict[str, ttnn.Tensor]:
-    cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(hf_config)
-
-    assert (
-        seq_len <= hf_config.max_seq_len
-    ), f"seq_len {seq_len} must be less than or equal to max_seq_len {hf_config.max_seq_len}"
-    cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
-    sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
-
-    if is_balanced:
-        sp_factor = mesh_device.shape[sp_axis]
-        chunk_order = create_balanced_chunk_order(sp_factor)
-        cos_matrix_torch = reorder_tensor_chunks(cos_matrix_torch, chunk_order, seq_dim=2)
-        sin_matrix_torch = reorder_tensor_chunks(sin_matrix_torch, chunk_order, seq_dim=2)
-
-    shard_dims = [None, None]
-    shard_dims[sp_axis] = 2
-
-    cos_matrix = ttnn.from_torch(
-        cos_matrix_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
-    )
-    sin_matrix = ttnn.from_torch(
-        sin_matrix_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
-    )
-
-    trans_mat_torch = get_rot_transformation_mat()
-    trans_matrix = ttnn.from_torch(
-        trans_mat_torch,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}

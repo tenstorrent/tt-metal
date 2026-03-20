@@ -13,9 +13,9 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
-    get_rope_tensors,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
@@ -166,7 +166,8 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
         tp_axis=tp_axis,
         is_balanced=is_balanced,
     )
-    rope_tensors = get_rope_tensors(config, seq_len, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
+    rope_tensors = rope_setup.get_rope_tensors(seq_len)
 
     # Verify both exist
     assert mla_ref is not None, "Reference MLA should exist"
