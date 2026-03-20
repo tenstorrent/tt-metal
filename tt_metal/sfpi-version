@@ -1,12 +1,17 @@
-# sfpi version information
+# sfpi trial 7.33.0-stochrnd-40342
+
+		#######################################
+		###   NOT A RELEASE, DO NOT DEPLOY  ###
+		#######################################
+
 sfpi_repo='https://github.com/tenstorrent/sfpi'
-sfpi_version='7.32.0'
+sfpi_version='7.33.0-stochrnd-40342'
 sfpi_base=''
-sfpi_build='333'
+sfpi_build='365'
 sfpi_hashtype='sha256'
-sfpi_aarch64_debian_txz_hash='5fca627708db6d5719eef9c62d6fa23527907ff385a42bb56cba1ec86d6de7cd'
-sfpi_aarch64_debian_deb_hash='d31861cbb96653be970b1d77192bf01a8c5ae0124e8c56e8af4cca43b26ab059'
-sfpi_x86_64_debian_txz_hash='11c11a584b87a6d4d33c8f48b7ac2a5a689b8c05fe082deec19fc49cc7d59285'
-sfpi_x86_64_debian_deb_hash='105057fdca12584689b1798fb631fdc7588856a765c7fd9ee3777a8a03ad6d17'
-sfpi_x86_64_fedora_txz_hash='e8aff14dfbefcddf9b606f0aa54c2f94fbcd1abfd8ca96edb871140148905f4f'
-sfpi_x86_64_fedora_rpm_hash='90ecb8d4874287a0e2c40cc9676a4160688e27c7217cd5ba07736b2105816821'
+sfpi_aarch64_debian_txz_hash='383e45a5d5f1095b1693583aba2948a9df82bbb08d0e0591a2918dba91a5c0c0'
+sfpi_aarch64_debian_deb_hash='f4ece16803fcfe86a382b45e54884c949d12a9c7d442bd80f26787cb6de82447'
+sfpi_x86_64_debian_txz_hash='4cadc14510f004320d80baeface5fc3e3dffa20cc25bd930cb70fe36e69be3d0'
+sfpi_x86_64_debian_deb_hash='83350438fff2e060d015cabeae3e6444d6464f16df00753b0fd2d18fac45f029'
+sfpi_x86_64_fedora_txz_hash='d18e29ff261617be89900abcfa304b68058407f86743f5a29f3cdfc5a86f3173'
+sfpi_x86_64_fedora_rpm_hash='c9434d91797d2921c83999e32eba5e04b1ff6bc82fd82ac8cb679a0b05e1ef9b'
