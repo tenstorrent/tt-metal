@@ -86,11 +86,11 @@ inline void calculate_lgamma_stirling_fp32(
             v_if(abs_range1 < abs_range2) { d = range1; }
             v_endif;
 
-            const float p0 = -0.57721566f;
-            const float p1 = 0.82246703f;
-            const float p2 = -0.40068563f;
-            const float p3 = 0.27058081f;
-            const float p4 = -0.20738555f;
+            constexpr float p0 = -0.57721566f;
+            constexpr float p1 = 0.82246703f;
+            constexpr float p2 = -0.40068563f;
+            constexpr float p3 = 0.27058081f;
+            constexpr float p4 = -0.20738555f;
             // res = d * (p0 + d * (p1 + d * (p2 + d * (p3 + d * p4))));
             res = d * PolynomialEvaluator::eval(d, p0, p1, p2, p3, p4);
         }
@@ -105,16 +105,11 @@ inline void calculate_lgamma_stirling_fp32(
         }
         v_endif;
 
-        // Handle special cases
-        v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
-        v_endif;
-
         // Handle boundary case
         v_if(sfpi::abs(z - 0.5f) < 0.01f) { res = LOG_SQRT_PI; }
         v_endif;
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
-
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = res;
         sfpi::dst_reg++;
     }
