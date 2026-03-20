@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <variant>
 #include <array>
+#include <vector>
+#include <variant>
 
 #include "dispatch_types.hpp"
 #include "dispatch_program_factory.hpp"
