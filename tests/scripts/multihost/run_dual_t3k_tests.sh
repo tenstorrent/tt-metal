@@ -29,6 +29,9 @@ run_dual_t3k_unit_tests() {
   tt-run --rank-binding "$strict_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests ; fail+=$?
   tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
 
+  # Run env passthrough multihost integration tests (verifies env vars reach remote ranks)
+  pytest tests/ttnn/distributed/test_ttrun_env_passthrough.py -m multihost -v ; fail+=$?
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
