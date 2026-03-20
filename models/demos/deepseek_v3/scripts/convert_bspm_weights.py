@@ -32,6 +32,7 @@ import argparse
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -88,8 +89,16 @@ def _preprocess_all_layers(
     variant: str,
     budget: float,
     bspm_root: Path,
+    n_io_workers: int = 16,
 ) -> _OverrideStateDict:
     """Apply BSPM tile pre-quantization to all MoE layers in state_dict.
+
+    Strategy: iterate by *projection* (not expert) so all 256 expert weights
+    for a given projection are loaded in parallel and processed in one batched
+    numpy call, rather than 256 sequential single-expert calls.
+
+    Per layer: 3 projections × O(unique_codes) numpy calls
+    vs original: 256 experts × 3 projections × O(unique_codes) calls
 
     Returns an _OverrideStateDict wrapping the original (lazy) state_dict so
     the full checkpoint is never materialised in memory.
@@ -125,34 +134,59 @@ def _preprocess_all_layers(
         bspm_codes = bspm_data["codes"]  # (n_experts, 3, tiles_per_proj)
         n_experts = min(hf_config.n_routed_experts, bspm_codes.shape[0])
 
-        for expert_idx in tqdm(range(n_experts), desc=f"  layer {layer_idx}", unit="expert", leave=False):
-            for proj_name, proj_idx in _PROJ_IDX.items():
-                key = f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.{proj_name}.weight"
-                if key not in state_dict:
-                    continue
+        t_layer = time.time()
 
-                w_f32 = (overrides[key] if key in overrides else state_dict[key]).float()  # (N, K)
-                w_kn = w_f32.T.contiguous().numpy()  # (K, N)
-                K, N = w_kn.shape
-                tiles_h, tiles_w = K // 32, N // 32
+        for proj_name, proj_idx in _PROJ_IDX.items():
+            keys = [f"model.layers.{layer_idx}.mlp.experts.{e}.{proj_name}.weight" for e in range(n_experts)]
+            present = [(e, k) for e, k in enumerate(keys) if k in state_dict]
+            if not present:
+                continue
 
-                codes_2d = bspm_codes[expert_idx, proj_idx, : tiles_h * tiles_w].reshape(tiles_h, tiles_w)
-                non_bfp4 = np.unique(codes_2d)
-                non_bfp4 = non_bfp4[non_bfp4 != 1]
-                if len(non_bfp4) == 0:
-                    continue  # all bfp4 — no-op
+            expert_indices, present_keys = zip(*present)
 
-                w_tiled = w_kn.reshape(tiles_h, 32, tiles_w, 32).transpose(0, 2, 1, 3).copy()
-                for code in non_bfp4:
-                    rs, cs = np.where(codes_2d == code)
-                    mant_bits = _TT_CODE_TO_MANT.get(int(code), 3)
-                    if mant_bits is None:
-                        w_tiled[rs, cs] = 0.0
-                    else:
-                        w_tiled[rs, cs] = quantize_dequantize_bfp(w_tiled[rs, cs], mant_bits)
+            # ── Load all expert weights for this projection in parallel ──────
+            # I/O-bound: threads hide NFS/disk latency effectively.
+            def _load(k):
+                return state_dict[k].float()
 
-                w_out = w_tiled.transpose(0, 2, 1, 3).reshape(K, N)
-                overrides[key] = torch.from_numpy(w_out).T.to(w_f32.dtype)
+            with ThreadPoolExecutor(max_workers=n_io_workers) as pool:
+                tensors = list(pool.map(_load, present_keys))
+
+            # Stack: (n_e, N, K) → transpose to (n_e, K, N)
+            w_nk = torch.stack(tensors).numpy()  # (n_e, N, K)
+            w_kn = w_nk.transpose(0, 2, 1)  # (n_e, K, N) — view, no copy yet
+            n_e, K, N = w_kn.shape
+            tiles_h, tiles_w = K // 32, N // 32
+
+            # codes: (n_e, tiles_h, tiles_w)
+            codes_3d = bspm_codes[list(expert_indices), proj_idx, : tiles_h * tiles_w].reshape(n_e, tiles_h, tiles_w)
+
+            unique_codes = np.unique(codes_3d)
+            non_bfp4 = unique_codes[unique_codes != 1]
+            if len(non_bfp4) == 0:
+                continue  # all tiles bfp4 — no-op for all experts
+
+            # (n_e, tiles_h, tiles_w, 32, 32) — contiguous copy needed for writes
+            w_tiled = w_kn.reshape(n_e, tiles_h, 32, tiles_w, 32).transpose(0, 1, 3, 2, 4).copy()
+
+            for code in non_bfp4:
+                ei, ri, ci = np.where(codes_3d == code)
+                mant_bits = _TT_CODE_TO_MANT.get(int(code), 3)
+                if mant_bits is None:
+                    w_tiled[ei, ri, ci] = 0.0
+                else:
+                    # Single batched call across ALL experts for this code
+                    w_tiled[ei, ri, ci] = quantize_dequantize_bfp(w_tiled[ei, ri, ci], mant_bits)
+
+            # Restore (n_e, K, N) → (n_e, N, K) and store overrides
+            w_out = w_tiled.transpose(0, 1, 3, 2, 4).reshape(n_e, K, N).transpose(0, 2, 1)
+            orig_dtype = tensors[0].dtype
+            for i, key in enumerate(present_keys):
+                overrides[key] = torch.from_numpy(w_out[i].copy()).to(orig_dtype)
+
+            del tensors, w_nk, w_kn, w_tiled, w_out
+
+        logger.debug(f"Layer {layer_idx} preprocessed in {time.time() - t_layer:.1f}s")
 
     logger.info(f"BSPM preprocessing complete: {len(overrides)} expert weight keys overridden")
     return _OverrideStateDict(state_dict, overrides)
