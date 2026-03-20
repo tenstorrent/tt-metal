@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import time
 from pathlib import Path
 from time import perf_counter
 
@@ -34,6 +36,12 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+def _debug_print(msg: str, flush: bool = True) -> None:
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
@@ -261,29 +269,47 @@ class MTP2D(AbstractModule):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        _debug_print("MTP2D.forward_decode: START")
         ccl = cfg["ccl"]
 
+        _debug_print("MTP2D.forward_decode: Embedding2D.forward_decode START")
         token_emb = Embedding2D.forward_decode(token_ids, cfg["embedding"])
+        _debug_print("MTP2D.forward_decode: Embedding2D.forward_decode DONE")
 
+        _debug_print("MTP2D.forward_decode: to_memory_config hidden_norm_in START")
         hidden_norm_in = ttnn.to_memory_config(hidden_states, **cfg["hidden_norm_reshard"])
+        _debug_print("MTP2D.forward_decode: to_memory_config hidden_norm_in DONE")
+
+        _debug_print("MTP2D.forward_decode: DistributedRMSNorm.forward_decode hidden_norm START")
         hidden_norm = DistributedRMSNorm.forward_decode(hidden_norm_in, cfg["hidden_norm"])
+        _debug_print("MTP2D.forward_decode: DistributedRMSNorm.forward_decode hidden_norm DONE")
         if _has_distinct_buffer(hidden_norm_in, hidden_states):
             ttnn.deallocate(hidden_norm_in)
 
+        _debug_print("MTP2D.forward_decode: to_memory_config token_norm_in START")
         token_norm_in = ttnn.to_memory_config(token_emb, **cfg["token_norm_reshard"])
+        _debug_print("MTP2D.forward_decode: to_memory_config token_norm_in DONE")
+
+        _debug_print("MTP2D.forward_decode: DistributedRMSNorm.forward_decode token_norm START")
         token_norm = DistributedRMSNorm.forward_decode(token_norm_in, cfg["token_norm"])
+        _debug_print("MTP2D.forward_decode: DistributedRMSNorm.forward_decode token_norm DONE")
         if _has_distinct_buffer(token_norm_in, token_emb):
             ttnn.deallocate(token_norm_in)
         ttnn.deallocate(token_emb)
 
+        _debug_print("MTP2D.forward_decode: all_gather_async hidden_norm START")
         hidden_full = ttnn.experimental.all_gather_async(
             hidden_norm, **ccl.populate_all_gather_runtime_args(cfg["norm_all_gather"])
         )
         ttnn.deallocate(hidden_norm)
+        _debug_print("MTP2D.forward_decode: all_gather_async hidden_norm DONE")
+
+        _debug_print("MTP2D.forward_decode: all_gather_async token_norm START")
         token_full = ttnn.experimental.all_gather_async(
             token_norm, **ccl.populate_all_gather_runtime_args(cfg["norm_all_gather"])
         )
         ttnn.deallocate(token_norm)
+        _debug_print("MTP2D.forward_decode: all_gather_async token_norm DONE")
 
         orig_hidden_full = hidden_full
         orig_token_full = token_full
@@ -292,7 +318,9 @@ class MTP2D(AbstractModule):
         ), f"MTP hidden/token length mismatch: hidden_full.shape={hidden_full.shape} token_full.shape={token_full.shape}"
 
         # Concatenate token embedding then hidden.
+        _debug_print("MTP2D.forward_decode: concat token_full + hidden_full START")
         concat_in = ttnn.concat([token_full, hidden_full], **cfg["concat"])
+        _debug_print("MTP2D.forward_decode: concat token_full + hidden_full DONE")
         ttnn.deallocate(hidden_full)
         ttnn.deallocate(token_full)
         if orig_hidden_full is not hidden_full:
@@ -300,12 +328,18 @@ class MTP2D(AbstractModule):
         if orig_token_full is not token_full:
             ttnn.deallocate(orig_token_full)
 
+        _debug_print("MTP2D.forward_decode: eh_proj linear START")
         eh_out = ttnn.linear(concat_in, **cfg["eh_proj"]["linear"])
+        _debug_print("MTP2D.forward_decode: eh_proj linear DONE")
         ttnn.deallocate(concat_in)
 
+        _debug_print("MTP2D.forward_decode: to_memory_config decoder_in START")
         decoder_in = ttnn.to_memory_config(eh_out, **cfg["decoder_input_reshard"])
         if _has_distinct_buffer(decoder_in, eh_out):
             ttnn.deallocate(eh_out)
+        _debug_print("MTP2D.forward_decode: to_memory_config decoder_in DONE")
+
+        _debug_print("MTP2D.forward_decode: MoEDecoderBlock2D.forward_decode START")
         decoder_out = MoEDecoderBlock2D.forward_decode(
             decoder_in,
             position_idxs,
@@ -313,19 +347,32 @@ class MTP2D(AbstractModule):
             rope_tensors,
             page_table,
         )
+        _debug_print("MTP2D.forward_decode: MoEDecoderBlock2D.forward_decode DONE")
         ttnn.deallocate(decoder_in)
 
+        _debug_print("MTP2D.forward_decode: to_memory_config head_norm_in START")
         head_norm_in = ttnn.to_memory_config(decoder_out, **cfg["head_norm_reshard"])
         if _has_distinct_buffer(head_norm_in, decoder_out):
             ttnn.deallocate(decoder_out)
+        _debug_print("MTP2D.forward_decode: to_memory_config head_norm_in DONE")
+
+        _debug_print("MTP2D.forward_decode: DistributedRMSNorm.forward_decode head_norm START")
         head_norm_out = DistributedRMSNorm.forward_decode(head_norm_in, cfg["head_norm"])
+        _debug_print("MTP2D.forward_decode: DistributedRMSNorm.forward_decode head_norm DONE")
         ttnn.deallocate(head_norm_in)
 
+        _debug_print("MTP2D.forward_decode: all_gather_async head_norm_out START")
         head_full = ttnn.experimental.all_gather_async(
             head_norm_out, **ccl.populate_all_gather_runtime_args(cfg["head_all_gather"])
         )
         ttnn.deallocate(head_norm_out)
-        return LMHead1D.forward_decode(head_full, cfg["head"])
+        _debug_print("MTP2D.forward_decode: all_gather_async head_norm_out DONE")
+
+        _debug_print("MTP2D.forward_decode: LMHead1D.forward_decode START")
+        out = LMHead1D.forward_decode(head_full, cfg["head"])
+        _debug_print("MTP2D.forward_decode: LMHead1D.forward_decode DONE")
+        _debug_print("MTP2D.forward_decode: END")
+        return out
 
     @classmethod
     def forward_prefill(
@@ -337,29 +384,47 @@ class MTP2D(AbstractModule):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        _debug_print("MTP2D.forward_prefill: START")
         ccl = cfg["ccl"]
 
+        _debug_print("MTP2D.forward_prefill: Embedding2D.forward_prefill START")
         token_emb = Embedding2D.forward_prefill(token_ids, cfg["embedding"])
+        _debug_print("MTP2D.forward_prefill: Embedding2D.forward_prefill DONE")
 
+        _debug_print("MTP2D.forward_prefill: to_memory_config hidden_norm_in START")
         hidden_norm_in = ttnn.to_memory_config(hidden_states, **cfg["hidden_norm_reshard"])
+        _debug_print("MTP2D.forward_prefill: to_memory_config hidden_norm_in DONE")
+
+        _debug_print("MTP2D.forward_prefill: DistributedRMSNorm.forward_prefill hidden_norm START")
         hidden_norm = DistributedRMSNorm.forward_prefill(hidden_norm_in, cfg["hidden_norm"])
+        _debug_print("MTP2D.forward_prefill: DistributedRMSNorm.forward_prefill hidden_norm DONE")
         if _has_distinct_buffer(hidden_norm_in, hidden_states):
             ttnn.deallocate(hidden_norm_in)
 
+        _debug_print("MTP2D.forward_prefill: to_memory_config token_norm_in START")
         token_norm_in = ttnn.to_memory_config(token_emb, **cfg["token_norm_reshard"])
+        _debug_print("MTP2D.forward_prefill: to_memory_config token_norm_in DONE")
+
+        _debug_print("MTP2D.forward_prefill: DistributedRMSNorm.forward_prefill token_norm START")
         token_norm = DistributedRMSNorm.forward_prefill(token_norm_in, cfg["token_norm"])
+        _debug_print("MTP2D.forward_prefill: DistributedRMSNorm.forward_prefill token_norm DONE")
         if _has_distinct_buffer(token_norm_in, token_emb):
             ttnn.deallocate(token_norm_in)
         ttnn.deallocate(token_emb)
 
+        _debug_print("MTP2D.forward_prefill: all_gather_async hidden_norm START")
         hidden_full = ttnn.experimental.all_gather_async(
             hidden_norm, **ccl.populate_all_gather_runtime_args(cfg["norm_all_gather"])
         )
         ttnn.deallocate(hidden_norm)
+        _debug_print("MTP2D.forward_prefill: all_gather_async hidden_norm DONE")
+
+        _debug_print("MTP2D.forward_prefill: all_gather_async token_norm START")
         token_full = ttnn.experimental.all_gather_async(
             token_norm, **ccl.populate_all_gather_runtime_args(cfg["norm_all_gather"])
         )
         ttnn.deallocate(token_norm)
+        _debug_print("MTP2D.forward_prefill: all_gather_async token_norm DONE")
 
         orig_hidden_full = hidden_full
         orig_token_full = token_full
@@ -368,7 +433,9 @@ class MTP2D(AbstractModule):
         ), f"MTP hidden/token length mismatch: hidden_full.shape={hidden_full.shape} token_full.shape={token_full.shape}"
 
         # Concatenate token embedding then hidden.
+        _debug_print("MTP2D.forward_prefill: concat token_full + hidden_full START")
         concat_in = ttnn.concat([token_full, hidden_full], **cfg["concat"])
+        _debug_print("MTP2D.forward_prefill: concat token_full + hidden_full DONE")
         ttnn.deallocate(hidden_full)
         ttnn.deallocate(token_full)
         if orig_hidden_full is not hidden_full:
@@ -376,12 +443,18 @@ class MTP2D(AbstractModule):
         if orig_token_full is not token_full:
             ttnn.deallocate(orig_token_full)
 
+        _debug_print("MTP2D.forward_prefill: eh_proj linear START")
         eh_out = ttnn.linear(concat_in, **cfg["eh_proj"]["linear"])
+        _debug_print("MTP2D.forward_prefill: eh_proj linear DONE")
         ttnn.deallocate(concat_in)
 
+        _debug_print("MTP2D.forward_prefill: to_memory_config decoder_in START")
         decoder_in = ttnn.to_memory_config(eh_out, **cfg["decoder_input_reshard"])
         if _has_distinct_buffer(decoder_in, eh_out):
             ttnn.deallocate(eh_out)
+        _debug_print("MTP2D.forward_prefill: to_memory_config decoder_in DONE")
+
+        _debug_print("MTP2D.forward_prefill: MoEDecoderBlock2D.forward_prefill START")
         decoder_out = MoEDecoderBlock2D.forward_prefill(
             decoder_in,
             user_id,
@@ -389,16 +462,29 @@ class MTP2D(AbstractModule):
             rope_tensors,
             page_table,
         )
+        _debug_print("MTP2D.forward_prefill: MoEDecoderBlock2D.forward_prefill DONE")
         ttnn.deallocate(decoder_in)
 
+        _debug_print("MTP2D.forward_prefill: to_memory_config head_norm_in START")
         head_norm_in = ttnn.to_memory_config(decoder_out, **cfg["head_norm_reshard"])
         if _has_distinct_buffer(head_norm_in, decoder_out):
             ttnn.deallocate(decoder_out)
+        _debug_print("MTP2D.forward_prefill: to_memory_config head_norm_in DONE")
+
+        _debug_print("MTP2D.forward_prefill: DistributedRMSNorm.forward_prefill head_norm START")
         head_norm_out = DistributedRMSNorm.forward_prefill(head_norm_in, cfg["head_norm"])
+        _debug_print("MTP2D.forward_prefill: DistributedRMSNorm.forward_prefill head_norm DONE")
         ttnn.deallocate(head_norm_in)
 
+        _debug_print("MTP2D.forward_prefill: all_gather_async head_norm_out START")
         head_full = ttnn.experimental.all_gather_async(
             head_norm_out, **ccl.populate_all_gather_runtime_args(cfg["head_all_gather"])
         )
         ttnn.deallocate(head_norm_out)
-        return LMHead1D.forward_prefill(head_full, cfg["head"])
+        _debug_print("MTP2D.forward_prefill: all_gather_async head_norm_out DONE")
+
+        _debug_print("MTP2D.forward_prefill: LMHead1D.forward_prefill START")
+        out = LMHead1D.forward_prefill(head_full, cfg["head"])
+        _debug_print("MTP2D.forward_prefill: LMHead1D.forward_prefill DONE")
+        _debug_print("MTP2D.forward_prefill: END")
+        return out

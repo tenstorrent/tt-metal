@@ -5,6 +5,7 @@
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -22,6 +23,9 @@ TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
+RANKFILE_MAP_BY_PATH_PATTERN = re.compile(r"rankfile:file=([^,\s]+)", re.IGNORECASE)
+MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
 
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
@@ -257,7 +261,6 @@ ENV_PASSTHROUGH_PREFIXES = (
     "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
     "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
-    "DEBUG_",  # Generic debug toggles used by tests/demos
     "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
     "MESH_",  # Mesh config (e.g., MESH_DEVICE)
 )
@@ -400,10 +403,183 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
     return env_args
 
 
+def _resolve_rankfile_for_mpi(rankfile_path: str) -> str:
+    """Resolve rankfile path when possible; preserve original on lookup failure."""
+    try:
+        return str(resolve_path(rankfile_path, description="MPI rankfile", must_be_file=True))
+    except ValueError:
+        logger.warning(
+            f"{TT_RUN_PREFIX} Could not resolve MPI rankfile path '{rankfile_path}'. " "Passing it to mpirun unchanged."
+        )
+        return rankfile_path
+
+
+def _extract_rankfile_path_from_map_by_policy(policy: str) -> Optional[str]:
+    """Extract rankfile path from --map-by policy if using rankfile:file=... syntax."""
+    match = RANKFILE_MAP_BY_PATH_PATTERN.search(policy)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _extract_rankfile_hosts(rankfile_path: str) -> List[str]:
+    """Extract unique hosts from an OpenMPI rankfile, preserving first-seen order."""
+    hosts = []
+    seen_hosts = set()
+    try:
+        with open(rankfile_path, "r") as rankfile:
+            for raw_line in rankfile:
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+
+                match = RANKFILE_LINE_PATTERN.match(line)
+                if not match:
+                    continue
+
+                host = match.group(1)
+                if host not in seen_hosts:
+                    seen_hosts.add(host)
+                    hosts.append(host)
+    except OSError as exc:
+        logger.warning(f"{TT_RUN_PREFIX} Failed to read rankfile '{rankfile_path}' for host inference: {exc}")
+
+    return hosts
+
+
+def _has_host_selection_args(mpi_args: List[str]) -> bool:
+    """Return True if host selection arguments are already present."""
+    for arg in mpi_args:
+        for host_flag in MPI_HOST_FLAGS:
+            if arg == host_flag or arg.startswith(f"{host_flag}="):
+                return True
+    return False
+
+
+def _has_mca_param(mpi_args: List[str], param_name: str) -> bool:
+    """Return True if --mca/-mca specifies a given MCA parameter."""
+    i = 0
+    while i < len(mpi_args):
+        arg = mpi_args[i]
+
+        if arg in ("--mca", "-mca"):
+            if i + 1 < len(mpi_args):
+                mca_key = mpi_args[i + 1]
+                if mca_key == param_name or mca_key.startswith(f"{param_name}="):
+                    return True
+                i += 3
+                continue
+            i += 1
+            continue
+
+        if arg.startswith("--mca=") or arg.startswith("-mca="):
+            mca_key = arg.split("=", 1)[1]
+            if mca_key == param_name or mca_key.startswith(f"{param_name}="):
+                return True
+
+        i += 1
+
+    return False
+
+
+def normalize_rankfile_mpi_args(mpi_args: Optional[List[str]]) -> List[str]:
+    """Normalize rankfile MPI args and infer --host list when rankfile is provided.
+
+    OpenMPI deprecates --rankfile in favor of --map-by rankfile:file=<path>.
+    This keeps backwards compatibility while avoiding deprecation warnings.
+    """
+    if not mpi_args:
+        return []
+
+    normalized_args = []
+    detected_rankfile_path: Optional[str] = None
+    rewrote_rankfile_args = False
+    i = 0
+
+    while i < len(mpi_args):
+        arg = mpi_args[i]
+
+        if arg in ("--rankfile", "-rankfile", "-rf"):
+            if i + 1 >= len(mpi_args):
+                logger.warning(f"{TT_RUN_PREFIX} Ignoring malformed rankfile option '{arg}' without a value")
+                normalized_args.append(arg)
+                i += 1
+                continue
+
+            detected_rankfile_path = _resolve_rankfile_for_mpi(mpi_args[i + 1])
+            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            rewrote_rankfile_args = True
+            i += 2
+            continue
+
+        if arg.startswith("--rankfile=") or arg.startswith("-rankfile="):
+            rankfile_path = arg.split("=", 1)[1]
+            detected_rankfile_path = _resolve_rankfile_for_mpi(rankfile_path)
+            normalized_args.extend(["--map-by", f"rankfile:file={detected_rankfile_path}"])
+            rewrote_rankfile_args = True
+            i += 1
+            continue
+
+        if arg == "--map-by":
+            normalized_args.append(arg)
+            if i + 1 >= len(mpi_args):
+                i += 1
+                continue
+
+            policy = mpi_args[i + 1]
+            rankfile_path = _extract_rankfile_path_from_map_by_policy(policy)
+            if rankfile_path:
+                resolved_rankfile_path = _resolve_rankfile_for_mpi(rankfile_path)
+                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
+                detected_rankfile_path = resolved_rankfile_path
+
+            normalized_args.append(policy)
+            i += 2
+            continue
+
+        if arg.startswith("--map-by="):
+            policy = arg.split("=", 1)[1]
+            rankfile_path = _extract_rankfile_path_from_map_by_policy(policy)
+            if rankfile_path:
+                resolved_rankfile_path = _resolve_rankfile_for_mpi(rankfile_path)
+                policy = policy.replace(f"rankfile:file={rankfile_path}", f"rankfile:file={resolved_rankfile_path}", 1)
+                arg = f"--map-by={policy}"
+                detected_rankfile_path = resolved_rankfile_path
+
+            normalized_args.append(arg)
+            i += 1
+            continue
+
+        normalized_args.append(arg)
+        i += 1
+
+    if rewrote_rankfile_args and detected_rankfile_path:
+        logger.debug(
+            f"{TT_RUN_PREFIX} Rewrote deprecated MPI rankfile args to "
+            f"--map-by rankfile:file={detected_rankfile_path}"
+        )
+
+    if detected_rankfile_path and not _has_host_selection_args(normalized_args):
+        rankfile_hosts = _extract_rankfile_hosts(detected_rankfile_path)
+        if rankfile_hosts:
+            host_csv = ",".join(rankfile_hosts)
+            normalized_args.extend(["--host", host_csv])
+            logger.debug(f"{TT_RUN_PREFIX} Inferred --host {host_csv} from MPI rankfile " f"'{detected_rankfile_path}'")
+        else:
+            logger.warning(
+                f"{TT_RUN_PREFIX} Could not infer hosts from MPI rankfile '{detected_rankfile_path}'. "
+                "If mpirun reports host allocation issues, pass --host explicitly."
+            )
+
+    return normalized_args
+
+
 def build_mpi_command(
     config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
+    effective_mpi_args = normalize_rankfile_mpi_args(mpi_args)
+
     # Check if running in SLURM interactive session
     if os.environ.get("SLURM_JOB_ID") is not None and os.environ.get("SLURM_STEP_ID") is not None:
         logger.warning(f"{TT_RUN_PREFIX} SLURM interactive session detected, using mpirun")
@@ -419,8 +595,8 @@ def build_mpi_command(
 
     # Check if --bind-to is already specified in mpi_args
     bind_to_already_specified = False
-    if mpi_args:
-        for i, arg in enumerate(mpi_args):
+    if effective_mpi_args:
+        for i, arg in enumerate(effective_mpi_args):
             if arg == "--bind-to":
                 bind_to_already_specified = True
                 break
@@ -432,8 +608,8 @@ def build_mpi_command(
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
 
-    if mpi_args:
-        cmd.extend(mpi_args)
+    if effective_mpi_args:
+        cmd.extend(effective_mpi_args)
 
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
@@ -548,7 +724,7 @@ def main(
         tt-run --rank-binding rank_binding.yaml ./my_app
 
         # Launch on multiple hosts with rankfile
-        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+        tt-run --rank-binding binding.yaml --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
     \b
     Rank Binding YAML Example:
@@ -579,7 +755,7 @@ def main(
             - env_overrides: Per-rank environment variables (e.g., TT_VISIBLE_DEVICES)
             This is about TT-Metal's logical device organization.
 
-        --mpi-args "--host ..." or "--rankfile ...":
+        --mpi-args "--host ..." or "--map-by rankfile:file=...":
             Configures MPI process placement. Tells mpirun:
             - Which physical cluster nodes to spawn processes on
             - How to distribute ranks across those nodes
@@ -599,10 +775,10 @@ def main(
         tt-run --rank-binding rank_binding.yaml ./my_app
 
         # Multi-host with rankfile (multihost MPI settings are default)
-        tt-run --rank-binding binding.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+        tt-run --rank-binding binding.yaml --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
         # Multi-host with specific network interface (e.g., ConnectX NIC)
-        tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--rankfile hosts.txt" ./my_app
+        tt-run --rank-binding binding.yaml --tcp-interface cnx1 --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
         # With additional MPI args
         tt-run --rank-binding binding.yaml --mpi-args "--bind-to core" ./my_app
@@ -701,7 +877,7 @@ def main(
 
         Example:
             tt-run --rank-binding config.yaml --mpi-args "--host nodeA,nodeB" ./my_app
-            tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--rankfile hosts.txt" ./my_app
+            tt-run --tcp-interface cnx1 --rank-binding config.yaml --mpi-args "--map-by rankfile:file=hosts.txt" ./my_app
 
     \b
     Debugging with --debug-gdbserver:
@@ -798,6 +974,10 @@ def main(
     effective_mpi_args = list(mpi_args) if mpi_args else []
 
     if not bare:
+        user_has_btl_setting = _has_mca_param(effective_mpi_args, "btl")
+        user_has_tcp_include = _has_mca_param(effective_mpi_args, "btl_tcp_if_include")
+        user_has_tcp_exclude = _has_mca_param(effective_mpi_args, "btl_tcp_if_exclude")
+
         # Recommended MPI settings for multi-host clusters:
         # - Use TCP for byte transfer layer (reliable for multi-host)
         # - Exclude loopback and docker0 (can't route inter-node traffic)
@@ -805,31 +985,33 @@ def main(
         # These interfaces cannot route traffic between hosts and can cause MPI
         # process discovery issues if selected. For specific interface control,
         # use --tcp-interface.
-        multihost_args = [
-            "--mca",
-            "btl",
-            "self,tcp",
-            "--mca",
-            "btl_tcp_if_exclude",
-            "docker0,lo",
-        ]
+        multihost_args = []
+        if not user_has_btl_setting:
+            multihost_args.extend(["--mca", "btl", "self,tcp"])
 
         if tcp_interface:
-            # If a specific interface is requested, use include instead of exclude
-            multihost_args = [
-                "--mca",
-                "btl",
-                "self,tcp",
-                "--mca",
-                "btl_tcp_if_include",
-                tcp_interface,
-            ]
+            if user_has_tcp_include or user_has_tcp_exclude:
+                logger.warning(
+                    f"{TT_RUN_PREFIX} Ignoring --tcp-interface={tcp_interface} because --mpi-args already "
+                    "specifies btl_tcp_if_include or btl_tcp_if_exclude."
+                )
+            else:
+                # If a specific interface is requested, use include instead of exclude
+                multihost_args.extend(["--mca", "btl_tcp_if_include", tcp_interface])
+        elif not user_has_tcp_include and not user_has_tcp_exclude:
+            multihost_args.extend(["--mca", "btl_tcp_if_exclude", "docker0,lo"])
 
         # Prepend multihost args so user-provided --mpi-args can override if needed
         effective_mpi_args = multihost_args + effective_mpi_args
 
         if verbose:
-            logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
+            if multihost_args:
+                logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
+            else:
+                logger.info(
+                    f"{TT_RUN_PREFIX} Skipping default multihost MPI args (user-provided --mpi-args already "
+                    "set matching MCA options)."
+                )
 
     # Build MPI command
     mpi_cmd = build_mpi_command(

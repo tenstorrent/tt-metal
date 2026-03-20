@@ -3,6 +3,8 @@
 
 
 import os
+import sys
+import time
 from pathlib import Path
 
 import torch
@@ -26,6 +28,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True) -> None:
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 class Experts(AbstractModule):
@@ -169,6 +178,7 @@ class Experts(AbstractModule):
 
     @classmethod
     def _forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        _debug_print("Experts._forward: START")
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         _, _, num_tokens, hidden_size = x.shape
@@ -204,27 +214,40 @@ class Experts(AbstractModule):
                 logger.warning(f"DEBUG experts {name}: failed to extract stats: {exc}")
 
         # Gate and up projections
+        _debug_print("Experts._forward: ttnn.linear w1_experts START")
         w1_out = ttnn.linear(x, **cfg["w1_experts"])
+        _debug_print("Experts._forward: ttnn.linear w1_experts DONE")
+        _debug_print("Experts._forward: ttnn.linear w3_experts START")
         w3_out = ttnn.linear(x, **cfg["w3_experts"])
+        _debug_print("Experts._forward: ttnn.linear w3_experts DONE")
         _log_expert_stats("w1_out", w1_out)
         _log_expert_stats("w3_out", w3_out)
 
         # Apply activation and multiply
+        _debug_print("Experts._forward: ttnn.mul activated START")
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul_experts"])
+        _debug_print("Experts._forward: ttnn.mul activated DONE")
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
         _log_expert_stats("activated", activated)
 
         # Down projection
+        _debug_print("Experts._forward: ttnn.linear w2_experts START")
         output = ttnn.linear(activated, **cfg["w2_experts"])
+        _debug_print("Experts._forward: ttnn.linear w2_experts DONE")
         ttnn.deallocate(activated)
         _log_expert_stats("w2_out", output)
 
         # Reshape for output
+        _debug_print("Experts._forward: ttnn.permute START")
         output = ttnn.permute(output, (1, 0, 2, 3))
+        _debug_print("Experts._forward: ttnn.permute DONE")
+        _debug_print("Experts._forward: ttnn.reshape START")
         output = ttnn.reshape(output, shape=(1, cfg["num_experts_per_device"], num_tokens, hidden_size))
+        _debug_print("Experts._forward: ttnn.reshape DONE")
 
         assert output.memory_config() == cfg["output_memory_config"]
+        _debug_print("Experts._forward: END")
         return output
 
     @classmethod

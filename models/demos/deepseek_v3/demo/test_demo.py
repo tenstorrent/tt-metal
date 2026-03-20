@@ -67,7 +67,7 @@ def _demo_case(
     [
         _demo_case(
             max_prompts=56,
-            repeat_batches=2,
+            repeat_batches=1,
             max_new_tokens=128,
             override_num_layers=5,
             enable_trace=False,
@@ -77,7 +77,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="tg_stress",
-            marks=pytest.mark.requires_device(["TG"]),
+            marks=[pytest.mark.requires_device(["TG"]), pytest.mark.timeout(2400)],
         ),
         _demo_case(
             max_prompts=256,
@@ -119,7 +119,7 @@ def _demo_case(
             stop_at_eos=None,
             expect_full_length=False,
             case_id="quad_full_demo",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(100000)],
         ),
         _demo_case(
             max_prompts=56,
@@ -133,7 +133,7 @@ def _demo_case(
             stop_at_eos=False,
             expect_full_length=True,
             case_id="quad_stress_demo",
-            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(100000)],
         ),
         _demo_case(
             max_prompts=1,

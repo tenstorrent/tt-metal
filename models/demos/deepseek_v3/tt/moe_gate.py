@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import time
 from pathlib import Path
 
 import torch
@@ -8,6 +10,15 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True):
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
+
+
 from models.demos.deepseek_v3.reference.reference_utils import topk_bitonic
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
@@ -295,18 +306,26 @@ class MoEGate(AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        _debug_print(f"MoEGate.forward: START (input shape={x.shape})")
         assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate projections
+        _debug_print("MoEGate.forward: gate projection (linear) START")
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
+        _debug_print("MoEGate.forward: gate projection (linear) DONE")
         # Sigmoid activation
+        _debug_print("MoEGate.forward: sigmoid START")
         scores = ttnn.sigmoid(logits)
+        _debug_print("MoEGate.forward: sigmoid DONE")
+        _debug_print("MoEGate.forward: deallocate logits START")
         ttnn.deallocate(logits)
+        _debug_print("MoEGate.forward: deallocate logits DONE")
         # Add score correction bias
         # Expand bias to match scores shape(dynamic shape)
+        _debug_print("MoEGate.forward: add score correction bias START")
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
         scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((1, 1, scores.shape[2], 1)))
         scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
@@ -316,11 +335,15 @@ class MoEGate(AbstractModule):
             memory_config=cfg["add_score_correction_bias"]["memory_config"],
             dtype=cfg["add_score_correction_bias"]["dtype"],
         )
+        _debug_print("MoEGate.forward: add score correction bias DONE")
         # Reshape scores to expert groups
+        _debug_print("MoEGate.forward: reshape scores to expert groups START")
         expert_scores_grouped = ttnn.reshape(scores_with_bias, **cfg["reshape_scores"])
+        _debug_print("MoEGate.forward: reshape scores to expert groups DONE")
         num_experts_per_group = expert_scores_grouped.shape[3]
 
         # calculate top-2 scores with expert groups
+        _debug_print("MoEGate.forward: topk within expert groups START")
         if cfg["topk_fallback"]:
             topk_scores_within_expert_groups, topk_indices_within_expert_groups = cls.topk_fallback_op(
                 expert_scores_grouped, **cfg["topk_fallback_config"], **cfg["topk_within_expert_groups"]
@@ -336,15 +359,25 @@ class MoEGate(AbstractModule):
             topk_scores_within_expert_groups, topk_indices_within_expert_groups = ttnn.topk(
                 expert_scores_grouped, **cfg["topk_within_expert_groups"]
             )
+        _debug_print("MoEGate.forward: topk within expert groups DONE")
+        _debug_print("MoEGate.forward: deallocate expert_scores_grouped, topk_indices_within_expert_groups START")
         ttnn.deallocate(expert_scores_grouped)
         ttnn.deallocate(topk_indices_within_expert_groups)
+        _debug_print("MoEGate.forward: deallocate expert_scores_grouped, topk_indices_within_expert_groups DONE")
         # sum top-2 scores within expert groups
+        _debug_print("MoEGate.forward: sum top-2 scores within expert groups START")
         expert_group_scores = ttnn.sum(topk_scores_within_expert_groups, dim=3)
+        _debug_print("MoEGate.forward: sum top-2 scores within expert groups DONE")
+        _debug_print("MoEGate.forward: deallocate topk_scores_within_expert_groups START")
         ttnn.deallocate(topk_scores_within_expert_groups)
+        _debug_print("MoEGate.forward: deallocate topk_scores_within_expert_groups DONE")
         # reshape to 4D tensor
+        _debug_print("MoEGate.forward: unsqueeze expert_group_scores START")
         expert_group_scores = ttnn.unsqueeze(expert_group_scores, dim=0)
+        _debug_print("MoEGate.forward: unsqueeze expert_group_scores DONE")
 
         # calculate top-k expert groups
+        _debug_print("MoEGate.forward: topk expert groups START")
         if cfg["topk_fallback"]:
             topk_expert_groups_scores, topk_expert_groups_indices = cls.topk_fallback_op(
                 expert_group_scores, **cfg["topk_fallback_config"], **cfg["topk_expert_groups"]
@@ -359,10 +392,14 @@ class MoEGate(AbstractModule):
             topk_expert_groups_scores, topk_expert_groups_indices = ttnn.topk(
                 expert_group_scores, **cfg["topk_expert_groups"]
             )
+        _debug_print("MoEGate.forward: topk expert groups DONE")
+        _debug_print("MoEGate.forward: deallocate expert_group_scores, topk_expert_groups_scores START")
         ttnn.deallocate(expert_group_scores)
         ttnn.deallocate(topk_expert_groups_scores)
+        _debug_print("MoEGate.forward: deallocate expert_group_scores, topk_expert_groups_scores DONE")
 
         # create full expert_groups_mask(dynamic shape)
+        _debug_print("MoEGate.forward: create expert_groups_mask START")
         input_mask = cfg["scatter_top_expert_groups"]["input"]
         input_mask = ttnn.repeat(input_mask, ttnn.Shape((1, 1, scores.shape[2], 1)))
 
@@ -377,19 +414,34 @@ class MoEGate(AbstractModule):
             src=src_tensor,
             dim=cfg["scatter_top_expert_groups"]["dim"],
         )
+        _debug_print("MoEGate.forward: create expert_groups_mask DONE")
+        _debug_print("MoEGate.forward: deallocate topk_expert_groups_indices START")
         ttnn.deallocate(topk_expert_groups_indices)
+        _debug_print("MoEGate.forward: deallocate topk_expert_groups_indices DONE")
+        _debug_print("MoEGate.forward: to_layout and reshape active_groups_mask START")
         active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
         active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
+        _debug_print("MoEGate.forward: to_layout and reshape active_groups_mask DONE")
 
         # expand active_groups_mask to all the experts
+        _debug_print("MoEGate.forward: expand active_groups_mask to all experts START")
         active_experts_mask = ttnn.repeat(active_groups_mask, ttnn.Shape((1, 1, 1, num_experts_per_group)))
+        _debug_print("MoEGate.forward: deallocate active_groups_mask START")
         ttnn.deallocate(active_groups_mask)
+        _debug_print("MoEGate.forward: deallocate active_groups_mask DONE")
+        _debug_print("MoEGate.forward: reshape active_experts_mask START")
         active_experts_mask = ttnn.reshape(active_experts_mask, **cfg["reshape_active_experts"])
+        _debug_print("MoEGate.forward: reshape active_experts_mask DONE")
+        _debug_print("MoEGate.forward: mul active_experts_scores START")
         active_experts_scores = ttnn.mul(scores_with_bias, active_experts_mask, **cfg["mul_scores_with_mask"])
+        _debug_print("MoEGate.forward: mul active_experts_scores DONE")
+        _debug_print("MoEGate.forward: deallocate scores_with_bias, active_experts_mask START")
         ttnn.deallocate(scores_with_bias)
         ttnn.deallocate(active_experts_mask)
+        _debug_print("MoEGate.forward: deallocate scores_with_bias, active_experts_mask DONE")
 
         # calculate top-k experts
+        _debug_print("MoEGate.forward: topk experts START")
         if cfg["topk_fallback"]:
             topk_experts_scores_with_bias, topk_experts_indices = cls.topk_fallback_op(
                 active_experts_scores, **cfg["topk_fallback_config"], **cfg["topk_experts"]
@@ -398,20 +450,32 @@ class MoEGate(AbstractModule):
             topk_experts_scores_with_bias, topk_experts_indices = ttnn.topk(
                 active_experts_scores, **cfg["topk_experts"]
             )
+        _debug_print("MoEGate.forward: topk experts DONE")
+        _debug_print("MoEGate.forward: deallocate active_experts_scores, topk_experts_scores_with_bias START")
         ttnn.deallocate(active_experts_scores)
         ttnn.deallocate(topk_experts_scores_with_bias)
+        _debug_print("MoEGate.forward: deallocate active_experts_scores, topk_experts_scores_with_bias DONE")
 
         # gather original scores without bias
+        _debug_print("MoEGate.forward: gather original scores START")
         topk_experts_scores = ttnn.gather(scores, dim=3, index=topk_experts_indices)
+        _debug_print("MoEGate.forward: gather original scores DONE")
+        _debug_print("MoEGate.forward: deallocate scores START")
         ttnn.deallocate(scores)
+        _debug_print("MoEGate.forward: deallocate scores DONE")
 
         # normalize scores
+        _debug_print("MoEGate.forward: normalize scores START")
         topk_expert_scores_sum = ttnn.sum(topk_experts_scores, dim=3, keepdim=True) + 1e-20  # add norm eps
         topk_experts_scores_normalized = ttnn.div(topk_experts_scores, topk_expert_scores_sum)
+        _debug_print("MoEGate.forward: normalize scores DONE")
+        _debug_print("MoEGate.forward: deallocate topk_expert_scores_sum, topk_experts_scores START")
         ttnn.deallocate(topk_expert_scores_sum)
         ttnn.deallocate(topk_experts_scores)
+        _debug_print("MoEGate.forward: deallocate topk_expert_scores_sum, topk_experts_scores DONE")
 
         # multiply by expert scale
+        _debug_print("MoEGate.forward: multiply by expert scale START")
         expert_scale = cfg["multiply_expert_scale"]["input_tensor_b"]
         # expand expert_scale to match topk_experts_scores_normalized shape(dynamic shape)
         expert_scale = ttnn.repeat(expert_scale, ttnn.Shape((1, 1, topk_experts_scores_normalized.shape[2], 1)))
@@ -422,17 +486,27 @@ class MoEGate(AbstractModule):
             memory_config=cfg["multiply_expert_scale"]["memory_config"],
             dtype=cfg["multiply_expert_scale"]["dtype"],
         )
+        _debug_print("MoEGate.forward: multiply by expert scale DONE")
+        _debug_print("MoEGate.forward: deallocate expert_scale START")
         ttnn.deallocate(expert_scale)
+        _debug_print("MoEGate.forward: deallocate expert_scale DONE")
 
+        _debug_print("MoEGate.forward: END")
         return topk_experts_scores_normalized, topk_experts_indices
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return cls.forward(x, cfg)
+        _debug_print("MoEGate.forward_prefill: START")
+        result = cls.forward(x, cfg)
+        _debug_print("MoEGate.forward_prefill: END")
+        return result
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return cls.forward(x, cfg)
+        _debug_print("MoEGate.forward_decode: START")
+        result = cls.forward(x, cfg)
+        _debug_print("MoEGate.forward_decode: END")
+        return result
 
     @classmethod
     def topk_fallback_op(

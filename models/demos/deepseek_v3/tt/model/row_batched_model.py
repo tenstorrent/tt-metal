@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import sys
+import time
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Sequence
@@ -13,6 +15,15 @@ from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True):
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
+
+
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
@@ -288,29 +299,42 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables: Page tables for each layer
             profile_decode: If True, only run first dense layer + first MoE layer for profiling
         """
+        _debug_print(
+            f"RowBatchedModel.forward_decode: START (profile_decode={profile_decode}, return_hidden={return_hidden})"
+        )
 
+        _debug_print("RowBatchedModel.forward_decode: Embedding2D.forward_decode START")
         x = Embedding2D.forward_decode(x, cfg["embedding"])
+        _debug_print("RowBatchedModel.forward_decode: Embedding2D.forward_decode DONE")
 
         if profile_decode:
             # Profile mode: run only first dense layer + first MoE layer
             # First dense layer (MLP)
             if cfg["mlp_decoder_block"]:
+                _debug_print("RowBatchedModel.forward_decode: Profile mode - first MLP layer START")
                 signpost(header="first_dense_layer")
                 x = DecoderBlock2D.forward_decode(
                     x, position_idxs, cfg["mlp_decoder_block"][0], rope_tensors, page_tables[0]
                 )
                 signpost(header="first_dense_layer")
+                _debug_print("RowBatchedModel.forward_decode: Profile mode - first MLP layer DONE")
             # First MoE layer
             if cfg["moe_decoder_block"]:
+                _debug_print("RowBatchedModel.forward_decode: Profile mode - first MoE layer START")
                 signpost(header="first_moe_layer")
                 moe_page_table_idx = len(cfg["mlp_decoder_block"])
                 x = MoEDecoderBlock2D.forward_decode(
                     x, position_idxs, cfg["moe_decoder_block"][0], rope_tensors, page_tables[moe_page_table_idx]
                 )
                 signpost(header="first_moe_layer")
+                _debug_print("RowBatchedModel.forward_decode: Profile mode - first MoE layer DONE")
 
         else:
             # Normal mode: run all layers
+            _debug_print(
+                f"RowBatchedModel.forward_decode: Running all layers (num_mlp={len(cfg['mlp_decoder_block'])}, num_moe={len(cfg['moe_decoder_block'])})"
+            )
+            layer_idx = 0
             for (block_cfg, BlockClass), page_table in zip(
                 itertools.chain(
                     zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -319,24 +343,44 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 page_tables,
                 strict=True,
             ):
+                layer_type = "MLP" if BlockClass == DecoderBlock2D else "MoE"
+                _debug_print(f"RowBatchedModel.forward_decode: Layer {layer_idx} ({layer_type}) START")
                 x = BlockClass.forward_decode(x, position_idxs, block_cfg, rope_tensors, page_table)
+                _debug_print(f"RowBatchedModel.forward_decode: Layer {layer_idx} ({layer_type}) DONE")
+                layer_idx += 1
+            _debug_print(f"RowBatchedModel.forward_decode: All {layer_idx} layers DONE")
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
 
+        _debug_print("RowBatchedModel.forward_decode: to_memory_config (norm_reshard) START")
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
+        _debug_print("RowBatchedModel.forward_decode: to_memory_config (norm_reshard) DONE")
+
+        _debug_print("RowBatchedModel.forward_decode: DistributedRMSNorm.forward_decode START")
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])
+        _debug_print("RowBatchedModel.forward_decode: DistributedRMSNorm.forward_decode DONE")
 
         ccl = cfg["lm_head"]["ccl"]
 
+        _debug_print("RowBatchedModel.forward_decode: all_gather_async START")
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
+        _debug_print("RowBatchedModel.forward_decode: all_gather_async DONE")
+
         if return_hidden:
+            _debug_print("RowBatchedModel.forward_decode: return_hidden path START")
             lm_head_in = ttnn.clone(x)
             ttnn.deallocate(x)
+            _debug_print("RowBatchedModel.forward_decode: LMHead1D.forward_decode (return_hidden) START")
             logits = LMHead1D.forward_decode(lm_head_in, cfg["lm_head"])
+            _debug_print("RowBatchedModel.forward_decode: LMHead1D.forward_decode (return_hidden) DONE")
+            _debug_print("RowBatchedModel.forward_decode: END (returning logits, hidden)")
             return logits, hidden_for_mtp
 
+        _debug_print("RowBatchedModel.forward_decode: LMHead1D.forward_decode START")
         logits = LMHead1D.forward_decode(x, cfg["lm_head"])
+        _debug_print("RowBatchedModel.forward_decode: LMHead1D.forward_decode DONE")
+        _debug_print("RowBatchedModel.forward_decode: END")
         return logits
 
     @classmethod
@@ -350,9 +394,16 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         return_hidden: bool = False,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward pass for prefill mode."""
+        _debug_print(f"RowBatchedModel.forward_prefill: START (user_id={user_id}, return_hidden={return_hidden})")
 
+        _debug_print("RowBatchedModel.forward_prefill: Embedding2D.forward_prefill START")
         x = Embedding2D.forward_prefill(x, cfg["embedding"])
+        _debug_print("RowBatchedModel.forward_prefill: Embedding2D.forward_prefill DONE")
 
+        _debug_print(
+            f"RowBatchedModel.forward_prefill: Running all layers (num_mlp={len(cfg['mlp_decoder_block'])}, num_moe={len(cfg['moe_decoder_block'])})"
+        )
+        layer_idx = 0
         for (block_cfg, BlockClass), page_table in zip(
             itertools.chain(
                 zip(cfg["mlp_decoder_block"], itertools.repeat(DecoderBlock2D)),
@@ -361,23 +412,40 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             page_tables,
             strict=True,
         ):
+            layer_type = "MLP" if BlockClass == DecoderBlock2D else "MoE"
+            _debug_print(f"RowBatchedModel.forward_prefill: Layer {layer_idx} ({layer_type}) START")
             x = BlockClass.forward_prefill(x, user_id, block_cfg, rope_tensors, page_table)
+            _debug_print(f"RowBatchedModel.forward_prefill: Layer {layer_idx} ({layer_type}) DONE")
+            layer_idx += 1
+        _debug_print(f"RowBatchedModel.forward_prefill: All {layer_idx} layers DONE")
 
         # Capture pre-norm hidden states for MTP; MTP applies its own hnorm.
         hidden_for_mtp = x if return_hidden else None
 
+        _debug_print("RowBatchedModel.forward_prefill: DistributedRMSNorm.forward_prefill START")
         x = DistributedRMSNorm.forward_prefill(x, cfg["norm"])  # no resharding needed for prefill
+        _debug_print("RowBatchedModel.forward_prefill: DistributedRMSNorm.forward_prefill DONE")
 
         ccl = cfg["lm_head"]["ccl"]
 
+        _debug_print("RowBatchedModel.forward_prefill: all_gather_async START")
         x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
+        _debug_print("RowBatchedModel.forward_prefill: all_gather_async DONE")
+
         if return_hidden:
+            _debug_print("RowBatchedModel.forward_prefill: return_hidden path START")
             lm_head_in = ttnn.clone(x)
             ttnn.deallocate(x)
+            _debug_print("RowBatchedModel.forward_prefill: LMHead1D.forward_prefill (return_hidden) START")
             logits = LMHead1D.forward_prefill(lm_head_in, cfg["lm_head"])
+            _debug_print("RowBatchedModel.forward_prefill: LMHead1D.forward_prefill (return_hidden) DONE")
+            _debug_print("RowBatchedModel.forward_prefill: END (returning logits, hidden)")
             return logits, hidden_for_mtp
 
+        _debug_print("RowBatchedModel.forward_prefill: LMHead1D.forward_prefill START")
         logits = LMHead1D.forward_prefill(x, cfg["lm_head"])
+        _debug_print("RowBatchedModel.forward_prefill: LMHead1D.forward_prefill DONE")
+        _debug_print("RowBatchedModel.forward_prefill: END")
         return logits
 
     @classmethod
@@ -391,7 +459,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         assert "mtp" in cfg, "MTP config is missing from decode run config"
-        return MTP2D.forward_decode(
+        _debug_print("RowBatchedModel.forward_mtp_decode: START")
+        result = MTP2D.forward_decode(
             hidden_states=hidden_states,
             token_ids=token_ids,
             position_idxs=position_idxs,
@@ -399,6 +468,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             rope_tensors=rope_tensors,
             page_table=page_table,
         )
+        _debug_print("RowBatchedModel.forward_mtp_decode: END")
+        return result
 
     @classmethod
     def forward_mtp_prefill(
@@ -411,7 +482,8 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         assert "mtp" in cfg, "MTP config is missing from prefill run config"
-        return MTP2D.forward_prefill(
+        _debug_print(f"RowBatchedModel.forward_mtp_prefill: START (user_id={user_id})")
+        result = MTP2D.forward_prefill(
             hidden_states=hidden_states,
             token_ids=token_ids,
             user_id=user_id,
@@ -419,3 +491,5 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
             rope_tensors=rope_tensors,
             page_table=page_table,
         )
+        _debug_print("RowBatchedModel.forward_mtp_prefill: END")
+        return result

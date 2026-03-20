@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, final
@@ -42,6 +44,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True) -> None:
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 class MLP(AbstractModule):
@@ -502,102 +511,140 @@ class MLP(AbstractModule):
         Returns:
             Tuple of (output tensor, (original_seq_len, pad_rows))
         """
+        _debug_print(f"MLP._forward_prefill_compute_only: START (input shape={x.shape})")
         num_layers, _, seq_len, _ = x.shape
         original_seq_len = seq_len
 
         # Chunk the input if needed
         pad_rows = 0
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
+            _debug_print(
+                f"MLP._forward_prefill_compute_only: chunking START (seq_len={seq_len}, max_rows={cfg['max_rows']})"
+            )
             if seq_len % cfg["max_rows"] != 0:
                 pad_rows = cfg["max_rows"] - (seq_len % cfg["max_rows"])
+                _debug_print(f"MLP._forward_prefill_compute_only: pad START (pad_rows={pad_rows})")
                 x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                _debug_print("MLP._forward_prefill_compute_only: pad DONE")
                 ttnn.deallocate(x)
                 x = x_padded
                 seq_len += pad_rows
             x = ttnn.reshape(x, [num_layers, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
             seq_len = cfg["max_rows"]
+            _debug_print("MLP._forward_prefill_compute_only: chunking DONE")
 
         # Gate and up projections with dynamic program configs
+        _debug_print("MLP._forward_prefill_compute_only: _fwd_ff1_3 START")
         w1_out, w3_out = cls._fwd_ff1_3(
             x,
             cfg["w1"],
             cfg["w3"],
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]),
         )
+        _debug_print("MLP._forward_prefill_compute_only: _fwd_ff1_3 DONE")
 
         # Apply activation and multiply
+        _debug_print("MLP._forward_prefill_compute_only: _fwd_mul START")
         activated = cls._fwd_mul(w1_out, w3_out, cfg["mul"])
+        _debug_print("MLP._forward_prefill_compute_only: _fwd_mul DONE")
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection with dynamic program configs
+        _debug_print("MLP._forward_prefill_compute_only: _fwd_ff2 START")
         output = cls._fwd_ff2(
             activated,
             cfg["w2"],
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=True, **cfg["linear_pc_gen"]),
         )
+        _debug_print("MLP._forward_prefill_compute_only: _fwd_ff2 DONE")
         ttnn.deallocate(activated)
 
         # Return output and chunking info for de-chunking after reduce_scatter
+        _debug_print("MLP._forward_prefill_compute_only: END")
         return output, (original_seq_len, pad_rows)
 
     @classmethod
     def _forward_decode_compute_only(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         """Decode computation without CCL operations."""
+        _debug_print(f"MLP._forward_decode_compute_only: START (input shape={x.shape})")
         # Gate and up projections
+        _debug_print("MLP._forward_decode_compute_only: _fwd_ff1_3 START")
         w1_out, w3_out = cls._fwd_ff1_3(x, cfg["w1"], cfg["w3"])
+        _debug_print("MLP._forward_decode_compute_only: _fwd_ff1_3 DONE")
 
         # Apply activation and multiply
+        _debug_print("MLP._forward_decode_compute_only: _fwd_mul START")
         activated = cls._fwd_mul(w1_out, w3_out, cfg["mul"])
+        _debug_print("MLP._forward_decode_compute_only: _fwd_mul DONE")
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection
+        _debug_print("MLP._forward_decode_compute_only: _fwd_ff2 START")
         output = cls._fwd_ff2(activated, cfg["w2"])
+        _debug_print("MLP._forward_decode_compute_only: _fwd_ff2 DONE")
         ttnn.deallocate(activated)
 
+        _debug_print("MLP._forward_decode_compute_only: END")
         return output
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        _debug_print(f"MLP.forward_prefill: START (input shape={x.shape})")
         num_layers = x.shape[0]
 
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
         # All gather for efficient matmuls
+        _debug_print("MLP.forward_prefill: _fwd_all_gather_preff1_3 START")
         x = cls._fwd_all_gather_preff1_3(x, cfg, ccl)
+        _debug_print("MLP.forward_prefill: _fwd_all_gather_preff1_3 DONE")
 
         # Perform the core computation
+        _debug_print("MLP.forward_prefill: _forward_prefill_compute_only START")
         output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
+        _debug_print("MLP.forward_prefill: _forward_prefill_compute_only DONE")
 
         # Reduce-scatter across devices to sum partial results
+        _debug_print("MLP.forward_prefill: _fwd_reduce_scatter_post_ff2 START")
         output = cls._fwd_reduce_scatter_post_ff2(output, cfg, ccl)
+        _debug_print("MLP.forward_prefill: _fwd_reduce_scatter_post_ff2 DONE")
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
         if num_chunks > 1:
+            _debug_print(f"MLP.forward_prefill: de-chunk START (num_chunks={num_chunks}, pad_rows={pad_rows})")
             output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
             if pad_rows > 0:
                 output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
+            _debug_print("MLP.forward_prefill: de-chunk DONE")
 
         assert output.memory_config() == cfg["output_memory_config"]
+        _debug_print("MLP.forward_prefill: END")
         return output
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        _debug_print(f"MLP.forward_decode: START (input shape={x.shape})")
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
         # All gather
+        _debug_print("MLP.forward_decode: _fwd_all_gather_preff1_3 START")
         x = cls._fwd_all_gather_preff1_3(x, cfg, ccl)
+        _debug_print("MLP.forward_decode: _fwd_all_gather_preff1_3 DONE")
 
         # Perform the core computation
         w2_out = cls._forward_decode_compute_only(x, cfg)
 
         # Add reduce-scatter
+        _debug_print("MLP.forward_decode: _fwd_reduce_scatter_post_ff2 START")
         output = cls._fwd_reduce_scatter_post_ff2(w2_out, cfg, ccl)
+        _debug_print("MLP.forward_decode: _fwd_reduce_scatter_post_ff2 DONE")
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]
+        _debug_print("MLP.forward_decode: END")
         return output

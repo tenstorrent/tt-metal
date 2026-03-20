@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import sys
+import time
 from pathlib import Path
 
 import torch
@@ -32,6 +34,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True) -> None:
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 class LMHead1D(AbstractModule):
@@ -132,18 +141,25 @@ class LMHead1D(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        _debug_print(f"LMHead1D.forward_decode: START (input shape={x.shape})")
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
+        _debug_print("LMHead1D.forward_decode: ttnn.linear START")
         output = ttnn.linear(x, **cfg["linear"])
+        _debug_print("LMHead1D.forward_decode: ttnn.linear DONE")
 
+        _debug_print("LMHead1D.forward_decode: deallocate x START")
         ttnn.deallocate(x)
+        _debug_print("LMHead1D.forward_decode: deallocate x DONE")
 
         assert output.memory_config() == cfg["output_memory_config"]
 
+        _debug_print("LMHead1D.forward_decode: END")
         return output
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        _debug_print(f"LMHead1D.forward_prefill: START (input shape={x.shape})")
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         _, _, seq_len, _ = x.shape
@@ -153,15 +169,23 @@ class LMHead1D(AbstractModule):
         if seq_len > SEQ_LEN_CHUNK_SIZE:  # For large sequence lengths, process the input in chunks
             if seq_len % SEQ_LEN_CHUNK_SIZE != 0:
                 pad_rows = SEQ_LEN_CHUNK_SIZE - (seq_len % SEQ_LEN_CHUNK_SIZE)
+                _debug_print(f"LMHead1D.forward_prefill: pad START (pad_rows={pad_rows})")
                 x_padded = ttnn.pad(x, padding=((0, 0), (0, 0), (0, pad_rows), (0, 0)), value=0.0)
+                _debug_print("LMHead1D.forward_prefill: pad DONE")
                 ttnn.deallocate(x)
                 x = x_padded
                 seq_len += pad_rows
+            _debug_print("LMHead1D.forward_prefill: reshape chunk START")
             x = ttnn.reshape(x, [1, even_int_div(seq_len, SEQ_LEN_CHUNK_SIZE), SEQ_LEN_CHUNK_SIZE, -1])
+            _debug_print("LMHead1D.forward_prefill: reshape chunk DONE")
 
+        _debug_print("LMHead1D.forward_prefill: ttnn.linear START")
         output = ttnn.linear(x, **cfg["linear"])
+        _debug_print("LMHead1D.forward_prefill: ttnn.linear DONE")
 
+        _debug_print("LMHead1D.forward_prefill: deallocate x START")
         ttnn.deallocate(x)
+        _debug_print("LMHead1D.forward_prefill: deallocate x DONE")
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -172,4 +196,5 @@ class LMHead1D(AbstractModule):
 
         assert output.memory_config() == cfg["output_memory_config"]
 
+        _debug_print("LMHead1D.forward_prefill: END")
         return output

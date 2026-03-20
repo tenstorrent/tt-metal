@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import time
 from abc import abstractmethod
 from pathlib import Path
 
@@ -23,6 +25,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True):
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
@@ -93,28 +102,50 @@ class DecoderBlock2DBase(DecoderBlockBase):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        _debug_print(f"DecoderBlock2DBase.forward_prefill: START (user_id={user_id})")
         # MLA norm
+        _debug_print("DecoderBlock2DBase.forward_prefill: DistributedRMSNorm (mla_norm) START")
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
+        _debug_print("DecoderBlock2DBase.forward_prefill: DistributedRMSNorm (mla_norm) DONE")
 
         # MLA
+        _debug_print("DecoderBlock2DBase.forward_prefill: MLA2D.forward_prefill START")
         mla_out = MLA2D.forward_prefill(mla_norm_out, user_id, cfg["mla"], rope_tensors, page_table)
+        _debug_print("DecoderBlock2DBase.forward_prefill: MLA2D.forward_prefill DONE")
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mla_norm_out START")
         ttnn.deallocate(mla_norm_out)
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mla_norm_out DONE")
 
         # MLA Residual
+        _debug_print("DecoderBlock2DBase.forward_prefill: MLA residual add START")
         x += mla_out
+        _debug_print("DecoderBlock2DBase.forward_prefill: MLA residual add DONE")
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mla_out START")
         ttnn.deallocate(mla_out)
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mla_out DONE")
 
         # MLP norm
+        _debug_print("DecoderBlock2DBase.forward_prefill: DistributedRMSNorm (mlp_norm) START")
         mlp_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mlp_norm"])
+        _debug_print("DecoderBlock2DBase.forward_prefill: DistributedRMSNorm (mlp_norm) DONE")
 
         # MLP
+        _debug_print("DecoderBlock2DBase.forward_prefill: forward_mlp_prefill START")
         mlp_out = cls.forward_mlp_prefill(mlp_norm_out, cfg["mlp"])
+        _debug_print("DecoderBlock2DBase.forward_prefill: forward_mlp_prefill DONE")
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mlp_norm_out START")
         ttnn.deallocate(mlp_norm_out)
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mlp_norm_out DONE")
 
         # MLP Residual
+        _debug_print("DecoderBlock2DBase.forward_prefill: MLP residual add START")
         x += mlp_out
+        _debug_print("DecoderBlock2DBase.forward_prefill: MLP residual add DONE")
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mlp_out START")
         ttnn.deallocate(mlp_out)
+        _debug_print("DecoderBlock2DBase.forward_prefill: deallocate mlp_out DONE")
 
+        _debug_print("DecoderBlock2DBase.forward_prefill: END")
         return x
 
     @classmethod
@@ -126,40 +157,76 @@ class DecoderBlock2DBase(DecoderBlockBase):
         rope_tensors: dict,
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
+        _debug_print("DecoderBlock2DBase.forward_decode: START")
         # MLA norm
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mla_norm_reshard) START")
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mla_norm_reshard) DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: DistributedRMSNorm (mla_norm) START")
         mla_norm_out = DistributedRMSNorm.forward_decode(mla_norm_in, cfg["mla_norm"])
+        _debug_print("DecoderBlock2DBase.forward_decode: DistributedRMSNorm (mla_norm) DONE")
         if _has_distinct_buffer(mla_norm_in, x):
+            _debug_print("DecoderBlock2DBase.forward_decode: deallocate mla_norm_in START")
             ttnn.deallocate(mla_norm_in)
+            _debug_print("DecoderBlock2DBase.forward_decode: deallocate mla_norm_in DONE")
 
         # MLA
+        _debug_print("DecoderBlock2DBase.forward_decode: create_sharded_memory_config (mla_reshard) START")
         mla_reshard_memory_config = ttnn.create_sharded_memory_config(
             mla_norm_out.shape,
             **cfg["mla_reshard"],
         )
+        _debug_print("DecoderBlock2DBase.forward_decode: create_sharded_memory_config (mla_reshard) DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mla_reshard) START")
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, memory_config=mla_reshard_memory_config)
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mla_reshard) DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: MLA2D.forward_decode START")
         mla_out = MLA2D.forward_decode(mla_norm_out, position_idxs, cfg["mla"], rope_tensors, page_table)
+        _debug_print("DecoderBlock2DBase.forward_decode: MLA2D.forward_decode DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mla_norm_out START")
         ttnn.deallocate(mla_norm_out)
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mla_norm_out DONE")
 
         # MLA Residual
+        _debug_print("DecoderBlock2DBase.forward_decode: MLA residual add START")
         x += mla_out
+        _debug_print("DecoderBlock2DBase.forward_decode: MLA residual add DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mla_out START")
         ttnn.deallocate(mla_out)
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mla_out DONE")
 
         # MLP norm
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mlp_norm_reshard) START")
         mlp_norm_in = ttnn.to_memory_config(x, **cfg["mlp_norm_reshard"])
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mlp_norm_reshard) DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: DistributedRMSNorm (mlp_norm) START")
         mlp_norm_out = DistributedRMSNorm.forward_decode(mlp_norm_in, cfg["mlp_norm"])
+        _debug_print("DecoderBlock2DBase.forward_decode: DistributedRMSNorm (mlp_norm) DONE")
         if _has_distinct_buffer(mlp_norm_in, x):
+            _debug_print("DecoderBlock2DBase.forward_decode: deallocate mlp_norm_in START")
             ttnn.deallocate(mlp_norm_in)
+            _debug_print("DecoderBlock2DBase.forward_decode: deallocate mlp_norm_in DONE")
 
         # MLP
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mlp_reshard) START")
         mlp_norm_out = ttnn.to_memory_config(mlp_norm_out, **cfg["mlp_reshard"])
+        _debug_print("DecoderBlock2DBase.forward_decode: to_memory_config (mlp_reshard) DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: forward_mlp_decode START")
         mlp_out = cls.forward_mlp_decode(mlp_norm_out, cfg["mlp"])
+        _debug_print("DecoderBlock2DBase.forward_decode: forward_mlp_decode DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mlp_norm_out START")
         ttnn.deallocate(mlp_norm_out)
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mlp_norm_out DONE")
 
         # MLP Residual
+        _debug_print("DecoderBlock2DBase.forward_decode: MLP residual add START")
         x += mlp_out
+        _debug_print("DecoderBlock2DBase.forward_decode: MLP residual add DONE")
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mlp_out START")
         ttnn.deallocate(mlp_out)
+        _debug_print("DecoderBlock2DBase.forward_decode: deallocate mlp_out DONE")
 
+        _debug_print("DecoderBlock2DBase.forward_decode: END")
         return x
 
     @classmethod

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True) -> None:
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 class DistributedRMSNorm(RMSNormBase):
@@ -226,17 +235,28 @@ class DistributedRMSNorm(RMSNormBase):
             Output tensor after embedding lookup
         """
 
+        _debug_print(f"DistributedRMSNorm._rmsnorm_forward: START (input shape={x.shape})")
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: _get_pc START")
         program_config = cls._get_pc(x.memory_config())
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: _get_pc DONE")
+
         # Run distributed rmsnorm part 1
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: rms_norm_pre_all_gather START")
         tt_stats = cls._fwd_rms_norm_pre_all_gather(x, cfg, program_config=program_config)
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: rms_norm_pre_all_gather DONE")
 
         # AllGather stats
         ccl = cfg["ccl"]
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: all_gather_stats START")
         tt_gathered_stats = cls._fwd_all_gather_stats(tt_stats, cfg, ccl)
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: all_gather_stats DONE")
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: rms_norm_post_all_gather START")
         tt_out = cls._fwd_rms_norm_post_all_gather(x, tt_gathered_stats, cfg, program_config=program_config)
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: rms_norm_post_all_gather DONE")
         ttnn.deallocate(tt_gathered_stats)
 
+        _debug_print("DistributedRMSNorm._rmsnorm_forward: END")
         return tt_out

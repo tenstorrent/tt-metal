@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
+import sys
+import time
 from pathlib import Path
 
 import torch
@@ -29,6 +30,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     WeightConfig,
 )
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True):
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 class MLA2D(MLA1D):
@@ -178,12 +186,16 @@ class MLA2D(MLA1D):
         Returns:
             Output tensor after MLP computation
         """
+        _debug_print(f"MLA2D.forward_prefill: START (batch_idx={batch_idx}, input shape={x.shape})")
 
         scale = 1 / cfg["mla1d"]["mesh_shape"][0]
 
         ccl = cfg["ccl"]
 
+        _debug_print("MLA2D.forward_prefill: all_gather_async START")
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        _debug_print("MLA2D.forward_prefill: all_gather_async DONE")
+        _debug_print("MLA2D.forward_prefill: super().forward_prefill START")
         x_out = super().forward_prefill(
             x_next,
             batch_idx=batch_idx % USERS_PER_ROW,
@@ -192,12 +204,17 @@ class MLA2D(MLA1D):
             rope_tensors=rope_tensors,
             page_table=page_table,
         )
+        _debug_print("MLA2D.forward_prefill: super().forward_prefill DONE")
+        _debug_print("MLA2D.forward_prefill: deallocate x_next START")
         ttnn.deallocate(x_next)
+        _debug_print("MLA2D.forward_prefill: deallocate x_next DONE")
 
+        _debug_print("MLA2D.forward_prefill: reduce_scatter_minimal_async START")
         x_rs = (
             ttnn.experimental.reduce_scatter_minimal_async(
                 x_out, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
             )
             * scale
         )
+        _debug_print("MLA2D.forward_prefill: reduce_scatter_minimal_async DONE")
         return x_rs

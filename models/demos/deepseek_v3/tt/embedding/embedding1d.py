@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import time
 from pathlib import Path
 
 import torch
@@ -23,6 +25,13 @@ from models.demos.deepseek_v3.utils.run_config import (
     ModelPrefillConfig,
     WeightConfig,
 )
+
+
+# DEBUG: Helper for hang debugging
+def _debug_print(msg: str, flush: bool = True):
+    """Print debug message with timestamp and flush to ensure immediate output."""
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[DEBUG {timestamp}] {msg}", file=sys.stderr, flush=flush)
 
 
 class Embedding1D(AbstractModule):
@@ -198,11 +207,17 @@ class Embedding1D(AbstractModule):
 
     @classmethod
     def forward_prefill(cls, x, cfg):
-        return cls._forward(x, cfg)
+        _debug_print(f"Embedding1D.forward_prefill: START (input shape={x.shape})")
+        result = cls._forward(x, cfg)
+        _debug_print("Embedding1D.forward_prefill: END")
+        return result
 
     @classmethod
     def forward_decode(cls, x, cfg):
-        return cls._forward(x, cfg)
+        _debug_print(f"Embedding1D.forward_decode: START (input shape={x.shape})")
+        result = cls._forward(x, cfg)
+        _debug_print("Embedding1D.forward_decode: END")
+        return result
 
     @classmethod
     def _forward(cls, x, cfg):
