@@ -1,0 +1,8 @@
+﻿ttnn.transformer.paged\_scaled\_dot\_product\_attention\_decode
+===============================================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.paged_scaled_dot_product_attention_decode:
+
+.. autooperation:: ttnn.transformer.paged_scaled_dot_product_attention_decode
