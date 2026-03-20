@@ -29,7 +29,7 @@
 - name: Llama 3.3-70B sweep tests
   cmd: |
     export TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ MESH_DEVICE=TG
-    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/text_demo.py::test_prefill_prefix_caching_benchmark
+    pytest --timeout 1800 models/demos/llama3_70b_galaxy/demo/prefix_caching_benchmark.py
   model: llama3.3-70b
   skus:
     wh_galaxy:
