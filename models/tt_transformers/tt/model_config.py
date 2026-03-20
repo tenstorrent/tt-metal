@@ -93,6 +93,7 @@ class MathFidelitySetting(Enum):
     HIFI2 = "hifi2"
     HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
+    HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
     HIFI4 = "hifi4"
     HIFI4_FP32 = "hifi4fp32"
 
@@ -277,7 +278,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
-                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2_NOL1ACC,
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
@@ -741,6 +742,12 @@ class ModelArgs:
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            self.compute_kernel_config_hifi2_nol1acc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             )
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
@@ -4227,6 +4234,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
             MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
+            MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
             MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
