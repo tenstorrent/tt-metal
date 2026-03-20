@@ -327,8 +327,6 @@ def test_demo_base_and_refiner(
     timesteps,
     sigmas,
 ):
-    if is_blackhole():
-        pytest.skip("Skipping because VAE is not working and optimized on full grid")
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
