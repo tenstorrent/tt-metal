@@ -39,87 +39,6 @@ void print_data(uint16_t* ptr, uint32_t len) {
     DPRINT << ENDL();
 }
 
-// Read one tile-column of num_rows rows from 'acc' into 'cb'.
-// For each of the num_rows rows in the block, reads tile_width_bytes starting
-// at col_byte_offset within that row.  NOC addresses are computed on-the-fly.
-// The CB page is always tile-sized (TILE_HEIGHT rows); rows beyond num_rows
-// are left as uninitialized L1 (harmless — the writer will not emit them).
-template <typename Accessor>
-void read_tile_col(
-    const Accessor& acc,
-    tt::CBIndex cb,
-    uint32_t block_start_stick,
-    uint32_t col_byte_offset,
-    uint32_t tile_width_bytes,
-    uint32_t num_rows) {
-    cb_reserve_back(cb, 1);
-    uint32_t l1 = get_write_ptr(cb);
-
-    // DEBUG: Print address of NoC for k=0
-    // DPRINT << "NoC address for k=0 = " << acc.get_noc_addr(block_start_stick) + col_byte_offset << ENDL();
-    // DPRINT << "L1 address = " << l1 << ENDL();
-
-    for (uint32_t k = 0; k < num_rows; ++k) {
-        noc_async_read(acc.get_noc_addr(block_start_stick + k) + col_byte_offset, l1, tile_width_bytes);
-        l1 += tile_width_bytes;
-    }
-    noc_async_read_barrier();
-
-    // if (dbg_j == 15) {
-    //     uint16_t* l1_start = reinterpret_cast<uint16_t*>(get_write_ptr(cb));
-    //     print_data(l1_start, tile_width_bytes);  //
-    // }
-
-    cb_push_back(cb, 1);
-}
-
-template <typename Accessor>
-void read_blocks(
-    const Accessor& acc_a,
-    const Accessor& acc_b,
-    tt::CBIndex cb_a,
-    tt::CBIndex cb_b,
-    uint32_t block_start_stick,
-    uint32_t tile_width_bytes,
-    uint32_t num_rows,
-    uint32_t tiles_per_block) {
-    cb_reserve_back(cb_a, tiles_per_block);
-    cb_reserve_back(cb_b, tiles_per_block);
-    uint32_t l1_a = get_write_ptr(cb_a);
-    uint32_t l1_b = get_write_ptr(cb_b);
-
-    // DEBUG: Print address of NoC for k=0
-    DPRINT << "block start stick = " << block_start_stick << ENDL();
-    DPRINT << "num rows = " << num_rows << ENDL();
-
-    for (uint32_t k = 0; k < num_rows; ++k) {
-        // DPRINT << " reading stick " << block_start_stick + k << ENDL();
-        // noc_async_read(acc_a.get_noc_addr(block_start_stick + k), l1_a, tile_width_bytes);
-        // noc_async_read(acc_b.get_noc_addr(block_start_stick + k), l1_b, tile_width_bytes);
-
-        noc_async_read_page(block_start_stick + k, acc_a, l1_a);
-        noc_async_read_page(block_start_stick + k, acc_b, l1_b);
-
-        // if (block_start_stick + k == 33) {
-
-        //     print_data(reinterpret_cast<uint16_t*>(l1_a), 23);
-        //     print_data(reinterpret_cast<uint16_t*>(l1_b), 23);
-        // }
-
-        l1_a += tile_width_bytes;
-        l1_b += tile_width_bytes;
-    }
-    noc_async_read_barrier();
-
-    // if (dbg_j == 15) {
-    //     uint16_t* l1_start = reinterpret_cast<uint16_t*>(get_write_ptr(cb));
-    //     print_data(l1_start, tile_width_bytes);  //
-    // }
-
-    cb_push_back(cb_a, tiles_per_block);
-    cb_push_back(cb_b, tiles_per_block);
-}
-
 void kernel_main() {
     constexpr uint32_t stick_size = get_compile_time_arg_val(0);
     constexpr auto a_args = TensorAccessorArgs<1>();
@@ -138,9 +57,6 @@ void kernel_main() {
 
     constexpr auto cb_a = tt::CBIndex::c_0;
     constexpr auto cb_b = tt::CBIndex::c_1;
-
-    const uint32_t num_full_blocks = num_sticks / TILE_HEIGHT;
-    const uint32_t tail_rows = num_sticks % TILE_HEIGHT;
 
     uint32_t end_stick = start_stick_id + num_sticks;
 
@@ -161,6 +77,9 @@ void kernel_main() {
         // read_blocks(a, b, cb_a, cb_b, stick_id, ntiles_per_row * tile_width_bytes, nrows, ntiles_per_row);
 
         // DPRINT << "Reading " << ntiles_per_row << " tiles from CB_A" << ENDL();
+
+        // IDEAS:
+        // 1) Switch back to noc_async_read but prefect next address (hide some latency)
 
         cb_reserve_back(cb_a, ntiles_per_row);
         // cb_reserve_back(cb_b, ntiles_per_row);

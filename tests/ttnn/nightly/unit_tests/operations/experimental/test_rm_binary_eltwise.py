@@ -18,7 +18,6 @@ import torch
 import ttnn
 from loguru import logger
 
-from ...layers.rm_binary_eltwise import rm_binary_eltwise
 
 from tests.ttnn.utils_for_testing import assert_with_ulp
 
@@ -112,8 +111,8 @@ def save_tensor_to_csv(tensor: torch.Tensor, path: str | Path) -> None:
 @pytest.mark.parametrize("shape", SHAPES, ids=[str(s) for s in SHAPES])
 @pytest.mark.parametrize("op", OPS)
 @pytest.mark.parametrize("dtype", DTYPES, ids=["bf16", "fp32"])
-def test_rm_binary_eltwise(device, shape, op, dtype):
-    """Validate that rm_binary_eltwise matches torch element-wise arithmetic."""
+def test_minimal_rm_binary(device, shape, op, dtype):
+    """Validate that ttnn.experimental.dit_minimal_rm_binary matches torch element-wise arithmetic."""
     tdtype = _torch_dtype(dtype)
 
     torch.manual_seed(0)
@@ -154,7 +153,7 @@ def test_rm_binary_eltwise(device, shape, op, dtype):
     )
 
     # Run the custom kernel
-    out = rm_binary_eltwise(A_rm, B_rm, op=op)
+    out = ttnn.experimental.dit_minimal_rm_binary(A_rm, B_rm, op=op)
 
     print(f"out.padded_shape: {out.padded_shape}")
 
@@ -176,7 +175,7 @@ def test_rm_binary_eltwise(device, shape, op, dtype):
         f"shape={shape} op={op} dtype={dtype} " f"sticks={num_sticks} max_abs_err={max_abs_err:.3e} PSNR={psnr:.2f} dB"
     )
     assert psnr >= min_psnr, (
-        f"rm_binary_eltwise({op}, {dtype}) PSNR too low — "
+        f"ttnn.experimental.dit_minimal_rm_binary({op}, {dtype}) PSNR too low — "
         f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
     )
 
@@ -209,7 +208,7 @@ def test_rm_binary_add_single_stick(device, dtype):
         B_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    out = rm_binary_eltwise(A_rm, B_rm, op="add")
+    out = ttnn.experimental.dit_minimal_rm_binary(A_rm, B_rm, op="add")
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
 
@@ -221,7 +220,7 @@ def test_rm_binary_add_single_stick(device, dtype):
     max_abs_err = (C_out - C_ref_cast).abs().max().item()
     logger.info(f"single_stick add dtype={dtype} PSNR={psnr:.2f} dB max_abs_err={max_abs_err:.3e}")
     assert psnr >= min_psnr, (
-        f"rm_binary_eltwise(add, {dtype}) single-stick PSNR too low — "
+        f"ttnn.experimental.dit_minimal_rm_binary(add, {dtype}) single-stick PSNR too low — "
         f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
     )
 
@@ -258,7 +257,7 @@ def test_rm_binary_mul_large(device, dtype):
         B_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    out = rm_binary_eltwise(A_rm, B_rm, op="mul")
+    out = ttnn.experimental.dit_minimal_rm_binary(A_rm, B_rm, op="mul")
     C_out = ttnn.to_torch(out)
     C_ref_cast = C_ref.to(C_out.dtype)
 
@@ -282,7 +281,7 @@ def test_rm_binary_mul_large(device, dtype):
 #   x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
 #   x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
 #
-# Both operands have identical shape (B, T, H, W, out_dim) so rm_binary_eltwise
+# Both operands have identical shape (B, T, H, W, out_dim) so ttnn.experimental.dit_minimal_rm_binary
 # can replace this add directly (once h_tile_BTHWC is kept in ROW_MAJOR).
 #
 # Channels (96, 192, 384) are all multiples of ALIGNMENT=32, so padded_shape
@@ -290,7 +289,7 @@ def test_rm_binary_mul_large(device, dtype):
 #
 # NOTE: The WanConv2d mask multiply at line 765-766:
 #   x_BTHWC = ttnn.mul(x_BTHWC, mask)   # mask shape: (1, 1, H, 1, 1)
-# uses broadcasting (mask is NOT the same shape as x). rm_binary_eltwise does not
+# uses broadcasting (mask is NOT the same shape as x). ttnn.experimental.dit_minimal_rm_binary does not
 # support broadcast, so that call cannot be replaced with the current kernel.
 # ---------------------------------------------------------------------------
 WAN_RESIDUAL_ADD_SHAPES = [
@@ -313,7 +312,7 @@ WAN_RESIDUAL_ADD_SHAPES = [
 )
 @pytest.mark.parametrize("dtype", DTYPES, ids=["bf16", "fp32"])
 def test_rm_binary_wan_residual_add(device, shape, dtype):
-    """Validate rm_binary_eltwise add on the exact WanDecoder3D residual-add shapes.
+    """Validate ttnn.experimental.dit_minimal_rm_binary add on the exact WanDecoder3D residual-add shapes.
 
     Mirrors WanResidualBlock.forward lines 571-573:
         x_tile = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
@@ -334,7 +333,7 @@ def test_rm_binary_wan_residual_add(device, shape, dtype):
         B_torch, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    out = rm_binary_eltwise(A_rm, B_rm, op="add")
+    out = ttnn.experimental.dit_minimal_rm_binary(A_rm, B_rm, op="add")
 
     assert out.layout == ttnn.ROW_MAJOR_LAYOUT, f"Expected ROW_MAJOR output, got {out.layout}"
     assert out.dtype == dtype, f"dtype mismatch: {out.dtype} != {dtype}"
@@ -351,6 +350,6 @@ def test_rm_binary_wan_residual_add(device, shape, dtype):
     min_psnr = _MIN_PSNR[dtype]
     logger.info(f"shape={shape} dtype={dtype} sticks={num_sticks} " f"max_abs_err={max_abs_err:.3e} PSNR={psnr:.2f} dB")
     assert psnr >= min_psnr, (
-        f"rm_binary_eltwise(add, {dtype}) Wan-shape PSNR too low — "
+        f"ttnn.experimental.dit_minimal_rm_binary(add, {dtype}) Wan-shape PSNR too low — "
         f"{psnr:.2f} dB < {min_psnr} dB (max_abs_err={max_abs_err:.3e})"
     )

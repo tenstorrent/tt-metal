@@ -121,8 +121,8 @@ void kernel_main() {
 
     const uint32_t tiles_per_block = ntiles_per_row;
 
-    UNPACK(DPRINT << "num sticks = " << num_sticks << ENDL();
-           DPRINT << "ntiles per row = " << ntiles_per_row << ENDL(););
+    // UNPACK(DPRINT << "num sticks = " << num_sticks << ENDL();
+    //        DPRINT << "ntiles per row = " << ntiles_per_row << ENDL(););
 
     binary_op_init_common(CB_A_RM, CB_B_RM, CB_OUT_TILED);
 
@@ -135,28 +135,28 @@ void kernel_main() {
         // Phase 1: Tilize A tiles (ntiles_per_row tiles, 1 at a time)
         // ============================================================
         // for (uint32_t j = 0; j < ntiles_per_row; ++j) {
-        UNPACK(DPRINT << blk << " [main] Phase 1: Tilize A tiles (ntiles_per_row tiles, 1 at a time)" << ENDL();
-               DPRINT << blk << " Waiting for " << tiles_per_block << " tiles from CB_A_RM" << ENDL(););
+        // UNPACK(DPRINT << blk << " [main] Phase 1: Tilize A tiles (ntiles_per_row tiles, 1 at a time)" << ENDL();
+        //        DPRINT << blk << " Waiting for " << tiles_per_block << " tiles from CB_A_RM" << ENDL(););
         cb_wait_front(CB_A_RM, tiles_per_block);
-        UNPACK(DPRINT << blk << " Wait done" << ENDL(););
+        // UNPACK(DPRINT << blk << " Wait done" << ENDL(););
         cb_reserve_back(CB_A_TILED, tiles_per_block);
-        UNPACK(DPRINT << blk << " Reserve done" << ENDL(););
+        // UNPACK(DPRINT << blk << " Reserve done" << ENDL(););
 
-        if (blk == 32) {
-            UNPACK(DPRINT << "cb a rm tile0 row1:" << ENDL(););
-            print_cb_rm_row(CB_A_RM, 0, 1, ntiles_per_row * 32);
-        }
+        // if (blk == 32) {
+        //     UNPACK(DPRINT << "cb a rm tile0 row1:" << ENDL(););
+        //     print_cb_rm_row(CB_A_RM, 0, 1, ntiles_per_row * 32);
+        // }
 
         // auto cb_a_ptr = get_pointer_to_cb_data<uint16_t>(CB_A_RM, 0);
         // UNPACK(DPRINT << "j = " << j << ", cb a ptr = " << cb_a_ptr << ENDL(););
 
         tilize_block(CB_A_RM, tiles_per_block, CB_A_TILED);
 
-        if (blk == 32) {
-            UNPACK(DPRINT << "cb a tiled j=0 row0:" << ENDL(););
-            // print_cb_row_data(CB_A_TILED, 0, 1);
-            print_cb_data(CB_A_TILED, 0);
-        }
+        // if (blk == 32) {
+        //     UNPACK(DPRINT << "cb a tiled j=0 row0:" << ENDL(););
+        //     // print_cb_row_data(CB_A_TILED, 0, 1);
+        //     print_cb_data(CB_A_TILED, 0);
+        // }
 
         cb_push_back(CB_A_TILED, tiles_per_block);
         cb_pop_front(CB_A_RM, tiles_per_block);
@@ -166,29 +166,29 @@ void kernel_main() {
         // Phase 2: Tilize B tiles — switch source CB to CB_B_RM
         // ============================================================
 
-        UNPACK(DPRINT << blk << " ==== Phase 2 =====" << ENDL(););
+        // UNPACK(DPRINT << blk << " ==== Phase 2 =====" << ENDL(););
         //        tilize_init_short_with_dt(CB_B_RM, CB_A_RM, 1, CB_A_TILED);
 
         tilize_init_short_with_dt(CB_A_RM, CB_B_RM, tiles_per_block, CB_B_TILED);
 
         // for (uint32_t j = 0; j < ntiles_per_row; ++j) {
-        UNPACK(DPRINT << blk << " Waiting for " << tiles_per_block << " tiles from CB_B_RM" << ENDL(););
+        // UNPACK(DPRINT << blk << " Waiting for " << tiles_per_block << " tiles from CB_B_RM" << ENDL(););
 
         cb_wait_front(CB_B_RM, tiles_per_block);
         cb_reserve_back(CB_B_TILED, tiles_per_block);
 
-        if (blk == 32) {
-            UNPACK(DPRINT << "cb a rm tile0 row1:" << ENDL(););
-            print_cb_rm_row(CB_B_RM, 0, 1, ntiles_per_row * 32);
-        }
+        // if (blk == 32) {
+        //     UNPACK(DPRINT << "cb a rm tile0 row1:" << ENDL(););
+        //     print_cb_rm_row(CB_B_RM, 0, 1, ntiles_per_row * 32);
+        // }
 
         tilize_block(CB_B_RM, tiles_per_block, CB_B_TILED);
 
-        if (blk == 32) {
-            UNPACK(DPRINT << "cb b tiled j=0 row0:" << ENDL(););
-            // print_cb_row_data(CB_B_TILED, 0, 1);
-            print_cb_data(CB_B_TILED, 0);
-        }
+        // if (blk == 32) {
+        //     UNPACK(DPRINT << "cb b tiled j=0 row0:" << ENDL(););
+        //     // print_cb_row_data(CB_B_TILED, 0, 1);
+        //     print_cb_data(CB_B_TILED, 0);
+        // }
 
         // DEBUG: Fill cb_b with 1.f
         // tile_regs_acquire();
@@ -259,7 +259,7 @@ void kernel_main() {
         // ============================================================
         untilize_init(CB_OUT_TILED);
 
-        UNPACK(DPRINT << blk << " Pushing " << tiles_per_block << " tiles to CB_OUT_RM" << ENDL(););
+        // UNPACK(DPRINT << blk << " Pushing " << tiles_per_block << " tiles to CB_OUT_RM" << ENDL(););
 
         // untilize_block produces ntiles_per_row tile-sized pages in row-major
         // order.  Row k starts at byte offset k * row_size_bytes from the block
@@ -313,5 +313,5 @@ void kernel_main() {
         untilize_uninit(CB_OUT_TILED);
         tilize_init_short_with_dt(CB_B_RM, CB_A_RM, tiles_per_block, CB_A_TILED);
     }
-    DPRINT << "Compute completed" << ENDL();
+    // DPRINT << "Compute completed" << ENDL();
 }

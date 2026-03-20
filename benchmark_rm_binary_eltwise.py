@@ -45,7 +45,6 @@ from tracy import signpost
 _REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from models.tt_dit.layers.rm_binary_eltwise import rm_binary_eltwise
 
 # [1, 1, 60, 104, 384]
 # [1, 1, 120, 208, 384]
