@@ -24,8 +24,6 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-// HERE JAKSA
-
 namespace ttnn::prim {
 
 namespace reuse_mcast_1d_optimized_helpers {
@@ -1196,27 +1194,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
-    std::cout << "in0_CB_tiles: (" << in0_CB_tiles << ")" << std::endl;
-    std::cout << "in1_CB_tiles: (" << in1_CB_tiles << ")" << std::endl;
-    std::cout << "in2_CB_tiles: (" << in2_CB_tiles << ")" << std::endl;
-    std::cout << "in3_CB_tiles: (" << in3_CB_tiles << ")" << std::endl;
-    std::cout << "out_CB_tiles: (" << out_CB_tiles << ")" << std::endl;
-    std::cout << "interm0_CB_tiles: (" << interm0_CB_tiles << ")" << std::endl;
-    // std::cout << "interm0_CB_tiles: (" << interm0_CB_tiles << ")" << std::endl;
-    // std::cout << "untilize_out: (" << untilize_out << ")" << std::endl;
-    // std::cout << "in0_B: (" << in0_B << ")" << std::endl;
-    // std::cout << "in1_B: (" << in1_B << ")" << std::endl;
-
     constexpr bool row_major = true;
     CoreRangeSet all_cores =
         tt::tt_metal::num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
-
-    // std::cout << "all cores: (" << compute_with_storage_grid_size.x << ", " << compute_with_storage_grid_size.y <<
-    // ")"
-    //           << std::endl;
-    // std::cout << "num cores: (" << num_cores << ")" << std::endl;
 
     CoreRange in1_mcast_sender(start_core, start_core);
     CoreRangeSet in1_mcast_receivers;
@@ -1249,18 +1231,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     const auto in1_tensor_next_w_dim_block_stride = in1_block_w * in1_tensor_stride_w;
     const auto in1_tensor_start_tile_id_stride = per_core_N * in1_tensor_stride_w;
 
-    bool keep_in0_in_l1 = false;
-    // bool keep_in0_in_l1 = in0_B == 1 && in1_B > 1;
-    // if we have a special case where we want to keep in0 in L1 and go through in1 bathches,
-    // we want to put whole in0 "row" in each core's L1, else, keep only one block in L1
-    // in the same case, we can consider that in0_block_w is the whole row
-    const auto in0_block_num_tiles_for_in0_reader = keep_in0_in_l1 ? per_core_M * K : in0_block_h * in0_block_w;
-    const auto in0_block_w_for_in0_reader = keep_in0_in_l1 ? K : in0_block_w;
-    const auto in0_block_h_for_in0_reader = keep_in0_in_l1 ? per_core_M : in0_block_h;
-    const auto out_num_blocks_x_for_in0_reader = keep_in0_in_l1 ? 1 : out_num_blocks_x;
-    const auto out_num_blocks_y_for_in0_reader = keep_in0_in_l1 ? 1 : out_num_blocks_y;
-    const auto num_blocks_for_in0_reader = keep_in0_in_l1 ? 1 : num_blocks;
-
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
         (std::uint32_t)in0_tensor_stride_w,
@@ -1268,9 +1238,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in0_tensor_next_block_stride,
         (std::uint32_t)in0_tensor_next_h_dim_block_stride,
         // in0 block args
-        (std::uint32_t)in0_block_w_for_in0_reader,          // in0_block_w
-        (std::uint32_t)in0_block_h_for_in0_reader,          // in0_block_h
-        (std::uint32_t)in0_block_num_tiles_for_in0_reader,  // in0_block_num_tiles
+        (std::uint32_t)in0_block_w,                // in0_block_w
+        (std::uint32_t)in0_block_h,                // in0_block_h
+        (std::uint32_t)in0_block_h * in0_block_w,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
         (std::uint32_t)in0_last_ktile_h,
 
@@ -1278,9 +1248,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in0_shard_width_in_tiles,
         (std::uint32_t)in0_shard_height_in_tiles,
         // in0/in1 common args
-        (std::uint32_t)num_blocks_for_in0_reader,        // num_blocks
-        (std::uint32_t)out_num_blocks_x_for_in0_reader,  // out_num_blocks_x
-        (std::uint32_t)out_num_blocks_y_for_in0_reader,  // out_num_blocks_y
+        (std::uint32_t)num_blocks,        // num_blocks
+        (std::uint32_t)out_num_blocks_x,  // out_num_blocks_x
+        (std::uint32_t)out_num_blocks_y,  // out_num_blocks_y
         // in0 mcast args
         (std::uint32_t)0,
         (std::uint32_t)0,
@@ -1484,6 +1454,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+
     auto mm_kernel_in0_sender_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
@@ -1548,7 +1519,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    // const auto in0_block_num_tiles_for_compute = keep_in0_in_l1 ? per_core_M * K : in0_block_num_tiles;
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
@@ -2976,22 +2946,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
-    // std::cout << "a shape: (" << ashape << "), b shape: (" << bshape << ")" << std::endl;
-    // std::cout << "transpose a: (" << transpose_a << "), transpose b: (" << transpose_b << ")" << std::endl;
-    // std::cout << "Mt: (" << Mt << "), Nt: (" << Nt << "), Kt: (" << Kt << ")" << std::endl;
-    // std::cout << "per_core_M: (" << per_core_M << "), per_core_N: (" << per_core_N << "), in0_block_w: (" <<
-    // in0_block_w
-    //           << ")" << std::endl;
-    // std::cout << "num_cores_x: (" << num_cores_x << "), num_cores_y: (" << num_cores_y << "), num_cores: (" <<
-    // num_cores
-    //           << ")" << std::endl;
-    // std::cout << "num_blocks_y: (" << num_blocks_y << "), num_blocks_x: (" << num_blocks_x << "), num_blocks_total:
-    // ("
-    //           << num_blocks_total << ")" << std::endl;
-    // std::cout << "___________OUTPUT SIZE - logical:" << output.logical_shape() << "_________" << std::endl;
-    // std::cout << "___________OUTPUT SIZE - physical:" << output.padded_shape() << "_________" << std::endl;
-    // std::cout << "___________ALL OUTPUTS SIZE:" << output_tensors.size() << "_________" << std::endl;
-
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
     // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
@@ -3304,10 +3258,6 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
     for (const auto& mesh_coord_range : tensor_coords.ranges()) {
         for (const auto& mesh_coord : mesh_coord_range) {
             const ttnn::MeshCoordinateRange mesh_coord_range{mesh_coord, mesh_coord};
-            // std::cout << "tensor_return_value before program is created_____________________________: " << std::endl;
-            // for (size_t i = 0; i < tensor_return_value.size(); ++i) {
-            //     std::cout << "Tensor[" << i << "] shape: " << tensor_return_value[i].logical_shape() << std::endl;
-            // }
             auto single_device_program =
                 MatmulMultiCoreReuseMcast1DProgramFactory::create(attributes, tensor_args, tensor_return_value);
             shared_variables[mesh_coord_range] = single_device_program.shared_variables;

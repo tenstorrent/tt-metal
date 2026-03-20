@@ -120,8 +120,6 @@ void kernel_main() {
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
-                    // DPRINT << "received mcast of " << in1_block_num_tiles << " tiles from batch: " << b << ", block:
-                    // " << block << ENDL();
 
                     cb_push_back(cb_id_in1, in1_block_num_tiles);
                 }
@@ -177,8 +175,6 @@ void kernel_main() {
                         cb_wait_front(cb_id_out0, out_subblock_tile_count);
                         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-                        // uint32_t help1 = out_tensor_sb_row_start_tile_id;
-                        // uint32_t help2 = out_tensor_sb_row_start_tile_id;
                         for (uint32_t h = 0; h < out_subblock_h_; ++h) {
                             uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                             for (uint32_t w = 0; w < out_subblock_w_; ++w) {
@@ -193,11 +189,9 @@ void kernel_main() {
                             // Skip padded tiles in subblock along row
                             l1_read_addr += subblock_tiles_addr_skip;
                             out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
-                            // help2 = out_tensor_tile_id;
                         }
+
                         noc_async_write_barrier();
-                        // DPRINT << "sent " << out_subblock_tile_count << " tiles from batch: " << b << " to DRAM to
-                        // tile ids: " << help1 << " - " << help2 << ENDL();
 
                         cb_pop_front(cb_id_out0, out_subblock_tile_count);
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
