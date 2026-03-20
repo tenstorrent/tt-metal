@@ -150,6 +150,10 @@ autograd::TensorPtr polynorm(
     const auto x = tensor->get_value();
     auto out_value = ttnn::Tensor{};
     if (use_fused_forward_path()) {
+        if (x.logical_shape()[-1] % 32U != 0U) {
+            throw std::runtime_error(
+                "polynorm fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
+        }
         out_value = metal::polynorm_fw(x, w[0], w[1], w[2], b, epsilon);
     } else {
         const auto x2 = ttnn::square(x);
