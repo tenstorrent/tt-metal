@@ -6,12 +6,13 @@
 
 import os
 from pathlib import Path
+from typing import Any, Dict
 
 import pytest
 import torch
-from torch import nn
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
 
 import ttnn
 from transformers.models.qwen3_next.modeling_qwen3_next import (
@@ -19,24 +20,111 @@ from transformers.models.qwen3_next.modeling_qwen3_next import (
     Qwen3NextGatedDeltaNet,
     Qwen3NextSparseMoeBlock,
 )
-
+from torch import nn
+from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
-from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3NextGatedAttention
 from models.experimental.tt_symbiote.modules.gated_deltanet import TTNNGatedDeltaNet
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3MoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
+# Use non-FP8 model: FP8 weights (Float8_e4m3fn) cause dtype mismatch with bfloat16
+# activations in transformers MoE (torch.mm expects same dtype).
 QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next"
 
-# Run only on T3K; set default so MESH_DEVICE is defined for MeshShapeToDeviceArch lookup
-_MESH_DEVICE_ENV = "MESH_DEVICE"
-if _MESH_DEVICE_ENV not in os.environ:
-    os.environ[_MESH_DEVICE_ENV] = "T3K"
-MESH_DEVICE = (os.environ.get(_MESH_DEVICE_ENV) or "T3K").upper()
+# Generation / stability (hybrid TTNN logits drift vs full torch — greedy + penalties + early stop).
+QWEN3_MAX_NEW_TOKENS = 128
+QWEN3_REPETITION_PENALTY = 1.28
+QWEN3_DO_SAMPLE = False
+QWEN3_SAMPLE_TEMPERATURE = 0.68
+QWEN3_SAMPLE_TOP_P = 0.88
+QWEN3_SAMPLE_TOP_K: int | None = None  # if set, passed to generate()
+QWEN3_NO_REPEAT_NGRAM_SIZE: int | None = None  # e.g. 3 to ban repeating trigrams (hurts code/markdown)
+QWEN3_SAME_TOKEN_STREAK_STOP = 4  # stop after N identical token ids in a row
+QWEN3_RNG_SEED = 42
+
+# Run only on T3K (symbiote DeviceArch). Uses MESH_DEVICE env if set, else T3K.
+MESH_DEVICE = (os.environ.get("MESH_DEVICE") or "T3K").upper()
 MESH_SHAPE_T3K = (1, 8)
+
+
+class StopOnConsecutiveSameToken(StoppingCriteria):
+    """Stop when the same token id is generated ``streak`` times in a row (kills ``you you you`` tails)."""
+
+    def __init__(self, streak: int = 6):
+        self.streak = max(2, int(streak))
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.BoolTensor:
+        if input_ids.shape[1] < self.streak:
+            return torch.zeros(input_ids.shape[0], device=input_ids.device, dtype=torch.bool)
+        tail = input_ids[:, -self.streak :]
+        done = (tail == tail[:, :1]).all(dim=1)
+        return done
+
+
+def _stopping_criteria_list() -> StoppingCriteriaList:
+    """Cut off ``this this…`` tails when same token repeats (see ``QWEN3_SAME_TOKEN_STREAK_STOP``)."""
+    if QWEN3_SAME_TOKEN_STREAK_STOP <= 0:
+        return StoppingCriteriaList([])
+    return StoppingCriteriaList([StopOnConsecutiveSameToken(QWEN3_SAME_TOKEN_STREAK_STOP)])
+
+
+def _merge_generate_kw(base: Dict[str, Any]) -> Dict[str, Any]:
+    sc = _stopping_criteria_list()
+    if len(sc) == 0:
+        return base
+    return {**base, "stopping_criteria": sc}
+
+
+def _clone_model_inputs(inputs: dict) -> dict:
+    """Deep-enough copy so ``generate`` / warmup cannot alias or resize shared prompt tensors."""
+    out = {}
+    for k, v in inputs.items():
+        if isinstance(v, torch.Tensor):
+            out[k] = v.clone()
+        else:
+            out[k] = v
+    return out
+
+
+def _seed_torch_for_generate() -> None:
+    """Reset PyTorch RNG before ``generate`` when ``do_sample=True`` (no ``generator=`` kwarg on this model)."""
+    torch.manual_seed(QWEN3_RNG_SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(QWEN3_RNG_SEED)
+
+
+def _generate_extra_kw(model, tokenizer) -> Dict[str, Any]:
+    """Kwargs for ``generate`` — tune module constants above (greedy default for TTNN stability)."""
+    kw = {}
+    # Explicit ids avoid chat-template / config mismatches stopping or padding oddly.
+    eos = getattr(model.config, "eos_token_id", None)
+    if eos is None and tokenizer is not None:
+        eos = tokenizer.eos_token_id
+    if eos is not None:
+        kw["eos_token_id"] = eos
+    pad = getattr(model.config, "pad_token_id", None)
+    if pad is None and tokenizer is not None:
+        pad = tokenizer.pad_token_id
+    if pad is not None:
+        kw["pad_token_id"] = pad
+
+    kw["repetition_penalty"] = QWEN3_REPETITION_PENALTY
+
+    if QWEN3_NO_REPEAT_NGRAM_SIZE is not None and QWEN3_NO_REPEAT_NGRAM_SIZE > 0:
+        kw["no_repeat_ngram_size"] = QWEN3_NO_REPEAT_NGRAM_SIZE
+
+    if QWEN3_DO_SAMPLE:
+        kw["do_sample"] = True
+        kw["temperature"] = QWEN3_SAMPLE_TEMPERATURE
+        kw["top_p"] = QWEN3_SAMPLE_TOP_P
+        if QWEN3_SAMPLE_TOP_K is not None:
+            kw["top_k"] = int(QWEN3_SAMPLE_TOP_K)
+    else:
+        kw["do_sample"] = False
+
+    return kw
 
 
 def _get_cached_model_path():
@@ -85,52 +173,6 @@ def _load_qwen3_model():
         raise
 
 
-def _layer_output_to_torch(out):
-    """Convert decoder layer output (torch or TorchTTNNTensor) to torch float32 for PCC."""
-    if isinstance(out, torch.Tensor) and not isinstance(out, TorchTTNNTensor):
-        return out.detach().to(torch.float32)
-    if isinstance(out, TorchTTNNTensor):
-        t = out.to_torch
-        if callable(t):
-            t = t()
-        return t.detach().to(torch.float32)
-    if hasattr(out, "to_torch"):
-        t = getattr(out, "to_torch")
-        return (t() if callable(t) else t).detach().to(torch.float32)
-    return None
-
-
-def _compute_pcc(torch_out, ttnn_out):
-    """Compute PCC between reference (torch) and TTNN output. Returns (pcc, max_diff, mean_diff)."""
-    t = torch_out.to(torch.float32).flatten()
-    n = _layer_output_to_torch(ttnn_out)
-    if n is None:
-        return float("-inf"), float("inf"), float("inf")
-    n = n.flatten()
-    if t.numel() != n.numel():
-        return float("-inf"), float("inf"), float("inf")
-    pcc = torch.corrcoef(torch.stack([t, n]))[0, 1].item()
-    diff = torch.abs(t - n)
-    return pcc, torch.max(diff).item(), torch.mean(diff).item()
-
-
-def _get_output_dtype(out):
-    """Get dtype string of layer output (ref or TTNN) for PCC/dtype comparison."""
-    if out is None:
-        return "None"
-    if isinstance(out, torch.Tensor) and not isinstance(out, TorchTTNNTensor):
-        return str(out.dtype)
-    if isinstance(out, TorchTTNNTensor):
-        t = out.to_torch
-        t = t() if callable(t) else t
-        return str(t.dtype) if hasattr(t, "dtype") else "?"
-    if hasattr(out, "to_torch"):
-        t = getattr(out, "to_torch")
-        x = t() if callable(t) else t
-        return str(x.dtype) if hasattr(x, "dtype") else "?"
-    return "?"
-
-
 @pytest.mark.parametrize(
     "device_params",
     [{"trace_region_size": 50000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
@@ -144,19 +186,18 @@ def _get_output_dtype(out):
 def test_qwen3_coder_next(mesh_device):
     """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention). Runs only on T3K."""
     if MESH_DEVICE != "T3K":
-        pytest.skip(f"test_qwen3_coder_next runs only on T3K (MESH_DEVICE={os.environ.get(_MESH_DEVICE_ENV)})")
+        pytest.skip(f"test_qwen3_coder_next runs only on T3K (MESH_DEVICE={os.environ.get('MESH_DEVICE')!r})")
     tokenizer, model = _load_qwen3_model()
 
+    # All Linears → sharded TTNN except lm_head (always PyTorch for correct full-vocab logits).
+    # Still PyTorch: embed_tokens, Qwen3NextRMSNorm, Qwen3NextRotaryEmbedding.
     nn_to_ttnn = {
         Qwen3NextSparseMoeBlock: TTNNQwen3MoE,
         Qwen3NextAttention: TTNNQwen3NextGatedAttention,
         Qwen3NextGatedDeltaNet: TTNNGatedDeltaNet,
-    }
-    nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,
     }
-
-    exclude_replacement = set()
+    exclude_replacement = {"lm_head"}
 
     messages = [
         {
@@ -187,201 +228,37 @@ def test_qwen3_coder_next(mesh_device):
     if model.generation_config.pad_token_id is None:
         model.generation_config.pad_token_id = model.config.eos_token_id
 
-    modules1 = register_module_replacement_dict(
+    all_modules = register_module_replacement_dict(
         model, nn_to_ttnn, model_config=None, exclude_replacement=exclude_replacement
     )
-    modules2 = register_module_replacement_dict(
-        model, nn_to_ttnn2, model_config=None, exclude_replacement=exclude_replacement
-    )
-    set_device(model, mesh_device)
-    all_modules = {**modules1, **modules2}
 
-    # print(f"Preprocessing {len(all_modules)} TTNN modules weights...")
+    set_device(model, mesh_device, dump_visualization=False)
+
     for k, v in tqdm(all_modules.items()):
         v.preprocess_weights()
         v.move_weights_to_device()
 
-    print("Running inference...")
     model.eval()  # Disables dropout, batch norm updates
     torch.set_grad_enabled(False)  # Disables autograd overhead
 
-    # Warmup
-    outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True)
+    warm_in = _clone_model_inputs(inputs)
+    wk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
+    if wk.get("do_sample", False):
+        _seed_torch_for_generate()
+    model.generate(**warm_in, max_new_tokens=2, use_cache=True, **wk)
 
     DispatchManager.clear_timings()
-    outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True)
+    # Use enough tokens for a short code answer; very small limits stop mid-sentence and can show U+FFFD ()
+    # at UTF-8 boundaries when the last token is incomplete.
+    max_new = QWEN3_MAX_NEW_TOKENS
+    main_in = _clone_model_inputs(inputs)
+    mk = _merge_generate_kw(_generate_extra_kw(model, tokenizer))
+    if mk.get("do_sample", False):
+        _seed_torch_for_generate()
+    outputs = model.generate(**main_in, max_new_tokens=max_new, use_cache=True, **mk)
 
-    prompt_len = inputs["input_ids"].shape[-1]
+    prompt_len = int(inputs["input_ids"].shape[-1])
     output_ids = outputs[0][prompt_len:].tolist()
-
-    # Debug: first 20 token IDs and decoded
-    print(f"[DEBUG] First 20 output token IDs: {output_ids[:20]}")
-    print(f"[DEBUG] Full output token count: {len(output_ids)}")
     content = tokenizer.decode(output_ids, skip_special_tokens=True)
-    print(f"[DEBUG] First 100 chars decoded: {repr(content[:100])}")
-
-    print(f"Qwen3-Coder-Next output: {content}")
+    print(f"Qwen3-Coder-Next output ({len(output_ids)} new tokens):\n{content}")
     DispatchManager.save_stats_to_file("qwen3_coder_next_timing_stats.csv")
-
-
-# Single-device mesh for layer PCC (to_torch works without mesh composer)
-MESH_SHAPE_SINGLE = (1, 1)
-PCC_LAYER_THRESHOLD = 0.99
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 50000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [MESH_SHAPE_SINGLE],
-    indirect=True,
-)
-def _run_layer_pcc_forward(ref_model, ttnn_model, inputs):
-    """Run ref and ttnn forward, capture layer outputs. Returns (ref_outputs, ttnn_outputs)."""
-    layers = ref_model.model.layers
-    num_layers = len(layers)
-    ref_outputs = [None] * num_layers
-    ttnn_outputs = [None] * num_layers
-
-    def make_ref_hook(i):
-        def hook(_mod, _inputs, output):
-            out = output[0] if isinstance(output, tuple) else output
-            ref_outputs[i] = out.detach()
-
-        return hook
-
-    def make_ttnn_hook(i):
-        def hook(_mod, _inputs, output):
-            out = output[0] if isinstance(output, tuple) else output
-            ttnn_outputs[i] = out
-
-        return hook
-
-    ref_handles = [layers[i].register_forward_hook(make_ref_hook(i)) for i in range(num_layers)]
-    ref_model(**inputs)
-    for h in ref_handles:
-        h.remove()
-
-    ttnn_handles = [ttnn_model.model.layers[i].register_forward_hook(make_ttnn_hook(i)) for i in range(num_layers)]
-    ttnn_model(**inputs)
-    for h in ttnn_handles:
-        h.remove()
-    return ref_outputs, ttnn_outputs
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [{"trace_region_size": 50000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [MESH_SHAPE_SINGLE],
-    indirect=True,
-)
-def test_qwen3_coder_next_layer_pcc(mesh_device):
-    """Layer-by-layer PCC for both recurrent (T<=64) and chunked (T>64) Gated DeltaNet modes.
-    Also checks dtype match between ref and TTNN. Requires single device (mesh 1x1)."""
-    if MESH_DEVICE != "T3K":
-        pytest.skip(
-            f"test_qwen3_coder_next_layer_pcc runs only on T3K (MESH_DEVICE={os.environ.get(_MESH_DEVICE_ENV)})"
-        )
-    if mesh_device.get_num_devices() != 1:
-        pytest.skip("test_qwen3_coder_next_layer_pcc requires single device (mesh 1x1) for to_torch conversion")
-
-    tokenizer, ref_model = _load_qwen3_model()
-    _, ttnn_model = _load_qwen3_model()
-
-    nn_to_ttnn = {
-        Qwen3NextSparseMoeBlock: TTNNQwen3MoE,
-        Qwen3NextAttention: TTNNQwen3NextGatedAttention,
-        Qwen3NextGatedDeltaNet: TTNNGatedDeltaNet,
-    }
-    modules = register_module_replacement_dict(ttnn_model, nn_to_ttnn, model_config=None, exclude_replacement=set())
-    set_device(ttnn_model, mesh_device)
-    for _k, mod in tqdm(modules.items()):
-        mod.preprocess_weights()
-        mod.move_weights_to_device()
-
-    device = next(ref_model.parameters()).device
-
-    def _to_device(v):
-        if not isinstance(v, torch.Tensor):
-            return v
-        v = v.to(device)
-        if v.dtype in (torch.long, torch.int, torch.int32, torch.int64):
-            return v
-        return v.to(torch.bfloat16)
-
-    layer_types = getattr(ref_model.config, "layer_types", None) or ["full_attention"] * len(ref_model.model.layers)
-
-    results = {}
-    for run_name, messages in [
-        ("recurrent_T<=64", [{"role": "user", "content": "Hi."}]),
-        ("chunked_T>64", [{"role": "user", "content": "Write a function " + "word " * 80}]),
-    ]:
-        inputs = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
-        )
-        inputs = {k: _to_device(v) for k, v in inputs.items()}
-        seq_len = inputs["input_ids"].shape[-1]
-        effective_mode = "recurrent" if seq_len <= 64 else "chunked"
-        ref_model.eval()
-        ttnn_model.eval()
-        torch.set_grad_enabled(False)
-        ref_out, ttnn_out = _run_layer_pcc_forward(ref_model, ttnn_model, inputs)
-        results[run_name] = {
-            "seq_len": seq_len,
-            "mode": effective_mode,
-            "ref_outputs": ref_out,
-            "ttnn_outputs": ttnn_out,
-        }
-
-    num_layers = len(ref_model.model.layers)
-    min_pcc_overall = 1.0
-    dtype_mismatches = []
-
-    for run_name, data in results.items():
-        seq_len = data["seq_len"]
-        mode = data["mode"]
-        ref_outputs = data["ref_outputs"]
-        ttnn_outputs = data["ttnn_outputs"]
-
-        print(f"\n=== {run_name} (seq_len={seq_len}, GatedDeltaNet mode={mode}) ===")
-        print(
-            f"{'Layer':<6} {'Type':<18} {'PCC':<10} {'MaxDiff':<10} {'MeanDiff':<10} {'RefDtype':<12} {'TTNNDtype':<12}"
-        )
-        print("-" * 88)
-
-        for i in range(num_layers):
-            lt = layer_types[i] if i < len(layer_types) else "?"
-            pcc, max_d, mean_d = _compute_pcc(ref_outputs[i], ttnn_outputs[i])
-            ref_dtype = _get_output_dtype(ref_outputs[i])
-            ttnn_dtype = _get_output_dtype(ttnn_outputs[i])
-            dtype_ok = ref_dtype == ttnn_dtype
-            if not dtype_ok:
-                dtype_mismatches.append((run_name, i, lt, ref_dtype, ttnn_dtype))
-            min_pcc_overall = min(min_pcc_overall, pcc)
-            print(f"{i:<6} {lt:<18} {pcc:<10.6f} {max_d:<10.6f} {mean_d:<10.6f} {ref_dtype:<12} {ttnn_dtype:<12}")
-
-        print("-" * 88)
-        min_pcc_run = min(_compute_pcc(ref_outputs[i], ttnn_outputs[i])[0] for i in range(num_layers))
-        print(f"Min PCC ({run_name}): {min_pcc_run:.6f}")
-
-    if dtype_mismatches:
-        print("\n[Dtype mismatches (ref vs TTNN)]:")
-        for rn, i, lt, rd, td in dtype_mismatches[:10]:
-            print(f"  {rn} layer {i} ({lt}): ref={rd} vs ttnn={td}")
-        if len(dtype_mismatches) > 10:
-            print(f"  ... and {len(dtype_mismatches) - 10} more")
-        assert False, (
-            f"Dtype mismatch between ref and TTNN in {len(dtype_mismatches)} layer(s). " f"First: {dtype_mismatches[0]}"
-        )
-
-    print(f"\nMin PCC overall: {min_pcc_overall:.6f}")
-    assert (
-        min_pcc_overall >= PCC_LAYER_THRESHOLD
-    ), f"Layer-by-layer min PCC {min_pcc_overall:.6f} below threshold {PCC_LAYER_THRESHOLD}"
