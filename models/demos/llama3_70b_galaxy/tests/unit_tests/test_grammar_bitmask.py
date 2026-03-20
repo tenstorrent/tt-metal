@@ -102,6 +102,7 @@ def test_unpack_bitmask_sharded_with_subdevices_and_subcore_grids(mesh_device):
     decode_manager = mesh_device.create_sub_device_manager([prefetcher_sub_device, worker_sub_device], 0)
     mesh_device.load_sub_device_manager(decode_manager)
     mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+    mesh_device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])  # this happens in llama_model.py forward
 
     batch_size = 2
     packed_vocab_dim = 64  # divisible across Galaxy mesh sharding
