@@ -239,8 +239,7 @@ void handle_mesh_adapter_cache_hit(
     auto& cached_program_factory = program_cache.get(program_hash);
     auto program_factory_index = cached_program_factory.program_factory_index;
     auto program_factory = map_index_to_variant(
-        program_factory_index,
-        mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));  // HERE JAKSA
+        program_factory_index, mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args));
 
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(
         program_factory, [&]<MeshWorkloadFactoryConcept WorkloadFactory>() {
