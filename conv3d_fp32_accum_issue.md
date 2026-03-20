@@ -19,6 +19,44 @@ Multi-core fp32 reduction now works: PCC=0.999996 vs torch.
 - Both produce PCC > 0.999 vs torch
 - Max difference between the two blockings is 1 bf16 ULP (0.007812) — inherent to bf16 output quantization since the computation order differs
 
+## Device Perf (Blackhole P150, single chip)
+
+Measured with `TT_METAL_DEVICE_PROFILER=1` using `DEVICE KERNEL DURATION [ns]` from `ttnn.ReadDeviceProfiler` / `ttnn.get_latest_programs_perf_data`. See `bench_conv3d_fp32_reduction.py` to reproduce.
+
+### 192x192 k3, 32x32 (C_in_num_blocks: 1 vs 2)
+
+| Config | Device Time | Speedup | PCC | MAE |
+|---|---|---|---|---|
+| Conservative C_in=192 | 192 μs | 1.0x | 0.999995 | 0.000822 |
+| Aggressive C_in=96, bf16 interm | 122 μs | 1.57x | 0.999867 | 0.005515 |
+| **Aggressive C_in=96, fp32 interm** | **122 μs** | **1.57x** | **0.999996** | **0.000731** |
+
+### 96x96 k3, 32x32 (C_in_num_blocks: 1 vs 3)
+
+| Config | Device Time | Speedup | PCC | MAE |
+|---|---|---|---|---|
+| Conservative C_in=96 | 91 μs | 1.0x | 0.999994 | 0.000852 |
+| Aggressive C_in=32, bf16 interm | 53 μs | 1.70x | 0.999957 | 0.002871 |
+| **Aggressive C_in=32, fp32 interm** | **66 μs** | **1.36x** | **0.999996** | **0.000768** |
+
+### 384x384 k3, 90x160 (same C_in_block=128 for both, C_in_num_blocks=3)
+
+| Config | Device Time | PCC | MAE |
+|---|---|---|---|
+| Conservative C_in=128 | 2288 μs | 0.999996 | 0.000779 |
+| Aggressive C_in=128, bf16 interm | 2283 μs | 0.999804 | 0.007408 |
+| **Aggressive C_in=128, fp32 interm** | **2293 μs** | **0.999996** | **0.000779** |
+
+### 384x384 k3, 32x32 (conservative OOMs — must use aggressive)
+
+| Config | Device Time | PCC | MAE |
+|---|---|---|---|
+| Conservative C_in=384 | **L1 OOM** | — | — |
+| Aggressive C_in=128, bf16 interm | 306 μs | 0.999807 | 0.007132 |
+| **Aggressive C_in=128, fp32 interm** | **312 μs** | **0.999996** | **0.000768** |
+
+**Takeaway:** Aggressive blocking gives 1.4-1.7x device speedup on layers where it increases parallelism. The fp32 SFPU reduction adds ~25% overhead vs bf16 FPU add (66 vs 53 μs) but recovers full accuracy (MAE 0.0008 vs 0.003-0.007). For layers where conservative blocking OOMs, aggressive + fp32 is the only option with correct results.
+
 ## Root Cause (RESOLVED)
 
 The PCC=0.789 bug was caused by a **missing unpacker reconfig** in the compute kernel's spatial loop.
