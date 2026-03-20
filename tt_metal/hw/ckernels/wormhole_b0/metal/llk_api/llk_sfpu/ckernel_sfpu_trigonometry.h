@@ -184,11 +184,11 @@ inline void calculate_sine() {
 
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
         sfpi::vFloat rounding_bias = __builtin_rvtt_sfpxloadi(0x4b40, 0);  // 1.5*2^23
-        __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
+        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
 
         // Compute j = round(v / PI).
         // First, j = v * (1 / PI) + 1.5*2^23 shifts the mantissa bits to give round-to-nearest-even.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // At this point, the mantissa bits of j contain the integer.
         // Store for later; the LSB determines the sign of the result.
@@ -260,13 +260,13 @@ inline void calculate_cosine() {
 
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         sfpi::vFloat half = __builtin_rvtt_sfpxloadi(0x3f00, 0);  // 0.5
-        __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
-        __rvtt_vec_t one = __builtin_rvtt_sfpreadlreg(sfpi::vConst1.get());
-        __rvtt_vec_t neg_one = __builtin_rvtt_sfpreadlreg(sfpi::vConstNeg1.get());
+        sfpi::vFloat inv_pi = sfpi::vConstFloatPrgm2;
+        sfpi::vFloat one = sfpi::vConst1;
+        sfpi::vFloat neg_one = sfpi::vConstNeg1;
 
         // Start from j = v * (1 / PI) + 0.5; after bias-round and 2*j - 1, j is an odd quadrant index.
         // ROUNDING_BIAS shifts mantissa bits to perform round-to-nearest-even.
-        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi, half.get(), SFPMAD_MOD1_OFFSET_NONE);
+        sfpi::vFloat j = __builtin_rvtt_sfpmad(v.get(), inv_pi.get(), half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // sfpi::vFloat rounding_bias;
         // rounding_bias = __builtin_rvtt_sfpxloadi(0x4b40, 0);  // 1.5*2^23
@@ -281,7 +281,7 @@ inline void calculate_cosine() {
         j = j + NEG_ROUNDING_BIAS;
 
         sfpi::vFloat two = __builtin_rvtt_sfpxloadi(0x4000, 0);  // 2.0
-        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one, SFPMAD_MOD1_OFFSET_NONE);
+        j = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
