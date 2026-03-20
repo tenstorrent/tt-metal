@@ -124,15 +124,18 @@ def sweep_gated_deltanet(device, seq_lens, chunk_size=64, warmup=2, iterations=3
 
     for T in seq_lens:
         try:
-            params = make_gated_deltanet_params(seq_len=T)
+            # Use batch_size=1 for T>=8192 to avoid L1 OOM (batch=BH*num_chunks scales with T)
+            batch_size = 1 if T >= 8192 else 2
+            cs = chunk_size
+            params = make_gated_deltanet_params(seq_len=T, batch_size=batch_size)
             torch_mode = "chunk" if T > 64 else "fused_recurrent"
 
             for _ in range(warmup):
-                gated_deltanet_forward(**params, mode=torch_mode, chunk_size=chunk_size)
+                gated_deltanet_forward(**params, mode=torch_mode, chunk_size=cs)
             torch_times = []
             for _ in range(iterations):
                 t0 = time.perf_counter()
-                torch_out, _ = gated_deltanet_forward(**params, mode=torch_mode, chunk_size=chunk_size)
+                torch_out, _ = gated_deltanet_forward(**params, mode=torch_mode, chunk_size=cs)
                 torch_times.append(time.perf_counter() - t0)
             torch_min = min(torch_times)
 
@@ -165,8 +168,11 @@ def sweep_gated_deltanet(device, seq_lens, chunk_size=64, warmup=2, iterations=3
                 else:
                     ttnn_params[key] = val
             ttnn_params["device"] = device
-            ttnn_params["mode"] = "chunk"
-            ttnn_params["chunk_size"] = chunk_size
+            # Align TTNN mode with torch: recurrent for T<64, chunk for T>=64.
+            # At T=64, use chunk (1 full chunk, no padding) to avoid 64 sequential
+            # device steps in recurrent mode which causes the sweep to appear stuck.
+            ttnn_params["mode"] = "recurrent" if T < 64 else "chunk"
+            ttnn_params["chunk_size"] = cs
 
             for _ in range(warmup):
                 gated_deltanet_forward_ttnn(**ttnn_params)
