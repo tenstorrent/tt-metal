@@ -82,9 +82,10 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
         reference_buffer.global_config(), reference_buffer.device_local_config(), parent_mesh.get(), reference_address);
 
     tt::tt_metal::DeviceStorage device_storage(mesh_buffer);
-    TT_ASSERT(
+    TT_FATAL(
         device_storage.get_coords().size() == 1 &&
-        device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0),
+        "mesh_buffer is not on a unit submesh");
 
     return Tensor(
         std::move(device_storage),
