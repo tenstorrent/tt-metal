@@ -8,11 +8,11 @@ Nightly tests for ttnn.experimental.broadcast_to with INT32/UINT32 data types.
 These tests cover the MOVD2B path via _llk_math_eltwise_unary_datacopy_ (WH/BH):
 
   - unpack_to_dest=true + is_32bit_input + BroadcastType::ROW
-      → MOVD2B dest_32b_hi=0 then dest_32b_lo=1 (lines 42-57 in llk_math_eltwise_unary_datacopy.h)
+      → MOVD2B dest_32b_hi=0 then dest_32b_lo=1 in the BroadcastType::ROW path of _llk_math_eltwise_unary_datacopy_
   - unpack_to_dest=true + is_32bit_input + BroadcastType::COL
-      → same MOVD2B pattern
+      → same MOVD2B pattern in the BroadcastType::COL path
   - unpack_to_dest=true + is_32bit_input + BroadcastType::SCALAR
-      → same MOVD2B pattern
+      → same MOVD2B pattern in the BroadcastType::SCALAR path
 
 SubtileBroadcastType is determined by input.logical_shape[-2:] vs output shape:
   ROW:    input_h == 1  and  input_w == output_w
