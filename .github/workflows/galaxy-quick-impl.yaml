@@ -98,7 +98,17 @@ jobs:
   #         path: /work
   #     - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
   #       if: always()
-
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+      build-wheel: true
+      
   multi-host-glx-2x:
     runs-on:
       - ${{ inputs.extra-tag }}
