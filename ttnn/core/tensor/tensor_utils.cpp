@@ -65,7 +65,7 @@ std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor&
     **/
     TT_FATAL(
         tensor.is_sharded(),
-        "Tensor must be sharded to compute optimal worker cores.");  // Host tensors will fail this check.
+        "Tensor must be on device and sharded to compute optimal worker cores.");  // Host tensors will fail this check.
     if (!tensor.memory_config().is_dram()) {
         return tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
     }
