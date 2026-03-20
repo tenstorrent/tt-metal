@@ -176,6 +176,65 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
         return tt_output
 
 
+class TTNNLinearIColShardedWRowShardedLmHead(TTNNLinearIColShardedWRowSharded):
+    """Sharded linear + ``all_gather`` on the output dim for full-vocab logits (sampling). Prefer PyTorch ``lm_head`` when possible."""
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if len(input_tensor.tensor_topology().placements()) == 1:
+            assert (
+                input_tensor.tensor_topology().placements()[0].dim == self.input_dim
+            ), f"Input tensor must be sharded on dimension {self.input_dim}."
+        elif len(input_tensor.tensor_topology().placements()) == 2:
+            assert (
+                input_tensor.tensor_topology().placements()[0].dim == 0
+            ), f"Input tensor must be sharded on batch dim (0)."
+            assert (
+                input_tensor.tensor_topology().placements()[1].dim == self.input_dim
+            ), f"Input tensor must be sharded on dimension {self.input_dim}."
+        else:
+            raise RuntimeError(
+                f"Input tensor must be sharded on either batch dim (0) or input dim ({self.input_dim}), but got tensor with placements: {input_tensor.tensor_topology().placements()}"
+            )
+        if input_tensor.layout != ttnn.TILE_LAYOUT:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor_shape = list(input_tensor.shape)
+        input_shape = list(input_tensor_shape)
+        while len(input_shape) < 4:
+            input_shape.insert(1, 1)
+        input_tensor = ttnn.reshape(input_tensor, input_shape)
+        tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_output = ttnn.experimental.reduce_scatter_minimal_async(
+            tt_output,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+        if self.tt_bias is not None:
+            tt_output += self.tt_bias
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
+        if self.device_state is not None and self.device.get_num_devices() > 1:
+            tt_output = ttnn.experimental.all_gather_async(
+                tt_output,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+        tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [self.out_features])
+        return tt_output
+
+
 @trace_disabled
 class TTNNLinearLLama(TTNNLinear):
     """TTNN Linear layer optimized for LLaMA models using bfloat8."""
