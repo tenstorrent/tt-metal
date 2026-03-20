@@ -16,6 +16,8 @@ import os
 from typing import Any
 
 import torch
+import time
+
 from loguru import logger
 
 import ttnn
@@ -267,42 +269,65 @@ class Glm4MoeDecoderLayer:
             packer_l1_acc=True,
         )
 
-        # ---- Pre-attention norm (sharded to avoid L1 overflow with hidden=5120) ----
+        _COMP = os.environ.get("GLM4_MOE_PROFILE_COMPONENTS", "0") != "0"
+        _lid = getattr(w, 'layer_idx', '?')
+
+        def _cs():
+            if not _COMP: return None
+            ttnn.synchronize_device(device)
+            return time.perf_counter_ns()
+
+        def _ce(t0, comp):
+            if t0 is None: return
+            ttnn.synchronize_device(device)
+            ms = (time.perf_counter_ns() - t0) / 1e6
+            if _lid in (0, 45, 91):  # Sample 3 layers
+                logger.info("TTCOMP L{} {} {:.1f}ms", _lid, comp, ms)
+
+        # ---- Pre-attention norm ----
+        t0 = _cs()
         h = _sharded_rms_norm(x, w.input_layernorm, hparams.hidden_size)
+        _ce(t0, "pre_attn_norm")
 
         # ---- GQA Attention ----
+        t0 = _cs()
         attn_out = self.attention.forward(
             h, current_pos, rot_mats, mode="decode", page_table=page_table, kv_cache=kv_cache,
             active_batch=active_batch,
         )
+        _ce(t0, "attention")
 
         # ---- Residual ----
         x = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out, force=False)
 
-        # ---- Pre-MLP norm (sharded to avoid L1 overflow with hidden=5120) ----
+        # ---- Pre-MLP norm ----
         residual = x
+        t0 = _cs()
         h = _sharded_rms_norm(x, w.post_attention_layernorm, hparams.hidden_size)
+        _ce(t0, "pre_mlp_norm")
 
         # ---- MLP ----
+        t0 = _cs()
         if self.is_dense_layer:
             mlp_out = self._dense_mlp_forward(
                 h, w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down,
                 compute_kernel_config=mlp_compute_kernel_config,
             )
             ttnn.deallocate(h, force=False)
-            # TP reduce for dense MLP (host-side — ttnn.all_reduce broken on TG 2D mesh).
             if tp_enabled:
                 mlp_out = _simple_all_reduce(
                     mlp_out, device, cluster_axis=tp_axis,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     ccl=self.tt_ccl,
                 )
+            _ce(t0, "dense_mlp")
         else:
             mlp_out = self._moe_forward(
                 h, compute_kernel_config=mlp_compute_kernel_config,
                 tp_axis=tp_axis, tp_enabled=tp_enabled,
             )
+            _ce(t0, "moe")
 
         # ---- Residual ----
         res_shape = [int(d) for d in residual.shape]

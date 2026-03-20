@@ -267,7 +267,7 @@ class Glm4MoeForCausalLM(nn.Module):
 
         num_blocks = int(self._kv_cache_shape[0]) if self._kv_cache_shape else 1
 
-        for seq_len in [128, 512]:
+        for seq_len in [128]:
             logger.info("Warming prefill: seq_len={}", seq_len)
             page_table = torch.zeros((1, max(1, num_blocks)), dtype=torch.int32)
             page_table[0, 0] = 0
