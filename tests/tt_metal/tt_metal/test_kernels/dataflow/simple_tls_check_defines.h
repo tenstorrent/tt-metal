@@ -27,5 +27,5 @@ enum TlsCheckResultIndex : uint32_t {
     TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END = 16,
 };
 
-constexpr uint32_t TLS_CHECK_RESULT_SLOT_WORDS = 17;
+constexpr uint32_t TLS_CHECK_RESULT_SLOT_WORDS = ((17 + 3) / 4) * 4;
 constexpr uint32_t TLS_CHECK_RESULT_SLOT_BYTES = TLS_CHECK_RESULT_SLOT_WORDS * sizeof(uint32_t);

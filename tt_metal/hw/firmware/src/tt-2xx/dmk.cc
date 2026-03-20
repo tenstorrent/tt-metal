@@ -64,6 +64,7 @@ uint32_t _start() {
     if (hartid == thread_0_hartid) {
         do_crt1(&__tdata_lma[__ldm_tdata_end - __ldm_tdata_start]);
         (*GET_MAILBOX_ADDRESS_DEV(shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
+        flush_l1_dcache(0);
     }
 
     do_thread_crt1(__tdata_lma);

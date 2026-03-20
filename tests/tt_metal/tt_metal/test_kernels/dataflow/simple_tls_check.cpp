@@ -34,25 +34,30 @@ void kernel_main() {
         }
     }
 
+    invalidate_l1_dcache((uintptr_t)signal_address);
     volatile tt_l1_ptr std::uint32_t* signal_addr = (tt_l1_ptr uint32_t*)((uintptr_t)signal_address);
     while (*signal_addr != hartid);
 
     uint32_t global_start = shared_global;
     shared_global = shared_global + 1;
+    flush_l1_dcache((uintptr_t)&shared_global);
     uint32_t global_end = shared_global;
     uint64_t global_addr = (uint64_t)(&shared_global);
 
     uint32_t uninitialized_global_start = uninitialized_global;
     uninitialized_global = uninitialized_global + 1;
+    flush_l1_dcache((uintptr_t)&uninitialized_global);
     uint32_t uninitialized_global_end = uninitialized_global;
 
     uint32_t thread_local_start = thread_local_var;
     thread_local_var = thread_local_var + 1;
+    flush_l1_dcache((uintptr_t)&thread_local_var);
     uint32_t thread_local_end = thread_local_var;
     uint64_t thread_local_addr = (uint64_t)(&thread_local_var);
 
     uint32_t uninitialized_thread_local_start = uninitialized_thread_local_var;
     uninitialized_thread_local_var = uninitialized_thread_local_var + 1;
+    flush_l1_dcache((uintptr_t)&uninitialized_thread_local_var);
     uint32_t uninitialized_thread_local_end = uninitialized_thread_local_var;
 
     volatile tt_l1_ptr uint32_t* result = (tt_l1_ptr uint32_t*)((uintptr_t)l1_result_addr);
@@ -75,8 +80,9 @@ void kernel_main() {
     result[TLS_CHECK_UNINITIALIZED_THREAD_LOCAL_END] = uninitialized_thread_local_end;
 
     uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dram_dst_bank_id, dram_dst_address + slot_offset);
-    noc_async_write(l1_result_addr, dram_noc_addr, TLS_CHECK_RESULT_SLOT_BYTES);
+    noc_async_write(base_l1_result_addr, dram_noc_addr, TLS_CHECK_RESULT_SLOT_BYTES);
     noc_async_write_barrier();
 
     *signal_addr = hartid + 1;
+    flush_l1_dcache((uintptr_t)signal_addr);
 }
