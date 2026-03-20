@@ -72,8 +72,9 @@ jobs:
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       blackhole: ${{ github.event.inputs.arch == 'blackhole' }}
       scheduled: ${{ github.event_name == 'schedule' }}
       extra-tag: ${{ inputs.extra-tag || 'in-service' }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
