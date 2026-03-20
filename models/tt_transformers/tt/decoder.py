@@ -219,12 +219,13 @@ class TransformerBlock(LightweightModule):
 
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.args.get_residual_mem_config(
-            mode, self.prefetcher, residual_replicated=self.post_ff_norm is not None
+            mode, self.prefetcher, residual_replicated=self.pre_ff_norm is not None
         )
 
-        # assert (
-        #     x.memory_config() == skip_mem_cfg
-        # ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        if self.pre_ff_norm is None:
+            assert (
+                x.memory_config() == skip_mem_cfg
+            ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
@@ -238,7 +239,7 @@ class TransformerBlock(LightweightModule):
             mode,
             norm_config=attn_norm_config,
             residual=residual if self.pre_ff_norm else None,
-            skip_allgather=not self.first_layer,
+            skip_allgather=not self.first_layer and self.pre_ff_norm,
         )
 
         if type(attn_in) is tuple:
