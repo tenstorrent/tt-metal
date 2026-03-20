@@ -125,6 +125,31 @@ void kernel_main() {
     uint32_t mm_sem_target = 0;
 #endif
 
+#ifdef FUSE_RS_ADDCMUL
+    // Addcmul tensor addresses — appended at the end of the RT args list.
+    const address_t addcmul_a_address = get_arg_val<address_t>(arg_idx++);
+    const address_t addcmul_b_address = get_arg_val<address_t>(arg_idx++);
+
+    // Derive CT indices for addcmul a/b CBs and tensor accessor args.
+    // Factory appends: addcmul_a_cb_index, addcmul_b_cb_index, TensorAccessorArgs(a), TensorAccessorArgs(b)
+    // right after the intermediate tensor's CT args.
+#ifndef INTERMEDIATE_IS_SHARDED
+    constexpr uint32_t ct_offset_intermediate = intermediate_tensor_args.num_compile_time_args();
+#else
+    constexpr uint32_t ct_offset_intermediate = 7;
+#endif
+    constexpr uint32_t ct_idx_addcmul_base = ct_idx + ct_offset + ct_offset_intermediate;
+    constexpr uint32_t addcmul_a_cb = get_compile_time_arg_val(ct_idx_addcmul_base);
+    constexpr uint32_t addcmul_b_cb = get_compile_time_arg_val(ct_idx_addcmul_base + 1);
+    constexpr auto addcmul_a_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2>();
+    constexpr uint32_t ct_offset_a = addcmul_a_tensor_args.num_compile_time_args();
+    constexpr auto addcmul_b_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2 + ct_offset_a>();
+    auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address, page_size);
+    auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address, page_size);
+    // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
+    // b tile index: batch * slice_Wt + col_in_slice  (b has 1 row per batch)
+#endif
+
     /**
     Iterate over chunks in the row-major order and reduce-scatter each chunk, one by one.
     In particular, for each chunk, perform a full ring reduce-scatter iteration before going to the next one.
@@ -174,6 +199,12 @@ void kernel_main() {
                     const bool do_reduce = i != 0;
                     const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
+#ifdef FUSE_RS_ADDCMUL
+                    // At the final ring step the local chip's slice is written to DRAM by the writer.
+                    // This is where we fuse the addcmul: load a and b tiles in parallel with input/intermediate.
+                    const bool is_final_ring_step = (i == ring_size - 1);
+                    constexpr uint32_t addcmul_a_batch_pages = mm_cores_y * slice_Ht_per_core * slice_Wt;
+#endif
 
                     const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                         get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt);
@@ -219,6 +250,16 @@ void kernel_main() {
                                 cb_reserve_back(cb_intermediate_id, tile_granularity);
                                 intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                             }
+#ifdef FUSE_RS_ADDCMUL
+                            uint32_t addcmul_a_l1_write_addr = 0;
+                            uint32_t addcmul_b_l1_write_addr = 0;
+                            if (is_final_ring_step) {
+                                cb_reserve_back(addcmul_a_cb, tile_granularity);
+                                addcmul_a_l1_write_addr = get_write_ptr(addcmul_a_cb);
+                                cb_reserve_back(addcmul_b_cb, tile_granularity);
+                                addcmul_b_l1_write_addr = get_write_ptr(addcmul_b_cb);
+                            }
+#endif
 
                             for (uint32_t j = 0; j < tiles_to_read_in_this_step; ++j) {
                                 const auto [slice_row, slice_col] = coordinates_to_slice_coordinates(
@@ -247,6 +288,21 @@ void kernel_main() {
                                             intermediate_l1_write_addr,
                                             page_size);
                                     }
+#ifdef FUSE_RS_ADDCMUL
+                                    if (is_final_ring_step) {
+                                        const uint32_t a_tile_idx =
+                                            b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
+                                        const uint32_t b_gate_idx = b * slice_Wt + col_in_slice;
+                                        noc_async_read(
+                                            get_noc_addr(a_tile_idx, addcmul_a_addrgen),
+                                            addcmul_a_l1_write_addr,
+                                            page_size);
+                                        noc_async_read(
+                                            get_noc_addr(b_gate_idx, addcmul_b_addrgen),
+                                            addcmul_b_l1_write_addr,
+                                            page_size);
+                                    }
+#endif
                                 }
                                 // Always advance: CB position i corresponds to iteration tile i,
                                 // so the writer can find valid tile data at the correct packet slot.
@@ -254,6 +310,12 @@ void kernel_main() {
                                 if (do_reduce) {
                                     intermediate_l1_write_addr += page_size;
                                 }
+#ifdef FUSE_RS_ADDCMUL
+                                if (is_final_ring_step) {
+                                    addcmul_a_l1_write_addr += page_size;
+                                    addcmul_b_l1_write_addr += page_size;
+                                }
+#endif
 
                                 get_next_tile_coordinates(
                                     tile_row_in_mm_M_unit_block,
@@ -269,6 +331,12 @@ void kernel_main() {
                             if (do_reduce) {
                                 cb_push_back(cb_intermediate_id, tile_granularity);
                             }
+#ifdef FUSE_RS_ADDCMUL
+                            if (is_final_ring_step) {
+                                cb_push_back(addcmul_a_cb, tile_granularity);
+                                cb_push_back(addcmul_b_cb, tile_granularity);
+                            }
+#endif
                         }
                     }
                     // Move to the next slice

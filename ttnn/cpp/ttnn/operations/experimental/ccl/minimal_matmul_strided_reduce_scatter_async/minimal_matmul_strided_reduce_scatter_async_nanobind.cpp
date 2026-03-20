@@ -53,7 +53,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                std::optional<uint32_t> num_workers_per_link,
                std::optional<uint32_t> num_buffers_per_channel,
                std::optional<uint32_t> chunk_width_in_mm_blocks,
-               const std::optional<Tensor>& optional_rs_output_tensor) -> std::vector<ttnn::Tensor> {
+               const std::optional<Tensor>& optional_rs_output_tensor,
+               std::optional<float> fused_ternary_scalar,
+               const std::optional<const Tensor>& addcmul_input_tensor1,
+               const std::optional<const Tensor>& addcmul_input_tensor2) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -76,7 +79,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
                     num_workers_per_link,
                     num_buffers_per_channel,
                     chunk_width_in_mm_blocks,
-                    optional_rs_output_tensor);
+                    optional_rs_output_tensor,
+                    fused_ternary_scalar,
+                    addcmul_input_tensor1,
+                    addcmul_input_tensor2);
             },
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
@@ -100,7 +106,10 @@ void bind_minimal_matmul_strided_reduce_scatter_async_op(
             nb::arg("num_workers_per_link") = nb::none(),
             nb::arg("num_buffers_per_channel") = nb::none(),
             nb::arg("chunk_width_in_mm_blocks") = nb::none(),
-            nb::arg("optional_rs_output_tensor") = nb::none()});
+            nb::arg("optional_rs_output_tensor") = nb::none(),
+            nb::arg("fused_ternary_scalar") = nb::none(),
+            nb::arg("addcmul_input_tensor1") = nb::none(),
+            nb::arg("addcmul_input_tensor2") = nb::none()});
 }
 
 }  // namespace
@@ -144,6 +153,9 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`num_buffers_per_channel` (Optional[int]): Buffers per channel for RS.
             * :attr:`chunk_width_in_mm_blocks` (Optional[int]): MM output blocks per RS chunk.
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
+            * :attr:`fused_ternary_scalar` (Optional[float]): Scalar value for fused addcmul operation.
+            * :attr:`addcmul_input_tensor1` (Optional[ttnn.Tensor]): First additional input tensor for fused addcmul (residual/base).
+            * :attr:`addcmul_input_tensor2` (Optional[ttnn.Tensor]): Second additional input tensor for fused addcmul (gate/multiplier).
 
         )doc");
 }
