@@ -1,7 +1,7 @@
 name: "ttnn - Sweep Trace Validation"
 
 run-name: >-
-  ttnn - sweep validation (${{ github.event.inputs.module_name }}, ${{ github.event.inputs.arch }})
+  ttnn - sweep validation (${{ github.event.inputs.module_name }}, ${{ github.event.inputs.model_traced_scope }}, ${{ github.event.inputs.arch }})
 
 on:
   workflow_dispatch:
@@ -39,6 +39,16 @@ on:
           capture for accurate validation.
         required: true
         default: "4x8"
+      model_traced_scope:
+        type: choice
+        description: >-
+          Which model_traced modules to validate when module_name is "all".
+          "lead" = lead models only (e.g. DeepSeek), "all" = every model_traced module.
+        required: true
+        default: "lead"
+        options:
+          - lead
+          - all
 
 jobs:
   build-artifact:
@@ -102,7 +112,7 @@ jobs:
         ARCH_NAME: ${{ github.event.inputs.arch }}
         RUNNER_LABEL: ${{ github.event.inputs['runner-label'] }}
         MESH_DEVICE_SHAPE: ${{ github.event.inputs.mesh_shape }}
-        LEAD_MODELS_RUN: "1"
+        LEAD_MODELS_RUN: ${{ github.event.inputs.model_traced_scope == 'lead' && '1' || '0' }}
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: INFO
         GITHUB_ACTIONS: true
@@ -155,6 +165,7 @@ jobs:
           echo "  Arch:         ${{ github.event.inputs.arch }}"
           echo "  Runner:       ${{ github.event.inputs['runner-label'] }}"
           echo "  Mesh shape:   ${{ github.event.inputs.mesh_shape }}"
+          echo "  Scope:        ${{ github.event.inputs.model_traced_scope }}"
           echo "  Trace ver:    v2 (fixed)"
           echo "========================================"
 
@@ -181,9 +192,11 @@ jobs:
           MESH_SHAPE="${{ github.event.inputs.mesh_shape }}"
           ARCH_NAME="${{ github.event.inputs.arch }}"
 
-          # Step 1: Generate vectors for all model_traced modules
+          SCOPE="${{ github.event.inputs.model_traced_scope }}"
+
+          # Step 1: Generate vectors for model_traced modules (scope: $SCOPE)
           python3 tests/sweep_framework/sweeps_parameter_generator.py \
-            --model-traced lead \
+            --model-traced "$SCOPE" \
             --suite-name model_traced \
             --master-trace "$MODEL_TRACE"
 
