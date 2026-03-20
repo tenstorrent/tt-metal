@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);  // padded to tile width
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
+    constexpr uint32_t C_in_num_blocks_ct = get_compile_time_arg_val(22);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -64,7 +65,8 @@ void kernel_main() {
     }
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
@@ -157,9 +159,10 @@ void kernel_main() {
                                     uint64_t worker_output_read_addr = get_noc_addr(
                                         worker_core_xs[worker_idx], worker_core_ys[worker_idx], worker_output_read_ptr);
                                     for (uint32_t tile = 0; tile < output_tiles; tile++) {
-                                        noc_async_read(worker_output_read_addr, reduction_write_ptr, tile_bytes);
-                                        worker_output_read_addr += tile_bytes;
-                                        reduction_write_ptr += tile_bytes;
+                                        noc_async_read(
+                                            worker_output_read_addr, reduction_write_ptr, partials_tile_bytes);
+                                        worker_output_read_addr += partials_tile_bytes;
+                                        reduction_write_ptr += partials_tile_bytes;
                                     }
                                     noc_async_read_barrier();
                                     cb_push_back(cb_reduction_tiled, output_tiles);
@@ -193,6 +196,5 @@ void kernel_main() {
             }
         }
     }
-
     noc_async_atomic_barrier();
 }
