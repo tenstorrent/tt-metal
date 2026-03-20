@@ -8,6 +8,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
@@ -27,6 +28,20 @@ class ttMLA:
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
         self.is_balanced = is_balanced
+
+        # Store per-matmul and SDPA config dicts keyed by local seq_len for runtime lookup
+        self.mm_configs = {
+            name: MLA_MATMUL_CONFIG.get(name, {})
+            for name in [
+                "q_a_proj",
+                "q_b_proj",
+                "wkv_b1",
+                "kv_a_proj_with_mqa",
+                "wkv_b2",
+                "o_proj",
+            ]
+        }
+        self.sdpa_configs = MLA_SDPA_CONFIG
 
         # Extract dimensions from config
         self.hidden_size = config.hidden_size
@@ -64,12 +79,6 @@ class ttMLA:
         self.ring_sdpa_compute_grid = (
             mesh_device.compute_with_storage_grid_size().x,
             mesh_device.compute_with_storage_grid_size().y - 1,
-        )
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
-            q_chunk_size=256,
-            k_chunk_size=128,
-            exp_approx_mode=False,
         )
 
         # Create CCL object for semaphore management
@@ -270,6 +279,29 @@ class ttMLA:
             "o_proj.weight": tuple(self.o_proj_weight.shape),
         }
 
+    def _get_mm_kwargs(self, weight_name: str, seq_len_local: int) -> dict:
+        """Get matmul kwargs from config, falling back to defaults."""
+        cfg = self.mm_configs[weight_name].get(seq_len_local)
+        if cfg is None:
+            return {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+        return {
+            "memory_config": cfg["out_mem_config"],
+            "program_config": cfg["program_config"],
+            "dtype": cfg["out_dtype"],
+        }
+
+    def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
+        """Get SDPA program config, falling back to default chunk sizes."""
+        cfg = self.sdpa_configs.get(seq_len_local)
+        q_chunk_size = cfg["q_chunk_size"] if cfg else 32
+        k_chunk_size = cfg["k_chunk_size"] if cfg else 32
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
     def forward(self, hidden_states: ttnn.Tensor, rope_tensors: dict) -> ttnn.Tensor:
@@ -284,8 +316,8 @@ class ttMLA:
         tt_q = ttnn.linear(
             hidden_states,
             self.q_a_proj_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("q_a_proj", seq_len_local),
         )
 
         # All reduce
@@ -322,8 +354,8 @@ class ttMLA:
         tt_q = ttnn.linear(
             tt_q,
             self.q_b_proj_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
 
         # convert to
@@ -341,12 +373,13 @@ class ttMLA:
         tt_q_rope = ttnn.slice(
             tt_q, [0, 0, 0, self.qk_nope_head_dim], [1, num_heads_local, seq_len_local, self.qk_head_dim]
         )
+        ttnn.deallocate(tt_q)
 
         tt_q_nope = ttnn.linear(
             tt_q_nope,
             self.wkv_b1_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("wkv_b1", seq_len_local),
         )
 
         tt_q_rope = ttnn.experimental.rotary_embedding_llama(
@@ -359,13 +392,15 @@ class ttMLA:
 
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_q = ttnn.concat([tt_q_nope, tt_q_rope], dim=-1)
+        ttnn.deallocate(tt_q_nope)
+        ttnn.deallocate(tt_q_rope)
 
         # kv
         tt_kv = ttnn.linear(
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("kv_a_proj_with_mqa", seq_len_local),
         )
 
         # All reduce
@@ -419,9 +454,8 @@ class ttMLA:
         tt_v_embedding = ttnn.linear(
             tt_v_latent_post_repeat,
             self.wkv_b2_weight,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -435,7 +469,7 @@ class ttMLA:
             persistent_output_buffer_v=self.persistent_v_output_buffer,
             joint_strategy="rear",
             logical_n=seq_len_local * sp_factor,
-            program_config=self.ring_sdpa_program_config,
+            program_config=self._get_sdpa_program_config(seq_len_local),
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
@@ -454,8 +488,8 @@ class ttMLA:
         v_out = ttnn.linear(
             v_out,
             self.o_proj_weight,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
+            **self._get_mm_kwargs("o_proj", seq_len_local),
         )
         out = ttnn.experimental.reduce_scatter_minimal_async(
             v_out,
