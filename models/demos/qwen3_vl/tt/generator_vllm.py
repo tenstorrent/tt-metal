@@ -20,7 +20,12 @@ from vllm.model_executor.models.qwen3_vl import (
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
-from models.demos.qwen3_vl.tt.common import merge_vision_tokens, multimodal_rope_from_hf, preprocess_inputs_prefill
+from models.demos.qwen3_vl.tt.common import (
+    get_pad_embedding,
+    merge_vision_tokens_ttnn,
+    multimodal_rope_from_hf,
+    preprocess_inputs_prefill_ttnn,
+)
 from models.demos.qwen3_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
@@ -240,30 +245,50 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         else:
             # text-only users
             image_embeds, deepstack_visual_embeds = (
-                torch.tensor([], dtype=torch.bfloat16, device=tokens.device),
+                ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=self.model_args.mesh_device, dtype=ttnn.bfloat16
+                ),
                 None,
             )
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
-        input_embeds, deepstack_visual_embeds = merge_vision_tokens(
-            inputs.input_ids, text_embeds, image_embeds, self.reference_model.config, deepstack_visual_embeds
+        text_embeds_tt = ttnn.from_torch(
+            text_embeds,
+            device=self.model_args.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.model_args.mesh_device, dims=(None, 2), mesh_shape=self.model_args.cluster_shape
+            ),
         )
+        input_embeds, deepstack_visual_embeds = merge_vision_tokens_ttnn(
+            inputs.input_ids,
+            text_embeds_tt,
+            image_embeds,
+            self.reference_model.config,
+            deepstack_visual_embeds,
+            self.model_args,
+        )
+        ttnn.deallocate(text_embeds_tt)
+        ttnn.deallocate(image_embeds)
+        pad_embedding_tt = get_pad_embedding(self.reference_model, pad_token_id, self.model_args)
         (
             input_prefill_pt,
             deepstack_visual_embeds,
             decoding_pos,  # Position where decoding should start for each user
             _prefill_lens,  # [INFO] _prefill_lens is post-padding number of tokens after text-image processing
-        ) = preprocess_inputs_prefill(
+        ) = preprocess_inputs_prefill_ttnn(
             input_embeds,
             self.model_args,
             inputs.attention_mask,
-            pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
+            pad_embedding=pad_embedding_tt,
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
+        ttnn.deallocate(pad_embedding_tt)
         # Get user-specific rotary position embeddings
         cos, sin, rope_deltas = multimodal_rope_from_hf(
-            inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
+            inputs, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
 
