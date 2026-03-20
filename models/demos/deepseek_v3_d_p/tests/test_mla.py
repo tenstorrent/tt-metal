@@ -78,8 +78,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(8, 4)],
-    ids=["8x4"],
+    [(8, 4), (2, 4)],
+    ids=["8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -92,10 +92,11 @@ def random_weights(config_only):
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq8k"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("seq_len", [128 * 1024], ids=["seq128k"])
 @pytest.mark.parametrize("skip_host_comparison", [True])
 @pytest.mark.timeout(900)  # Increase timeout to 15 minutes for large sequence lengths
-def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison):
+def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison, scale_down_sl):
     """
     Test comparing reference and TT MLA modules with same weights.
 
@@ -115,6 +116,14 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
         config, weights = request.getfixturevalue("pretrained_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
+
+    production_mesh = [32, 4]
+    sp_axis = 0
+    tp_axis = 1
+
+    mesh_shape = list(mesh_device.shape)
+    if scale_down_sl:
+        seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
 
     # temp hack
     config.max_seq_len = seq_len
@@ -141,8 +150,8 @@ def test_mla(use_pretrained, request, mesh_device, seq_len, skip_host_comparison
 
     # Create TT MLA
     logger.info("Creating TT MLA...")
-    mla_tt = ttMLA(config, weights, mesh_device, layer_idx=0, seq_len=seq_len, sp_axis=0, tp_axis=1)
-    rope_tensors = get_rope_tensors(config, seq_len, mesh_device, sp_axis=0)
+    mla_tt = ttMLA(config, weights, mesh_device, layer_idx=0, seq_len=seq_len, sp_axis=sp_axis, tp_axis=tp_axis)
+    rope_tensors = get_rope_tensors(config, seq_len, mesh_device, sp_axis=sp_axis)
 
     # Verify both exist
     assert mla_ref is not None, "Reference MLA should exist"
