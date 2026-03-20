@@ -27,7 +27,7 @@ struct type_caster<ttsl::Span<T, Extent>> {
         io_name("collections.abc.Sequence", "span") + const_name("[") + make_caster<ValueItem>::Name + const_name("]"));
 
     bool from_python(handle src, std::uint8_t, cleanup_list*) {
-        if (!isinstance<list>(src)) {
+        if (!PySequence_Check(src.ptr())) {
             return false;
         }
 
