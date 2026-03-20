@@ -432,6 +432,11 @@ def test_gpt_oss_demo(
     if os.environ.get("CI", None) and not run_in_ci:
         config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
+    # CI enables TT_METAL_OPERATION_TIMEOUT_SECONDS for hang detection; prefill/decode tracing
+    # increases command-queue load and can stall long enough between progress updates to false-trip.
+    if is_ci_env:
+        enable_decode_trace = False
+        enable_prefill_trace = False
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
