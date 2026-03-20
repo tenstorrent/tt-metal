@@ -7,6 +7,8 @@
 #include <array>
 #include <cstdint>
 
+#include "llk_assert.h"
+
 namespace ckernel
 {
 
