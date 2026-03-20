@@ -773,8 +773,8 @@ nlohmann::json GraphProcessor::get_report() const {
 
     // Add distributed context metadata
     const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    metadata[kReportDistributedRank] = *world_ctx->rank();
-    metadata[kReportDistributedWorldSize] = *world_ctx->size();
+    metadata[kReportRank] = *world_ctx->rank();
+    metadata[kReportWorldSize] = *world_ctx->size();
 
     report[kReportMetadata] = metadata;
 
