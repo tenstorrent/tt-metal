@@ -174,8 +174,11 @@ def run(
 
     tt_sum_x2 = tt_stats_torch[..., 0:1]
 
-    # Use 0.95 PCC threshold: this operation computes intermediate stats (sum(x^2))
-    # which can have lower precision in bfloat16 accumulation, especially without fp32_dest_acc_en.
-    # The final model accuracy is maintained by rms_norm_post_all_gather.
-    pcc_threshold = 0.99 if op_kwargs.get("compute_kernel_config") is not None else 0.95
+    # rms_norm_pre_all_gather computes intermediate stats (sum(x^2)) that accumulate
+    # across the full last dimension. bfloat16 accumulation (fp32_dest_acc_en=false)
+    # loses precision proportional to the reduction length; only fp32 accumulation
+    # warrants the tighter threshold.
+    raw_ckc = kwargs.get("compute_kernel_config", {})
+    fp32_acc = raw_ckc.get("fp32_dest_acc_en", False) if isinstance(raw_ckc, dict) else False
+    pcc_threshold = 0.99 if fp32_acc else 0.95
     return [check_with_pcc(torch_expected_stats, tt_sum_x2, pcc_threshold), e2e_perf]

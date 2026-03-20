@@ -89,6 +89,8 @@ def run(
     if dim is None:
         dim = kwargs.get("arg1", None)
     keepdim = kwargs.get("keepdim", None)
+    if keepdim == "__ABSENT__":
+        keepdim = None
     has_keepdim = keepdim is not None
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
@@ -102,7 +104,7 @@ def run(
     if dim is None:
         torch_output_tensor = torch.sum(torch_input_tensor_a)
     else:
-        effective_keepdim = keepdim if has_keepdim else True
+        effective_keepdim = keepdim if has_keepdim else False
         torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=effective_keepdim)
 
     is_host = storage_type and "HOST" in str(storage_type)
