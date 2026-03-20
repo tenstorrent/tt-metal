@@ -159,7 +159,11 @@ ttnn::Shape compute_matmul_output_shape(
         output_shape = ttnn::Shape(new_shape);
     }
 
-    if (input_shape_a[1] == 1 && input_shape_b[1] > 1) {
+    // For standard batched matmul BxHxMxK / BxHxKxN, allow broadcasting of H when
+    // input A has H == 1 and input B has H > 1. Restrict to rank-4 tensors to avoid
+    // incorrectly treating dim 1 as a batch dimension for other rank patterns, and
+    // to ensure we do not index out of bounds for lower-rank shapes.
+    if (a_rank == 4 && b_rank == 4 && input_shape_a[1] == 1 && input_shape_b[1] > 1) {
         output_shape[1] = input_shape_b[1];
     }
     return output_shape;
