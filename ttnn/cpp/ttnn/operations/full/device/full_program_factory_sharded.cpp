@@ -31,53 +31,10 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
 
     auto data_format = datatype_to_dataformat_converter(dtype);
 
-    uint32_t tensor_width = output.padded_shape()[-1];
-    uint32_t tensor_height = output.physical_volume() / tensor_width;
-    const auto& output_shard_spec = output.shard_spec().value();
-    uint32_t shard_height = output_shard_spec.shape[0];
-    uint32_t shard_width = output_shard_spec.shape[1];
-    uint32_t num_compute_cores = output_shard_spec.grid.num_cores();
     uint32_t tensor_width_in_pages = output.buffer()->shard_spec().tensor2d_shape_in_pages[1];
 
-    uint32_t num_input_blocks_across_width = tt::div_up(tensor_width, shard_width);
-    uint32_t num_shards_height = tt::div_up(tensor_height, shard_height);
-    uint32_t num_shards = num_shards_height * num_input_blocks_across_width;
-
-    CoreRangeSet compute_core_range;
-    std::vector<CoreCoord> runtime_cores;
-    if (memory_config.is_dram()) {  // For DRAM sharded tensors, we take one core that is optimal for each DRAM bank
-                                    // with a shard to use as our compute cores.
-        num_compute_cores =
-            std::min(num_compute_cores, num_shards);  // If the number of banks to shard over is more than the number
-                                                      // of shards, only num_shards DRAM banks will have data.
-        auto all_dram_workers = output.device()->get_optimal_dram_bank_to_logical_worker_assignment(
-            tt::tt_metal::NOC::RISCV_0_default);  // Getting optimal worker core for each DRAM bank index.
-        bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-        auto shard_grid_cores = corerange_to_cores(
-            output_shard_spec.grid, num_compute_cores, is_row_major);  // Getting the DRAM banks with shards in order.
-        runtime_cores.reserve(shard_grid_cores.size());
-        for (const auto& dram_core : shard_grid_cores) {
-            uint32_t dram_channel =
-                output.device()->dram_channel_from_logical_core(dram_core);  // For each DRAM coord, get its bank ID.
-            runtime_cores.push_back(all_dram_workers[dram_channel]);  // Get the worker core for the DRAM bank and add
-                                                                      // it to the vector of worker cores.
-        }
-        compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
-    } else {
-        if (num_compute_cores >
-            num_shards) {  // For L1 sharding, the user may specify a core grid larger than the number of shards. In
-                           // this case, we need to determine which cores have data on them so that we are not running
-                           // programs on cores with no data being processed.
-            runtime_cores = output.buffer()->buffer_distribution_spec().value().cores_with_data();
-            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
-        } else {
-            compute_core_range =
-                output_shard_spec.grid;  // If the user specified the same number of compute cores as the number of
-                                         // shards, then we can directly use the core grid specified in the shard_spec.
-            bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-            runtime_cores = corerange_to_cores(compute_core_range, std::nullopt, is_row_major);
-        }
-    }
+    std::vector<CoreCoord> runtime_cores = get_optimal_worker_cores_in_sharded_tensor(output);
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(runtime_cores));
 
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();

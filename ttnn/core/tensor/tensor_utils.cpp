@@ -46,4 +46,39 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
         .global_circular_buffer = nullptr};
 }
 
+std::vector<CoreCoord> get_optimal_worker_cores_in_sharded_tensor(const Tensor& tensor, NOC noc) {
+    /**
+    This function takes in a sharded device tensor (can be legacy 2D sharded or ND sharded) and returns the optimal
+    worker cores for the tensor.
+
+    If the tensor is L1 sharded, the function returns a vector of CoreCoords of all the cores that have shards on them
+    in order (based on if the shard orientation is in row or column major order).
+
+    If the tensor is DRAM sharded, the function returns a vector of CoreCoords in order (based on shard orientation) of
+    the optimal worker core for each DRAM bank with shards.
+
+    The intended use for this API is inside sharded program factories to get the optimal worker cores to launch the
+    program and kernels on. Since the core grid provided in the shard_spec and nd_shard_spec may be larger than the
+    number of shards that exist, not all cores in the core grid will have shards on them. This API returns the cores
+    that have shards on them in order (based on shard orientation) so that the program and kernels will not be launched
+    on cores with no data on them (this can cause failures).
+    **/
+    TT_FATAL(
+        tensor.is_sharded(),
+        "Tensor must be sharded to compute optimal worker cores.");  // Host tensors will fail this check.
+    if (!tensor.memory_config().is_dram()) {
+        return tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    }
+    TT_FATAL(tensor.device() != nullptr, "Device pointer must be valid when selecting optimal DRAM worker cores");
+    auto all_dram_workers = tensor.device()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    const auto dram_banks = tensor.buffer()->buffer_distribution_spec().value().cores_with_data();
+    std::vector<CoreCoord> ordered_worker_cores_with_data;
+    ordered_worker_cores_with_data.reserve(dram_banks.size());
+    for (const auto& dram_core : dram_banks) {
+        const uint32_t dram_channel = tensor.device()->dram_channel_from_logical_core(dram_core);
+        ordered_worker_cores_with_data.push_back(all_dram_workers[dram_channel]);
+    }
+    return ordered_worker_cores_with_data;
+}
+
 }  // namespace tt::tt_metal
