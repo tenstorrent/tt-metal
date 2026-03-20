@@ -6,12 +6,11 @@
 
 #include <tuple>
 
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/tuple.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 #include "complex.hpp"
 
@@ -29,8 +28,7 @@ void bind_complex_tensor_type(nb::module_& mod) {
 }
 
 void bind_complex_tensor(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
+    const char* doc = R"doc(
             Create a complex tensor from real and imaginary part tensors.
 
             Args:
@@ -59,11 +57,9 @@ void bind_complex_tensor(nb::module_& mod) {
 
                 Limitations:
                     -  The real and imag tensors must have the same shape and layout (both must be TILE or ROW_MAJOR).
-        )doc",
-        ttnn::complex_tensor.base_name());
+        )doc";
 
-    bind_registered_operation(
-        mod, ttnn::complex_tensor, doc, ttnn::nanobind_arguments_t{nb::arg("real"), nb::arg("imag")});
+    ttnn::bind_function<"complex_tensor">(mod, doc, &complex_tensor, nb::arg("real"), nb::arg("imag"));
 }
 
 }  // namespace

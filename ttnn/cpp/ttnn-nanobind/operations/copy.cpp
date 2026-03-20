@@ -6,11 +6,10 @@
 
 #include <optional>
 
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/types.hpp"
 
@@ -19,9 +18,8 @@ namespace ttnn::operations::copy {
 namespace {
 
 void bind_global_typecast(nb::module_& mod) {
-    auto doc = fmt::format(
-        R"doc(
-        Performs {0} on elements of a tensor on the host or device to the desired dtype.
+    const char* doc = R"doc(
+        Performs typecast on elements of a tensor on the host or device to the desired dtype.
 
         Args:
             input_tensor (ttnn.Tensor): input tensor to be typecast (can be on the host or device).
@@ -54,47 +52,39 @@ void bind_global_typecast(nb::module_& mod) {
             Limitations:
                 -  ND Sharded tensors are not supported.
                 -  If preallocated output tensor is used, it must match the input tensor's shape and layout.
-        )doc",
-        ttnn::typecast.base_name());
+        )doc";
 
-    using TypecastType = decltype(ttnn::typecast);
-    bind_registered_operation(
+    ttnn::bind_function<"typecast">(
         mod,
-        ttnn::typecast,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const TypecastType& self,
-               const ttnn::Tensor& input_tensor,
-               const DataType dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, dtype, memory_config, output_tensor, sub_core_grids);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const DataType&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::typecast),
             nb::arg("input_tensor"),
             nb::arg("dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const TypecastType& self,
-               const ttnn::Tensor& input_tensor,
-               const DataType input_dtype,
-               const DataType output_dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(input_tensor, input_dtype, output_dtype, memory_config, output_tensor, sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const DataType&,
+                const DataType&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::typecast),
             nb::arg("input_tensor"),
             nb::arg("input_dtype"),
             nb::arg("output_dtype"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 }  // namespace

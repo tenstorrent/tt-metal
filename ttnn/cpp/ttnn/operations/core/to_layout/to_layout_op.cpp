@@ -18,9 +18,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::core {
-
-namespace CMAKE_UNIQUE_NAMESPACE {
+namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
 bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
@@ -236,16 +234,20 @@ Tensor to_layout_impl(
     TT_THROW("ttnn::to_layout: Unsupported output layout: {}!", layout);
 }
 }  // namespace
-}  // namespace CMAKE_UNIQUE_NAMESPACE
 
-Tensor ToLayout::invoke(
-    const ttnn::Tensor& tensor_arg,
-    const ttnn::Layout layout,
-    const std::optional<ttnn::DataType>& dtype,
-    const std::optional<ttnn::MemoryConfig>& memory_config,
+}  // namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE
+
+namespace ttnn {
+
+Tensor to_layout(
+    const Tensor& tensor_arg,
+    Layout layout,
+    const std::optional<DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const float pad_value) {
-    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
+    return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
+        tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }
 
-}  // namespace ttnn::operations::core
+}  // namespace ttnn

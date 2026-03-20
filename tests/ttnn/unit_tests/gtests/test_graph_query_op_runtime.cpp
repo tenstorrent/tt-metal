@@ -79,7 +79,10 @@ TEST_P(BinaryOpTraceRuntime, Add) {
     {
         auto* device = device_;
         auto query = ttnn::graph::query_op_runtime(
-            [](auto&&... args) { return ttnn::add(args...); }, device, input_spec_a, input_spec_b);
+            [](auto&&... args) { return ttnn::add(std::forward<decltype(args)>(args)...); },
+            device,
+            input_spec_a,
+            input_spec_b);
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);

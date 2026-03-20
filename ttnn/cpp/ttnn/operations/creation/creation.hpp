@@ -229,9 +229,8 @@ struct FullLikeWith {
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_like_impl(
-            tensor, fill_value, dtype, layout, device, memory_config, std::move(optional_output_tensor));
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
 };
 
@@ -315,7 +314,7 @@ struct Full {
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
         return full_impl(
             shape,
             fill_value,
@@ -323,7 +322,7 @@ struct Full {
             layout,
             device.has_value() ? &device->get() : nullptr,
             memory_config,
-            std::move(optional_output_tensor));
+            optional_output_tensor);
     }
 };
 
@@ -337,9 +336,8 @@ struct FullLike {
         const std::optional<Layout>& layout = std::nullopt,
         std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_like_impl(
-            tensor, fill_value, dtype, layout, device, memory_config, std::move(optional_output_tensor));
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
+        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
 };
 
