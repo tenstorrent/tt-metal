@@ -64,10 +64,16 @@ inline void assert_and_hang(
 
 // The do... while(0) in this macro allows for it to be called more flexibly, e.g. in an if-else
 // without {}s.
-#define ASSERT(condition, ...)                                                                     \
-    do {                                                                                           \
-        if (not(condition))                                                                        \
-            assert_and_hang(__LINE__, watcher_detail::watcher_file_hash(__FILE__), ##__VA_ARGS__); \
+// NOTE: the file hash MUST be assigned to a static constexpr variable so that
+// the compiler is forced to evaluate it at compile time.  Without this, riscv32
+// GCC may emit the recursive watcher_file_hash() as runtime code, bloating the
+// text section beyond the tight firmware size limits (e.g. trisc2 on Wormhole
+// only has 0x600 bytes).
+#define ASSERT(condition, ...)                                                                                    \
+    do {                                                                                                          \
+        static constexpr uint16_t watcher_assert_file_id_ = watcher_detail::watcher_file_hash(__FILE__);         \
+        if (not(condition))                                                                                       \
+            assert_and_hang(__LINE__, watcher_assert_file_id_, ##__VA_ARGS__);                                    \
     } while (0)
 
 #define ASSERT_ENABLED 1
