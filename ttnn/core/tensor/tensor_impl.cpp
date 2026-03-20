@@ -538,7 +538,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
-    auto mesh_buffer = storage.get_mesh_buffer();
+    const auto& mesh_buffer = storage.get_mesh_buffer();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);

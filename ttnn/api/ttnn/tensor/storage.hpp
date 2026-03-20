@@ -140,9 +140,9 @@ struct DeviceStorage {
 private:
     // Main internal constructor, performs all validation
     DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-        std::vector<distributed::MeshCoordinate> coords_,
-        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer_);
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
+        std::vector<distributed::MeshCoordinate> coords,
+        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer);
 
     std::vector<distributed::MeshCoordinate> coords_;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
