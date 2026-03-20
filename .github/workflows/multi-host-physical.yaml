@@ -114,7 +114,6 @@ jobs:
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
             eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            pytest -svv --timeout 1 tests/ttnn/distributed/test_ttrun_env_passthrough.py
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:

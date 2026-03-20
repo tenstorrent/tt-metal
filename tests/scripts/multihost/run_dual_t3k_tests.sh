@@ -14,6 +14,11 @@ run_dual_t3k_unit_tests() {
 
   echo "LOG_METAL: Running run_dual_t3k_unit_tests"
 
+  mkdir -p generated/test_reports
+  pytest --override-ini "addopts=--import-mode=importlib -vv -rA --durations=0" \
+    --junitxml=generated/test_reports/most_recent_tests_ttrun_env_passthrough.xml \
+    tests/ttnn/distributed/test_ttrun_env_passthrough.py ; fail+=$?
+
   # tcp flags are default for tt-run
   local mpi_args="--hostfile /etc/mpirun/hostfile"
   local mpirun_args="$mpi_args --mca btl_tcp_if_exclude docker0,lo"
