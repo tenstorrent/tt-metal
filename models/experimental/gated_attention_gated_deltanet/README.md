@@ -118,7 +118,11 @@ python models/experimental/gated_attention_gated_deltanet/tests/sweep_seq_len.py
 
 ## Performance Results
 
-Results from Wormhole N300 (DP=1), comparing torch CPU vs TTNN.
+Results from Wormhole (single chip, DP=1), comparing torch CPU vs TTNN.
+
+**Memory config strategy:**
+- **Gated Attention:** DRAM everywhere (L1 provides zero benefit; see [analysis](#l1-memory-configuration-analysis))
+- **Gated DeltaNet:** Conditional — `L1_MEMORY_CONFIG` for T ≤ 256, DRAM for T > 256 (`_L1_SEQ_THRESHOLD = 256` in `ttnn_gated_deltanet.py`)
 
 **Column key:** T = sequence length, B = batch size, PCC = Pearson Correlation Coefficient (1.0 = perfect match).
 
@@ -129,50 +133,52 @@ Results from Wormhole N300 (DP=1), comparing torch CPU vs TTNN.
 
 | T     | B   | Torch (ms) | TTNN (ms) | Speedup | PCC    |
 | ----- | --- | ---------- | --------- | ------- | ------ |
-| 1     | 2   | 0.62       | 1.89      | 0.33x   | 0.9999 |
-| 2     | 2   | 0.83       | 1.94      | 0.43x   | 0.9998 |
-| 4     | 2   | 0.84       | 1.88      | 0.45x   | 0.9999 |
-| 8     | 2   | 0.98       | 1.91      | 0.52x   | 0.9998 |
-| 16    | 2   | 1.45       | 1.88      | 0.77x   | 0.9998 |
-| 32    | 2   | 1.98       | 1.95      | 1.02x   | 0.9998 |
-| 64    | 2   | 3.98       | 1.88      | 2.11x   | 0.9997 |
-| 128   | 2   | 5.07       | 2.20      | 2.31x   | 0.9997 |
-| 256   | 2   | 10.68      | 2.01      | 5.30x   | 0.9996 |
-| 512   | 2   | 22.68      | 3.57      | 6.36x   | 0.9996 |
-| 1024  | 2   | 55.70      | 6.92      | 8.05x   | 0.9996 |
-| 2048  | 2   | 168.45     | 13.02     | 12.94x  | 0.9995 |
-| 4096  | 2   | 562.96     | 26.58     | 21.18x  | 0.9994 |
+| 1     | 2   | 0.62       | 1.83      | 0.34x   | 0.9999 |
+| 2     | 2   | 0.73       | 1.85      | 0.39x   | 0.9999 |
+| 4     | 2   | 0.82       | 1.84      | 0.44x   | 0.9999 |
+| 8     | 2   | 1.03       | 1.84      | 0.56x   | 0.9998 |
+| 16    | 2   | 1.41       | 1.87      | 0.75x   | 0.9998 |
+| 32    | 2   | 2.15       | 1.89      | 1.14x   | 0.9997 |
+| 64    | 2   | 3.75       | 1.87      | 2.01x   | 0.9997 |
+| 128   | 2   | 5.36       | 1.90      | 2.82x   | 0.9997 |
+| 256   | 2   | 10.10      | 2.12      | 4.77x   | 0.9996 |
+| 512   | 2   | 22.29      | 3.73      | 5.98x   | 0.9996 |
+| 1024  | 2   | 61.57      | 6.84      | 9.00x   | 0.9995 |
+| 2048  | 2   | 165.87     | 13.11     | 12.66x  | 0.9994 |
+| 4096  | 2   | 541.75     | 25.51     | 21.24x  | 0.9994 |
 | 8192  | 1   | 966.79     | 29.83     | 32.41x  | 0.9993 |
 | 16384 | 1   | 3693.90    | 71.05     | 51.99x  | 0.9993 |
 | 32768 | 1   | 22744.50   | 178.42    | 127.48x | 0.9991 |
 
 
-TTNN uses `ttnn.transformer.scaled_dot_product_attention` (fused FlashAttention-2 kernel) with `SDPAProgramConfig` and `WormholeComputeKernelConfig(HiFi4, fp32_dest_acc_en=True)`. GQA is handled natively by the kernel. B=1 for T >= 8192 to avoid host OOM on the torch reference.
+TTNN uses `ttnn.transformer.scaled_dot_product_attention` (fused FlashAttention-2 kernel) with `SDPAProgramConfig` and `WormholeComputeKernelConfig(HiFi2, fp32_dest_acc_en=True)`. GQA is handled natively by the kernel.
 
 ### Gated DeltaNet — Chunked Mode (B=2, H=4, K=128, V=256, chunk_size=64)
 
 - **H** — attention heads, **K** — key/query head dim, **V** — value head dim, **chunk_size** — tokens processed in parallel per chunk
 - Recurrent state per head is a K×V = 128×256 matrix (fixed size, independent of T)
+- T < chunk_size: automatic fallback to recurrent mode
+- Memory: L1 for T ≤ 256 (layer ops), DRAM for T > 256 (avoids OOM)
 
 
-| T     | Torch (ms) | TTNN (ms) | Speedup | PCC    |
-| ----- | ---------- | --------- | ------- | ------ |
-| 1     | 1.77       | 48.84     | 0.04x   | 0.9995 |
-| 2     | 2.45       | 46.83     | 0.05x   | 0.9997 |
-| 4     | 3.42       | 47.99     | 0.07x   | 0.9995 |
-| 8     | 5.41       | 50.02     | 0.11x   | 0.9995 |
-| 16    | 9.21       | 49.98     | 0.18x   | 0.9996 |
-| 32    | 17.58      | 50.45     | 0.35x   | 0.9994 |
-| 64    | 31.71      | 48.39     | 0.66x   | 0.9995 |
-| 128   | 22.70      | 49.78     | 0.46x   | 0.9995 |
-| 256   | 38.35      | 53.35     | 0.72x   | 0.9995 |
-| 512   | 75.38      | 60.05     | 1.26x   | 0.9995 |
-| 1024  | 151.23     | 40.18     | 3.76x   | 0.9998 |
-| 2048  | 310.70     | 70.61     | 4.40x   | 0.9998 |
-| 4096  | 686.50     | 134.79    | 5.09x   | 0.9998 |
-| 8192  | 1614.37    | 303.10    | 5.33x   | 0.9998 |
-| 16384 | 3299.19    | 676.65    | 4.88x   | 0.9998 |
-| 32768 | 6931.67    | 1414.78   | 4.90x   | 0.9998 |
+| T     | Torch (ms) | TTNN (ms) | Speedup | PCC    | Mode      |
+| ----- | ---------- | --------- | ------- | ------ | --------- |
+| 1     | 1.68       | 32.31     | 0.05x   | 0.9995 | recurrent |
+| 2     | 2.47       | 33.64     | 0.07x   | 0.9984 | recurrent |
+| 4     | 3.42       | 36.57     | 0.09x   | 0.9987 | recurrent |
+| 8     | 5.21       | 43.47     | 0.12x   | 0.9985 | recurrent |
+| 16    | 9.40       | 56.18     | 0.17x   | 0.9978 | recurrent |
+| 32    | 17.79      | 81.38     | 0.22x   | 0.9976 | recurrent |
+| 64    | 31.44      | 35.09     | 0.90x   | 0.9995 | chunk/L1  |
+| 128   | 22.11      | 36.87     | 0.60x   | 0.9993 | chunk/L1  |
+| 256   | 37.88      | 41.82     | 0.91x   | 0.9993 | chunk/L1  |
+| 512   | 77.62      | 48.46     | 1.60x   | 0.9995 | chunk     |
+| 1024  | 129.88     | 39.10     | 3.32x   | 0.9998 | chunk     |
+| 2048  | 307.84     | 69.45     | 4.43x   | 0.9998 | chunk     |
+| 4096  | 694.13     | 128.50    | 5.40x   | 0.9998 | chunk     |
+| 8192  | 1634.37    | 304.17    | 5.37x   | 0.9998 | chunk     |
+| 16384 | 3493.67    | 665.29    | 5.25x   | 0.9998 | chunk     |
+| 32768 | 6929.08    | 1384.80   | 5.00x   | 0.9998 | chunk     |
 
 
 DeltaNet's O(T) complexity (via chunked processing) vs Gated Attention's O(T²) complexity.
