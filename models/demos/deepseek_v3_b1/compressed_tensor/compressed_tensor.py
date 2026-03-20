@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -384,6 +385,10 @@ class CompressedTensor:
 
     def _pack_data_and_assignment(self, tensor, memory_config, assignment_memory_config, device, per_core_allocation):
         """Pack data and assignment into sharded ttnn tensors."""
+        if per_core_allocation and memory_config.buffer_type != ttnn.BufferType.L1:
+            logger.warning("per_core_allocation is only supported for L1 buffers, falling back to lockstep allocation")
+            per_core_allocation = False
+            self._per_core_allocation = False
         data_np = self._to_2d(tensor)
         self._shard_mapping = compute_shard_page_mapping(tensor.shape, memory_config, self.tile_hw)
         self._core_assignment = self._build_core_assignment()
