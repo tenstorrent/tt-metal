@@ -1371,6 +1371,9 @@ def test_bitwise_right_shift_subcore_grid_tensor_scalar(device, shape, sub_core_
     assert torch.equal(result, golden)
 
 
+# ── sub_core_grid tests for bitwise_or ──────────────────────────────────────
+
+
 @pytest.mark.parametrize(
     "shape, sub_core_grid",
     [
@@ -1430,6 +1433,9 @@ def test_bitwise_or_subcore_grid_tensor_scalar(device, shape, sub_core_grid, sca
     assert torch.equal(result, golden)
 
 
+# ── sub_core_grid tests for bitwise_xor ─────────────────────────────────────
+
+
 @pytest.mark.parametrize(
     "shape, sub_core_grid",
     [
@@ -1487,6 +1493,9 @@ def test_bitwise_xor_subcore_grid_tensor_scalar(device, shape, sub_core_grid, sc
     result = ttnn.to_torch(result_tt)
 
     assert torch.equal(result, golden)
+
+
+# ── sub_core_grid tests for bitwise_left_shift / logical_left_shift ──────────
 
 
 @pytest.mark.parametrize(
