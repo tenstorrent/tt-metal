@@ -276,6 +276,126 @@ class LTXResnetBlock3D(Module):
         return ttnn.add(residual, h)
 
 
+class LTXDepthToSpaceUpsample(Module):
+    """
+    LTX-2 upsampler: Conv3d → depth-to-space reshape.
+
+    Converts channels back to spatial/temporal dimensions:
+    (B, T, H, W, C_out) → reshape → permute → (B, T*p1, H*p2, W*p3, C)
+
+    If temporal stride=2, removes the first frame (causal padding artifact).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        stride: tuple[int, int, int],
+        out_channels_reduction_factor: int = 1,
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+        import math
+
+        self.stride = stride
+        self.out_channels_reduction_factor = out_channels_reduction_factor
+        conv_out_channels = math.prod(stride) * in_channels // out_channels_reduction_factor
+
+        self.conv = LTXCausalConv3d(
+            in_channels, conv_out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+        )
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        B, T, H, W, _ = x_BTHWC.shape
+        p1, p2, p3 = self.stride
+
+        x_BTHWC = self.conv(x_BTHWC)
+
+        # Infer C from the conv output: total channels = C * p1 * p2 * p3
+        total_c = x_BTHWC.shape[-1]
+        C = total_c // (p1 * p2 * p3)
+
+        # Depth-to-space: (B, T, H, W, C*p1*p2*p3) → (B, T*p1, H*p2, W*p3, C)
+        x = ttnn.reshape(x_BTHWC, (B, T, H, W, C, p1, p2, p3))
+        x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
+        x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
+
+        # Remove first frame if temporal upsampling (causal padding artifact)
+        if p1 == 2:
+            x = x[:, 1:, :, :, :]
+
+        return x
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        pass  # Conv handles its own state via LTXCausalConv3d._prepare_torch_state
+
+
+class LTXSpaceToDepthDownsample(Module):
+    """
+    LTX-2 downsampler: space-to-depth reshape + Conv3d + residual mean-pool.
+
+    Converts spatial/temporal dimensions to channels:
+    (B, T, H, W, C) → reshape → (B, T//p1, H//p2, W//p3, C*p1*p2*p3)
+    Then conv + residual (mean-pooled skip).
+    """
+
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        out_channels: int,
+        stride: tuple[int, int, int],
+        mesh_device: ttnn.MeshDevice,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+        import math
+
+        self.stride = stride
+        self.group_size = in_channels * math.prod(stride) // out_channels
+
+        conv_out_channels = out_channels // math.prod(stride)
+        self.conv = LTXCausalConv3d(
+            in_channels, conv_out_channels, kernel_size=3, stride=1, mesh_device=mesh_device, dtype=dtype
+        )
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        B, T, H, W, C = x_BTHWC.shape
+        p1, p2, p3 = self.stride
+
+        # Temporal causal padding: duplicate first frame
+        if p1 == 2:
+            first = x_BTHWC[:, :1, :, :, :]
+            x_BTHWC = ttnn.concat([first, x_BTHWC], dim=1)
+            T = T + 1
+
+        # Space-to-depth for skip connection: (B, T, H, W, C) → (B, T//p1, H//p2, W//p3, C*p1*p2*p3)
+        x_skip = ttnn.reshape(x_BTHWC, (B, T // p1, p1, H // p2, p2, W // p3, p3, C))
+        x_skip = ttnn.permute(x_skip, (0, 1, 3, 5, 7, 2, 4, 6))
+        x_skip = ttnn.reshape(x_skip, (B, T // p1, H // p2, W // p3, C * p1 * p2 * p3))
+
+        # Group and mean-pool the skip
+        out_c = x_skip.shape[-1] // self.group_size
+        x_skip = ttnn.reshape(x_skip, (B, T // p1, H // p2, W // p3, out_c, self.group_size))
+        x_skip = ttnn.mean(x_skip, dim=-1)
+        x_skip = ttnn.reshape(x_skip, (B, T // p1, H // p2, W // p3, out_c))
+
+        # Conv path: space-to-depth on conv output
+        x_conv = self.conv(x_BTHWC)
+        T_conv = x_conv.shape[1]
+        H_conv, W_conv = x_conv.shape[2], x_conv.shape[3]
+        C_conv = x_conv.shape[4]
+        x_conv = ttnn.reshape(x_conv, (B, T_conv // p1, p1, H_conv // p2, p2, W_conv // p3, p3, C_conv))
+        x_conv = ttnn.permute(x_conv, (0, 1, 3, 5, 7, 2, 4, 6))
+        x_conv = ttnn.reshape(x_conv, (B, T_conv // p1, H_conv // p2, W_conv // p3, C_conv * p1 * p2 * p3))
+
+        return ttnn.add(x_conv, x_skip)
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        pass
+
+
 # =============================================================================
 # Torch-only VAE Decoder wrapper (for pipeline, runs on CPU)
 # =============================================================================
