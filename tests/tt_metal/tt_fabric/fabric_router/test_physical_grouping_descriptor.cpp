@@ -1264,7 +1264,7 @@ TEST(PhysicalGroupingDescriptorTests, BuildFlattenedAdjacencyMesh_CornerInferenc
     expect_neighbors_by_id(flat_1x4, 3, {2});
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple8x16PsdWithGalaxyGroupings) {
+TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple8x16PsdWithGalaxyGroupings) {
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
 
@@ -1361,7 +1361,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple8x16PsdWi
     }
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
+TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadGroupings) {
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
 
@@ -1422,8 +1422,106 @@ TEST(PhysicalGroupingDescriptorPsdTests, ValidatePreformedGroups_Triple16x8PsdWi
     }
 }
 
+TEST(PhysicalGroupingDescriptorDualT3kTests, ValidatePreformedGroups_WHt3kGroupings) {
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_t3k_physical_grouping_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh_t3k");
+        ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh_t3k grouping not found";
+
+        std::vector<std::string> errors;
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+
+        // Should find 4 of them, each of them on a single host
+        EXPECT_EQ(asic_ids.size(), 4u)
+            << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
+
+        // Each should have their own host name
+        for (const auto& asic_id_set : asic_ids) {
+            ASSERT_FALSE(asic_id_set.empty()) << "Each 2x2_Mesh_t3k mapping should contain at least one ASIC";
+            std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
+            for (const auto& asic_id : asic_id_set) {
+                EXPECT_EQ(psd.get_host_name_for_asic(asic_id), host_name)
+                    << "Expected validation to pass: 2x2_Mesh_t3k grouping should map to mock cluster PSD";
+            }
+        }
+    }
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh_t3k");
+        ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh_t3k grouping not found";
+
+        std::vector<std::string> errors;
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
+
+        ASSERT_EQ(asic_ids.size(), 2u)
+            << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
+
+        // Each should have their own host name
+        for (const auto& asic_id_set : asic_ids) {
+            ASSERT_FALSE(asic_id_set.empty()) << "Each 2x4_Mesh_t3k mapping should contain at least one ASIC";
+            std::string host_name = psd.get_host_name_for_asic(*asic_id_set.begin());
+            for (const auto& asic_id : asic_id_set) {
+                EXPECT_EQ(psd.get_host_name_for_asic(asic_id), host_name)
+                    << "Expected validation to pass: 2x4_Mesh_t3k grouping should map to mock cluster PSD";
+            }
+        }
+    }
+}
+
+TEST(PhysicalGroupingDescriptorSP3Tests, ValidatePreformedGroups_Triple16x8PsdWithTriple16x8QuadUnknwonGroupings) {
+    const std::string pgd_path =
+        "tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto";
+
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+
+    tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
+    PhysicalGroupingDescriptor pgd{std::filesystem::path(pgd_path)};
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("2x2_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "2x2_Mesh grouping not found";
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
+
+        // Expect 96 groups
+        EXPECT_EQ(asic_ids.size(), 96u)
+            << "Expected validation to pass: 2x2_Mesh grouping should map to mock cluster PSD";
+    }
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("2x4_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "2x4_Mesh grouping not found";
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
+
+        // Expect 48 groups
+        EXPECT_EQ(asic_ids.size(), 48u)
+            << "Expected validation to pass: 2x4_Mesh grouping should map to mock cluster PSD";
+    }
+
+    {
+        auto mesh_groupings = pgd.get_groupings_by_name("4x4_Mesh");
+        ASSERT_FALSE(mesh_groupings.empty()) << "4x4_Mesh grouping not found";
+
+        auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd);
+
+        // Expect 24 groups
+        EXPECT_EQ(asic_ids.size(), 24u)
+            << "Expected validation to pass: 4x4_Mesh grouping should map to mock cluster PSD";
+    }
+}
+
 // Test POD and SUPERPOD level groupings - should fail (cannot be flattened as they're too high level)
-TEST(PhysicalGroupingDescriptorPsdTests, ValidateGroupingWithPsd_PodAndSuperpodLevel) {
+TEST(PhysicalGroupingDescriptorSP3Tests, ValidateGroupingWithPsd_PodAndSuperpodLevel) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
 
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
@@ -1460,7 +1558,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, ValidateGroupingWithPsd_PodAndSuperpodL
 // GET_VALID_GROUPINGS_FOR_MGD TESTS
 // ============================================================================
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_BlitzPipeline2x4) {
     // Test matching a 2x4 mesh MGD (8 ASICs) to the 2x4_Mesh grouping
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
@@ -1527,7 +1625,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_BlitzPipeline2x
     ASSERT_GE(g0_groupings.size(), 1u) << "Should have at least one grouping for G0";
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_4x4Mesh) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_4x4Mesh) {
     // Test matching a 4x4 mesh MGD (16 ASICs) to the 4x4_Mesh grouping
     // Using dual_4x4_mesh_graph_descriptor which has 4x4 meshes in a graph
     const std::string pgd_path =
@@ -1583,7 +1681,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_4x4Mesh) {
     ASSERT_GE(g0_groupings.size(), 1u) << "Should have at least one grouping for G0";
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_2x8Mesh) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_2x8Mesh) {
     // Test matching a 2x8 mesh MGD (16 ASICs) to the 2x8_Mesh grouping
     // Using wh_galaxy_split_2x8_2x4_3_mesh which has a 2x8 mesh (MESH4)
     const std::string pgd_path =
@@ -1639,7 +1737,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_2x8Mesh) {
     ASSERT_GE(g0_groupings_2x8.size(), 1u) << "Should have at least one grouping for G0";
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_8x16Mesh) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_8x16Mesh) {
     // Test matching an 8x16 mesh MGD (128 ASICs) to the 8x16_Mesh grouping
     const std::string pgd_path =
         "tests/tt_metal/tt_fabric/physical_groupings/triple_16x8_quad_bh_galaxy_physical_groupings.textproto";
@@ -1684,7 +1782,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_8x16Mesh) {
     }
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_SingleGalaxy4x8) {
     // Test matching a single galaxy mesh MGD (32 ASICs) to the 4x8_Mesh grouping
     // Using single_bh_galaxy_mesh_graph_descriptor which has 8x4 (32 ASICs, same count but different topology)
     const std::string pgd_path =
@@ -1730,7 +1828,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_SingleGalaxy4x8
     }
 }
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_DualGalaxy8x8) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_DualGalaxy8x8) {
     // Test matching a dual galaxy MGD with meshes
     // Using dual_galaxy_mesh_graph_descriptor which has 8x8 (64 ASICs) - different from 4x8 but testing dual mesh
     // matching
@@ -1788,7 +1886,7 @@ TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_DualGalaxy8x8) 
 //      G2 (4 graphs: 2xG1+2xG0, ALL_TO_ALL)
 // ============================================================================
 
-TEST(PhysicalGroupingDescriptorPsdTests, GetValidGroupingsForMGD_Phase3_HigherLayerGraphMatching) {
+TEST(PhysicalGroupingDescriptorSP3Tests, GetValidGroupingsForMGD_Phase3_HigherLayerGraphMatching) {
     const std::string pgd_path = "tests/tt_metal/tt_fabric/physical_groupings/test_superpod_grouping.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
 
