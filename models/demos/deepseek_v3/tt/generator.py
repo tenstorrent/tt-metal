@@ -791,27 +791,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         return self._normalize_hidden_host_for_mtp(hidden)
 
-    def _tt_from_positions(self, positions: torch.Tensor) -> Tuple[dict, ttnn.Tensor]:
-        """Return rope tensors dict and TTNN positions shard for decode.
-
-        positions: [B] int tensor
-        returns: (rope_tensors, tt_positions)
-        """
-        rope_mats = self.rope_setup.get_rot_mats_table(seq_len=1)
-        rope_tensors = {
-            "cos_matrix": rope_mats["cos_matrix"],
-            "sin_matrix": rope_mats["sin_matrix"],
-            "trans_matrix": rope_mats["trans_matrix"],
-        }
-
-        tt_positions = ttnn.from_torch(
-            positions.to(torch.int32),
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            dtype=ttnn.int32,
-        )
-        return rope_tensors, tt_positions
-
     def _iter_decode_mla_cfgs(self):
         for block_cfg in self.model_run_config_decode["mlp_decoder_block"]:
             yield block_cfg["mla"]["mla1d"]
