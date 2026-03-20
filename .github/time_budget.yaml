@@ -126,6 +126,7 @@ models:
     wh_llmbox_perf_release: 1090
     wh_galaxy: 287
     wh_galaxy_release: 345
+    bh_galaxy: 30
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
