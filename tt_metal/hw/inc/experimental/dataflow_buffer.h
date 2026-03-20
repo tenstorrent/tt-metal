@@ -39,10 +39,10 @@ public:
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) {
-        ASSERT(num_entries == 1);
         PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
         uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+        ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
         // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " acked: " << static_cast<uint32_t>(tile_counters[tc_id].f.acked) << ENDL();
 #elif !defined(COMPILE_FOR_TRISC)
@@ -53,6 +53,7 @@ public:
                 ready = true;
                 for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                     PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+                    ASSERT(llk_intf_get_capacity(get_tensix_id(ptc), get_counter_id(ptc)) >= num_entries);
                     // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
                     if (llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc)) < num_entries) {
                         ready = false;
@@ -62,6 +63,7 @@ public:
             }
         } else {
             uint8_t tensix_id = get_tensix_id(packed_tc);
+            ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
             while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
             // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL();
         }
@@ -69,10 +71,10 @@ public:
     }
 
     void push_back(uint16_t num_entries) {
-        ASSERT(num_entries == 1);
         PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
         uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+        ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_push_tiles(logical_dfb_id_, num_entries);
         // DPRINT << "push_bak: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(tile_counters[tc_id].f.posted) << ENDL();
 #elif !defined(COMPILE_FOR_TRISC)
@@ -80,6 +82,7 @@ public:
             // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                 PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
+                ASSERT(llk_intf_get_capacity(get_tensix_id(ptc), get_counter_id(ptc)) >= num_entries);
                 // DPRINT << "push_back: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
                 llk_intf_inc_posted(get_tensix_id(ptc), get_counter_id(ptc), num_entries);
             }
@@ -90,6 +93,7 @@ public:
             // tc_idx deliberately not advanced
         } else {
             uint8_t tensix_id = get_tensix_id(packed_tc);
+            ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
             llk_intf_inc_posted(tensix_id, tc_id, num_entries);
             // DPRINT << "push_back: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " << static_cast<uint32_t>(tc_id) << " capacity: "
             //         << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
@@ -106,10 +110,10 @@ public:
     }
 
     void wait_front(uint16_t num_entries) {
-        ASSERT(num_entries == 1);
         PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
         uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+        ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
             return;
         }
@@ -120,21 +124,23 @@ public:
         //        << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
         //        << " tc_id: " << static_cast<uint32_t>(tc_id)
         //        << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
+        ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     }
 
     void pop_front(uint16_t num_entries) {
-        ASSERT(num_entries == 1);
         PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
         uint8_t tc_id = get_counter_id(packed_tc);
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
         if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
             return;
         }
+        ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_pop_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
         uint8_t tensix_id = get_tensix_id(packed_tc);
+        ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         llk_intf_inc_acked(tensix_id, tc_id, num_entries);
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (num_entries * local_dfb_interface_.stride_size);
         if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr == local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
@@ -240,12 +246,12 @@ public:
 
     uint32_t get_write_ptr() const {
         // return byte address (wr_ptr is 16B address on Gen1XX)
-        return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr + MEM_L1_UNCACHED_BASE;
+        return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr;
     }
 
     uint32_t get_read_ptr() const {
         // return byte address (rd_ptr is 16B address on Gen1XX)
-        return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr + MEM_L1_UNCACHED_BASE;
+        return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr;
     }
 
     [[nodiscard]] auto scoped_lock() {
