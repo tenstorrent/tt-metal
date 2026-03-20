@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 
 #include "api/compute/bcast.h"
@@ -21,22 +22,25 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
 constexpr uint32_t num_inner = get_compile_time_arg_val(2);
 
+// CBs with input data / scalar parameters
 constexpr auto cb_input_pass_1 = tt::CBIndex::c_0;
 constexpr auto cb_input_pass_2 = tt::CBIndex::c_1;
-constexpr auto cb_input_pass_3 = tt::CBIndex::c_19;
-constexpr auto cb_scaler = tt::CBIndex::c_2;
-constexpr auto cb_eps = tt::CBIndex::c_3;
-constexpr auto cb_w0 = tt::CBIndex::c_4;
-constexpr auto cb_w1 = tt::CBIndex::c_5;
-constexpr auto cb_w2 = tt::CBIndex::c_6;
-constexpr auto cb_bias = tt::CBIndex::c_7;
-constexpr auto cb_sum_x2 = tt::CBIndex::c_8;
-constexpr auto cb_sum_x4 = tt::CBIndex::c_9;
-constexpr auto cb_sum_x6 = tt::CBIndex::c_10;
-constexpr auto cb_inv_rms_x = tt::CBIndex::c_11;
-constexpr auto cb_inv_rms_x2 = tt::CBIndex::c_12;
-constexpr auto cb_inv_rms_x3 = tt::CBIndex::c_13;
-constexpr auto cb_output = tt::CBIndex::c_14;
+constexpr auto cb_input_pass_3 = tt::CBIndex::c_2;
+constexpr auto cb_scaler = tt::CBIndex::c_3;
+constexpr auto cb_eps = tt::CBIndex::c_4;
+constexpr auto cb_w0 = tt::CBIndex::c_5;
+constexpr auto cb_w1 = tt::CBIndex::c_6;
+constexpr auto cb_w2 = tt::CBIndex::c_7;
+constexpr auto cb_bias = tt::CBIndex::c_8;
+// CBs with intermediate computations
+constexpr auto cb_sum_x2 = tt::CBIndex::c_9;
+constexpr auto cb_sum_x4 = tt::CBIndex::c_10;
+constexpr auto cb_sum_x6 = tt::CBIndex::c_11;
+constexpr auto cb_inv_rms_x = tt::CBIndex::c_12;
+constexpr auto cb_inv_rms_x2 = tt::CBIndex::c_13;
+constexpr auto cb_inv_rms_x3 = tt::CBIndex::c_14;
+// CB with output data
+constexpr auto cb_output = tt::CBIndex::c_15;
 
 // Reduce a row-sum tile into inv_rms = 1 / sqrt(sum * scaler + eps).
 void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
@@ -80,7 +84,7 @@ void accumulate_sum_x2_and_x6_for_row() {
     bool first_tile = true;
     tile_regs_acquire();
     for (uint32_t col = 0; col < num_inner; col += block_size) {
-        const uint32_t current_block_size = (col + block_size <= num_inner) ? block_size : (num_inner - col);
+        const uint32_t current_block_size = std::min(block_size, num_inner - col);
         cb_wait_front(cb_input_pass_1, block_size);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             copy_tile_init(cb_input_pass_1);
@@ -127,7 +131,7 @@ void accumulate_sum_x4_for_row() {
     bool first_tile = true;
     tile_regs_acquire();
     for (uint32_t col = 0; col < num_inner; col += block_size) {
-        const uint32_t current_block_size = (col + block_size <= num_inner) ? block_size : (num_inner - col);
+        const uint32_t current_block_size = std::min(block_size, num_inner - col);
         cb_wait_front(cb_input_pass_3, block_size);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             copy_tile_init(cb_input_pass_3);
@@ -163,7 +167,7 @@ void emit_output_for_row() {
     cb_wait_front(cb_inv_rms_x3, onetile);
 
     for (uint32_t col = 0; col < num_inner; col += block_size) {
-        const uint32_t current_block_size = (col + block_size <= num_inner) ? block_size : (num_inner - col);
+        const uint32_t current_block_size = std::min(block_size, num_inner - col);
         cb_wait_front(cb_input_pass_2, block_size);
         cb_reserve_back(cb_output, block_size);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
