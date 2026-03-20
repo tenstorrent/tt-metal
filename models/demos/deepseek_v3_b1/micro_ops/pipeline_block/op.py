@@ -55,10 +55,9 @@ class PipelineBlock:
         d2h_socket_page_size=None,
         entry_node_downstream=None,
         exit_node_upstream=None,
+        exit_upstream_page_size=None,
         embedding_tensor=None,
         initialize_loopback=True,
-        exit_upstream_core_coords=None,
-        exit_upstream_page_size=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -87,8 +86,6 @@ class PipelineBlock:
         self.d2h_socket = None
         self.entry_socket_interface = None
         self.exit_socket_interface = None
-        self.exit_upstream_core_coords = exit_upstream_core_coords
-        self.exit_upstream_page_size = exit_upstream_page_size
 
         token_size_bytes = 64
 
@@ -131,7 +128,6 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 entry_node_downstream,
                 exit_node_upstream,
-                exit_upstream_core_coords,
                 exit_upstream_page_size,
             )
 
@@ -278,7 +274,6 @@ class PipelineBlock:
         downstream_d2d_socket_page_size,
         entry_node_downstream,
         exit_node_upstream,
-        exit_upstream_core_coords=None,
         exit_upstream_page_size=None,
     ):
         self.entry_socket_interface = SocketInterface(
@@ -295,9 +290,9 @@ class PipelineBlock:
         )
 
         next_mesh_id = self.my_mesh_id + 1 if not self.is_last_stage else 0
-        use_multi_upstream = exit_upstream_core_coords is not None
-        print("use multi-upstream exit socket:", use_multi_upstream)
+        use_multi_upstream = isinstance(exit_node_upstream, list)
         if use_multi_upstream:
+            assert exit_upstream_page_size is not None, "exit_upstream_page_size required for multi-upstream mode"
             self.exit_socket_interface = SocketInterface(
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
@@ -306,7 +301,7 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id + 1].entry_node_coord, pipeline_core_coord),
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
-                upstream_core_coords=exit_upstream_core_coords,
+                upstream_core_coords=exit_node_upstream,
                 upstream_page_size=exit_upstream_page_size,
             )
         else:

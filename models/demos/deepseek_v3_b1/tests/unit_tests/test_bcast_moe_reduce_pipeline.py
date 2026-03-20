@@ -156,7 +156,7 @@ def test_bcast_moe_reduce_pipeline(
             embedding_tensor=embedding_tensor,
         )
     elif is_stage1:
-        exit_upstream_core_coords = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -165,7 +165,7 @@ def test_bcast_moe_reduce_pipeline(
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-            exit_upstream_core_coords=exit_upstream_core_coords,
+            exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=reduce_payload_per_shard,
         )
     else:
@@ -666,7 +666,7 @@ def test_persistent_mode_pipeline(
                 embedding_tensor=embedding_tensor,
             )
         elif is_stage1:
-            exit_upstream_core_coords = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+            exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core,
@@ -675,7 +675,7 @@ def test_persistent_mode_pipeline(
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-                exit_upstream_core_coords=exit_upstream_core_coords,
+                exit_node_upstream=exit_upstream_cores,
                 exit_upstream_page_size=reduce_payload_per_shard,
             )
         else:

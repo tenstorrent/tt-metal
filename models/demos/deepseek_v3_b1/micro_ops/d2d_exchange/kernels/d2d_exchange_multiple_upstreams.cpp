@@ -21,6 +21,7 @@ constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(8);
 constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(9);
 constexpr bool use_fabric_on_sender = get_compile_time_arg_val(10);
 
+// Note: hardcoding 8 upstream sockets, will be modified later
 constexpr uint32_t receiver_socket_config_addr_0 = get_compile_time_arg_val(11);
 constexpr uint32_t receiver_socket_config_addr_1 = get_compile_time_arg_val(12);
 constexpr uint32_t receiver_socket_config_addr_2 = get_compile_time_arg_val(13);

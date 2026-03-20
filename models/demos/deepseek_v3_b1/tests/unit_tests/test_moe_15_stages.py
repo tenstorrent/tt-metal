@@ -154,7 +154,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             embedding_tensor=embedding_tensor,
         )
     else:
-        exit_upstream_core_coords = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
         pipeline_block = PipelineBlock(
             mesh_device,
             pipeline_core,
@@ -163,7 +163,7 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
             upstream_d2d_socket_page_size=embedding_size_bytes,
             downstream_d2d_socket_page_size=embedding_size_bytes,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-            exit_upstream_core_coords=exit_upstream_core_coords,
+            exit_node_upstream=exit_upstream_cores,
             exit_upstream_page_size=reduce_payload_per_shard,
         )
 
@@ -536,7 +536,7 @@ def test_persistent_moe_15_stages(
                 embedding_tensor=embedding_tensor,
             )
         else:
-            exit_upstream_core_coords = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+            exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core,
@@ -545,7 +545,7 @@ def test_persistent_moe_15_stages(
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-                exit_upstream_core_coords=exit_upstream_core_coords,
+                exit_node_upstream=exit_upstream_cores,
                 exit_upstream_page_size=reduce_payload_per_shard,
             )
 
@@ -919,7 +919,7 @@ def test_persistent_moe_multi_token(
                 embedding_tensor=embedding_tensor,
             )
         else:
-            exit_upstream_core_coords = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+            exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core,
@@ -928,7 +928,7 @@ def test_persistent_moe_multi_token(
                 upstream_d2d_socket_page_size=embedding_size_bytes,
                 downstream_d2d_socket_page_size=embedding_size_bytes,
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-                exit_upstream_core_coords=exit_upstream_core_coords,
+                exit_node_upstream=exit_upstream_cores,
                 exit_upstream_page_size=reduce_payload_per_shard,
             )
 
