@@ -14,12 +14,12 @@ Estimated DRAM budget (BF8/BF16 mix) across both chips:
 
   Llama 3.1 8B (BF8)  ~8.0 GB (sharded across 2 chips)
   Whisper distil-v3   ~1.5 GB
-  SpeechT5            ~0.6 GB
+  Qwen3-TTS 1.7B      ~3.4 GB (Talker 28L + CodePredictor 5L)
   OWL-ViT             ~0.3 GB
   BERT Large          ~0.7 GB
   KV cache + traces   ~1.0 GB
   ─────────────────────────────
-  Total               ~12.1 GB / 24 GB  (across 2 × 12 GB chips)
+  Total               ~14.9 GB / 24 GB  (across 2 × 12 GB chips)
 """
 
 from dataclasses import dataclass
@@ -35,7 +35,7 @@ class ModelBundle:
 
     llm: object = None
     whisper: object = None
-    speecht5: object = None
+    qwen3_tts: object = None  # Qwen3-TTS (voice cloning, multi-language)
     owlvit: object = None
     bert: object = None
     sd: object = None  # Stable Diffusion
@@ -86,7 +86,7 @@ def load_all_models(
     mesh_device,
     load_llm: bool = True,
     load_whisper: bool = True,
-    load_speecht5: bool = True,
+    load_qwen3_tts: bool = True,
     load_owlvit: bool = True,
     load_bert: bool = True,
     load_sd: bool = False,  # Stable Diffusion (disabled by default - large model)
@@ -123,12 +123,12 @@ def load_all_models(
 
         bundle.whisper = WhisperTool(mesh_device=mesh_device)
 
-    # --- SpeechT5 (TTS) -------------------------------------------------
-    if load_speecht5:
-        logger.info("[3/8] Loading SpeechT5 TTS...")
-        from models.demos.minimax_m2.agentic.tool_wrappers.speecht5_tool import SpeechT5Tool
+    # --- Qwen3-TTS (TTS with voice cloning) ------------------------------
+    if load_qwen3_tts:
+        logger.info("[3/8] Loading Qwen3-TTS (voice cloning, multi-language)...")
+        from models.demos.minimax_m2.agentic.tool_wrappers.qwen3_tts_tool import Qwen3TTSTool
 
-        bundle.speecht5 = SpeechT5Tool(mesh_device=mesh_device)
+        bundle.qwen3_tts = Qwen3TTSTool(mesh_device=mesh_device)
 
     # --- OWL-ViT (object detection) -------------------------------------
     if load_owlvit:
@@ -193,12 +193,12 @@ def cleanup_models(bundle: ModelBundle) -> None:
         except Exception as e:
             logger.warning(f"Whisper cleanup failed: {e}")
 
-    # SpeechT5 - release any traces
-    if bundle.speecht5 is not None and hasattr(bundle.speecht5, "close"):
+    # Qwen3-TTS - release any traces
+    if bundle.qwen3_tts is not None and hasattr(bundle.qwen3_tts, "close"):
         try:
-            bundle.speecht5.close()
+            bundle.qwen3_tts.close()
         except Exception as e:
-            logger.warning(f"SpeechT5 cleanup failed: {e}")
+            logger.warning(f"Qwen3-TTS cleanup failed: {e}")
 
     # OWL-ViT and BERT don't use traces, but call close if available
     if bundle.owlvit is not None and hasattr(bundle.owlvit, "close"):

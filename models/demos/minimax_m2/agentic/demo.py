@@ -41,7 +41,7 @@ import ttnn
 from models.demos.minimax_m2.agentic.loader import cleanup_models, load_all_models, open_n300_device
 from models.demos.minimax_m2.agentic.orchestrator import process_single_query, run_agentic_loop
 
-_ALL_TOOLS = {"llm", "whisper", "speecht5", "owlvit", "bert", "sd", "yunet", "t5"}
+_ALL_TOOLS = {"llm", "whisper", "qwen3_tts", "owlvit", "bert", "sd", "yunet", "t5"}
 
 
 def _parse_args():
@@ -92,7 +92,7 @@ def _build_load_flags(tools_arg: str) -> dict:
     return {
         "load_llm": "llm" in selected,
         "load_whisper": "whisper" in selected,
-        "load_speecht5": "speecht5" in selected,
+        "load_qwen3_tts": "qwen3_tts" in selected,
         "load_owlvit": "owlvit" in selected,
         "load_bert": "bert" in selected,
         "load_sd": "sd" in selected,

@@ -40,7 +40,8 @@ TOOL_SCHEMAS: List[Dict] = [
         "function": {
             "name": "text_to_speech",
             "description": (
-                "Converts text to speech and saves as a wav file. "
+                "Converts text to speech using Qwen3-TTS with voice cloning. "
+                "Supports English, Chinese, Japanese. High-quality 24kHz audio. "
                 "Use when the user explicitly wants an audio response."
             ),
             "parameters": {
@@ -53,6 +54,10 @@ TOOL_SCHEMAS: List[Dict] = [
                     "output_path": {
                         "type": "string",
                         "description": "Output .wav file path",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Language: english, chinese, or japanese (default: english)",
                     },
                 },
                 "required": ["text"],
@@ -203,7 +208,8 @@ def dispatch_tool(name: str, args: Dict[str, Any], models) -> Any:
 
     elif name == "text_to_speech":
         output_path = args.get("output_path", "/tmp/response.wav")
-        return models.speecht5.synthesize(args["text"], output_path)
+        language = args.get("language", "english")
+        return models.qwen3_tts.synthesize(args["text"], output_path, language=language)
 
     elif name == "detect_objects":
         detections = models.owlvit.detect(args["image_path"], args["query"])
