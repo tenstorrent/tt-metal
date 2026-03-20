@@ -618,13 +618,89 @@ class TtTransformer(LightweightModule):
         self.mesh_device.reset_sub_device_stall_group()
         op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
         batch_dim, vocab_dim = bitmask.shape
+        mesh_rows, mesh_cols = self.args.cluster_shape
+        arange32 = torch.arange(32, dtype=torch.int32)
+
+        # Read back packed input from device to build per-shard torch references
+        packed_shards_host = [ttnn.to_torch(s).to(torch.int32) for s in ttnn.get_device_tensors(bitmask)]
+        B = packed_shards_host[0].shape[0]
+        shard_w = packed_shards_host[0].shape[-1]
+        ref_packed = [packed_shards_host[r * mesh_cols] for r in range(mesh_rows)]
+        ref_reshaped = [s.reshape(B, shard_w, 1) for s in ref_packed]
+        ref_shifted = [torch.bitwise_right_shift(s, arange32[None, None, :]) for s in ref_reshaped]
+        ref_anded = [(s & 1) for s in ref_shifted]
+        ref_flat = [s.reshape(B, shard_w * 32) for s in ref_anded]
+        ref_float = [s.to(torch.float32) for s in ref_flat]
+        ref_sub1 = [(s - 1.0) for s in ref_float]
+        ref_penalty = [(s * 1e9) for s in ref_sub1]
+        _stage_refs = {
+            "0_packed_input": (ref_packed, torch.int32),
+            "1_reshape_3d": (ref_reshaped, torch.int32),
+            "2_right_shift": (ref_shifted, torch.int32),
+            "3_bitwise_and": (ref_anded, torch.int32),
+            "4_reshape_2d": (ref_flat, torch.int32),
+            "5_to_tile": (ref_flat, torch.int32),
+            "6_add_neg1": (ref_sub1, torch.float32),
+            "7_mul_1e9": (ref_penalty, torch.float32),
+        }
+
+        def _check(name, tt_tensor):
+            ref_per_row, dtype = _stage_refs[name]
+            try:
+                shards = ttnn.get_device_tensors(tt_tensor)
+                failures = []
+                for idx, shard in enumerate(shards):
+                    row = idx // mesh_cols
+                    actual = ttnn.to_torch(shard).to(dtype)
+                    expected = ref_per_row[row].to(dtype)
+                    common = tuple(min(a, e) for a, e in zip(actual.shape, expected.shape))
+                    a = actual[tuple(slice(0, s) for s in common)]
+                    e = expected[tuple(slice(0, s) for s in common)]
+                    if not torch.equal(a, e):
+                        mm = a != e
+                        count = int(mm.sum().item())
+                        first = torch.nonzero(mm, as_tuple=False)[0].tolist()
+                        failures.append(
+                            f"  dev={idx} row={row} col={idx % mesh_cols} "
+                            f"first_mismatch={first} got={a[tuple(first)].item()} "
+                            f"expected={e[tuple(first)].item()} "
+                            f"mismatches={count}/{a.numel()} "
+                            f"actual_shape={tuple(actual.shape)} ref_shape={tuple(expected.shape)}"
+                        )
+                if failures:
+                    print(f"[STAGE CHECK] {name} FAILED ({len(failures)}/{len(shards)} shards):")
+                    for f in failures:
+                        print(f)
+                else:
+                    print(f"[STAGE CHECK] {name} PASSED ({len(shards)} shards)")
+            except Exception as ex:
+                import traceback
+
+                print(f"[STAGE CHECK] {name} ERROR: {ex}\n{traceback.format_exc()}")
+
+        # _check("0_packed_input", bitmask)
+
         bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
+        _check("1_reshape_3d", bitmask_to_broadcast)
+
         broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+        _check("2_right_shift", broadcast_unpacked)
+
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+        _check("3_bitwise_and", broadcast_unpacked)
+
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
+        # _check("4_reshape_2d", unpacked_bitmask)
+
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
+        # _check("5_to_tile", converted_bitmask)
+
         result = ttnn.add(converted_bitmask, -1.0, dtype=ttnn.float32, **op_kwargs)
+        # _check("6_add_neg1", result)
+
         result = ttnn.multiply(result, 1e9, **op_kwargs)
+        # _check("7_mul_1e9", result)
+
         if hasattr(self.prefetcher_setup, "prefetcher_sub_device_id"):
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
         return result
