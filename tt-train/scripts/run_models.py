@@ -29,13 +29,10 @@ def get_env(name: str, required=False) -> str:
 
 
 def get_git_commit_hash() -> str:
-    """Return current git HEAD commit hash, or empty string if not in a repo."""
-    try:
-        repo = git.Repo(search_parent_directories=True)
-        sha = repo.head.object.hexsha
-        return sha
-    except Exception:
-        return ""
+    """Return current git HEAD commit hash. Will raise an exception if not in a git repository."""
+    repo = git.Repo(search_parent_directories=True)
+    sha = repo.head.object.hexsha
+    return sha
 
 
 def run_and_save_log(args: list[str], log_path: Path):
@@ -95,6 +92,9 @@ def main() -> int:
         raise Exception(f"{str(tt_train_path)} does not exist or not a directory")
     if not build_examples.is_dir():
         raise Exception(f"{str(build_examples)} does not exist or not a directory")
+
+    # Save current git commit hash
+    git_commit_hash = get_git_commit_hash()
 
     # Create output directory to store metrics
     output_dir.mkdir(parents=True, exist_ok=True)
