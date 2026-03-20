@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.vae.ltx.vae_ltx import LTXCausalConv3d, LTXResnetBlock3D
+from models.tt_dit.models.vae.ltx.vae_ltx import LTXCausalConv3d, LTXDepthToSpaceUpsample, LTXResnetBlock3D
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_in_channels
 
@@ -150,3 +150,49 @@ def test_ltx_resnet_block(mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T
     min_pcc = 0.995 if in_c != out_c else 0.999
     assert_quality(torch_out, tt_out_torch, pcc=min_pcc)
     logger.info(f"PASSED: LTXResnetBlock3D ({in_c}->{out_c}) matches reference")
+
+
+@pytest.mark.parametrize(
+    "in_c, stride, T, H, W",
+    [
+        (128, (2, 2, 2), 4, 8, 8),  # Full 3D upsample (compress_all)
+        (128, (1, 2, 2), 3, 8, 8),  # Spatial only (compress_space)
+        (128, (2, 1, 1), 4, 8, 8),  # Temporal only (compress_time)
+    ],
+    ids=["upsample_all", "upsample_space", "upsample_time"],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    ids=["1x1"],
+    indirect=["mesh_device"],
+)
+def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, stride: tuple, T: int, H: int, W: int):
+    """Test LTXDepthToSpaceUpsample against PyTorch reference."""
+    from ltx_core.model.video_vae.sampling import DepthToSpaceUpsample as TorchDTS
+
+    B = 1
+    torch.manual_seed(42)
+
+    torch_model = TorchDTS(dims=3, in_channels=in_c, stride=stride)
+    torch_model.eval()
+
+    tt_model = LTXDepthToSpaceUpsample(in_channels=in_c, stride=stride, mesh_device=mesh_device)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32)
+    with torch.no_grad():
+        torch_out = torch_model(x)
+
+    x_bthwc = x.permute(0, 2, 3, 4, 1)
+    x_bthwc = conv_pad_in_channels(x_bthwc)
+    x_tt = ttnn.from_torch(x_bthwc, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    tt_out = tt_model(x_tt)
+    tt_out_torch = ttnn.to_torch(tt_out)
+    out_c = torch_out.shape[1]
+    tt_out_torch = tt_out_torch[:, :, :, :, :out_c].permute(0, 4, 1, 2, 3)
+
+    logger.info(f"Upsample stride={stride}: {x.shape} -> torch {torch_out.shape}, tt {tt_out_torch.shape}")
+    assert_quality(torch_out, tt_out_torch, pcc=0.999)
+    logger.info(f"PASSED: DepthToSpaceUpsample stride={stride}")
