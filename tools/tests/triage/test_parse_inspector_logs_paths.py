@@ -2,14 +2,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import sys
 from pathlib import Path
 
 
-metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-triage_home = os.path.join(metal_home, "tools", "triage")
-sys.path.insert(0, triage_home)
+metal_home = Path(__file__).resolve().parent.parent.parent.parent
+triage_home = metal_home / "tools" / "triage"
+sys.path.insert(0, str(triage_home))
 
 from parse_inspector_logs import get_log_directory
 
