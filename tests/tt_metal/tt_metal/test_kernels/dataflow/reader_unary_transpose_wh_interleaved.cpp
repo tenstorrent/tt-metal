@@ -67,8 +67,7 @@ void kernel_main() {
     noc.async_read_barrier();
 
 #ifdef ARCH_QUASAR
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        dfb1.get_write_ptr() + MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb1.get_write_ptr());
 #else
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id_in2));
 #endif
@@ -82,9 +81,9 @@ void kernel_main() {
         idx += 128;
     }
 #ifdef ARCH_QUASAR
-    dfb1.push_back(1);
+    dfb1.push_back(onetile);
 #else
-    cb2.push_back(1);
+    cb2.push_back(onetile);
 #endif
 #endif
 

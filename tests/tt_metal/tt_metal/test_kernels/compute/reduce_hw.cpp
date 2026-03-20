@@ -16,6 +16,8 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t NC = get_compile_time_arg_val(2);
 
+    constexpr uint32_t onetile = 1;
+
 #ifdef ARCH_QUASAR
     experimental::DataflowBuffer dfb_in(0);
     experimental::DataflowBuffer dfb_in_scaler(1);
@@ -31,12 +33,11 @@ void kernel_main() {
 #endif
 
 #ifdef ARCH_QUASAR
-    dfb_in_scaler.wait_front(1);
+    dfb_in_scaler.wait_front(onetile);
 #else
-    cb2.wait_front(1);  // scaler tile from the reader
+    cb2.wait_front(onetile);  // scaler tile from the reader
 #endif
     for (uint32_t nc = 0; nc < NC; nc++) {
-        constexpr int onetile = 1;
         int reduce_dst_idx = 0;
         acquire_dst();
         for (uint32_t ht = 0; ht < Ht; ++ht) {
