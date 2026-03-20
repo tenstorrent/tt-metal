@@ -386,12 +386,60 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
+        # Create dummy joint tensors with 0 sequence length (required by ring_joint_scaled_dot_product_attention)
+        joint_seq_len = 0
+        joint_q_shape = (1, num_heads_local, joint_seq_len, self.qk_head_dim)
+        joint_kv_shape = (1, 1, joint_seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
+        joint_v_shape = (1, num_heads_local, joint_seq_len, self.v_head_dim)
+
+        # Joint tensors are only sharded on head dimension (up_axis)
+        joint_shard_dims = [None, None]
+        joint_shard_dims[1] = 1  # tp_axis = 1 for head sharding
+
+        joint_kv_shard_dims = [None, None]
+        # Don't shard joint KV on head dim since there's only 1 head
+
+        tt_joint_q = ttnn.from_torch(
+            torch.zeros(joint_q_shape),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
+            ),
+        )
+
+        tt_joint_kv = ttnn.from_torch(
+            torch.zeros(joint_kv_shape),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        tt_joint_v = ttnn.from_torch(
+            torch.zeros(joint_v_shape),
+            device=self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=joint_shard_dims
+            ),
+        )
+
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
             tt_v_embedding,
+            tt_joint_q,
+            tt_joint_kv,
+            tt_joint_v,
             persistent_output_buffer_k=self.persistent_k_output_buffer,
             persistent_output_buffer_v=self.persistent_v_output_buffer,
+            joint_strategy="rear",
             logical_n=seq_len_local * sp_factor,
             program_config=self.ring_sdpa_program_config,
             compute_kernel_config=self.default_compute_kernel_config,
@@ -407,6 +455,11 @@ class ttMLA:
             scale=self.scale,
             is_balanced=True,
         )
+
+        # Clean up joint tensors
+        ttnn.deallocate(tt_joint_q)
+        ttnn.deallocate(tt_joint_kv)
+        ttnn.deallocate(tt_joint_v)
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
