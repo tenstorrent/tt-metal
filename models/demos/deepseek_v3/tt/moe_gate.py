@@ -4,7 +4,6 @@
 from pathlib import Path
 
 import torch
-from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -14,7 +13,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     BinaryOpConfig,
     FromWeightConfig,
     LinearConfig,
-    LinearFallbackConfig,
     MeshDeviceStub,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
@@ -155,15 +153,14 @@ class MoEGate(AbstractModule):
                     memory_config=memory_config,
                     dtype=ttnn.bfloat16,
                 ),
-                "linear_fallback": False,
-                "linear_fallback_config": LinearFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "input_output_shard_shape": (32, 32),
+                "token_shape": (16, 16),
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
+                "eps": 1e-20,
+                "enable_sigmoid": True,
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -179,15 +176,14 @@ class MoEGate(AbstractModule):
                     memory_config=memory_config,
                     dtype=ttnn.bfloat16,
                 ),
-                "linear_fallback": False,
-                "linear_fallback_config": LinearFallbackConfig(
-                    mesh_device=MeshDeviceStub(mesh_device.shape),
-                    dtype=ttnn.bfloat16,
-                ),
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "input_memory_config": memory_config,
                 "output_memory_config": memory_config,
+                "input_output_shard_shape": (32, 32),
+                "token_shape": (16, 16),
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
+                "eps": 1e-20,
+                "enable_sigmoid": True,
             }
 
     @classmethod
@@ -211,10 +207,7 @@ class MoEGate(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate projections
-        if cfg["linear_fallback"]:
-            logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
-        else:
-            logits = ttnn.linear(x, **cfg["gate_proj"])
+        logits = ttnn.linear(x, **cfg["gate_proj"])
 
         mesh_device = cfg["mesh_device"]
         num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
@@ -238,8 +231,8 @@ class MoEGate(AbstractModule):
                 row_wise=True,
             )
 
-            input_output_shard_shape = (32, 32)
-            reshaped_input_shape = (batch_size_per_device, 16, 16)
+            input_output_shard_shape = cfg["input_output_shard_shape"]
+            reshaped_input_shape = (batch_size_per_device, *cfg["token_shape"])
 
             # currently we cannot convert the tile size of logits and input indices to 16*16 which is required by the original op,
             # but the memory layout is the same since the length is 256
@@ -258,7 +251,7 @@ class MoEGate(AbstractModule):
             # change the memory config of the logits
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
-            # create the bias tensor (don't put it before line 398)
+            # create the bias tensor
             scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
             scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_device, 1)))
             scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
@@ -281,9 +274,9 @@ class MoEGate(AbstractModule):
             ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device, 1, 1))
             ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
-            eps = 1e-20
+            eps = cfg["eps"]
             scaling_factor = cfg["routed_scaling_factor"]
-            enable_sigmoid = True
+            enable_sigmoid = cfg["enable_sigmoid"]
             topk_experts_scores, topk_experts_indices = DeepseekMoeGateSingleCore.op(
                 cur_logits,
                 scores_correction_bias,
@@ -349,47 +342,3 @@ class MoEGate(AbstractModule):
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         return cls.forward(x, cfg)
-
-    @classmethod
-    def linear_fallback_op(
-        cls,
-        input_tensor: ttnn.Tensor,
-        input_tensor_b: ttnn.Tensor,
-        mesh_device: ttnn.Device,
-        dtype: ttnn.DataType,
-        memory_config: ttnn.MemoryConfig,
-        compute_kernel_config=None,
-    ) -> ttnn.Tensor:
-        """Linear fallback operation using torch.nn.functional.linear"""
-        # convert ttnn mesh tensors to torch tensors
-        logger.info(f"linear_fallback_op: input shape: {input_tensor.shape}, weight shape: {input_tensor_b.shape}")
-
-        torch_input = ttnn.to_torch(
-            input_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0].unsqueeze(0)
-
-        torch_weight = ttnn.to_torch(
-            input_tensor_b,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 0), mesh_shape=tuple(mesh_device.shape)),
-        )[0][0]
-
-        torch_input_2d = torch_input.squeeze(0).squeeze(0)  # [seq_len, hidden_dim]
-        torch_weight_2d = torch_weight.T  # [output_dim, hidden_dim]
-
-        # use torch linear: input @ weight.T
-        torch_output = torch.nn.functional.linear(torch_input_2d, torch_weight_2d)
-
-        # Restore dimensions and convert back to ttnn
-        torch_output = torch_output.unsqueeze(0).unsqueeze(0)  # [1, 1, seq_len, output_dim]
-
-        ttnn_output = ttnn.from_torch(
-            torch_output,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
-            dtype=dtype,
-            memory_config=memory_config,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        return ttnn_output
