@@ -3,90 +3,58 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Ring SDPA topology helpers shared between compute and dataflow kernels.
-// Contains the single-source-of-truth ring_id assignment state machine
+// Contains the single-source-of-truth sequential ring_id assignment state machine
 // used by RingSDPAOpIndexer, RingSDPAOpReceiver, and pre-scan helpers.
 
 #pragma once
 
 #include <cstdint>
+#include "api/debug/dprint.h"
 
 /**
- * Direction-alternating ring_id sequencer.
+ * Sequential single-direction ring_id sequencer.
  * Computes which device's KV shard to process at each ring iteration.
  * Iteration 0 is always the local device (ring_index).
- * Subsequent iterations alternate between backward and forward directions.
+ * Subsequent iterations step in a fixed direction determined at construction.
+ *
+ * direction 0 = backward: ring_id increments each step (ring_index, ring_index+1, ...)
+ * direction 1 = forward:  ring_id decrements each step (ring_index, ring_index-1, ...)
  *
  * The get_next_ring_id() method accepts a sync callback, allowing callers to
- * inject hardware synchronization (e.g. semaphore waits) between the ring_id
- * computation and the direction switch. This is the single implementation of
- * the ring_id assignment logic — both RingSDPAOpIndexer and RingSDPAOpReceiver
- * delegate to it.
+ * inject hardware synchronization (e.g. semaphore waits) at each iteration.
+ * Signature: void(uint32_t dir, uint32_t wait_val)
+ *   - dir:      fixed direction for this sequencer
+ *   - wait_val: transfer_idx at the time of the call (0 on first iteration → no wait)
+ * Pass a no-op lambda for sync-free usage (compute kernel, pre-scan).
  */
 struct RingIdSequencer {
     uint32_t ring_index = 0;
     uint32_t ring_size = 0;
-    uint32_t received[2] = {0, 0};  // [backward, forward]
-    uint32_t expected[2] = {0, 0};  // [backward, forward]
-    uint32_t curr_dir = 0;          // 0 = backward, 1 = forward
+    uint32_t direction = 0;  // 0 = backward, 1 = forward
+    int32_t step = 1;        // +1 for backward, -1 for forward
     uint32_t transfer_idx = 0;
 
     RingIdSequencer() = default;
 
-    RingIdSequencer(uint32_t ring_index_, uint32_t ring_size_, uint32_t backward_expected, uint32_t forward_expected) :
+    RingIdSequencer(uint32_t ring_index_, uint32_t ring_size_, uint32_t direction_) :
         ring_index(ring_index_),
         ring_size(ring_size_),
-        received{0, 0},
-        expected{backward_expected, forward_expected},
-        curr_dir(0),
+        direction(direction_),
+        step(direction_ == 0 ? 1 : -1),
         transfer_idx(0) {}
 
-    /**
-     * Compute the next ring_id and advance the state machine.
-     *
-     * @param sync_fn  Callback invoked between ring_id computation and direction switch.
-     *                 Signature: void(uint32_t dir, uint32_t wait_val)
-     *                 - dir: current direction index (for semaphore selection)
-     *                 - wait_val: semaphore threshold (0 on first iteration)
-     *                 Pass a no-op lambda for sync-free usage (compute kernel, pre-scan).
-     */
     template <typename SyncFn>
     uint32_t get_next_ring_id(SyncFn&& sync_fn) {
-        uint32_t sender_ring_id;
-        uint32_t sync_dir = curr_dir;
-        uint32_t sync_wait_val;
+        // ring_size * ring_size ensures a non-negative value before modulo for any valid input
+        uint32_t ring_id =
+            ((int32_t)ring_index + (int32_t)transfer_idx * step + (int32_t)(ring_size * ring_size)) % ring_size;
 
-        if (transfer_idx == 0) {
-            sender_ring_id = ring_index;
-            sync_wait_val = 0;
-        } else {
-            received[curr_dir] += 1;
-            if (curr_dir == 1) {
-                // Receiving from forward direction → go backwards
-                sender_ring_id = (ring_index - received[curr_dir] + ring_size) % ring_size;
-                sync_wait_val = received[curr_dir];
-            } else {
-                // Receiving from backward direction → go forwards
-                sender_ring_id = (ring_index + received[curr_dir]) % ring_size;
-                sync_wait_val = received[curr_dir] + 1;
-            }
-        }
-
-        sync_fn(sync_dir, sync_wait_val);
-
-        // Direction switch
-        if (transfer_idx == 0) {
-            if (expected[curr_dir] == 0) {
-                curr_dir = 1 - curr_dir;
-            }
-        } else {
-            uint32_t next_dir = 1 - curr_dir;
-            if (received[next_dir] < expected[next_dir]) {
-                curr_dir = next_dir;
-            }
-        }
+        // DPRINT << "get_next_ring_id: " << ring_id << " direction: " << direction << " transfer_idx: " << transfer_idx
+        // << ENDL();
+        sync_fn(direction, transfer_idx);
 
         transfer_idx++;
-        return sender_ring_id;
+        return ring_id;
     }
 };
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
@@ -15,18 +15,75 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
-    const RingJointSDPAParams& args,
+namespace {
+
+// Appends 5 compile-time args needed for a fabric MUX client worker kernel.
+static void fabric_mux_connection_ct_args(
+    const uint32_t num_workers_per_link,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args) {
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
+    worker_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
+    worker_ct_args.push_back(mux_kernel_config.get_status_address());
+    worker_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
+    worker_ct_args.push_back(num_workers_per_link);  // num_mux_clients
+}
+
+// Appends 17 runtime args for a fabric MUX client worker.
+// Creates 5 semaphores on worker_logical_core for the connection state.
+static void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const CoreCoord& mux_logical_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    const CoreCoord& termination_master_logical_core,
+    tt::tt_metal::IDevice* device,
+    std::vector<uint32_t>& worker_rt_args) {
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    const CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
+    const CoreCoord termination_master_virtual_core =
+        device->worker_core_from_logical_core(termination_master_logical_core);
+
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid));
+    worker_rt_args.push_back(static_cast<uint32_t>(is_termination_master));
+    worker_rt_args.push_back(mux_virtual_core.x);
+    worker_rt_args.push_back(mux_virtual_core.y);
+    const uint8_t ch_id = static_cast<uint8_t>(worker_id);
+    worker_rt_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, ch_id));
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // termination_sync_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address
+    worker_rt_args.push_back(termination_master_virtual_core.x);
+    worker_rt_args.push_back(termination_master_virtual_core.y);
+}
+
+}  // namespace
+
+ExpRingJointSDPAProgramFactory::cached_mesh_workload_t ExpRingJointSDPAProgramFactory::create_mesh_workload(
+    const ExpRingJointSDPAParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -39,11 +96,11 @@ RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory:
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
 }
 
-RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::create_at(
-    const RingJointSDPAParams& args,
+ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory::create_at(
+    const ExpRingJointSDPAParams& args,
     const ttnn::MeshCoordinate& coord,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -100,9 +157,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
-    auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
-    auto& stats_output_tensor = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX];
+    auto& output_tensor = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX];
+    auto& joint_output_tensor = output_tensors[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
+    auto& stats_output_tensor = output_tensors[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -110,26 +167,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::tt_metal::Program program{};
 
     auto* mesh_device = input_tensor_q.device();
-    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
-        input_tensor_q, coord, args.all_gather_operation_attributes.cluster_axis);
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensor_q, coord, args.cluster_axis);
 
-    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor_q,
-        coord,
-        1,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis);
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensor_q, coord, 1, args.topology, args.cluster_axis);
 
-    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
-        input_tensor_q,
-        coord,
-        -1,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis);
-
-    log_debug(tt::LogOp, "device index: {}", device_index);
-    log_debug(tt::LogOp, "is_causal: {}", args.is_causal);
-    log_debug(tt::LogOp, "is_balanced: {}", args.is_balanced);
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensor_q, coord, -1, args.topology, args.cluster_axis);
 
     auto scale = args.scale;
     if (not scale.has_value()) {
@@ -138,29 +182,27 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
 
+    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
+        ccl::get_forward_backward_configuration(args.ring_size, device_index, args.topology);
+    if (args.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
+        std::swap(num_targets_forward, num_targets_backward);
+    }
+
     // Minimally use matmul fused op signaler
-    sdpa_fused_op_signaler->init_all_gather(args.all_gather_operation_attributes.ring_size, device_index);
+    sdpa_fused_op_signaler->init_all_gather(args.ring_size, device_index);
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const auto& v_shape = gathered_input_tensor_v.logical_shape();
-
-    log_debug(tt::LogOp, "q_shape: {}", q_shape);
-    log_debug(tt::LogOp, "k_shape (gathered): {}", k_shape);
-    log_debug(tt::LogOp, "v_shape (gathered): {}", v_shape);
-
-    const uint32_t B = q_shape[0], NH = q_shape[1], NHK = k_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
+    const uint32_t B = q_shape[0], NH = q_shape[1], local_padded_N = q_shape[2], DH = q_shape[3];
     const uint32_t padded_N = k_shape[2];
     const uint32_t L = joint_q_shape[2];
-    const uint32_t vDH = v_shape[3];
 
     const uint32_t local_padded_Nt = local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t padded_Nt = padded_N / tt::constants::TILE_HEIGHT;
     // Find unpadded sequence lengths in tiles
     const uint32_t Lt = tt::div_up(L, tt::constants::TILE_HEIGHT);
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
-    const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
 
     /*
@@ -177,7 +219,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
     const bool global_n_has_padding = (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
     const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = (local_n_has_padding || global_n_has_padding || joint_has_padding) && !args.is_causal;
+    const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
 
     // Partial tile support when padding boundary falls inside a tile.
     const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
@@ -194,10 +236,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_debug(tt::LogOp, "B: {}", B);
     log_debug(tt::LogOp, "NH: {}", NH);
-    log_debug(tt::LogOp, "NHK: {}", NHK);
     log_debug(tt::LogOp, "L: {}", L);
     log_debug(tt::LogOp, "DH: {}", DH);
-    log_debug(tt::LogOp, "vDH: {}", vDH);
 
     // Log padded dimensions
     log_debug(tt::LogOp, "local_padded_N: {}", local_padded_N);
@@ -206,7 +246,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // Log tile dimensions
     log_debug(tt::LogOp, "DHt: {}", DHt);
-    log_debug(tt::LogOp, "vDHt: {}", vDHt);
     log_debug(tt::LogOp, "local_padded_Nt: {}", local_padded_Nt);
     log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
     log_debug(tt::LogOp, "Lt: {}", Lt);
@@ -240,6 +279,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Init fused op signaler
     sdpa_fused_op_signaler->init_fused_op(program, mesh_device, core_grid);
 
+    // Override the fused-op semaphore with the global out-ready semaphore so that
+    // the reader injector waits on the same semaphore that MUX writers increment.
+    const uint32_t out_ready_global_sem_addr = args.semaphore[0].address();
+    sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores[0] = out_ready_global_sem_addr;
+    sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores[1] = out_ready_global_sem_addr;
+
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
         tt::LogOp, "mesh_device->compute_with_storage_grid_size(): {}", mesh_device->compute_with_storage_grid_size());
@@ -266,11 +311,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
+    uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * vDHt;
-    uint32_t out0_t = Sq_chunk_t * vDHt;
+    uint32_t out_im_tiles = Sq_chunk_t * DHt;
+    uint32_t out0_t = Sq_chunk_t * DHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
@@ -278,7 +322,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
     log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
     log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "mask_tiles: {}", mask_tiles);
     log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
     log_debug(tt::LogOp, "out0_t: {}", out0_t);
     log_debug(tt::LogOp, "scale_tiles: {}", scale_tiles);
@@ -301,21 +344,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
-    // This is done only in the non-causal case:
     // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
+    // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
     // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
     // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
     const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1 && !args.is_causal;
-    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
+                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1;
 
     auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+        detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
+    const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
+    const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -337,12 +380,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
     const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
     const uint32_t mul_bcast_granularity = detail::find_valid_granularity(Sq_chunk_t * Sk_chunk_t, dst_size);
-    // DHT_GRANULARITY is used in the kernel with both DHt and vDHt as the cols parameter,
-    // so the granularity must evenly divide both to avoid dropping tiles.
-    uint32_t dht_granularity = std::min({DHt, vDHt, dst_size});
-    while (dht_granularity > 1 && (DHt % dht_granularity != 0 || vDHt % dht_granularity != 0)) {
-        dht_granularity--;
-    }
+    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
     const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
 
     // Log these
@@ -368,9 +406,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
-        NHK,
         DHt,
-        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -385,10 +421,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size,
-        qk_out_subblock_h,
-        args.is_causal,
-        args.is_balanced};
+        args.ring_size,
+        qk_out_subblock_h};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -416,9 +450,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
-        NHK,
         DHt,
-        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -435,13 +467,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        args.all_gather_operation_attributes.ring_size,
+        args.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)use_streaming_compute,
-        args.is_causal,
-        args.is_balanced,
-        (std::uint32_t)out_out_subblock_h,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -454,7 +483,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const tt::DataFormat v_df_early = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
     const tt::DataFormat out_df_early = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     const tt::DataFormat im_df_early = tt::DataFormat::Float16_b;
-    const tt::DataFormat mask_df_early = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+    const tt::DataFormat mask_df_early = tt::DataFormat::Float16_b;
     const bool uniform_dataformat =
         (q_df_early == k_df_early && q_df_early == v_df_early && q_df_early == out_df_early &&
          q_df_early == mask_df_early && q_df_early == im_df_early);
@@ -462,9 +491,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::vector<uint32_t> compute_compile_time_args = {
         B,
         NH,
-        NHK,
         DHt,
-        vDHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
@@ -479,7 +506,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size,
+        args.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -497,8 +524,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)uniform_dataformat,
-        args.is_causal,
-        args.is_balanced};
+    };
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -516,11 +542,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-
-    // This is done only in the non-causal case:
     // Lightweight mask: both streaming and non-streaming paths use Float16_b
     // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = (args.is_causal ? tt::DataFormat::Bfp4_b : tt::DataFormat::Float16_b);
+    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
@@ -550,29 +574,39 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_0, q_tile_size);
 
     CreateCircularBuffer(program, core_grid, c_in0_config);
-    // K input
-    auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-                            .set_page_size(tt::CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
-    // V input
-    auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-                            .set_page_size(tt::CBIndex::c_2, v_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in2_config);
-
-    if (args.is_causal) {
-        // attn_mask input
-        auto c_in3_config = CircularBufferConfig(mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                                .set_page_size(tt::CB::c_in3, mask_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in3_config);
+    // K and V input CBs.
+    // Fabric writer columns get overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
+    // compute and writer can pop independently from the same address space.
+    // Non-fabric columns get single-handle CBs to avoid the unused second handle blocking
+    // space reclamation.
+    CoreRange non_fabric_core_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
+    CoreRange fabric_core_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    {
+        // DANGEROUS
+        // K input: non-fabric cores (single handle)
+        auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
+                                .set_page_size(tt::CBIndex::c_1, k_tile_size);
+        CreateCircularBuffer(program, non_fabric_core_range, c_in1_config);
+        // K input: fabric cores (overlapping handles for compute + writer)
+        uint32_t k_cbs[] = {tt::CBIndex::c_1, tt::CBIndex::c_14};
+        tt::tt_metal::create_cb(k_cbs, program, fabric_core_range, k_tile_size, k_tiles, k_df);
     }
-    else {
-        // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
-        if (needs_lightweight_mask) {
-            auto c_in3_config =
-                CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
-                    .set_page_size(tt::CB::c_in3, mask_tile_size);
-            CreateCircularBuffer(program, core_grid, c_in3_config);
-        }
+    {
+        // V input: non-fabric cores (single handle)
+        auto c_in2_config = CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
+                                .set_page_size(tt::CBIndex::c_2, v_tile_size);
+        CreateCircularBuffer(program, non_fabric_core_range, c_in2_config);
+        // V input: fabric cores (overlapping handles for compute + writer)
+        uint32_t v_cbs[] = {tt::CBIndex::c_2, tt::CBIndex::c_15};
+        tt::tt_metal::create_cb(v_cbs, program, fabric_core_range, v_tile_size, v_tiles, v_df);
+    }
+
+    // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
+    if (needs_lightweight_mask) {
+        auto c_in3_config =
+            CircularBufferConfig(total_lightweight_mask_tiles * mask_tile_size, {{tt::CB::c_in3, mask_df}})
+                .set_page_size(tt::CB::c_in3, mask_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in3_config);
     }
 
     // scale input
@@ -670,13 +704,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
-
-        // Signal CB (c_12): compute signals writer when last K-chunk starts.
-        // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
-        constexpr uint32_t signal_page_size = 16;
-        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
-                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
-        CreateCircularBuffer(program, core_grid, c_signal_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
@@ -742,7 +769,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_info(
         tt::LogOp,
-        "[RingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
+        "[ExpRingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
         "base_chunks_per_core={} (+{} extras)",
         grid_size.x,
         grid_size.y,
@@ -816,7 +843,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Injector reselection for DRAM channel spreading is deferred to the
     // mcast eligibility pass below.
     for (auto& segments : head_segments) {
-        if (segments.size() < 2 || args.is_balanced) {
+        if (segments.size() < 2) {
             continue;
         }
 
@@ -895,7 +922,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 hist_str += std::to_string(chain_len_counts[len]) + "x" + std::to_string(len) + "-core ";
             }
         }
-        log_info(tt::LogOp, "[RingJointSDPA] {} chains ({})", num_chains, hist_str.empty() ? "none" : hist_str);
+        log_info(tt::LogOp, "[ExpRingJointSDPA] {} chains ({})", num_chains, hist_str.empty() ? "none" : hist_str);
     }
 
     // Third pass: Check multicast eligibility and configure mcast for eligible chains
@@ -998,8 +1025,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
         if (all_eligible && !candidates.empty()) {
             mcast_chains = candidates.size();
-            for (uint32_t cand_idx = 0; cand_idx < candidates.size(); ++cand_idx) {
-                const auto& cand = candidates[cand_idx];
+            // Track injector physical X columns for DRAM channel spreading
+            std::vector<uint32_t> injector_phys_x;
+            for (const auto& cand : candidates) {
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
 
@@ -1012,12 +1040,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                     }
                 }
 
-                // Reselect injector for diagonal placement: the n-th chain
-                // picks the core at offset n within its chain, wrapping around.
-                // This places injectors on the diagonal (0,0), (1,1), (2,2)...
+                // Reselect injector for DRAM channel spreading: pick the core
+                // whose physical X is furthest from all previously chosen injectors.
                 {
-                    uint32_t target_offset = cand_idx % chain_size;
-                    uint32_t best_idx = cand.core_indices[target_offset];
+                    uint32_t best_idx = injector_idx;
+                    uint32_t best_dist = 0;
+                    for (const auto& ci : cand.core_indices) {
+                        const uint32_t phys_x = core_work[ci].physical_core.x;
+                        uint32_t min_dist = UINT32_MAX;
+                        for (uint32_t ix : injector_phys_x) {
+                            uint32_t d = (phys_x > ix) ? (phys_x - ix) : (ix - phys_x);
+                            min_dist = std::min(min_dist, d);
+                        }
+                        if (min_dist > best_dist) {
+                            best_dist = min_dist;
+                            best_idx = ci;
+                        }
+                    }
                     if (best_idx != injector_idx) {
                         // Clear old injector, set new one
                         core_chain_info[injector_idx].is_injector = false;
@@ -1027,6 +1066,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                         injector_idx = best_idx;
                     }
                 }
+                injector_phys_x.push_back(core_work[injector_idx].physical_core.x);
 
                 uint32_t min_x = core_work[cand.core_indices[0]].physical_core.x;
                 uint32_t max_x = min_x;
@@ -1087,7 +1127,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_info(
         tt::LogOp,
-        "[RingJointSDPA] mcast: {} ({}/{} chains)",
+        "[ExpRingJointSDPA] mcast: {} ({}/{} chains)",
         mcast_chains > 0 ? "ENABLED" : "DISABLED",
         mcast_chains,
         mcast_chains > 0 ? mcast_chains
@@ -1099,22 +1139,103 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
+    // Map (batch * NH + head) -> injector physical coordinates for MUX writer signaling
+    std::unordered_map<uint32_t, CoreCoord> injector_physical_by_head;
+    for (uint32_t ci = 0; ci < num_cores; ++ci) {
+        if (core_chain_info[ci].is_injector) {
+            uint32_t head_key = core_chain_info[ci].batch * NH + core_chain_info[ci].head;
+            injector_physical_by_head[head_key] = core_work[ci].physical_core;
+        }
+    }
+
+    // ---- Fabric MUX config (needed for writer kernel CT args below) ----
+    // Hardcoded positions: backward-direction MUX at (11,0), (11,5); forward-direction MUX at (11,4), (11,9).
+    const std::vector<CoreCoord> mux_backward_logical_cores = {{11, 0}, {11, 9}};
+    const std::vector<CoreCoord> mux_forward_logical_cores = {{11, 4}, {11, 5}};
+
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t num_mux_full_size_channels = args.num_workers_per_link;
+    const uint32_t num_mux_header_only_channels = 0;
+    const uint32_t num_mux_buffers_per_channel = args.num_buffers_per_channel;
+    const size_t mux_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_mux_full_size_channels,
+        num_mux_header_only_channels,
+        num_mux_buffers_per_channel,
+        0,
+        mux_buffer_size_bytes,
+        l1_unreserved_base_address);
+
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
+    // Non-fabric writer: columns 0..(grid_size.x-3)
+    // grid_size.x-2 and grid_size.x-1 are fabric MUX client columns
+    CoreRange non_fabric_writer_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
-        core_grid,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
+        non_fabric_writer_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+
+    // Fabric writer: columns grid_size.x-2 and grid_size.x-1 (backward and forward MUX clients)
+    CoreRange fabric_writer_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto writer_fabric_compile_time_args = writer_compile_time_args;
+    fabric_mux_connection_ct_args(args.num_workers_per_link, mux_kernel_config, writer_fabric_compile_time_args);
+
+    // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
+    const uint32_t ag_kv_scratch_cb_id = tt::CBIndex::c_12;
+    const uint32_t ag_pkt_hdr_cb_id = tt::CBIndex::c_13;
+    const uint32_t ag_page_size = input_tensor_k.buffer()->page_size();
+    const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    constexpr uint32_t max_scatter_addresses = 4;
+    const uint32_t ag_packet_size_in_pages =
+        std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), max_scatter_addresses);
+
+    writer_fabric_compile_time_args.push_back(device_index);
+    writer_fabric_compile_time_args.push_back(ag_packet_size_in_pages);
+    writer_fabric_compile_time_args.push_back(ag_page_size);
+    writer_fabric_compile_time_args.push_back(ag_pkt_hdr_cb_id);
+    writer_fabric_compile_time_args.push_back(ag_kv_scratch_cb_id);
+    writer_fabric_compile_time_args.push_back(num_targets_forward);
+    writer_fabric_compile_time_args.push_back(num_targets_backward);
+    writer_fabric_compile_time_args.push_back(static_cast<uint32_t>(args.topology));
+    TensorAccessorArgs(input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
+
+    auto writer_fabric_defines = defines;
+    writer_fabric_defines["USE_MUX"] = "1";
+    auto writer_fabric_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
+        fabric_writer_range,
+        tt::tt_metal::WriterDataMovementConfig(writer_fabric_compile_time_args, writer_fabric_defines));
+
+    // K/V staging scratch CB and packet header CB for all-gather on fabric writer cores
+    const tt::DataFormat ag_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+    const uint32_t ag_cb_pages = 3 * ag_packet_size_in_pages;
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        fabric_writer_range,
+        tt::tt_metal::CircularBufferConfig(ag_cb_pages * ag_page_size, {{ag_kv_scratch_cb_id, ag_df}})
+            .set_page_size(ag_kv_scratch_cb_id, ag_page_size));
+    const uint32_t ag_pkt_hdr_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        fabric_writer_range,
+        tt::tt_metal::CircularBufferConfig(8 * ag_pkt_hdr_size, {{ag_pkt_hdr_cb_id, tt::DataFormat::RawUInt32}})
+            .set_page_size(ag_pkt_hdr_cb_id, ag_pkt_hdr_size));
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1122,6 +1243,58 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_compile_time_args,
             .defines = defines});
+
+    // ---- AllGatherFusedOpSignaler for integrated all-gather on MUX client columns 9-10 ----
+    auto all_gather_fused_op_signaler = ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+    all_gather_fused_op_signaler.init_fused_op(
+        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
+        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
+        sdpa_fused_op_signaler->fused_op_signaler_mode);
+
+    // Build backward and forward termination master core sets (1 per link per direction)
+    // Backward masters: row 0 of both MUX client columns (top half = backward direction).
+    // Forward masters:  row num_workers_per_link of both MUX client columns (bottom half = forward).
+    // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
+    std::vector<CoreCoord> ag_backward_master_cores, ag_forward_master_cores;
+    std::set<CoreRange> ag_backward_master_ranges, ag_forward_master_ranges;
+    for (uint32_t col_offset = 0; col_offset < 2; ++col_offset) {
+        CoreCoord bwd_master = {grid_size.x - 2 + col_offset, 0};
+        CoreCoord fwd_master = {grid_size.x - 2 + col_offset, args.num_workers_per_link};
+        ag_backward_master_cores.push_back(bwd_master);
+        ag_forward_master_cores.push_back(fwd_master);
+        ag_backward_master_ranges.insert(CoreRange(bwd_master));
+        ag_forward_master_ranges.insert(CoreRange(fwd_master));
+    }
+    auto fused_op_signaler_backward = all_gather_fused_op_signaler;
+    auto fused_op_signaler_forward = all_gather_fused_op_signaler;
+    // Pass the full direction-half range across both MUX client columns so that
+    // CreateSemaphore inside init_all_gather allocates the AG sync semaphore on ALL
+    // workers in each direction group.  This ensures every core (both term-masters
+    // and non-masters) has the same number of semaphores allocated before
+    // fabric_mux_connection_rt_args runs, keeping termination_sync IDs consistent.
+    CoreRange all_backward_clients({grid_size.x - 2, 0}, {grid_size.x - 1, args.num_workers_per_link - 1});
+    CoreRange all_forward_clients({grid_size.x - 2, args.num_workers_per_link}, {grid_size.x - 1, grid_size.y - 1});
+    fused_op_signaler_backward.init_all_gather(
+        program, mesh_device, CoreRangeSet({all_backward_clients}), ag_backward_master_cores);
+    fused_op_signaler_forward.init_all_gather(
+        program, mesh_device, CoreRangeSet({all_forward_clients}), ag_forward_master_cores);
+
+    // K/V tensor shape info for all-gather RT args
+    const auto& ag_input_shape = input_tensor_k.padded_shape();
+    const auto& ag_output_shape = gathered_input_tensor_k.padded_shape();
+    TT_ASSERT(!(ag_input_shape[3] % tt::constants::TILE_WIDTH));
+    TT_ASSERT(!(ag_output_shape[3] % tt::constants::TILE_WIDTH));
+    const uint32_t ag_output_Wt = ag_output_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t ag_output_Ht = ag_output_shape[2] / tt::constants::TILE_HEIGHT;
+
+    // Track the RT arg offset for all-gather args on fabric writer master cores
+    uint32_t writer_fabric_ag_rt_offset = 0;
+    bool ag_rt_offset_set = false;
+
+    // Track the RT arg offset for the fused-op global semaphore address in reader args
+    uint32_t reader_fused_op_sem_rt_offset = 0;
+    // Track the RT arg offset for per-link semaphore addresses in reader args
+    uint32_t reader_per_link_sem_rt_offset = 0;
 
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -1131,6 +1304,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         const auto& work = core_work.at(i);
         uint32_t global_q_start = work.global_q_start;
         uint32_t global_q_end = work.global_q_start + work.global_q_count;
+
+        // Direction: top half of rows = backward (0), bottom half = forward (1)
+        const uint32_t direction = (core.y < args.num_workers_per_link) ? 0 : 1;
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -1187,8 +1363,33 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(chain.mcast_num_dests);
         reader_args.push_back(chain.mcast_sender_wait);
 
+        // Determine if this core's writer has a valid MUX connection (for reader-side forwarding)
+        const bool is_mux_client = (core.x >= grid_size.x - 2);
+        bool is_mux_writer_valid = false;
+        if (is_mux_client) {
+            const uint32_t half_within_col = core.y / args.num_workers_per_link;
+            const bool is_backward = (half_within_col == 0);
+            const uint32_t link = (core.x == grid_size.x - 1) ? 1 : 0;
+            const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
+                                       (link < mux_forward_logical_cores.size());
+            if (link_in_range) {
+                const bool valid = is_backward ? backward_coord.has_value() : forward_coord.has_value();
+                is_mux_writer_valid = valid;
+            }
+        }
+        reader_args.push_back(static_cast<uint32_t>(is_mux_writer_valid));
+
+        // Per-link semaphore addresses for chunk-level sync
+        reader_per_link_sem_rt_offset = reader_args.size();
+        reader_args.push_back(args.num_links);
+        for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
+            reader_args.push_back(args.semaphore[lnk].address());
+        }
+
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, 0 /* direction=backward */);
+        // The semaphore address is the 4th value pushed (index = current size + 3)
+        reader_fused_op_sem_rt_offset = reader_args.size() + 3;
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, direction);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1200,71 +1401,188 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args, 0 /* direction=backward */);
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args, direction);
+
+        if (is_mux_client) {
+            // Direction is determined by row half: top half = backward, bottom half = forward.
+            // Link is determined by column: col grid_size.x-2 = link 0, col grid_size.x-1 = link 1.
+            const uint32_t half_within_col = core.y / args.num_workers_per_link;
+            const bool is_backward = (half_within_col == 0);
+            const uint32_t link = (core.x == grid_size.x - 1) ? 1 : 0;
+            const uint32_t worker_idx = core.y % args.num_workers_per_link;
+            const bool is_term_master = (worker_idx == 0);
+            const CoreCoord termination_master_logical = {core.x, half_within_col * args.num_workers_per_link};
+
+            const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
+                                       (link < mux_forward_logical_cores.size());
+            if (link_in_range) {
+                const CoreCoord& mux_core =
+                    is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
+                const bool valid = is_backward ? backward_coord.has_value() : forward_coord.has_value();
+                fabric_mux_connection_rt_args(
+                    valid,
+                    is_term_master,
+                    mux_core,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_logical,
+                    device,
+                    writer_args);
+            } else {
+                // link index out of range or invalid direction — append a disconnected MUX connection
+                // Still need valid semaphore addresses for the 5 semaphore fields
+                writer_args.push_back(0);                                    // mux_connection_valid = false
+                writer_args.push_back(0);                                    // is_termination_master
+                writer_args.push_back(0);                                    // mux_x
+                writer_args.push_back(0);                                    // mux_y
+                writer_args.push_back(0);                                    // channel_base_address
+                writer_args.push_back(0);                                    // connection_info_address
+                writer_args.push_back(0);                                    // connection_handshake_address
+                writer_args.push_back(0);                                    // flow_control_address
+                writer_args.push_back(0);                                    // buffer_index_address
+                writer_args.push_back(0);                                    // channel_credits_stream_id
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // termination_sync
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_fabric_mux_status
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_flow_control
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_teardown
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_buffer_index
+                writer_args.push_back(0);                                    // termination_master_noc_x
+                writer_args.push_back(0);                                    // termination_master_noc_y
+            }
+
+            // MUX writer RT args: out_ready_sem, injector coords, AG params, op signaler
+            if (link_in_range) {
+                if (!ag_rt_offset_set) {
+                    writer_fabric_ag_rt_offset = writer_args.size();
+                    ag_rt_offset_set = true;
+                }
+
+                const uint32_t out_ready_sem_addr = args.semaphore[link].address();
+                writer_args.push_back(out_ready_sem_addr);
+
+                // Find the injector core for this MUX writer's (batch, head)
+                const auto& mux_head_work = core_work.at(i).head_work;
+                CoreCoord injector_physical = {0, 0};
+                if (mux_head_work.empty()) {
+                    log_warning(
+                        tt::LogOp,
+                        "MUX writer core ({},{}) has no head_work; cannot determine injector",
+                        core.x,
+                        core.y);
+                } else {
+                    uint32_t head_key = mux_head_work[0].batch * NH + mux_head_work[0].head;
+                    auto it = injector_physical_by_head.find(head_key);
+                    if (it != injector_physical_by_head.end()) {
+                        injector_physical = it->second;
+                    } else {
+                        log_warning(
+                            tt::LogOp,
+                            "MUX writer core ({},{}) batch={} head={}: no injector found in chain info",
+                            core.x,
+                            core.y,
+                            mux_head_work[0].batch,
+                            mux_head_work[0].head);
+                    }
+                }
+                writer_args.push_back(static_cast<uint32_t>(injector_physical.x));
+                writer_args.push_back(static_cast<uint32_t>(injector_physical.y));
+                writer_args.push_back(args.num_links);  // num_muxes_in_direction
+                writer_args.push_back(link);            // my_mux_index
+                writer_args.push_back(ag_output_Wt);
+                writer_args.push_back(ag_output_Ht);
+                writer_args.push_back(gathered_k_addr);
+                writer_args.push_back(gathered_v_addr);
+
+                const uint32_t ag_direction = is_backward ? 0 : 1;
+                if (ag_direction == 1) {
+                    fused_op_signaler_forward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 1);
+                } else {
+                    fused_op_signaler_backward.push_all_gather_fused_op_rt_args(writer_args, args.num_links, link, 0);
+                }
+            }
+            SetRuntimeArgs(program, writer_fabric_kernels_id, core, writer_args);
+        } else {
+            SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+        }
 
         // Compute args
         std::vector<uint32_t> compute_args = {
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args, 0 /* direction=backward */);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args, direction);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
-    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
-        ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+    // ---- Fabric MUX cores ----
+    std::vector<CoreRange> mux_core_ranges;
+    for (uint32_t link = 0; link < args.num_links; ++link) {
+        if (backward_coord.has_value()) {
+            mux_core_ranges.emplace_back(mux_backward_logical_cores[link]);
+        }
+        if (forward_coord.has_value()) {
+            mux_core_ranges.emplace_back(mux_forward_logical_cores[link]);
+        }
+    }
+    CoreRangeSet mux_core_range_set(mux_core_ranges);
 
-    all_gather_fused_op_signaler->init_fused_op(
-        sdpa_fused_op_signaler->fused_op_receiver_cores_noc,
-        sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
-        sdpa_fused_op_signaler->fused_op_signaler_mode);
+    tt::tt_metal::KernelHandle ccl_mux_kernel_id{};
+    if (!mux_core_ranges.empty()) {
+        ccl_mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            mux_core_range_set,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
-    auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,  // Must pass ring_joint_sdpa's program
-        all_gather_input_tensors,
-        coord,
-        forward_coord,
-        backward_coord,
-        all_gather_output_tensors,
-        args.all_gather_operation_attributes.dim,
-        args.all_gather_operation_attributes.num_links,
-        args.all_gather_operation_attributes.ring_size,
-        device_index,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.semaphore,
-        args.all_gather_operation_attributes.sub_device_id,
-        all_gather_fused_op_signaler,
-        args.ccl_core_grid_offset,
-        args.all_gather_operation_attributes.core_allocation_strategy);
+        const auto src_node_id = mesh_device->get_fabric_node_id(coord);
+        for (uint32_t link = 0; link < args.num_links; ++link) {
+            if (backward_coord.has_value()) {
+                const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link, program, {mux_backward_logical_cores[link]});
+                tt::tt_metal::SetRuntimeArgs(
+                    program, ccl_mux_kernel_id, {mux_backward_logical_cores[link]}, mux_rt_args);
+            }
+            if (forward_coord.has_value()) {
+                const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link, program, {mux_forward_logical_cores[link]});
+                tt::tt_metal::SetRuntimeArgs(
+                    program, ccl_mux_kernel_id, {mux_forward_logical_cores[link]}, mux_rt_args);
+            }
+        }
+    }
 
     return cached_program_t{
         std::move(program),
-        {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, all_gather_shared_variables}};
+        {.num_cores = num_cores,
+         .grid_size = grid_size,
+         .reader_kernels_id = reader_kernels_id,
+         .writer_kernels_id = writer_kernels_id,
+         .writer_fabric_kernels_id = writer_fabric_kernels_id,
+         .compute_kernels_id = compute_kernels_id,
+         .writer_fabric_ag_rt_offset = writer_fabric_ag_rt_offset,
+         .reader_fused_op_sem_rt_offset = reader_fused_op_sem_rt_offset,
+         .reader_per_link_sem_rt_offset = reader_per_link_sem_rt_offset,
+         .num_links = args.num_links,
+         .ccl_mux_kernel_id = ccl_mux_kernel_id,
+         .ccl_mux_backward_cores = mux_backward_logical_cores,
+         .ccl_mux_forward_cores = mux_forward_logical_cores}};
 }
 
-void RingJointSDPAProgramFactory::override_runtime_arguments(
+void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const RingJointSDPAParams& args,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    const ExpRingJointSDPAParams& args,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
-            shared_vars.all_gather_shared_variables,
-            program,
-            {tensor_args.input_k, tensor_args.input_v},       /*input_tensors*/
-            {tensor_args.gathered_k, tensor_args.gathered_v}, /*output_tensors*/
-            args.all_gather_operation_attributes.semaphore);
 
         // Get addresses for regular tensors
         auto* q_buffer = tensor_args.input_q.buffer();
@@ -1277,9 +1595,9 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
         // Get addresses for output tensors
-        auto* out_buffer = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX].buffer();
-        auto* joint_out_buffer = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
-        auto* stats_buffer = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
+        auto* out_buffer = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX].buffer();
+        auto* joint_out_buffer = output_tensors[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
+        auto* stats_buffer = output_tensors[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
 
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();
@@ -1295,12 +1613,12 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+        auto& writer_fabric_args_by_core = GetRuntimeArgs(program, shared_vars.writer_fabric_kernels_id);
 
         for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
             CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
 
             auto& reader_args = reader_args_by_core[core.x][core.y];
-            auto& writer_args = writer_args_by_core[core.x][core.y];
 
             // Update reader args
             reader_args[0] = q_addr;
@@ -1312,10 +1630,39 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
             reader_args[6] = joint_k_addr;
             reader_args[7] = joint_v_addr;
 
-            // Update writer args
-            writer_args[0] = out_addr;
-            writer_args[1] = joint_out_addr;
-            writer_args[2] = stats_addr;
+            // Update per-link semaphore addresses in reader args
+            if (shared_vars.reader_per_link_sem_rt_offset > 0) {
+                for (uint32_t lnk = 0; lnk < shared_vars.num_links; ++lnk) {
+                    reader_args[shared_vars.reader_per_link_sem_rt_offset + 1 + lnk] = args.semaphore[lnk].address();
+                }
+            }
+
+            // Update fused-op global semaphore address (used by injector readers)
+            if (shared_vars.reader_fused_op_sem_rt_offset > 0) {
+                reader_args[shared_vars.reader_fused_op_sem_rt_offset] = args.semaphore[0].address();
+            }
+
+            // Update writer args — fabric clients (last 2 columns) use writer_fabric_kernels_id
+            const bool is_fabric_client = (core.x >= shared_vars.grid_size.x - 2);
+            if (is_fabric_client) {
+                auto& writer_args = writer_fabric_args_by_core[core.x][core.y];
+                writer_args[0] = out_addr;
+                writer_args[1] = joint_out_addr;
+                writer_args[2] = stats_addr;
+                // Update addresses for MUX writers with link_in_range
+                if (shared_vars.writer_fabric_ag_rt_offset > 0 &&
+                    writer_args.size() > shared_vars.writer_fabric_ag_rt_offset) {
+                    const uint32_t link = (core.x == shared_vars.grid_size.x - 1) ? 1 : 0;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 0] = args.semaphore[link].address();
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 7] = gathered_k_addr;
+                    writer_args[shared_vars.writer_fabric_ag_rt_offset + 8] = gathered_v_addr;
+                }
+            } else {
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                writer_args[0] = out_addr;
+                writer_args[1] = joint_out_addr;
+                writer_args[2] = stats_addr;
+            }
         }
     }
 }

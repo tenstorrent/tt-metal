@@ -71,6 +71,7 @@ void kernel_main() {
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
+
     /* Args for overlapped all gather */
     OpSignaler op_signaler_sender;
 
