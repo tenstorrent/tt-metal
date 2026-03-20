@@ -60,6 +60,27 @@ def _hashable_kwargs(kwargs: Dict[str, Any]) -> Tuple:
     return tuple(items)
 
 
+_COLLECTIVE_OPS_DIM_CLUSTER = frozenset({"scatter", "all_gather", "reduce_scatter"})
+
+
+def _rule_kwargs_for_op(
+    op_name: str, other_args: List[Any], kwargs: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Merge leading non-tensor args into kwargs for collectives that take ``dim`` / ``cluster_axis``.
+
+    Non-tensor positionals are still forwarded to ``raw`` via ``*other_args``; this copy
+    is for plan cache keys and sharding rules only.
+    """
+    merged = dict(kwargs)
+    if op_name not in _COLLECTIVE_OPS_DIM_CLUSTER:
+        return merged
+    if "dim" not in merged and len(other_args) >= 1:
+        merged["dim"] = other_args[0]
+    if "cluster_axis" not in merged and len(other_args) >= 2:
+        merged["cluster_axis"] = other_args[1]
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Fallback: gather all inputs to replicated, run the op, return replicated
 # ---------------------------------------------------------------------------
@@ -173,11 +194,12 @@ def dispatch(op_name: str, *args, **kwargs):
         print(f"WARNING: No rule found for op {op_name}, falling back to replicated")
         return _fallback_replicated(op_name, tensor_args, other_args, kwargs)
 
+    rule_kwargs = _rule_kwargs_for_op(op_name, other_args, kwargs)
     cache = runtime.plan_cache
-    cache_key = (op_name, tuple(input_layouts), _hashable_kwargs(kwargs))
+    cache_key = (op_name, tuple(input_layouts), _hashable_kwargs(rule_kwargs))
     plan: Optional[ShardingPlan] = cache.get(cache_key)
     if plan is None:
-        plan = rule_fn(*input_layouts, runtime=runtime, **kwargs)
+        plan = rule_fn(*input_layouts, runtime=runtime, **rule_kwargs)
         cache.put(cache_key, plan)
 
     # Apply optional pre-collective per input (e.g. broadcast for input 0).
@@ -227,6 +249,8 @@ def dispatch(op_name: str, *args, **kwargs):
     raw = _get_raw(op_name)
     # Strip rule-only kwargs (e.g. gather_output) so raw C++ op is not passed them
     kwargs_for_raw = {k: v for k, v in kwargs.items() if k not in ("gather_output",)}
+    # Non-tensor positionals are already interleaved into *redistributed* (same loop as
+    # *preprocessed*); do not also splat *other_args* or scalars (e.g. epsilon) duplicate.
     result = raw(*redistributed, **kwargs_for_raw)
 
     # Apply optional post-collective per output. Rule sets post_collectives[j] for each output.
@@ -268,7 +292,7 @@ def dispatch(op_name: str, *args, **kwargs):
                 redistributions=redistributions,
                 post_collectives=post_collectives_log,
                 output_layout=plan.output_layout,
-                op_kwargs=dict(kwargs),
+                op_kwargs=dict(rule_kwargs),
             )
         )
 

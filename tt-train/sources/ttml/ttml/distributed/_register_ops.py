@@ -113,3 +113,4 @@ def init_ops():
     _patch(ttml.ops.distributed, "broadcast", "broadcast")
     _patch(ttml.ops.distributed, "all_gather", "all_gather")
     _patch(ttml.ops.distributed, "all_reduce", "all_reduce")
+    _patch(ttml.ops.distributed, "scatter", "scatter")
