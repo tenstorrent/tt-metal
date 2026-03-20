@@ -1032,10 +1032,17 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
     const uint32_t alloc_size_a_bit_more_than_half_of_total_size = (total_size / 2) + alloc_size_1K;
     const uint32_t alloc_size_same_as_address_limit = address_limit;
 
+    // Seed allocator 2 (top-down) so dependent allocators are non-empty for allocators 0/1,
+    // forcing them through the multi-allocator path which correctly handles address_limit clamping.
+    bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{2});
+
     // Allocate 1K in allocator 0 - should be placed at address_limit (256KB)
-    // - Alloc0: |    256K addr_limit    | 1K |                               free                               |
-    // - Alloc1: |    256K addr_limit    |                                 free                                  |
-    // - Alloc2: |    256K addr_limit    |                                 free                                  |
     const auto alloc0_addr0 = bank_manager.allocate_buffer(
         alloc_size_1K,
         alloc_size_1K,
@@ -1103,10 +1110,16 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
     // I am switching back to default destructor because it doesn't look like there's a need for the custom destructor
     bank_manager.deallocate_all();
 
+    // Re-seed allocator 2 after deallocate_all
+    bank_manager.allocate_buffer(
+        alloc_size_1K,
+        alloc_size_1K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{2});
+
     // Reallocate 1K in allocator 0
-    // - Alloc0: |    256K addr_limit    | 1K |                               free                               |
-    // - Alloc1: |    256K addr_limit    |                                 free                                  |
-    // - Alloc2: |    256K addr_limit    |                                 free                                  |
     const auto alloc0_addr0_realloc = bank_manager.allocate_buffer(
         alloc_size_1K,
         alloc_size_1K,
@@ -1155,8 +1168,19 @@ TEST(OverlappedAllocators, NonzeroAllocOffset) {
         disable_interleaved,
         deps);
 
-    // Two consecutive top-down allocations
+    // Seed allocator 2 (top-down) so dependent allocators are non-empty for allocator 0,
+    // forcing it through the multi-allocator path which correctly handles address_limit clamping.
     const uint32_t alloc_size_4K = 4096;
+    bank_manager.allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{2});
+
+    // Two consecutive top-down allocations
+    // Seed on allocator 2 occupies the top 4K, so allocator 0's first top-down shifts down
     const auto alloc0_addr0 = bank_manager.allocate_buffer(
         alloc_size_4K,
         alloc_size_4K,
@@ -1164,7 +1188,7 @@ TEST(OverlappedAllocators, NonzeroAllocOffset) {
         CoreRangeSet(std::vector<CoreRange>{}),
         std::nullopt,
         AllocatorID{0});
-    EXPECT_EQ(alloc0_addr0, allocatable_l1_size - alloc_size_4K + l1_unreserved_base);
+    EXPECT_EQ(alloc0_addr0, allocatable_l1_size - alloc_size_4K - alloc_size_4K + l1_unreserved_base);
 
     const auto alloc0_addr1 = bank_manager.allocate_buffer(
         alloc_size_4K,
