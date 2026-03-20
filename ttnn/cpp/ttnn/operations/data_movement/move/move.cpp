@@ -17,13 +17,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-bool can_deallocate(const Tensor& input_tensor) {
-    if (is_cpu_tensor(input_tensor)) {
-        return false;
-    }
-    return input_tensor.device_storage().get_mesh_buffer_leak_ownership().use_count() == 1;
-}
-
 inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
