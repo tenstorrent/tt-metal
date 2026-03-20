@@ -21,13 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....utils.conv3d import (
-    aligned_channels,
-    conv_pad_height,
-    conv_pad_in_channels,
-    conv_unpad_height,
-    prepare_conv3d_weights,
-)
+from ....utils.conv3d import aligned_channels, conv_pad_height, conv_pad_in_channels, conv_unpad_height
 from ....utils.tensor import typed_tensor_2dshard
 
 
@@ -82,15 +76,24 @@ def _run_conv3d(
         weight_padded = torch.nn.functional.pad(weight_padded, (0, 0, 0, 0, 0, 0, 0, 0, 0, C_out - C_out_orig))
         bias_padded = torch.nn.functional.pad(bias_padded, (0, C_out - C_out_orig))
 
-    w_prepared, b_prepared = prepare_conv3d_weights(weight_padded, bias_padded, conv_config)
+    # Prepare weights using C++ API
+    weight_tt = ttnn.from_torch(weight_padded, dtype=dtype, pad_value=0)
+    weight_prepared = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=weight_tt, C_in_block=conv_config.C_in_block, device=mesh_device
+    )
+    bias_prepared = bias_padded.reshape(1, -1)
 
     # Put weights on device
     h_axis, w_axis = 0, 1
     tt_weight = typed_tensor_2dshard(
-        w_prepared, mesh_device, shard_mapping={h_axis: 0, w_axis: 1}, layout=ttnn.TILE_LAYOUT, dtype=dtype
+        ttnn.to_torch(ttnn.get_device_tensors(weight_prepared)[0]),
+        mesh_device,
+        shard_mapping={h_axis: 0, w_axis: 1},
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
     )
     tt_bias = typed_tensor_2dshard(
-        b_prepared, mesh_device, shard_mapping={h_axis: 0, w_axis: 1}, layout=ttnn.TILE_LAYOUT, dtype=dtype
+        bias_prepared, mesh_device, shard_mapping={h_axis: 0, w_axis: 1}, layout=ttnn.TILE_LAYOUT, dtype=dtype
     )
 
     # Prepare input: BCTHW -> BTHWC, pad channels, pad height

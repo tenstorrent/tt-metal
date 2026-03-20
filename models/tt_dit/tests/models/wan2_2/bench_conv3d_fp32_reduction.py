@@ -21,7 +21,7 @@ import os
 import torch
 
 import ttnn
-from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels, prepare_conv3d_weights
+from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels
 from models.tt_dit.utils.tensor import typed_tensor_2dshard
 
 WARMUP = 2
@@ -47,6 +47,26 @@ def get_device_kernel_duration_us(device):
         return None
 
 
+def prepare_weights(w, b, conv_config, mesh_device, dtype=ttnn.DataType.BFLOAT16):
+    """Prepare conv3d weights using the C++ prepare_conv3d_weights API."""
+    weight_tt = ttnn.from_torch(w, dtype=dtype, pad_value=0)
+    weight_prepared = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=weight_tt, C_in_block=conv_config.C_in_block, device=mesh_device
+    )
+    tt_w = typed_tensor_2dshard(
+        ttnn.to_torch(ttnn.get_device_tensors(weight_prepared)[0]),
+        mesh_device,
+        shard_mapping={0: 0, 1: 1},
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+    )
+    bias_torch = b.reshape(1, -1)
+    tt_b = typed_tensor_2dshard(
+        bias_torch, mesh_device, shard_mapping={0: 0, 1: 1}, layout=ttnn.TILE_LAYOUT, dtype=dtype
+    )
+    return tt_w, tt_b
+
+
 def run_conv3d(mesh_device, inp, w, b, C_out, kernel, c_in_block, fp32_dest):
     grid_size = mesh_device.compute_with_storage_grid_size()
     padding = tuple(k // 2 for k in kernel)
@@ -69,13 +89,7 @@ def run_conv3d(mesh_device, inp, w, b, C_out, kernel, c_in_block, fp32_dest):
         packer_l1_acc=False,
     )
 
-    w_p, b_p = prepare_conv3d_weights(w, b, conv_config)
-    tt_w = typed_tensor_2dshard(
-        w_p, mesh_device, shard_mapping={0: 0, 1: 1}, layout=ttnn.TILE_LAYOUT, dtype=ttnn.DataType.BFLOAT16
-    )
-    tt_b = typed_tensor_2dshard(
-        b_p, mesh_device, shard_mapping={0: 0, 1: 1}, layout=ttnn.TILE_LAYOUT, dtype=ttnn.DataType.BFLOAT16
-    )
+    tt_w, tt_b = prepare_weights(w, b, conv_config, mesh_device)
 
     durations = []
     for i in range(WARMUP + RUNS):
