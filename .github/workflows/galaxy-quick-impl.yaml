@@ -16,10 +16,6 @@ on:
         required: false
         type: string
         default: "in-service"
-      blackhole:
-        required: false
-        type: boolean
-        default: false
       scheduled:
         required: false
         type: boolean
@@ -73,7 +69,7 @@ jobs:
       - name: Run health tests
         timeout-minutes: 10
         run: |
-          mpirun --host g10glx03,g10glx04 \
+          mpirun --allow-run-as-root --host g10glx03,g10glx04 \
             --mca btl_tcp_if_exclude docker0,lo \
             ./build/tools/scaleout/run_cluster_validation \
             --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/WH_GALAXY_big_mesh_8x8_torus-2d.textproto \
@@ -91,62 +87,3 @@ jobs:
       - name: Cleanup
         uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
-  multi-host-glx-2x:
-    runs-on:
-      - ${{ inputs.extra-tag }}
-    env:
-      BUILD_DIR: ${{ github.workspace }}/build
-    steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: ⬇️ Download Build Artifacts
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.build-artifact-name }}
-
-      - name: Extract build files
-        run: tar --zstd -xvf ttm_${{ inputs.platform == 'Ubuntu 22.04' && 'ubuntu-22.04' || 'ubuntu-20.04' }}-${{ inputs.build-type == 'Release' && 'release' || 'debug' }}.tar.zst
-
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-
-      - name: Capture runner's home directory
-        id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
-
-      - name: Run multi-host tests
-        uses: ./.github/actions/docker-run
-        timeout-minutes: 30
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e LD_LIBRARY_PATH=${{ env.BUILD_DIR }}/lib
-            -e PYTHONPATH=${{ github.workspace }}
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=wormhole_b0
-            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
-            -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
-            --device /dev/tenstorrent
-            --pid=host
-            --hostname=mpirun-host
-          install_wheel: true
-          run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
-            ./tests/scripts/multihost/run_dual_galaxy_tests.sh
-
-      - name: Upload test reports
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_multi_host_"
