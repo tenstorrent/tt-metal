@@ -76,7 +76,8 @@ class TTSConfig:
     temperature: float = 0.9
     top_k: int = 50
     top_p: float = 1.0
-    greedy: bool = False  # Use greedy decoding instead of sampling
+    greedy: bool = False  # Use greedy decoding (causes repetitive output - not recommended)
+    repetition_penalty: float = 1.0  # >1.0 discourages repetition (e.g., 1.1-1.3)
 
     # Code predictor
     num_code_groups: int = 16
@@ -137,21 +138,16 @@ def load_tokenizer():
 
 def encode_reference_audio(audio_path: str, weights: dict) -> Tuple[torch.Tensor, torch.Tensor]:
     """
-    Encode reference audio to codes and extract speaker embedding.
+    Encode reference audio to codec codes (Mimi). Speaker embedding is computed
+    separately after optional trimming so it matches the waveform used for ICL.
 
     Returns:
         ref_codes: [seq_len, 16] - RVQ codes for all 16 codebooks
-        speaker_embedding: [1, 2048] - Speaker embedding vector
+        audio_data: [num_samples] mono float32 @ 24 kHz
     """
     from scipy import signal
 
-    from models.demos.qwen3_tts.reference.functional import (
-        SpeakerEncoderConfig,
-        compute_mel_spectrogram_qwen,
-        extract_speaker_encoder_weights,
-        speaker_encoder_forward,
-        speech_tokenizer_encoder_forward_mimi,
-    )
+    from models.demos.qwen3_tts.reference.functional import speech_tokenizer_encoder_forward_mimi
 
     print("\nEncoding reference audio...")
 
@@ -166,19 +162,29 @@ def encode_reference_audio(audio_path: str, weights: dict) -> Tuple[torch.Tensor
 
     print(f"  Audio duration: {len(audio_data)/24000:.2f}s")
 
-    # Extract speaker embedding
-    mel = compute_mel_spectrogram_qwen(audio_data)
-    speaker_weights = extract_speaker_encoder_weights(weights)
-    speaker_config = SpeakerEncoderConfig()
-    speaker_embedding = speaker_encoder_forward(mel, speaker_weights, speaker_config)
-    print(f"  Speaker embedding: {speaker_embedding.shape}")
-
     # Encode to codes
     ref_codes = speech_tokenizer_encoder_forward_mimi(audio_data.unsqueeze(0))  # [1, 16, seq_len]
     ref_codes = ref_codes.squeeze(0).T  # [seq_len, 16]
     print(f"  Reference codes: {ref_codes.shape}")
 
-    return ref_codes, speaker_embedding
+    return ref_codes, audio_data
+
+
+def extract_speaker_embedding_reference(audio_data: torch.Tensor, weights: dict) -> torch.Tensor:
+    """ECAPA speaker embedding from 24 kHz mono waveform (matches TTNN pipeline)."""
+    from models.demos.qwen3_tts.reference.functional import (
+        SpeakerEncoderConfig,
+        compute_mel_spectrogram_qwen,
+        extract_speaker_encoder_weights,
+        speaker_encoder_forward,
+    )
+
+    mel = compute_mel_spectrogram_qwen(audio_data)
+    speaker_weights = extract_speaker_encoder_weights(weights)
+    speaker_config = SpeakerEncoderConfig()
+    speaker_embedding = speaker_encoder_forward(mel, speaker_weights, speaker_config)
+    print(f"  Speaker embedding: {speaker_embedding.shape}")
+    return speaker_embedding
 
 
 def create_icl_embedding(
@@ -377,10 +383,36 @@ def create_icl_embedding(
     return inputs_embeds, trailing_text_hidden, tts_pad_embed
 
 
-def sample_token(logits: torch.Tensor, temperature: float = 0.9, top_k: int = 50, greedy: bool = False) -> int:
-    """Sample next token from logits."""
+def sample_token(
+    logits: torch.Tensor,
+    temperature: float = 0.9,
+    top_k: int = 50,
+    greedy: bool = False,
+    repetition_penalty: float = 1.0,
+    generated_tokens: list = None,
+) -> int:
+    """Sample next token from logits with optional repetition penalty.
+
+    Args:
+        logits: Logits tensor [vocab_size]
+        temperature: Sampling temperature (ignored if greedy=True)
+        top_k: Top-k filtering (ignored if greedy=True)
+        greedy: Use argmax instead of sampling
+        repetition_penalty: Penalty for previously generated tokens (>1.0 discourages repetition)
+        generated_tokens: List of previously generated token IDs for repetition penalty
+    """
     if greedy:
         return logits.argmax().item()
+
+    # Apply repetition penalty to previously generated tokens
+    if repetition_penalty != 1.0 and generated_tokens:
+        for token_id in set(generated_tokens):
+            if 0 <= token_id < logits.size(-1):
+                if logits[token_id] > 0:
+                    logits[token_id] = logits[token_id] / repetition_penalty
+                else:
+                    logits[token_id] = logits[token_id] * repetition_penalty
+
     logits = logits / temperature
     if top_k > 0:
         top_k = min(top_k, logits.size(-1))
@@ -473,6 +505,9 @@ def generate_codes(
     # Generated codes (all 16 codebooks)
     all_codes = []
 
+    # Track generated code 0 tokens for repetition penalty
+    generated_code0_tokens = []
+
     # Autoregressive generation
     for step in range(config.max_new_tokens):
         current_seq_len = hidden_states.shape[1]
@@ -509,7 +544,15 @@ def generate_codes(
 
         # Project to vocab and sample codebook 0
         logits = F.linear(last_hidden.squeeze(1), codec_head)
-        token_0 = sample_token(logits[0], config.temperature, config.top_k, greedy=config.greedy)
+        token_0 = sample_token(
+            logits[0],
+            config.temperature,
+            config.top_k,
+            config.greedy,
+            config.repetition_penalty,
+            generated_code0_tokens,
+        )
+        generated_code0_tokens.append(token_0)
 
         # Check for EOS
         if token_0 == config.codec_eos_id:
@@ -575,6 +618,8 @@ def generate_codes(
 
     codes = torch.tensor(all_codes, dtype=torch.long)
     print(f"  Full codes shape: {codes.shape}")
+    print(f"  Code 0: {codes[:, 0].tolist()}")
+    torch.save(codes, "/tmp/ref_last_codes.pt")
 
     return codes
 
@@ -619,7 +664,32 @@ def main():
     parser.add_argument("--output", type=str, default="/tmp/pure_reference_tts.wav", help="Output audio path")
     parser.add_argument("--max-tokens", type=int, default=256, help="Maximum tokens to generate")
     parser.add_argument("--language", type=str, default="english", help="Language (english, chinese, etc.)")
-    parser.add_argument("--greedy", action="store_true", help="Use greedy decoding instead of sampling")
+    parser.add_argument(
+        "--greedy", action="store_true", help="Use greedy decoding (causes repetitive output - not recommended)"
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        help="Repetition penalty >1.0 discourages repetition (e.g., 1.1-1.3, default: 1.0)",
+    )
+    parser.add_argument(
+        "--save-inputs",
+        type=str,
+        default=None,
+        help="Save ICL embeddings (inputs_embeds, trailing_text_hidden, tts_pad_embed) to .pt file",
+    )
+    parser.add_argument(
+        "--auto-trim-bleed",
+        action="store_true",
+        help="Automatically detect and trim reference audio bleed using Whisper",
+    )
+    parser.add_argument(
+        "--target-word",
+        type=str,
+        default=None,
+        help="Expected first word of target text for bleed detection (auto-extracted if not set)",
+    )
     args = parser.parse_args()
 
     print("=" * 80)
@@ -645,9 +715,16 @@ def main():
     config = TTSConfig()
     config.max_new_tokens = args.max_tokens
     config.greedy = args.greedy
+    config.repetition_penalty = args.repetition_penalty
 
-    # Encode reference audio
-    ref_codes, speaker_embedding = encode_reference_audio(args.ref_audio, main_weights)
+    from models.demos.qwen3_tts.demo.reference_icl_utils import trim_reference_for_icl_conditioning
+
+    # Encode reference audio, then shorten if needed so text_len > codec_len
+    ref_codes, audio_data = encode_reference_audio(args.ref_audio, main_weights)
+    ref_codes, audio_data = trim_reference_for_icl_conditioning(
+        ref_codes, audio_data, tokenizer, args.ref_text, args.text
+    )
+    speaker_embedding = extract_speaker_embedding_reference(audio_data, main_weights)
 
     # Create ICL embeddings
     inputs_embeds, trailing_text_hidden, tts_pad_embed = create_icl_embedding(
@@ -660,6 +737,17 @@ def main():
         speaker_embedding=speaker_embedding,
         language=args.language,
     )
+
+    if args.save_inputs:
+        torch.save(
+            {
+                "inputs_embeds": inputs_embeds.detach().cpu(),
+                "trailing_text_hidden": trailing_text_hidden.detach().cpu(),
+                "tts_pad_embed": tts_pad_embed.detach().cpu(),
+            },
+            args.save_inputs,
+        )
+        print(f"  Saved ICL inputs to: {args.save_inputs}")
 
     # Generate codes
     start_time = time.time()
@@ -677,6 +765,31 @@ def main():
     audio_np = audio.squeeze().detach().cpu().float().numpy()
     sf.write(args.output, audio_np, 24000)
     print(f"\nSaved to: {args.output}")
+
+    # Auto-trim bleed if requested
+    if args.auto_trim_bleed:
+        from models.demos.qwen3_tts.demo.bleed_detector import detect_bleed, print_bleed_report, trim_audio
+
+        # Extract first word from target text if not provided
+        target_word = args.target_word
+        if target_word is None:
+            first_word = args.text.split()[0].rstrip(",.!?;:") if args.text.split() else "Hello"
+            target_word = first_word
+
+        print(f"\n  Running bleed detection (target word: '{target_word}')...")
+        bleed_results = detect_bleed(args.output, target_word)
+        print_bleed_report(bleed_results)
+
+        if bleed_results["bleed_duration"] > 0.1:
+            trim_time = max(0, bleed_results["bleed_duration"] - 0.1)
+            trimmed_path = args.output.replace(".wav", "_trimmed.wav")
+            trim_audio(args.output, trimmed_path, trim_time)
+            print(f"  Bleed-trimmed audio saved to: {trimmed_path}")
+
+            # Update main output with trimmed version
+            trim_audio(args.output, args.output, trim_time)
+            audio_np = audio_np[int(trim_time * 24000) :]
+            print(f"  Main output updated with trimmed audio")
 
     # Summary
     print("\n" + "=" * 80)
