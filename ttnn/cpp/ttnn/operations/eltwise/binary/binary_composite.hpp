@@ -379,7 +379,8 @@ struct ExecuteBitwiseAnd {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -389,7 +390,8 @@ struct ExecuteBitwiseAnd {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteBitwiseOr {
@@ -467,7 +469,8 @@ struct ExecuteBitwiseRightShift {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -477,7 +480,8 @@ struct ExecuteBitwiseRightShift {
         ttsl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
         ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        std::optional<bool> use_legacy = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 };
 
 struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {

@@ -730,7 +730,8 @@ void bind_bitwise_binary_ops_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     scalar,
@@ -739,7 +740,8 @@ void bind_bitwise_binary_ops_operation(
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
@@ -749,7 +751,8 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none()},
+            nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()},
 
         // tensor and tensor
         ttnn::nanobind_overload_t{
@@ -761,7 +764,8 @@ void bind_bitwise_binary_ops_operation(
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
                const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
+               const std::optional<bool>& use_legacy,
+               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -770,7 +774,8 @@ void bind_bitwise_binary_ops_operation(
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    sub_core_grids);
             },
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -781,6 +786,7 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
             nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none(),
         });
 }
 
