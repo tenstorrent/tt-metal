@@ -42,21 +42,15 @@ class NanoGPTConfig:
     n_embd: int = 768  # Embedding dimension
     n_layer: int = 12  # Number of transformer blocks
     n_head: int = 12  # Number of attention heads
-    dropout: float = (
-        0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
-    )
+    dropout: float = 0.2  # Dropout probability (matching C++ default: dropout_prob = 0.2F)
     bias: bool = True  # Use bias in linear layers and layer norm
     runner_type: RunnerType = RunnerType.Default  # For memory efficient block execution
-    weight_tying: WeightTyingType = (
-        WeightTyingType.Disabled
-    )  # Ties tok_emb and fc weights
+    weight_tying: WeightTyingType = WeightTyingType.Disabled  # Ties tok_emb and fc weights
     # Selects positional embedding type:
     # - trainable positional embedding (trainable)
     # - sinusoidal positional embedding (fixed)
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
-    experimental: NanoGPTExperimentalConfig = field(
-        default_factory=NanoGPTExperimentalConfig
-    )
+    experimental: NanoGPTExperimentalConfig = field(default_factory=NanoGPTExperimentalConfig)
 
 
 class NanoGPT(AbstractModuleBase):
@@ -71,20 +65,17 @@ class NanoGPT(AbstractModuleBase):
 
         self.config = config
 
-        weight_init = ttml.init.normal(0.0, 0.02)
-        bias_init = ttml.init.zeros()
-
         self.fc = LinearLayer(
             config.n_embd,
             config.vocab_size,
             False,
-            weight_init=weight_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(
             vocab_size_divisible_by_32,
             config.n_embd,
-            weight_init=weight_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
@@ -95,12 +86,9 @@ class NanoGPT(AbstractModuleBase):
                 config.block_size,
                 config.n_embd,
                 config.dropout,
-                weight_init=weight_init,
             )
         elif config.positional_embedding_type == "fixed":
-            self.pos_emb = PositionalEmbedding(
-                config.block_size, config.n_embd, config.dropout
-            )
+            self.pos_emb = PositionalEmbedding(config.block_size, config.n_embd, config.dropout)
         else:
             raise ValueError(
                 f"Unsupported positional_embedding_type="
@@ -116,8 +104,6 @@ class NanoGPT(AbstractModuleBase):
                     config.dropout,
                     config.bias,
                     config.experimental.use_composite_layernorm,
-                    weight_init=weight_init,
-                    bias_init=bias_init,
                 )
                 for _ in range(config.n_layer)
             ]
@@ -132,9 +118,7 @@ class NanoGPT(AbstractModuleBase):
         else:
             self.ln_f_beta = None
 
-    def forward(
-        self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, idx: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         """Forward pass of NanoGPT.
 
         Args:
@@ -154,9 +138,7 @@ class NanoGPT(AbstractModuleBase):
             elif self.config.runner_type == ttml.models.RunnerType.Default:
                 out = block(out, mask)
             else:
-                raise ValueError(
-                    "Unknown runner type. Supported runner types ['default', 'memory_efficient']"
-                )
+                raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 
         if self.config.experimental.use_composite_layernorm:
             layernorm_op = ttml.ops.layernorm.composite_layernorm

@@ -79,21 +79,18 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        weight_init = ttml.init.normal(0.0, 0.02)
-        bias_init = ttml.init.zeros()
-
         self.fc = LinearLayer(
             config.hidden_size,
             config.vocab_size,
             False,
-            weight_init=weight_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(
             vocab_size_divisible_by_32,
             config.hidden_size,
-            weight_init=weight_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
@@ -127,8 +124,6 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
-                    weight_init=weight_init,
-                    bias_init=bias_init,
                 )
                 for _ in range(config.num_hidden_layers)
             ]

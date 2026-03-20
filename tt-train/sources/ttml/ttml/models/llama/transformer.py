@@ -55,8 +55,6 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        weight_init=None,
-        bias_init=None,
     ) -> None:
         super().__init__()
 
@@ -67,30 +65,25 @@ class LlamaMLP(AbstractModuleBase):
 
         if intermediate_size is None:
             unrounded_size = (4 * embedding_size * 2) // 3
-            intermediate_size = (
-                (unrounded_size + multiple_of - 1) // multiple_of
-            ) * multiple_of
+            intermediate_size = ((unrounded_size + multiple_of - 1) // multiple_of) * multiple_of
 
         self.w1 = LinearLayer(
             embedding_size,
             intermediate_size,
             False,
-            weight_init=weight_init,
-            bias_init=bias_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
         self.w3 = LinearLayer(
             embedding_size,
             intermediate_size,
             False,
-            weight_init=weight_init,
-            bias_init=bias_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
         self.w2 = LinearLayer(
             intermediate_size,
             embedding_size,
             False,
-            weight_init=weight_init,
-            bias_init=bias_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
         )
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -124,8 +117,6 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
-        weight_init=None,
-        bias_init=None,
     ) -> None:
         super().__init__()
 
@@ -133,8 +124,6 @@ class LlamaBlock(AbstractModuleBase):
             hidden_size,
             intermediate_size,
             mlp_dropout,
-            weight_init=weight_init,
-            bias_init=bias_init,
         )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -145,8 +134,6 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            weight_init=weight_init,
-            bias_init=bias_init,
         )
 
     def forward(

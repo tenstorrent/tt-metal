@@ -17,8 +17,6 @@ class GPTMLP(AbstractModuleBase):
         self,
         embedding_dim: int,
         dropout: float = 0.0,
-        weight_init=None,
-        bias_init=None,
     ) -> None:
         super().__init__()
 
@@ -29,15 +27,15 @@ class GPTMLP(AbstractModuleBase):
             embedding_dim,
             embedding_dim * 4,
             True,
-            weight_init=weight_init,
-            bias_init=bias_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
+            bias_init=ttml.init.zeros(),
         )
         self.fc2 = LinearLayer(
             embedding_dim * 4,
             embedding_dim,
             True,
-            weight_init=weight_init,
-            bias_init=bias_init,
+            weight_init=ttml.init.normal(0.0, 0.02),
+            bias_init=ttml.init.zeros(),
         )
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:

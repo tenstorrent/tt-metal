@@ -52,9 +52,7 @@ class LayerNorm(AbstractModuleBase):
         else:
             layernorm_op = ttml.ops.layernorm.layernorm
 
-        return layernorm_op(
-            x, self.gamma.tensor, self.beta.tensor if self.beta else None
-        )
+        return layernorm_op(x, self.gamma.tensor, self.beta.tensor if self.beta else None)
 
 
 class GPTBlock(AbstractModuleBase):
@@ -67,8 +65,6 @@ class GPTBlock(AbstractModuleBase):
         dropout: float = 0.0,
         bias: bool = True,
         use_composite_layernorm: bool = False,
-        weight_init=None,
-        bias_init=None,
     ) -> None:
         super().__init__()
 
@@ -83,22 +79,16 @@ class GPTBlock(AbstractModuleBase):
             embedding_dim,
             num_heads,
             dropout,
-            weight_init=weight_init,
-            bias_init=bias_init,
         )
         self.mlp = GPTMLP(
             embedding_dim,
             dropout,
-            weight_init=weight_init,
-            bias_init=bias_init,
         )
 
     # train() and eval() are inherited from AbstractModuleBase
     # They automatically propagate RunMode to all registered submodules
 
-    def forward(
-        self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None
-    ) -> ttml.autograd.Tensor:
+    def forward(self, x: ttml.autograd.Tensor, mask: Optional[ttml.autograd.Tensor] = None) -> ttml.autograd.Tensor:
         """Forward pass of GPT block.
 
         Args:
