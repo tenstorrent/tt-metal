@@ -289,15 +289,15 @@ def run(
             else False,
         )
 
-    # Build operation arguments
-    op_kwargs = {
-        "is_causal": is_causal_flag,
-        "memory_config": output_mem_cfg,
-        "cur_pos_tensor": cur_pos_tensor,
-    }
+    # Start with all parsed V2 kwargs, then override with explicitly built params
+    op_kwargs = dict(parsed_op_kwargs)
 
-    # Add optional parameters if extracted from traced config
+    op_kwargs["is_causal"] = is_causal_flag
+    op_kwargs["cur_pos_tensor"] = cur_pos_tensor
     op_kwargs["scale"] = compute_scale
+
+    if output_mem_cfg is not None:
+        op_kwargs["memory_config"] = output_mem_cfg
 
     if sliding_window_size is not None:
         op_kwargs["sliding_window_size"] = int(sliding_window_size)
