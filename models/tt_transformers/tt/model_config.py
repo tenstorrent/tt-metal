@@ -6,7 +6,7 @@ import inspect
 import json
 import math
 import os
-from enum import Enum
+from enum import Enum, auto
 from functools import lru_cache
 from pathlib import Path
 from typing import Tuple
@@ -405,6 +405,11 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
         raise ValueError(f"Error loading JSON configuration: {e}")
 
 
+class CheckpointType(Enum):
+    Meta = auto()
+    HuggingFace = auto()
+
+
 class ModelArgs:
     OP_KEYS = (
         # Embedding
@@ -518,6 +523,7 @@ class ModelArgs:
         HF_MODEL = os.getenv("HF_MODEL")
         self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
         if HF_MODEL:
+            self.checkpoint_type = CheckpointType.HuggingFace
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
 
@@ -2305,13 +2311,7 @@ class ModelArgs:
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Mistral-Small-3.1-24B": {
-                    "N150": 32,
-                    "N300": 64,
-                    "T3K": 128,
-                    "TG": 128,
-                    "P150x4": 128,
-                },  # Conservative: Allow on all devices
+                "Mistral-Small-3.1-24B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2671,6 +2671,22 @@ class ModelArgs:
 
         self._set_vision_params(config)
         self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.vision_chunk_size = config.get("vision_chunk_size", 896)
+        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+
+        self.vision_dim = 1280
+        self.vision_mlp_ratio = 4
+        self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        self.vision_act_layer = ttnn.UnaryOpType.GELU
+        self.vision_dropout = 0.0
+        self.vision_attn_n_heads = 16
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        self.vision_n_layers = 32
+        self.vision_n_global_layers = 8
+        self.vision_max_num_tiles = 4
+        self.vision_patch_size = 14
+        self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
@@ -2781,12 +2797,13 @@ class ModelArgs:
             merged_text_config = merge_text_config(config)
             self._set_params_from_dict(merged_text_config)
 
-            if "vision_config" in config:
-                # Merge vision config (merge_vision_config is safe for all models - it only adds missing keys)
-                merged_vision_config = merge_vision_config(config)
-                self._set_vision_params({"vision_config": merged_vision_config})
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                self._set_vision_params(config["vision_config"])
+            else:
+                if "vision_config" in config:
+                    merged_vision_config = merge_vision_config(config)
+                    self._set_vision_params({"vision_config": merged_vision_config})
 
-            # Set is_multimodal using original config that has vision_config
             self.is_multimodal = "vision_config" in config or self.is_vision()
         else:
             self._set_params_from_dict(config)
@@ -3597,13 +3614,15 @@ class ModelArgs:
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector.mm_soft_emb_norm
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_rms_norm(self):

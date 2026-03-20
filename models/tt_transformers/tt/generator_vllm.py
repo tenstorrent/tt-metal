@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
 from typing import List, Mapping, Union
 
 import torch
@@ -128,6 +129,115 @@ class DummyInputsBuilder(BaseDummyInputsBuilder):
         mm_counts: Mapping[str, int],
     ) -> MultiModalDataDict:
         raise NotImplementedError
+
+
+def input_processor_for_mistral_24b(ctx, inputs):
+    input_processor = ctx.get_hf_processor()
+    if "prompt" in inputs:
+        prompt_text = inputs["prompt"]
+    else:
+        assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
+        prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
+    if "multi_modal_data" in inputs and "image" in inputs["multi_modal_data"]:
+        images = inputs["multi_modal_data"]["image"]
+    else:
+        images = None
+
+    processed_inputs = input_processor(
+        text=prompt_text,
+        images=images,
+        videos=None,
+        return_tensors="pt",
+    )
+
+    assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
+    return {
+        "type": inputs["type"],
+        "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
+        "prompt": prompt_text,
+        "multi_modal_data": {"image": processed_inputs},
+    }
+
+
+class CustomNamespace(SimpleNamespace):
+    def __contains__(self, key):
+        return key in self.__dict__
+
+
+class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.MISTRAL_IMAGE_TOKEN_ID = 151655
+        self.max_gen_len = self.model_args[0].max_seq_len - 1
+
+    @classmethod
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=32768, tt_data_parallel=1):
+        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+
+        max_seq_len = 1024 * 128
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    @property
+    def max_cross_attn_tokens(self):
+        return self.model_args[0].vision_max_num_chunks * nearest_32(self.model_args[0].vision_chunk_ntok)
+
+    def prefill_forward(self, *args, **kwargs):
+        self.tokenizer = self.model_args[0].tokenizer
+        pad_token_id = self.tokenizer.pad_token_id
+
+        tokens = kwargs["tokens"]
+        prompt_lens = kwargs["prompt_lens"]
+        inputs = CustomNamespace()
+        inputs.input_ids = tokens
+        data = kwargs.get("images", None)
+        for i in range(tokens.shape[0]):
+            tokens[i][prompt_lens[i] :] = pad_token_id
+        pixel_values, image_sizes = None, None
+
+        if data and hasattr(data[0], "pixel_values"):
+            pixel_values = [im.pixel_values for im in data if hasattr(im, "pixel_values")]
+            image_sizes = [im.image_sizes for im in data if hasattr(im, "image_sizes")]
+
+        page_table = kwargs.get("page_table", None)
+        kv_cache = kwargs.get("kv_cache", None)
+
+        return super().prefill_forward_text(
+            tokens=inputs.input_ids,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            pixel_values=pixel_values if pixel_values else None,
+            image_sizes=image_sizes if image_sizes else None,
+        )
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
 # Mllama is currently not supported in vLLM V1.
