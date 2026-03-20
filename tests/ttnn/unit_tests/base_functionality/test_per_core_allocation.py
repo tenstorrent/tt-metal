@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tests for per-core L1 allocation via MemoryConfig.per_core_shard_sizes.
+Tests for per-core L1 allocation via MemoryConfig(per_core_allocation=True).
 
-Each test creates single-core HEIGHT_SHARDED tensors with per_core_shard_sizes=[size],
+Each test creates single-core HEIGHT_SHARDED tensors with per_core_allocation=True,
 which triggers the per-bank allocator (AllocatorID bank_id+1) instead of lockstep.
 """
 
@@ -65,7 +65,7 @@ class PerCoreMemMap:
     def validate(self, actual):
         """Assert actual address map matches expected."""
         assert actual == self.expected, f"Address map mismatch:\n" + "\n".join(
-            f"  {k}: expected={self.expected[k]:#x} actual={actual.get(k, 'MISSING'):#x}"
+            f"  {k}: expected={self.expected[k]:#x} actual={'MISSING' if k not in actual else f'{actual[k]:#x}'}"
             f"{' MISMATCH' if self.expected[k] != actual.get(k) else ''}"
             for k in self.expected
         )

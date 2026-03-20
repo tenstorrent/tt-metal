@@ -5,7 +5,6 @@
 #pragma once
 
 #include <optional>
-#include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -64,10 +63,20 @@ public:
     bool is_dram() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
-        "memory_layout", "buffer_type", "shard_spec", "nd_shard_spec", "created_with_nd_shard_spec");
+        "memory_layout",
+        "buffer_type",
+        "shard_spec",
+        "nd_shard_spec",
+        "created_with_nd_shard_spec",
+        "per_core_allocation");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            memory_layout_, buffer_type_, shard_spec_, nd_shard_spec_, created_with_nd_shard_spec_);
+            memory_layout_,
+            buffer_type_,
+            shard_spec_,
+            nd_shard_spec_,
+            created_with_nd_shard_spec_,
+            per_core_allocation_);
     }
 
     static MemoryConfig create_with_prepopulated_shard_specs(

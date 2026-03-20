@@ -135,6 +135,9 @@ void MeshBuffer::initialize_device_buffers() {
             /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
         // For per-core allocation, propagate per-core addresses from the backing buffer.
         if (buffer->per_core_allocation()) {
+            TT_FATAL(
+                std::holds_alternative<OwnedBufferState>(state_),
+                "Per-core allocation is not supported for externally-owned MeshBuffers");
             auto& owned = std::get<OwnedBufferState>(state_);
             buffer->copy_per_core_addresses_from(*owned.backing_buffer);
         }

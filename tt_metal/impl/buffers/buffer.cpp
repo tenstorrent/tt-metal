@@ -388,6 +388,8 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
         return shared_from_this();
     }
 
+    TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
+
     auto buffer = Buffer::create(
         device_,
         address_,
@@ -568,6 +570,7 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
 }
 
 DeviceAddr Buffer::per_core_address(CoreCoord core) const {
+    TT_FATAL(per_core_allocation_, "Buffer::per_core_address() called on buffer without per-core allocation enabled");
     auto it = per_core_addresses_.find(core);
     TT_FATAL(it != per_core_addresses_.end(), "No per-core address for core ({}, {})", core.x, core.y);
     return it->second;

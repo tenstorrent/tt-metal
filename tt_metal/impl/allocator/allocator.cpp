@@ -134,9 +134,9 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
         DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
-        for (size_t i = 0; i < cores.size(); i++) {
-            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(cores[i]).at(0);
-            addrs[cores[i]] = l1_manager_->allocate_buffer(
+        for (const auto& core : cores) {
+            auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
+            addrs[core] = l1_manager_->allocate_buffer(
                 alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
         }
         buffer->set_per_core_addresses(std::move(addrs));
