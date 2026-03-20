@@ -203,8 +203,12 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
 // clang-format on
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool enforce_fp32_accumulation = false>
 ALWI void reduce_tile_math(uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+#ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, tensor_shape)));
+#else
+    MATH((llk_math_reduce(idst)));
+#endif
 }
 
 }  // namespace ckernel
