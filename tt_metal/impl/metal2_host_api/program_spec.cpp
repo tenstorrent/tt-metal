@@ -114,34 +114,35 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const ComputeProcessorMaskMap& kernel_to_compute_processor_mask_map);
 
 // ============================================================================
-//  ENTRY POINT
+//  PUBLIC ENTRY POINTS
 // ============================================================================
 
 Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
-    // Phase 1: Collect derived data (builds lookup tables, checks structural invariants)
+    // Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
-    // Phase 1b: Validate semantic rules (can be skipped for trusted inputs)
+    // Validate semantic rules (can be skipped for trusted inputs)
     if (!skip_validation) {
         ValidateProgramSpec(spec, collected);
     }
 
-    // Phase 2: Solve kernel-to-core assignments
+    // Solve kernel-to-core assignments
     // NOTE: Current solver assumes that a given DM kernel uses the _same_ set of DM cores on every node/cluster.
     auto [kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map] =
         SolveKernelToProcessorAssignments(spec, collected);
 
-    // Phase 3: Build the Program
+    // Build the Program
     auto program_impl = std::make_shared<detail::ProgramImpl>();
 
     // Create DataflowBuffers
-    std::unordered_map<DFBSpecName, uint32_t> dfb_name_to_id_map;
     for (const auto& [dfb_name, dfb_endpoint_info] : collected.dfb_endpoints) {
         const DataflowBufferSpec* dfb_spec = collected.dfb_by_name.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config = MakeDataflowBufferConfig(
             dfb_spec, dfb_endpoint_info, kernel_to_dm_processor_mask_map, kernel_to_compute_processor_mask_map);
+
+        // Add the DFB to the ProgramImpl, and register the name -> handle mapping
         uint32_t dfb_id = program_impl->add_dataflow_buffer(to_node_range_set(dfb_spec->target_nodes), config);
-        dfb_name_to_id_map[dfb_name] = dfb_id;
+        program_impl->register_dfb_spec_name(dfb_name, dfb_id);
     }
 
     // Create Kernels
@@ -173,7 +174,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
 
             // Add it to the ProgramImpl & save the kernel handle
             KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-            // TODO... save kernel handle
+            program_impl->register_kernel_spec_name(kernel_spec.unique_id, kh);
         }
         else {
             // Compute kernel
@@ -188,7 +189,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
 
             // Add it to the ProgramImpl & save the kernel handle
             KernelHandle kh = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-            // TODO... save kernel handle
+            program_impl->register_kernel_spec_name(kernel_spec.unique_id, kh);
         }
     }
 
