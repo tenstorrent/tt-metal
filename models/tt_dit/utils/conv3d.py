@@ -38,6 +38,18 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
             (192, 384, (3, 3, 3)): (96, 128, 1, 32, 1),
             (384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
             (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
+            # LTX Video VAE blockings
+            # Maximize C_in_block to minimize multi-C_in reduction (bf16 truncation).
+            # C_in_block = min(in_c, 256) avoids L1 overflow while minimizing groups.
+            (128, 1024, (3, 3, 3)): (128, 32, 1, 1, 1),  # 1 group (no reduction)
+            (128, 512, (3, 3, 3)): (128, 32, 1, 1, 1),  # 1 group
+            (256, 256, (3, 3, 3)): (256, 32, 1, 1, 1),  # 1 group
+            (256, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # 1 group
+            (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # 2 groups
+            (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # 4 groups
+            (1024, 2048, (3, 3, 3)): (256, 32, 1, 1, 1),  # 4 groups
+            (64, 64, (3, 3, 3)): (64, 32, 1, 1, 1),  # 1 group
+            (64, 48, (3, 3, 3)): (64, 32, 1, 1, 1),  # 1 group
         }
 
     blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
