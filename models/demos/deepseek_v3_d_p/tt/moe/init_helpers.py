@@ -520,22 +520,17 @@ def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):
     )
 
 
-def get_combine_counter_mesh_mapper(mesh_device):
+def get_ep_mesh_mapper(mesh_device):
     """
-    Create mesh mapper for combine counter tensor (expert_token_counts).
+    Create mesh mapper for expert-parallel tensors.
 
-    The counter tensor is sharded across both mesh dimensions.
-
-    Args:
-        mesh_device: TTNN mesh device
-
-    Returns:
-        ShardTensor2dMesh mapper configured for counter tensor
+    Shards tensor dim 1 across mesh rows (dispatch_group_size),
+    tensor dim 0 across mesh cols (num_dispatch_groups).
     """
     return ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
+        dims=(1, 0),
     )
 
 
@@ -551,73 +546,16 @@ def get_tp_mesh_composer(mesh_device):
     )
 
 
-def get_dispatch_output_mesh_composer(mesh_device):
+def get_ep_mesh_composer(mesh_device):
     """
-    Create mesh composer for gathering dispatch output back to torch.
+    Create mesh composer for expert-parallel tensors.
 
-    Args:
-        mesh_device: TTNN mesh device
-    """
-    return ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],
-        ),
-    )
-
-
-def get_combine_output_mesh_composer(mesh_device):
-    """
-    Create mesh composer for gathering combine output back to torch.
-
-    Args:
-        mesh_device: TTNN mesh device
-
-    Returns:
-        MeshComposer configured for combine output
+    Composes tensor dim 1 from mesh rows (dispatch_group_size),
+    tensor dim 0 from mesh cols (num_dispatch_groups).
     """
     return ttnn.create_mesh_composer(
         mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],
-        ),
-    )
-
-
-def get_routed_expert_buffer_mesh_mapper(mesh_device):
-    """
-    Create mesh mapper for routed expert dispatched buffer.
-
-    The buffer is sharded across both mesh dimensions.
-
-    Args:
-        mesh_device: TTNN mesh device
-
-    Returns:
-        ShardTensor2dMesh mapper configured for routed expert buffer
-    """
-    return ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),
-    )
-
-
-def get_routed_expert_output_mesh_composer(mesh_device):
-    """
-    Create mesh composer for gathering routed expert output back to torch.
-
-    Args:
-        mesh_device: TTNN mesh device
-
-    Returns:
-        MeshComposer configured for routed expert output
-    """
-    return ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],
-        ),
+        ttnn.MeshComposerConfig(dims=[1, 0]),
     )
 
 

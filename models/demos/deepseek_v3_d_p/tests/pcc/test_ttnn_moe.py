@@ -18,10 +18,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_fabric_router_config,
     extract_mesh_config,
-    get_combine_output_mesh_composer,
-    get_dispatch_output_mesh_composer,
+    get_ep_mesh_composer,
     get_gate_outputs,
-    get_routed_expert_output_mesh_composer,
     get_tp_mesh_composer,
     initialize_test_inputs,
 )
@@ -467,11 +465,11 @@ def test_ttnn_moe(
     # fmt: off
     sparse_checks = [
         ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
-         get_dispatch_output_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
+         get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
         ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
-         get_dispatch_output_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
+         get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
         ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
-         get_routed_expert_output_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.93}),
+         get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.93}),
     ]
     # fmt: on
 
@@ -512,7 +510,7 @@ def test_ttnn_moe(
         logger.debug(f"📊 {name} torch shape: {torch_intermediates.combined_output.shape}")
 
         # Convert TTNN combined_output to torch
-        combine_mesh_composer = get_combine_output_mesh_composer(mesh_device)
+        combine_mesh_composer = get_ep_mesh_composer(mesh_device)
         tt_combined_torch = ttnn.to_torch(
             tt_intermediates.combined_output,
             mesh_composer=combine_mesh_composer,

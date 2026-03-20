@@ -18,8 +18,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
     extract_mesh_config,
-    get_routed_expert_buffer_mesh_mapper,
-    get_routed_expert_output_mesh_composer,
+    get_ep_mesh_composer,
+    get_ep_mesh_mapper,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -222,7 +222,7 @@ def test_ttnn_routed_expert(
         logger.debug(f"Torch output stats - min: {torch_outputs.min():.4f}, max: {torch_outputs.max():.4f}")
 
         # Create TTNN input from torch - shard across devices using dims=(1, 0)
-        mesh_mapper = get_routed_expert_buffer_mesh_mapper(mesh_device)
+        mesh_mapper = get_ep_mesh_mapper(mesh_device)
         profiler.start("input_to_device")
         dispatched_buffer_tt = ttnn.from_torch(
             dispatched_buffer_torch,
@@ -285,7 +285,7 @@ def test_ttnn_routed_expert(
     # Output shape per device: (experts_per_chip, max_tokens, emb_dim)
     # Need to unsqueeze and compose back to (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
     ttnn_outputs_expanded = ttnn.unsqueeze(ttnn.unsqueeze(ttnn_outputs, dim=0), dim=0)
-    mesh_composer = get_routed_expert_output_mesh_composer(mesh_device)
+    mesh_composer = get_ep_mesh_composer(mesh_device)
     ttnn_outputs_torch = ttnn.to_torch(ttnn_outputs_expanded, mesh_composer=mesh_composer)
     logger.debug(f"TTNN output (torch) shape: {ttnn_outputs_torch.shape}")
     logger.debug(f"TTNN output stats - min: {ttnn_outputs_torch.min():.4f}, max: {ttnn_outputs_torch.max():.4f}")

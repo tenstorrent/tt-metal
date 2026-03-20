@@ -23,9 +23,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_fabric_router_config,
     extract_mesh_config,
-    get_combine_counter_mesh_mapper,
-    get_combine_output_mesh_composer,
     get_dispatch_input_mesh_mapper,
+    get_ep_mesh_composer,
+    get_ep_mesh_mapper,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -373,7 +373,7 @@ def test_ttnn_dispatch_combine(
     torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
 
     # Convert counter to TTNN tensor for combine module
-    mesh_mapper_combine_counter = get_combine_counter_mesh_mapper(mesh_device)
+    mesh_mapper_combine_counter = get_ep_mesh_mapper(mesh_device)
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
         mesh_mapper=mesh_mapper_combine_counter,
@@ -403,7 +403,7 @@ def test_ttnn_dispatch_combine(
     logger.debug("Combine complete!")
 
     # Convert TTNN output back to torch
-    mesh_composer = get_combine_output_mesh_composer(mesh_device)
+    mesh_composer = get_ep_mesh_composer(mesh_device)
 
     y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
 

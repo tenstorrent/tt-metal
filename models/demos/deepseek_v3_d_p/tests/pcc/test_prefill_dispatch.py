@@ -22,7 +22,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     extract_mesh_config,
     get_dispatch_input_mesh_mapper,
-    get_dispatch_output_mesh_composer,
+    get_ep_mesh_composer,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -386,7 +386,7 @@ def test_ttnn_dispatch(
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     # Convert TTNN outputs to torch for comparison
-    mesh_composer = get_dispatch_output_mesh_composer(mesh_device)
+    mesh_composer = get_ep_mesh_composer(mesh_device)
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
 
