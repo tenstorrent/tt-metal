@@ -486,6 +486,18 @@ def compute_expected_dram_worker_cores(device, dram_grid, num_shards, row_major,
     return expected_workers
 
 
+def compute_expected_dram_worker_cores_grid_2d(
+    device, dram_grid, num_shards_height, num_shards_width, row_major, noc=ttnn.NOC.NOC_0
+):
+    """
+    For DRAM block-sharded tensors, first compute the DRAM cores with data using GRID_2D rules,
+    then map those DRAM logical cores to optimal Tensix worker cores.
+    """
+    dram_cores_with_data = compute_expected_cores_grid_2d(dram_grid, num_shards_height, num_shards_width, row_major)
+    all_dram_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc)
+    return [all_dram_workers[dram_core.x] for dram_core in dram_cores_with_data]
+
+
 # ============================================================================
 #  DRAM Legacy HEIGHT_SHARDED Tests
 # ============================================================================
@@ -682,6 +694,57 @@ def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientat
 
     shard_spec = ttnn.ShardSpec(grid, shard_shape, orientation)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_tensor = ttnn.to_device(tt_tensor, device, memory_config=mem_config)
+
+    actual_cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
+    assert_cores_match(actual_cores, expected_cores)
+
+
+# ============================================================================
+#  DRAM Legacy BLOCK_SHARDED Tests (rank-1 only)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid, description",
+    [
+        # rank-1 tensor, 4 block shards on 4 DRAM cores
+        (
+            [128],
+            [1, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            "dram_block_grid_eq_shards_rank1",
+        ),
+        # rank-1 tensor, 4 block shards on 8 DRAM cores
+        (
+            [128],
+            [1, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            "dram_block_grid_gt_shards_rank1",
+        ),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_dram_legacy_block_sharded_rank1(device, tensor_shape, shard_shape, grid, description):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
+
+    total_height = 1
+    width = tensor_shape[-1]
+    shard_h, shard_w = shard_shape
+    num_shards_h = math.ceil(total_height / shard_h)
+    num_shards_w = math.ceil(width / shard_w)
+    expected_cores = compute_expected_dram_worker_cores_grid_2d(
+        device, grid, num_shards_h, num_shards_w, row_major=True
+    )
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
     torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
