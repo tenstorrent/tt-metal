@@ -46,6 +46,11 @@ class EnqueueProgramCommand;
 
 class Kernel;
 
+// Metal 2.0 type aliases
+using KernelSpecName = std::string;
+using DFBSpecName = std::string;
+using SemaphoreSpecName = std::string;
+
 namespace distributed {
 class MeshWorkload;
 class MeshWorkloadImpl;
@@ -309,6 +314,21 @@ public:
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
+    // Metal 2.0: Add name -> handle mappings (temporary indirection)
+    void register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle);
+    void register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id);
+    void register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id);
+
+    // Metal 2.0: Get handle from name (TT_FATAL if not found)
+    KernelHandle get_kernel_handle(const KernelSpecName& name) const;
+    uint32_t get_dfb_handle(const DFBSpecName& name) const;
+    uint32_t get_semaphore_handle(const SemaphoreSpecName& name) const;
+
+    // Metal 2.0: Get kernel by name (TT_FATAL if not found)
+    std::shared_ptr<Kernel> get_kernel_by_spec_name(const KernelSpecName& name) const {
+        return get_kernel(get_kernel_handle(name));
+    }
+
 private:
     HWCommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -380,6 +400,16 @@ private:
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
 
+    // Initial Metal 2.0 implementation uses a name registry to map names to handles.
+    // This indirection is simple and non-invasive, but less efficient than a direct mapping.
+    struct Metal2NameRegistry {
+        std::unordered_map<KernelSpecName, KernelHandle> kernel_handles;
+        std::unordered_map<DFBSpecName, uint32_t> dfb_handles;
+        std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
+    };
+    std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
+
+    // Semaphores
     std::vector<Semaphore> semaphores_;
 
     std::unordered_set<uint64_t> compiled_;

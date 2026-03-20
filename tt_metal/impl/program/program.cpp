@@ -380,6 +380,56 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
     return nullptr;
 }
 
+// ============================================================================
+// Metal 2.0 Name Registry Methods
+// ============================================================================
+
+void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->kernel_handles.try_emplace(name, handle);
+    TT_FATAL(inserted, "Duplicate kernel spec name: {}", name);
+}
+
+void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->dfb_handles.try_emplace(name, dfb_id);
+    TT_FATAL(inserted, "Duplicate DFB spec name: {}", name);
+}
+
+void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    auto [it, inserted] = metal2_registry_->semaphore_handles.try_emplace(name, sem_id);
+    TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
+}
+
+KernelHandle ProgramImpl::get_kernel_handle(const KernelSpecName& name) const {
+    TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
+    auto it = metal2_registry_->kernel_handles.find(name);
+    TT_FATAL(it != metal2_registry_->kernel_handles.end(), "Unknown kernel spec name: {}", name);
+    return it->second;
+}
+
+uint32_t ProgramImpl::get_dfb_handle(const DFBSpecName& name) const {
+    TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
+    auto it = metal2_registry_->dfb_handles.find(name);
+    TT_FATAL(it != metal2_registry_->dfb_handles.end(), "Unknown DFB spec name: {}", name);
+    return it->second;
+}
+
+uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const {
+    TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
+    auto it = metal2_registry_->semaphore_handles.find(name);
+    TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
+    return it->second;
+}
+// ============================================================================
+
 std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
     return program.impl().collect_kernel_meta(device);
 }
