@@ -471,3 +471,365 @@ def test_legacy_block_sharded(device, tensor_shape, shard_shape, grid, orientati
 
     actual_cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
     assert_cores_match(actual_cores, expected_cores)
+
+
+# ============================================================================
+#  DRAM Sharded Helper
+# ============================================================================
+
+
+def compute_expected_dram_worker_cores(device, dram_grid, num_shards, row_major, noc=ttnn.NOC.NOC_0):
+    """
+    For DRAM-sharded tensors the API returns optimal Tensix worker cores, not DRAM cores.
+    Steps:
+      1. Enumerate DRAM logical cores from the grid in traversal order.
+      2. Keep only the first min(num_cores, num_shards) that have data.
+      3. Map each DRAM core -> channel -> optimal worker via the device mapping.
+    """
+    all_dram_cores = corerange_to_cores_python(dram_grid, row_wise=row_major)
+    cores_with_data = all_dram_cores[: min(len(all_dram_cores), num_shards)]
+
+    all_dram_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc)
+
+    expected_workers = []
+    for dram_core in cores_with_data:
+        channel = dram_core.x
+        expected_workers.append(all_dram_workers[channel])
+    return expected_workers
+
+
+# ============================================================================
+#  DRAM Legacy HEIGHT_SHARDED Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_h, grid, orientation, description",
+    [
+        # All 12 DRAM banks, grid == num_shards (12 shards on 12 banks)
+        (
+            [1, 1, 384, 64],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_height_all_banks_eq_shards_row_major",
+        ),
+        (
+            [1, 1, 384, 64],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_height_all_banks_eq_shards_col_major",
+        ),
+        # All 12 DRAM banks, num_shards < num_banks (6 shards on 12 banks)
+        (
+            [1, 1, 192, 64],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_height_all_banks_gt_shards_row_major",
+        ),
+        (
+            [1, 1, 192, 64],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_height_all_banks_gt_shards_col_major",
+        ),
+        # Disjoint DRAM banks (banks 0-3 and 8-11), grid == num_shards
+        (
+            [1, 1, 256, 64],
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_height_disjoint_eq_shards_row_major",
+        ),
+        (
+            [1, 1, 256, 64],
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_height_disjoint_eq_shards_col_major",
+        ),
+        # Disjoint DRAM banks, num_shards < num_banks (4 shards on 8 disjoint banks)
+        (
+            [1, 1, 128, 64],
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_height_disjoint_gt_shards_row_major",
+        ),
+        (
+            [1, 1, 128, 64],
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_height_disjoint_gt_shards_col_major",
+        ),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_dram_legacy_height_sharded(device, tensor_shape, shard_h, grid, orientation, description):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
+
+    shard_w = tensor_shape[-1]
+    shard_shape = [shard_h, shard_w]
+    num_shards = compute_num_shards_legacy(tensor_shape, shard_shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
+    row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
+    expected_cores = compute_expected_dram_worker_cores(device, grid, num_shards, row_major)
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, orientation)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_tensor = ttnn.to_device(tt_tensor, device, memory_config=mem_config)
+
+    actual_cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
+    assert_cores_match(actual_cores, expected_cores)
+
+
+# ============================================================================
+#  DRAM Legacy WIDTH_SHARDED Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_w, grid, orientation, description",
+    [
+        # All 12 DRAM banks, grid == num_shards (12 shards on 12 banks)
+        (
+            [1, 1, 32, 384],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_width_all_banks_eq_shards_row_major",
+        ),
+        (
+            [1, 1, 32, 384],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_width_all_banks_eq_shards_col_major",
+        ),
+        # All 12 DRAM banks, num_shards < num_banks (6 shards on 12 banks)
+        (
+            [1, 1, 32, 192],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_width_all_banks_gt_shards_row_major",
+        ),
+        (
+            [1, 1, 32, 192],
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_width_all_banks_gt_shards_col_major",
+        ),
+        # Disjoint DRAM banks, grid == num_shards
+        (
+            [1, 1, 32, 256],
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_width_disjoint_eq_shards_row_major",
+        ),
+        (
+            [1, 1, 32, 256],
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_width_disjoint_eq_shards_col_major",
+        ),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_dram_legacy_width_sharded(device, tensor_shape, shard_w, grid, orientation, description):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
+
+    total_height = 1
+    for dim in tensor_shape[:-1]:
+        total_height *= dim
+    shard_shape = [total_height, shard_w]
+    num_shards = compute_num_shards_legacy(tensor_shape, shard_shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED)
+    row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
+    expected_cores = compute_expected_dram_worker_cores(device, grid, num_shards, row_major)
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, orientation)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_tensor = ttnn.to_device(tt_tensor, device, memory_config=mem_config)
+
+    actual_cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
+    assert_cores_match(actual_cores, expected_cores)
+
+
+# ============================================================================
+#  DRAM ND Sharded Tests (ROUND_ROBIN_1D)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid, orientation, description",
+    [
+        # All 12 DRAM banks, grid == num_shards (12 shards on 12 banks)
+        (
+            [1, 1, 384, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_nd_all_banks_eq_shards_row_major",
+        ),
+        (
+            [1, 1, 384, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_nd_all_banks_eq_shards_col_major",
+        ),
+        # All 12 DRAM banks, num_shards < num_banks (6 shards on 12 banks)
+        (
+            [1, 1, 192, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_nd_all_banks_gt_shards_row_major",
+        ),
+        (
+            [1, 1, 192, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_nd_all_banks_gt_shards_col_major",
+        ),
+        # All 12 DRAM banks, num_shards > num_banks (24 shards on 12 banks, 2 per bank)
+        (
+            [1, 1, 768, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_nd_all_banks_lt_shards_row_major",
+        ),
+        (
+            [1, 1, 768, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_nd_all_banks_lt_shards_col_major",
+        ),
+        # Disjoint DRAM banks (banks 0-3 and 8-11), grid == num_shards
+        (
+            [1, 1, 256, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_nd_disjoint_eq_shards_row_major",
+        ),
+        (
+            [1, 1, 256, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_nd_disjoint_eq_shards_col_major",
+        ),
+        # Disjoint DRAM banks, num_shards < num_banks (4 shards on 8 disjoint banks)
+        (
+            [1, 1, 128, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            "dram_nd_disjoint_gt_shards_row_major",
+        ),
+        (
+            [1, 1, 128, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(11, 0)),
+                ]
+            ),
+            ttnn.ShardOrientation.COL_MAJOR,
+            "dram_nd_disjoint_gt_shards_col_major",
+        ),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_dram_nd_sharded_round_robin(device, tensor_shape, shard_shape, grid, orientation, description):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
+
+    num_shards = compute_num_shards_nd(tensor_shape, shard_shape)
+    row_major = orientation == ttnn.ShardOrientation.ROW_MAJOR
+    expected_cores = compute_expected_dram_worker_cores(device, grid, num_shards, row_major)
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=shard_shape,
+        grid=grid,
+        orientation=orientation,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tt_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_tensor = ttnn.to_device(tt_tensor, device, memory_config=mem_config)
+
+    actual_cores = ttnn.get_optimal_worker_cores_for_sharded_tensor(tt_tensor)
+    assert_cores_match(actual_cores, expected_cores)
