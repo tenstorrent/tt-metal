@@ -153,17 +153,17 @@ public:
 
     TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
 
-    BufferShardingArgs& set_per_core_shard_sizes(std::vector<DeviceAddr> sizes) {
-        per_core_shard_sizes_ = std::move(sizes);
+    BufferShardingArgs& set_per_core_allocation(bool enable) {
+        per_core_allocation_ = enable;
         return *this;
     }
-    const std::optional<std::vector<DeviceAddr>>& per_core_shard_sizes() const { return per_core_shard_sizes_; }
+    bool per_core_allocation() const { return per_core_allocation_; }
 
 private:
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
     std::optional<ShardSpecBuffer> shard_spec_;
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
-    std::optional<std::vector<DeviceAddr>> per_core_shard_sizes_;
+    bool per_core_allocation_ = false;
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
@@ -257,10 +257,11 @@ public:
     std::optional<uint32_t> num_cores() const;
     const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
 
-    // Per-core allocation API (set via BufferShardingArgs::set_per_core_shard_sizes)
-    bool has_per_core_addresses() const { return !per_core_addresses_.empty(); }
+    // Per-core allocation API
+    bool per_core_allocation() const { return per_core_allocation_; }
     DeviceAddr per_core_address(CoreCoord core) const;
     const std::unordered_map<CoreCoord, DeviceAddr>& per_core_addresses() const { return per_core_addresses_; }
+    void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
 
     // Returns the buffer that owns the underlying device memory.
     // Typically returns itself unless the buffer was created with a view method.
@@ -300,10 +301,6 @@ private:
     friend void DeallocateBuffer(Buffer& buffer);
     friend class AllocatorImpl;
 
-    // Per-core allocation internals (used by AllocatorImpl)
-    void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs);
-    const std::optional<std::vector<DeviceAddr>>& per_core_shard_sizes() const { return per_core_shard_sizes_; }
-
     DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
     IDevice* const device_;
@@ -329,7 +326,7 @@ private:
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;
 
     // Per-core allocation state
-    std::optional<std::vector<DeviceAddr>> per_core_shard_sizes_;
+    bool per_core_allocation_ = false;
     std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses_;
 
     // The root buffer is the buffer that owns the underlying device memory.

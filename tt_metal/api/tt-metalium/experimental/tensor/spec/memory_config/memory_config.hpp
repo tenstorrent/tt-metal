@@ -44,14 +44,14 @@ public:
     const std::optional<ShardSpec>& shard_spec() const { return shard_spec_; }
     const std::optional<NdShardSpec>& nd_shard_spec() const { return nd_shard_spec_; }
     bool created_with_nd_shard_spec() const { return created_with_nd_shard_spec_; }
-    const std::optional<std::vector<DeviceAddr>>& per_core_shard_sizes() const { return per_core_shard_sizes_; }
-    MemoryConfig& set_per_core_shard_sizes(std::vector<DeviceAddr> sizes) {
-        TT_FATAL(
-            sizes.size() == 1,
-            "per_core_shard_sizes currently only supports single-core tensors (got {} entries)",
-            sizes.size());
-        TT_FATAL(!created_with_nd_shard_spec_, "per_core_shard_sizes is not supported with NdShardSpec");
-        per_core_shard_sizes_ = std::move(sizes);
+    bool per_core_allocation() const { return per_core_allocation_; }
+    MemoryConfig& set_per_core_allocation(bool enable) {
+        if (enable) {
+            TT_FATAL(buffer_type_ == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
+            TT_FATAL(is_sharded(), "per_core_allocation requires a sharded memory layout");
+            TT_FATAL(!created_with_nd_shard_spec_, "per_core_allocation is not supported with NdShardSpec");
+        }
+        per_core_allocation_ = enable;
         return *this;
     }
 
@@ -92,7 +92,7 @@ private:
     std::optional<ShardSpec> shard_spec_ = std::nullopt;
     std::optional<NdShardSpec> nd_shard_spec_ = std::nullopt;
     bool created_with_nd_shard_spec_ = false;
-    std::optional<std::vector<DeviceAddr>> per_core_shard_sizes_;
+    bool per_core_allocation_ = false;
 };
 
 std::ostream& operator<<(std::ostream& os, const MemoryConfig& config);

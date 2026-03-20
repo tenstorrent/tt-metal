@@ -470,7 +470,7 @@ class CompressedTensor:
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 memory_config.buffer_type,
                 core_shard_spec,
-                per_core_shard_sizes=[aligned_size],
+                per_core_allocation=True,
             )
             data_per_core[(core.x, core.y)] = ttnn.from_torch(
                 core_torch,
@@ -541,7 +541,7 @@ class CompressedTensor:
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 buffer_type,
                 core_shard_spec,
-                per_core_shard_sizes=[aligned_size],
+                per_core_allocation=True,
             )
             assignment_per_core[(core.x, core.y)] = ttnn.from_torch(
                 core_torch,

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Integration tests for per-core L1 allocation via Buffer::set_per_core_shard_sizes().
+// Integration tests for per-core L1 allocation via Buffer::per_core_allocation().
 // These tests require a real device (slow dispatch).
 
 #include <gtest/gtest.h>
@@ -18,14 +18,13 @@ class PerCoreAllocationTest : public MeshDeviceSingleCardBufferFixture {};
 // (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
 static constexpr DeviceAddr PAGE_SIZE = 1024;
 
-TEST_F(PerCoreAllocationTest, DifferentSizesPerCore) {
+TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];
     auto compute_grid = device->compute_with_storage_grid_size();
     uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
     ASSERT_GE(num_cores, 2u) << "Need at least 2 compute cores";
 
     CoreRange core_range(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0));
-    // shard_shape and page_shape chosen so that num_pages per shard = 1
     std::array<uint32_t, 2> shard_shape = {32, 32};
     std::array<uint32_t, 2> page_shape = {32, 32};
     std::array<uint32_t, 2> tensor2d_shape = {num_cores, 1};
@@ -33,21 +32,13 @@ TEST_F(PerCoreAllocationTest, DifferentSizesPerCore) {
     ShardSpecBuffer shard_spec(
         CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
 
-    // Different sizes per core: 1KB, 2KB, 3KB, 4KB
-    std::vector<DeviceAddr> per_core_sizes;
-    for (uint32_t i = 0; i < num_cores; i++) {
-        per_core_sizes.push_back(static_cast<DeviceAddr>((i + 1) * PAGE_SIZE));
-    }
+    DeviceAddr total_size = PAGE_SIZE * num_cores;
 
-    DeviceAddr max_size = *std::max_element(per_core_sizes.begin(), per_core_sizes.end());
-    DeviceAddr total_size = max_size * num_cores;
-
-    auto shard_args =
-        BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_shard_sizes(per_core_sizes);
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_allocation(true);
 
     auto buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
-    ASSERT_TRUE(buf->has_per_core_addresses());
+    ASSERT_TRUE(buf->per_core_allocation());
 
     // Verify each core has an address within L1 range
     auto cores = corerange_to_cores(CoreRangeSet(core_range), std::nullopt, true);
@@ -72,13 +63,10 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     ShardSpecBuffer shard_spec(
         CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
 
-    std::vector<DeviceAddr> per_core_sizes(num_cores, 2 * PAGE_SIZE);
-
     DeviceAddr total_size = 2 * PAGE_SIZE * num_cores;
 
     // Create per-core buffer
-    auto shard_args =
-        BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_shard_sizes(per_core_sizes);
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_allocation(true);
     auto per_core_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     // Create lockstep buffer on same cores
@@ -112,49 +100,21 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
     ShardSpecBuffer shard_spec(
         CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
 
-    std::vector<DeviceAddr> per_core_sizes(num_cores, 2 * PAGE_SIZE);
-
     DeviceAddr total_size = 2 * PAGE_SIZE * num_cores;
 
-    auto shard_args =
-        BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_shard_sizes(per_core_sizes);
+    auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_allocation(true);
 
     // Create and destroy a buffer
     {
         auto buf1 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
-        EXPECT_TRUE(buf1->has_per_core_addresses());
+        EXPECT_TRUE(buf1->per_core_allocation());
         // buf1 destroyed here, freeing per-core allocations
     }
 
     // Create another buffer on same cores — should succeed (space was freed)
     auto buf2 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
-    EXPECT_TRUE(buf2->has_per_core_addresses());
+    EXPECT_TRUE(buf2->per_core_allocation());
     EXPECT_TRUE(buf2->is_allocated());
-}
-
-TEST_F(PerCoreAllocationTest, SizeMismatchFatals) {
-    auto* device = this->devices_[0]->get_devices()[0];
-    auto compute_grid = device->compute_with_storage_grid_size();
-    uint32_t num_cores = static_cast<uint32_t>(std::min<size_t>(4, compute_grid.x));
-    ASSERT_GE(num_cores, 2u);
-
-    CoreRange core_range(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0));
-    std::array<uint32_t, 2> shard_shape = {32, 32};
-    std::array<uint32_t, 2> page_shape = {32, 32};
-    std::array<uint32_t, 2> tensor2d_shape = {num_cores, 1};
-
-    ShardSpecBuffer shard_spec(
-        CoreRangeSet(core_range), shard_shape, ShardOrientation::ROW_MAJOR, page_shape, tensor2d_shape);
-
-    // Wrong count: num_cores - 1 sizes for num_cores grid
-    std::vector<DeviceAddr> wrong_sizes(num_cores - 1, 2 * PAGE_SIZE);
-
-    DeviceAddr total_size = 2 * PAGE_SIZE * num_cores;
-
-    auto shard_args =
-        BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED).set_per_core_shard_sizes(wrong_sizes);
-
-    EXPECT_ANY_THROW(Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args));
 }
 
 }  // namespace tt::tt_metal

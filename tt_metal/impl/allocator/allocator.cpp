@@ -124,24 +124,20 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     }
 
     // Per-core allocation path: each core gets an independent address
-    if (buffer->per_core_shard_sizes().has_value() && buffer_type == BufferType::L1) {
+    if (buffer->per_core_allocation()) {
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        const auto& sizes = *buffer->per_core_shard_sizes();
-        TT_FATAL(buffer->has_shard_spec(), "per_core_shard_sizes requires a shard_spec with core grid");
+        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
         const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
         bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
         auto cores = corerange_to_cores(grid, std::nullopt, row_major);
-        TT_FATAL(
-            sizes.size() == cores.size(),
-            "per_core_shard_sizes count ({}) must match shard grid core count ({})",
-            sizes.size(),
-            cores.size());
+        DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
         for (size_t i = 0; i < cores.size(); i++) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(cores[i]).at(0);
             addrs[cores[i]] = l1_manager_->allocate_buffer(
-                sizes[i], page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
+                alloc_size, page_size, bottom_up, config_->compute_grid, /*num_shards=*/1, AllocatorID{bank_id + 1});
         }
         buffer->set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
@@ -178,7 +174,8 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     auto buffer_type = buffer->buffer_type();
 
     // Per-core deallocation path
-    if (buffer->has_per_core_addresses() && buffer_type == BufferType::L1) {
+    if (buffer->per_core_allocation()) {
+        TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
         for (const auto& [core, addr] : buffer->per_core_addresses()) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
@@ -457,7 +454,7 @@ AllocatorImpl::~AllocatorImpl() {
 AllocatorState AllocatorImpl::extract_state() const {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->has_per_core_addresses(), "extract_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->per_core_allocation(), "extract_state does not yet support per-core L1 allocations");
     }
 
     std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
@@ -490,7 +487,7 @@ AllocatorState AllocatorImpl::extract_state() const {
 void AllocatorImpl::override_state(const AllocatorState& state) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto* buf : allocated_buffers_) {
-        TT_FATAL(!buf->has_per_core_addresses(), "override_state does not yet support per-core L1 allocations");
+        TT_FATAL(!buf->per_core_allocation(), "override_state does not yet support per-core L1 allocations");
     }
 
     // Clear all buffer types

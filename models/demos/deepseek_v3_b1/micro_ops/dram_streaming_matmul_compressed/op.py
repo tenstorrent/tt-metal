@@ -161,7 +161,7 @@ def upload_per_core_uint32_tensor(device, all_cores, per_core_data, entries_per_
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             core_shard_spec,
-            per_core_shard_sizes=[aligned_size],
+            per_core_allocation=True,
         )
         tensors[core_idx] = ttnn.from_torch(
             core_torch,

@@ -154,7 +154,7 @@ def create_runtime_fmt_tensors(ct, core_grid, num_tiles, device, all_cores):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             core_shard_spec,
-            per_core_shard_sizes=[aligned_size],
+            per_core_allocation=True,
         )
         tensors[core_idx] = ttnn.from_torch(
             core_torch,

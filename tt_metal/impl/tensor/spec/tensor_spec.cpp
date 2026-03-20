@@ -256,8 +256,8 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         mem_config.shard_spec(),
         std::move(nd_shard_spec),
         mem_config.created_with_nd_shard_spec());
-    if (mem_config.per_core_shard_sizes().has_value()) {
-        result.set_per_core_shard_sizes(*mem_config.per_core_shard_sizes());
+    if (mem_config.per_core_allocation()) {
+        result.set_per_core_allocation(true);
     }
     return result;
 }

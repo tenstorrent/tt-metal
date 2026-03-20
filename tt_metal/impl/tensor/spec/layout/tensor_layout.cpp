@@ -229,8 +229,8 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
     }
     auto sharding_args =
         BufferShardingArgs(std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
-    if (memory_config_.per_core_shard_sizes().has_value()) {
-        sharding_args.set_per_core_shard_sizes(*memory_config_.per_core_shard_sizes());
+    if (memory_config_.per_core_allocation()) {
+        sharding_args.set_per_core_allocation(true);
     }
     return sharding_args;
 }

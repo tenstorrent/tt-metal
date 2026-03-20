@@ -82,7 +82,7 @@ def _create_single_core_tensor(device, core, shard_bytes):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         shard_spec,
-        per_core_shard_sizes=[shard_bytes],
+        per_core_allocation=True,
     )
     data = torch.zeros(1, shard_bytes, dtype=torch.uint8)
     return ttnn.from_torch(
@@ -121,7 +121,7 @@ def test_per_core_round_trip(device):
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         shard_spec,
-        per_core_shard_sizes=[shard_bytes],
+        per_core_allocation=True,
     )
     data = torch.arange(shard_bytes, dtype=torch.uint8).reshape(1, shard_bytes)
     tensor = ttnn.from_torch(
@@ -353,3 +353,61 @@ def test_all_cores_lockstep_then_per_core_then_reverse(device):
     for i in range(num_cores):
         assert lockstep_tensors[i].is_allocated()
         assert per_core_tensors[i].is_allocated()
+
+
+def test_triangle_allocation_then_sharded(device):
+    """Triangle per-core allocation on ALL compute cores, then a per-core sharded tensor.
+
+    Phase 1: Create increasing-size per-core tensors (triangle pattern) on every
+    core in the compute grid. Core at flat index i gets (i+1) * TILE_BYTES.
+    This consumes different amounts of L1 per core.
+
+    Phase 2: Allocate one HEIGHT_SHARDED per-core tensor across all cores.
+    Since each core's per-bank allocator has consumed a different amount
+    (the triangle), the resulting per-core addresses should be strictly
+    decreasing with flat index (inverse triangle).
+    """
+    grid = device.compute_with_storage_grid_size()
+    cores = []
+    for y in range(grid.y):
+        for x in range(grid.x):
+            cores.append(ttnn.CoreCoord(x, y))
+    num_cores = len(cores)
+
+    TILE_BYTES = 1024  # above DRAM alignment to avoid min_allocation_size issues
+
+    # Phase 1: Triangle allocation — flat index i gets (i+1) * TILE_BYTES
+    triangle_tensors = {}
+    for i, core in enumerate(cores):
+        size = (i + 1) * TILE_BYTES
+        triangle_tensors[i] = _create_single_core_tensor(device, core, size)
+
+    # Phase 2: Allocate one HEIGHT_SHARDED per-core tensor across all cores
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    shard_bytes = TILE_BYTES
+    shard_spec = ttnn.ShardSpec(core_grid, [1, shard_bytes], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+        per_core_allocation=True,
+    )
+    sharded_data = torch.zeros(num_cores, shard_bytes, dtype=torch.uint8)
+    sharded_tensor = ttnn.from_torch(
+        sharded_data, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+    )
+
+    # Verify: per-core addresses form an inverse triangle
+    # Core at flat index 0 consumed least → highest address
+    # Core at flat index N-1 consumed most → lowest address
+    addrs = [sharded_tensor.per_core_buffer_address(c) for c in cores]
+    for i in range(num_cores - 1):
+        assert addrs[i] > addrs[i + 1], (
+            f"Expected inverse triangle: core {i} ({cores[i].x},{cores[i].y}) addr={addrs[i]:#x} "
+            f"should be > core {i+1} ({cores[i+1].x},{cores[i+1].y}) addr={addrs[i+1]:#x}"
+        )
+
+    # All tensors still alive
+    for i in range(num_cores):
+        assert triangle_tensors[i].is_allocated()
+    assert sharded_tensor.is_allocated()
