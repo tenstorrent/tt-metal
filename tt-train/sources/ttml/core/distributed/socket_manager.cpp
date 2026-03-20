@@ -11,8 +11,8 @@ namespace {
 tt::tt_metal::distributed::SocketMemoryConfig _make_socket_mem_config() {
     tt::tt_metal::distributed::SocketMemoryConfig socket_mem_config{};
     socket_mem_config.socket_storage_type = ttnn::BufferType::DRAM;
-    // bandwidth-delay product is roughly 10GB/s * 1us = 10MB
-    socket_mem_config.fifo_size = 10U * 1024U * 1024U;  // 10MB
+    // Bandwidth-delay product is roughly 10GB/s * 1us = 10MB; use an 8x safety margin and allocate 80MB.
+    socket_mem_config.fifo_size = 10U * 1024U * 1024U * 2U * 4U;  // 80MB
     return socket_mem_config;
 }
 
