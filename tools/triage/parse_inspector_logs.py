@@ -453,7 +453,7 @@ def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
         return None
 
     def _get_current_rank() -> int | None:
-        for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "TT_MESH_HOST_RANK"):
+        for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"):
             rank_value = os.environ.get(rank_env)
             if rank_value is None:
                 continue
@@ -461,7 +461,7 @@ def _find_rank_scoped_inspector_directory(logs_root: str | Path) -> str | None:
                 rank = int(rank_value)
                 if rank >= 0:
                     return rank
-            except ValueError:
+            except (ValueError, OverflowError):
                 continue
         return None
 
@@ -503,9 +503,6 @@ def get_log_directory(log_directory: str | None = None) -> str:
         rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root)
         if rank_scoped_directory is not None:
             return rank_scoped_directory
-
-        if default_directory.exists():
-            return str(default_directory)
 
         return str(default_directory)
     elif "TT_METAL_HOME" in os.environ:

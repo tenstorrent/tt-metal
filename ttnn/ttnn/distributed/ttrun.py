@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 DEFAULT_JIT_SCRATCH = Path("/tmp/tt-jit-build")
-DEFAULT_CACHE_FALLBACK = Path("/tmp")
+DEFAULT_CACHE_FALLBACK = Path("/tmp/tt-metal-cache")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 

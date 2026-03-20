@@ -260,21 +260,23 @@ bool has_rank_scoped_suffix(const std::filesystem::path& path) {
     });
 }
 
+constexpr size_t kHostNameMax =
+#if defined(HOST_NAME_MAX)
+    HOST_NAME_MAX;
+#elif defined(_POSIX_HOST_NAME_MAX)
+    _POSIX_HOST_NAME_MAX;
+#else
+    255;
+#endif
+
 std::filesystem::path get_rank_scoped_logs_root(const std::string& logs_dir, int rank) {
     auto logs_root = std::filesystem::path(logs_dir).lexically_normal();
     if (rank < 0 || logs_root.empty() || has_rank_scoped_suffix(logs_root)) {
         return logs_root;
     }
 
-#ifndef HOST_NAME_MAX
-#ifdef _POSIX_HOST_NAME_MAX
-#define HOST_NAME_MAX _POSIX_HOST_NAME_MAX
-#else
-#define HOST_NAME_MAX 255
-#endif
-#endif
-    std::vector<char> hostname(HOST_NAME_MAX + 1, '\0');
-    if (gethostname(hostname.data(), HOST_NAME_MAX) != 0 || hostname.front() == '\0') {
+    std::vector<char> hostname(kHostNameMax + 1, '\0');
+    if (gethostname(hostname.data(), kHostNameMax) != 0 || hostname.front() == '\0') {
         return logs_root;
     }
     return logs_root / fmt::format("{}_rank_{}", hostname.data(), rank);
@@ -318,9 +320,9 @@ int get_rank_from_env() {
             try {
                 return std::stoi(rank_str);
             } catch (const std::invalid_argument&) {
-                return -1;
+                continue;
             } catch (const std::out_of_range&) {
-                return -1;
+                continue;
             }
         }
     }

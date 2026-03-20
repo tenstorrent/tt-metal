@@ -171,14 +171,21 @@ _DEFAULT_INSPECTOR_RPC_PORT = 50051
 
 def _get_rank_from_env() -> int:
     """Return MPI/mesh rank from process env for rank-aware Inspector port, or -1 if not set.
-    Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so each process gets a distinct port; fallback to TT_MESH_HOST_RANK."""
-    for var in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "TT_MESH_HOST_RANK"):
+
+    Precedence (highest to lowest):
+      1. OMPI_COMM_WORLD_RANK  -- OpenMPI standard
+      2. PMI_RANK              -- MPICH / Hydra / Slurm PMI
+      3. SLURM_PROCID          -- Slurm native (without PMI layer)
+      4. PMIX_RANK             -- PMIx-aware launchers (OpenPMIx, PRRTE)
+      5. TT_MESH_HOST_RANK     -- TT-specific fallback (may be duplicated across ranks)
+    """
+    for var in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "SLURM_PROCID", "PMIX_RANK", "TT_MESH_HOST_RANK"):
         val = os.environ.get(var)
         if val is not None:
             try:
                 return int(val)
-            except ValueError:
-                pass
+            except (ValueError, OverflowError):
+                continue
     return -1
 
 
