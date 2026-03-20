@@ -64,7 +64,8 @@ constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(18);
 constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(19);
 constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(22);
+// [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -80,7 +81,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 23;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=slice_Ht
+    constexpr uint32_t ct_idx = 24;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -122,6 +124,10 @@ void kernel_main() {
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, page_size);
 #endif
+#ifdef FUSE_MM_OP_SIGNALER
+    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    uint32_t mm_sem_target = 0;
+#endif
 
     /**
     Iterate over chunks in the row-major order and reduce-scatter each chunk, one by one.
@@ -154,6 +160,15 @@ void kernel_main() {
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
+#ifdef FUSE_MM_OP_SIGNALER
+                // Wait for matmul to finish writing the output blocks for this chunk.
+                // The matmul signals in a strided pattern: value k means k mm_blocks have been
+                // written in EACH N-full-block, so ceil(effective_chunk_width / mm_block_wt)
+                // signals guarantees all N-full-blocks covering this chunk are ready.
+                const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
+                mm_sem_target += sem_increment;
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+#endif
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
                 // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
                 // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
@@ -266,6 +281,11 @@ void kernel_main() {
         // Reset between batches so the counter doesn't overflow across batches.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         out_ready_sem_target = 0;
+
+#ifdef FUSE_MM_OP_SIGNALER
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
+        mm_sem_target = 0;
+#endif
     }
 
     // Explicit cleanup: guarantee the semaphore is 0 when this kernel exits
