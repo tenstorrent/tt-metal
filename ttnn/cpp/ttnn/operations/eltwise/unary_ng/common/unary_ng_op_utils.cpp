@@ -31,7 +31,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
 
 // Init and func strings for SFPU op chain. Only migrated ops (e.g. ABS) are implemented here.
 std::pair<std::string, std::string> get_op_init_and_func(
-    UnaryOpType op_type, const std::string& idst, std::optional<DataType> /*input_dtype*/) {
+    UnaryOpType op_type, const std::string& idst, std::optional<DataType> input_dtype) {
     switch (op_type) {
         case UnaryOpType::ABS: return {"abs_tile_init();", fmt::format("abs_tile({});", idst)};
         case UnaryOpType::ABS_INT32: return {"abs_tile_init();", fmt::format("abs_tile_int32({});", idst)};
