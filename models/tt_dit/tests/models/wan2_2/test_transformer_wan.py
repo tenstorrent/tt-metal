@@ -137,7 +137,7 @@ def test_wan_transformer_block(
 
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
-        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True, local_files_only=True
+        MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True, local_files_only=False
     )
     torch_model = parent_torch_model.blocks[0]
     torch_model.eval()
@@ -186,22 +186,37 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
+
     tt_model_traced = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
-    for i in range(3):
-        tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
-        tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
-        tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+
+    tt_spatial_out = tt_model_traced(
+        spatial_1BND=tt_spatial,
+        prompt_1BLP=tt_prompt,
+        temb_1BTD=tt_temb,
+        N=spatial_seq_len,
+        rope_cos=tt_rope_cos,
+        rope_sin=tt_rope_sin,
+        trans_mat=tt_trans_mat,
+    )
+
+    start = time.perf_counter()
+    for i in range(40):
+        tt_spatial = bf16_tensor_2dshard(
+            spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}, on_host=True
+        )
+        tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device, on_host=True)
+        tt_temb = from_torch(
+            temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis], on_host=True
+        )
         tt_spatial_out = tt_model_traced(
             spatial_1BND=tt_spatial,
             prompt_1BLP=tt_prompt,
             temb_1BTD=tt_temb,
-            N=spatial_seq_len,
-            rope_cos=tt_rope_cos,
-            rope_sin=tt_rope_sin,
-            trans_mat=tt_trans_mat,
         )
-        ttnn.ReadDeviceProfiler(mesh_device)
+        # ttnn.ReadDeviceProfiler(mesh_device)
     # ttnn.synchronize_device(mesh_device)
+    elapsed = time.perf_counter() - start
+    print(f"######################### Took {elapsed:.3f}s")
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
