@@ -946,11 +946,6 @@ def _tree_shape(node):
 class TestSequentialParallelAPI:
     """Tests for Sequential/Parallel resolution."""
 
-    @pytest.fixture(autouse=True)
-    def _mock_sort_key(self, monkeypatch):
-        """Mock _item_sort_key so that Parallel works with mock descriptors."""
-        monkeypatch.setattr(_fusion, "_item_sort_key", lambda item: (id(item),))
-
     def test_linear_chain(self):
         a, b, c = [_make_mock_op(n) for n in "abc"]
         nodes = _fusion._resolve(_fusion.Sequential(a, b, c))
@@ -976,7 +971,7 @@ class TestSequentialParallelAPI:
         nodes = _fusion._resolve(S(a, P(S(b, P(c, d)), e)))
         r = nodes[0]
         assert r.op is a and len(r.children) == 2
-        # Parallel sorting may reorder children — use identity checks
+        # Resolve Parallel children by identity (order matches construction)
         b_node = next((ch for ch in r.children if ch.op is b), None)
         e_node = next((ch for ch in r.children if ch.op is e), None)
         assert b_node is not None and e_node is not None

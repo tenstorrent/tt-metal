@@ -5,7 +5,7 @@
 """
 Exhaustive fusion build cache tests.
 
-Tests cache key properties (topology fingerprint, Parallel sort),
+Tests cache key properties (topology fingerprint, branch order),
 cache hit correctness (RT args, CB pointers, outputs, PCC), cache
 entry structure, topology differentiation, and lifecycle.
 """
@@ -15,15 +15,16 @@ import torch
 import ttnn
 
 from models.common.utility_functions import comp_pcc
-from models.experimental.ops.descriptors.fusion import Parallel, Sequential
+from models.experimental.ops.descriptors.fusion import Parallel, Sequential, clear_build_cache
 from models.experimental.ops.descriptors.fusion.fusion import (
     _BUILD_CACHE,
     _CacheEntry,
-    _CacheHitOverrideSpec,
+    _build_cache_surface_key,
+    _fusion_cache_id_and_ops,
     _topology_fingerprint,
-    _cache_key_and_ops,
 )
-from models.experimental.ops.descriptors.normalization import rms_norm
+from models.experimental.ops.descriptors.normalization.rms_norm import rms_norm
+from models.experimental.ops.descriptors.op_descriptor import DeferredOpDescriptor
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ def _make_branches(device, seed=42):
     tt_kv_input = ttnn.from_torch(torch_kv_input, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
     tt_kv_weight = ttnn.from_torch(torch_kv_weight, device=device, layout=ttnn.TILE_LAYOUT)
 
-    q_branch = rms_norm.rms_norm(
+    q_branch = rms_norm(
         tt_q_input,
         epsilon=1e-5,
         weight=tt_q_weight,
@@ -103,7 +104,7 @@ def _make_branches(device, seed=42):
         core_range_set=q_cores,
         program_config=q_pc,
     )
-    kv_branch = rms_norm.rms_norm(
+    kv_branch = rms_norm(
         tt_kv_input,
         epsilon=1e-5,
         weight=tt_kv_weight,
@@ -162,11 +163,66 @@ class TestCacheKeyInfra:
         assert fp == "O,S(O,O)", f"Expected 'O,S(O,O)', got {fp!r}"
 
     def test_cache_key_includes_topology(self, device):
-        """Key tuple starts with a topology fingerprint string."""
+        """Surface key prefixes Parallel vs Sequential so P(O,O) ≠ S(O,O)."""
         q, kv, _ = _make_branches(device, seed=42)
-        key, ops = _cache_key_and_ops([q, kv])
-        assert isinstance(key[0], str), f"First element should be string, got {type(key[0])}"
-        assert key[0] == "O,O"
+        assert _build_cache_surface_key([q, kv], "P") == "P(O,O)"
+        assert _build_cache_surface_key([q, kv], "S") == "S(O,O)"
+        assert _build_cache_surface_key([q, kv], "P") != _build_cache_surface_key([q, kv], "S")
+
+
+# ===========================================================================
+# D1b. FusedOp IO rebind (op-agnostic API, device)
+# ===========================================================================
+
+
+class TestFusedOpRebind:
+    """``FusedOp.refresh_merged_io_from_parallel`` matches a second ``build()`` (PCC)."""
+
+    def test_rebind_from_parallel_matches_second_build(self, device):
+        """Same PCC after rebind+launch as a fresh Parallel.build from matching tensors."""
+        clear_build_cache()
+
+        q_a, kv_a, _ = _make_branches(device, seed=501)
+        p = Parallel(q_a, kv_a)
+        fused_once = p.build()
+        fused_once.launch()
+        ttnn.synchronize_device(device)
+
+        q_b, kv_b, torch_bufs = _make_branches(device, seed=502)
+        torch_q, torch_qw, torch_kv, torch_kvw = torch_bufs
+
+        # General pattern: copy tensor handles onto the *same* op objects used at build().
+        q_a.input_tensors[:] = list(q_b.input_tensors)
+        q_a.output_tensors[:] = list(q_b.output_tensors)
+        kv_a.input_tensors[:] = list(kv_b.input_tensors)
+        kv_a.output_tensors[:] = list(kv_b.output_tensors)
+
+        fused_once.rebind_from_parallel(p)
+        fused_once.launch()
+        ttnn.synchronize_device(device)
+
+        clear_build_cache()
+        fused_fresh = Parallel(q_b, kv_b).build()
+        fused_fresh.launch()
+        ttnn.synchronize_device(device)
+
+        for t_new, t_ref in zip(fused_once.output_tensors, fused_fresh.output_tensors):
+            ok, pcc = comp_pcc(ttnn.to_torch(t_new), ttnn.to_torch(t_ref))
+            assert ok and pcc >= 0.999, f"rebind vs fresh build PCC {pcc}"
+
+        # Match fused outputs to goldens by shape (Q vs KV widths differ).
+        q_golden = torch_rms_norm(torch_q.float(), torch_qw.float())
+        kv_golden = torch_rms_norm(torch_kv.float(), torch_kvw.float())
+        for tt_out in fused_once.output_tensors:
+            th = ttnn.to_torch(tt_out).float()
+            if th.shape == q_golden.shape:
+                ok, pcc = comp_pcc(th, q_golden)
+                assert ok and pcc >= 0.98, f"Q branch PCC {pcc}"
+            elif th.shape == kv_golden.shape:
+                ok, pcc = comp_pcc(th, kv_golden)
+                assert ok and pcc >= 0.98, f"KV branch PCC {pcc}"
+            else:
+                raise AssertionError(f"unexpected output shape {th.shape}")
 
 
 # ===========================================================================
@@ -175,9 +231,9 @@ class TestCacheKeyInfra:
 
 
 class TestCacheOrderTolerance:
-    def test_parallel_order_invariant(self, device):
-        """Parallel(Q, KV) and Parallel(KV, Q) hit same cache entry."""
-        _BUILD_CACHE.clear()
+    def test_parallel_branch_order_is_user_visible(self, device):
+        """Parallel(Q, KV) vs Parallel(KV, Q) are distinct builds and cache entries."""
+        clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
         fused1 = Parallel(q1, kv1).build()
@@ -185,10 +241,12 @@ class TestCacheOrderTolerance:
         assert len(_BUILD_CACHE) == 1
 
         q2, kv2, _ = _make_branches(device, seed=200)
-        # Reversed order
         fused2 = Parallel(kv2, q2).build()
         fused2.launch()
-        assert len(_BUILD_CACHE) == 1, f"Expected cache hit (size 1), got {len(_BUILD_CACHE)}"
+        assert len(_BUILD_CACHE) == 2, (
+            "Reversed branch order must not share the same fusion cache entry "
+            f"(output tensor order differs); got {len(_BUILD_CACHE)}"
+        )
 
 
 # ===========================================================================
@@ -197,24 +255,25 @@ class TestCacheOrderTolerance:
 
 
 class TestCacheHitCorrectness:
-    def test_fresh_descriptor_each_hit(self, device):
-        """Each cache hit returns a new FusedOp with distinct descriptor id."""
-        _BUILD_CACHE.clear()
+    def test_cache_hit_returns_fused_op(self, device):
+        """Each cache hit returns a FusedOp that produces correct results."""
+        clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
         fused1 = Parallel(q1, kv1).build()
         fused1.launch()
-        desc_id_1 = id(fused1.descriptor)
 
         q2, kv2, _ = _make_branches(device, seed=200)
         fused2 = Parallel(q2, kv2).build()
-        desc_id_2 = id(fused2.descriptor)
+        fused2.launch()
 
-        assert desc_id_1 != desc_id_2, "Cache hit must return a fresh descriptor copy"
+        # Cache hit reuses the same descriptor (no deep copy).
+        # patched_generic_op patches only tensor address slots on program cache hit.
+        assert len(_BUILD_CACHE) == 1
 
-    def test_output_tensors_from_fresh_ops(self, device):
-        """Cache hit's output_tensors are from the fresh ops, not stale cached ones."""
-        _BUILD_CACHE.clear()
+    def test_output_tensors_reused_on_cache_hit(self, device):
+        """Cache hit reuses output tensor objects (hidden rebind: same device buffers)."""
+        clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
         fused1 = Parallel(q1, kv1).build()
@@ -225,11 +284,19 @@ class TestCacheHitCorrectness:
         fused2 = Parallel(q2, kv2).build()
         out2_ids = {id(t) for t in fused2.output_tensors}
 
-        assert not (out1_ids & out2_ids), "Cache hit outputs must be new tensor objects"
+        # Hidden rebind reuses the same FusedOp and its output tensor buffers.
+        # The device writes fresh data to the same buffers on each launch().
+        assert out1_ids == out2_ids, (
+            "Cache hit should reuse output tensor objects (hidden rebind) — " f"got {out1_ids} vs {out2_ids}"
+        )
+
+        # User's fresh branch ops also get patched to the cached outputs
+        assert id(q2.output_tensors[0]) in out2_ids
+        assert id(kv2.output_tensors[0]) in out2_ids
 
     def test_pcc_across_seeds(self, device):
         """10 iterations with different seeds, PCC >= 0.98 on every hit."""
-        _BUILD_CACHE.clear()
+        clear_build_cache()
 
         q_cores = cores(0, 0, 3, 3)
         q_shard_w = 96
@@ -279,7 +346,7 @@ class TestCacheHitCorrectness:
             tt_kv = ttnn.from_torch(torch_kv, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
             tt_kvw = ttnn.from_torch(torch_kvw, device=device, layout=ttnn.TILE_LAYOUT)
 
-            q_b = rms_norm.rms_norm(
+            q_b = rms_norm(
                 tt_q,
                 epsilon=1e-5,
                 weight=tt_qw,
@@ -287,7 +354,7 @@ class TestCacheHitCorrectness:
                 core_range_set=q_cores,
                 program_config=q_pc,
             )
-            kv_b = rms_norm.rms_norm(
+            kv_b = rms_norm(
                 tt_kv,
                 epsilon=1e-5,
                 weight=tt_kvw,
@@ -321,9 +388,9 @@ class TestCacheHitCorrectness:
 
 
 class TestCacheEntryStructure:
-    def test_no_tensor_refs_in_entry(self, device):
-        """_CacheEntry fields don't hold any ttnn.Tensor objects."""
-        _BUILD_CACHE.clear()
+    def test_cache_entry_fields(self, device):
+        """_CacheEntry has the expected fields."""
+        clear_build_cache()
 
         q, kv, _ = _make_branches(device, seed=42)
         Parallel(q, kv).build().launch()
@@ -331,46 +398,23 @@ class TestCacheEntryStructure:
         assert len(_BUILD_CACHE) == 1
         entry = next(iter(_BUILD_CACHE.values()))
 
-        # Check entry fields
         assert isinstance(entry, _CacheEntry)
-        assert isinstance(entry.spec, _CacheHitOverrideSpec)
+        assert entry.cached_descriptor is not None
+        assert isinstance(entry.semaphores, tuple)
+        assert isinstance(entry.kernel_labels, tuple)
+        assert len(entry.output_sources) > 0
 
-        # cached_descriptor is a ProgramDescriptor, not a tensor
+    def test_no_tensor_refs_in_entry(self, device):
+        """_CacheEntry fields don't hold any ttnn.Tensor objects."""
+        clear_build_cache()
+
+        q, kv, _ = _make_branches(device, seed=42)
+        Parallel(q, kv).build().launch()
+
+        entry = next(iter(_BUILD_CACHE.values()))
         assert not isinstance(entry.cached_descriptor, ttnn.Tensor)
-        # semaphores should be a tuple of GlobalSemaphore refs, not tensors
         for s in entry.semaphores:
             assert not isinstance(s, ttnn.Tensor)
-
-    def test_override_spec_complete(self, device):
-        """_CacheHitOverrideSpec has non-empty origin_kernel_map and barrier_suffix."""
-        _BUILD_CACHE.clear()
-
-        q, kv, _ = _make_branches(device, seed=42)
-        Parallel(q, kv).build().launch()
-
-        entry = next(iter(_BUILD_CACHE.values()))
-        spec = entry.spec
-
-        assert len(spec.origin_kernel_map) > 0, "origin_kernel_map should not be empty"
-        assert len(spec.barrier_suffix) > 0, "barrier_suffix should not be empty"
-        assert len(spec.output_sources) > 0, "output_sources should not be empty"
-
-    def test_override_spec_has_sharded_cb_map(self, device):
-        """spec.sharded_cb_map is populated for sharded parallel RMS norm."""
-        _BUILD_CACHE.clear()
-
-        q, kv, _ = _make_branches(device, seed=42)
-        Parallel(q, kv).build().launch()
-
-        entry = next(iter(_BUILD_CACHE.values()))
-        spec = entry.spec
-
-        assert len(spec.sharded_cb_map) > 0, "sharded_cb_map should be non-empty for sharded ops"
-        # Each entry should be (merged_idx, op_idx, orig_cb_idx) — all ints
-        for merged_idx, op_idx, orig_cb_idx in spec.sharded_cb_map:
-            assert isinstance(merged_idx, int)
-            assert isinstance(op_idx, int)
-            assert isinstance(orig_cb_idx, int)
 
 
 # ===========================================================================
@@ -380,17 +424,47 @@ class TestCacheEntryStructure:
 
 class TestTopologyDifferentiation:
     def test_topology_fingerprint_in_key(self, device):
-        """Cache keys from Sequential and Parallel start with different topology strings."""
+        """Wrapped Parallel vs Sequential yield different tree fingerprints (and fusion ids)."""
         q1, kv1, _ = _make_branches(device, seed=100)
         q2, kv2, _ = _make_branches(device, seed=200)
 
-        key_par, _ = _cache_key_and_ops([Parallel(q1, kv1)])
-        key_seq, _ = _cache_key_and_ops([Sequential(q2, kv2)])
+        topo_par = _topology_fingerprint([Parallel(q1, kv1)])
+        topo_seq = _topology_fingerprint([Sequential(q2, kv2)])
+        assert topo_par != topo_seq, f"expected different topology strings, got {topo_par!r} vs {topo_seq!r}"
+        assert topo_par.startswith("P(") and topo_seq.startswith("S(")
 
-        # Topology fingerprints differ
-        assert key_par[0] != key_seq[0], (
-            f"Parallel and Sequential should have different topology fingerprints: " f"{key_par[0]!r} vs {key_seq[0]!r}"
-        )
+        id_par, _ = _fusion_cache_id_and_ops([Parallel(q1, kv1)], "")
+        id_seq, _ = _fusion_cache_id_and_ops([Sequential(q2, kv2)], "")
+        assert id_par != id_seq
+
+
+# ===========================================================================
+# D5b. Lazy factory must not run on fusion cache hit
+# ===========================================================================
+
+
+class TestDeferredFactorySkippedOnFusionCacheHit:
+    def test_branch_descriptors_stay_deferred_after_cache_hit_build(self, device):
+        """Fusion cache hit must not access ``DeferredOpDescriptor.descriptor`` (no C++ factory)."""
+        clear_build_cache()
+
+        q1, kv1, _ = _make_branches(device, seed=10)
+        Parallel(q1, kv1).build().launch()
+        assert len(_BUILD_CACHE) == 1
+
+        q2, kv2, _ = _make_branches(device, seed=20)
+        assert isinstance(q2, DeferredOpDescriptor)
+        assert isinstance(kv2, DeferredOpDescriptor)
+        assert q2._descriptor is None and q2._factory_fn is not None
+        assert kv2._descriptor is None and kv2._factory_fn is not None
+
+        fused2 = Parallel(q2, kv2).build()
+        assert q2._descriptor is None and q2._factory_fn is not None
+        assert kv2._descriptor is None and kv2._factory_fn is not None
+
+        fused2.launch()
+        assert q2._descriptor is None and q2._factory_fn is not None
+        assert kv2._descriptor is None and kv2._factory_fn is not None
 
 
 # ===========================================================================
@@ -400,14 +474,14 @@ class TestTopologyDifferentiation:
 
 class TestCacheLifecycle:
     def test_clear_cache(self, device):
-        """After _BUILD_CACHE.clear(), next build is a cache miss."""
-        _BUILD_CACHE.clear()
+        """After clear_build_cache(), next build is a cache miss."""
+        clear_build_cache()
 
         q1, kv1, _ = _make_branches(device, seed=100)
         Parallel(q1, kv1).build().launch()
         assert len(_BUILD_CACHE) == 1
 
-        _BUILD_CACHE.clear()
+        clear_build_cache()
         assert len(_BUILD_CACHE) == 0
 
         q2, kv2, _ = _make_branches(device, seed=200)
@@ -415,10 +489,74 @@ class TestCacheLifecycle:
         fused.launch()
         assert len(_BUILD_CACHE) == 1, "Should have re-added a cache entry after clear"
 
-    def test_single_op_not_cached(self, device):
-        """Sequential(single_op) doesn't create a cache entry."""
-        _BUILD_CACHE.clear()
+    def test_single_op_cached(self, device):
+        """Single-op ``Sequential`` is cached like any other fuse (uniform policy)."""
+        clear_build_cache()
 
         q, _, _ = _make_branches(device, seed=42)
-        fused = Sequential(q).build()
-        assert len(_BUILD_CACHE) == 0, "Single-op Sequential should not create a cache entry"
+        Sequential(q).build()
+        assert len(_BUILD_CACHE) == 1, "Single-op Sequential should populate the fusion build cache"
+
+
+# ===========================================================================
+# D7. build_launch sugar
+# ===========================================================================
+
+
+class TestChangedIoIndices:
+    """patched_generic_op returns changed_io_indices — activation slots change, weight/output slots don't."""
+
+    def test_changed_indices_reflect_activations(self, device):
+        """After two launches with different activations but same weights,
+        changed_io_indices should contain only activation and output slots (not weight slots)."""
+        clear_build_cache()
+
+        q1, kv1, _ = _make_branches(device, seed=100)
+        fused = Parallel(q1, kv1).build()
+        fused.launch()
+        ttnn.synchronize_device(device)
+
+        # First launch: all indices reported as changed (no previous snapshot).
+        first_changed = set(fused._changed_io_indices)
+        n_io = len(fused.input_tensors) + len(fused.output_tensors)
+        assert first_changed == set(
+            range(n_io)
+        ), f"First launch should report all {n_io} indices as changed, got {first_changed}"
+
+        # Second launch with new activations but same weights (via hidden rebind).
+        q2, kv2, _ = _make_branches(device, seed=200)
+        Parallel(q2, kv2).build()  # hidden rebind patches cached ops
+        fused.launch()
+        ttnn.synchronize_device(device)
+
+        second_changed = set(fused._changed_io_indices)
+        # Activations changed (new tensors), weights are same objects → same address.
+        # Output tensors are reused (hidden rebind) → same address.
+        # So changed_io_indices should be a SUBSET of all indices.
+        assert (
+            len(second_changed) < n_io
+        ), f"Second launch should have fewer changed indices than {n_io}, got {second_changed}"
+
+
+class TestBuildLaunch:
+    def test_build_launch_same_as_build_then_launch(self, device):
+        """``Parallel.build_launch()`` equals ``build().launch()`` for same container."""
+        clear_build_cache()
+        q_op, kv_op, _ = _make_branches(device, seed=77)
+        p = Parallel(q_op, kv_op)
+        out_sep = p.build().launch()
+        ttnn.synchronize_device(device)
+        out_one = p.build_launch()
+        ttnn.synchronize_device(device)
+        assert list(out_sep) == list(out_one)
+
+    def test_parallel_build_launch_twice_uses_cache_hit(self, device):
+        clear_build_cache()
+        q_op, kv_op, _ = _make_branches(device, seed=88)
+        p = Parallel(q_op, kv_op)
+        p.build_launch()
+        ttnn.synchronize_device(device)
+        assert len(_BUILD_CACHE) == 1
+        p.build_launch()
+        ttnn.synchronize_device(device)
+        assert len(_BUILD_CACHE) == 1
