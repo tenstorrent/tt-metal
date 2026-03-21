@@ -935,7 +935,7 @@ class LMHeadSampling:
 
                 # [MTP] Number of EH matmul cores (each incs eh_matmul_done semaphore once).
                 # Must match the core set that has is_eh_matmul_core=1 (matmul_core_grid on exit device).
-                eh_matmul_num_cores = eh_matmul_core_grid.num_cores() if enable_mtp else 0
+                eh_matmul_num_cores = eh_matmul_core_grid.num_cores() if enable_mtp_on_device else 0
 
                 # ================================================================
                 # NCRISC compile-time args
@@ -1129,6 +1129,7 @@ class LMHeadSampling:
                     ("argmax_core_noc_x", argmax_core_noc_x if enable_mtp_on_device else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if enable_mtp_on_device else 0),
                     ("eh_matmul_num_cores", eh_matmul_num_cores if enable_mtp_on_device else 0),
+                    ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
                 ]
 
                 # ================================================================
@@ -1306,38 +1307,17 @@ class LMHeadSampling:
                         global_sem_addr,
                         global_stage2_sem_addr,
                     ]
-                    # [MTP] All cores consume 4 alignment args + input_core gets embedding_base
                     if enable_mtp_on_device:
                         sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
-                        mtp_token_addr = int(intermediate_tensor_device.buffer_address())
                         embedding_tensor_device = embedding_tensors_per_device[device_idx]
+                        mtp_token_addr = int(intermediate_tensor_device.buffer_address())
+                        mtp_argmax_output_addr = int(output_index_tensor_device.buffer_address())
                         ncrisc_bcast_common_args += [
+                            int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
+                            mtp_token_addr,
                             int(sender_core_phys.x),  # input_core_noc_x
                             int(sender_core_phys.y),  # input_core_noc_y
-                            mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
-                            int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
-                        ]
-                    # [BYPASS SEND] bypass sender socket config + staging buffer addr
-                    if bypass_socket_output is not None:
-                        bypass_staging_devs = ttnn.get_device_tensors(bypass_staging_tensor)
-                        ncrisc_bcast_common_args += [
-                            int(bypass_socket_output.get_config_buffer_address()),
-                            int(bypass_staging_devs[device_idx].buffer_address()),
-                        ]
-                    # [MTP Verification] reference token addr, verification result addr, speculative token addr
-                    if enable_mtp_verification:
-                        ref_token_dev = ttnn.get_device_tensors(reference_token_tensor)[device_idx]
-                        verify_result_dev = ttnn.get_device_tensors(verification_result_tensor)[device_idx]
-                        spec_tokens_dev = ttnn.get_device_tensors(speculative_tokens_tensor)[device_idx]
-                        ncrisc_bcast_common_args += [
-                            int(ref_token_dev.buffer_address()),
-                            int(verify_result_dev.buffer_address()),
-                            int(spec_tokens_dev.buffer_address()),
-                        ]
-                    # [BYPASS RECV] bypass receiver socket config addr
-                    if bypass_socket_input is not None:
-                        ncrisc_bcast_common_args += [
-                            int(bypass_socket_input.get_config_buffer_address()),
+                            mtp_argmax_output_addr,
                         ]
                     brisc_bcast_common_args = [
                         int(final_core_phys.x),
@@ -1354,7 +1334,17 @@ class LMHeadSampling:
                         int(persistent_target_node.chip_id),
                         persistent_next_iter_global_sem_addr,
                     ]
-
+                    # [MTP] All cores consume 4 alignment args + input_core gets embedding_base
+                    if enable_mtp_on_device:
+                        sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
+                        mtp_argmax_output_addr = int(output_index_tensor_device.buffer_address())
+                        mtp_token_addr = int(intermediate_tensor_device.buffer_address())
+                        brisc_bcast_common_args += [
+                            int(sender_core_phys.x),  # input_core_noc_x
+                            int(sender_core_phys.y),  # input_core_noc_y
+                            mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer
+                            mtp_argmax_output_addr,
+                        ]
                 # ================================================================
                 # Circular buffer descriptors
                 # ================================================================
@@ -1779,7 +1769,7 @@ class LMHeadSampling:
                                 other_value=0,
                             ),
                         ]
-                        if enable_mtp
+                        if enable_mtp_on_device
                         else []
                     ),
                     per_core_compile_time_descriptors=(

@@ -170,6 +170,20 @@ struct Sampling {
             noc_async_full_barrier();
         }
 #endif
+#if defined(COMPILE_FOR_BRISC)
+        FORCE_INLINE void send_deferred_socket_output_brisc(const WriterArgs& args) {
+            if constexpr (IsFinalCore && CTArgs::defer_socket_output && CTArgs::socket_mode == 1) {
+                DPRINT << "ARGMAX_B DEFERRED_D2H_SEND" << ENDL();
+                send_d2h_token_from_cb_brisc(args);
+                DPRINT << "ARGMAX_B DEFERRED_D2H_DONE" << ENDL();
+            } else if constexpr (IsFinalCore && CTArgs::defer_socket_output && CTArgs::socket_mode == 2) {
+                DPRINT << "ARGMAX_B DEFERRED_D2D_SEND" << ENDL();
+                send_d2d_token_from_cb_brisc(args);
+                DPRINT << "ARGMAX_B DEFERRED_D2D_DONE" << ENDL();
+            }
+        }
+#endif
+
     private:
 #if defined(COMPILE_FOR_NCRISC)
         FORCE_INLINE bool is_better_candidate(
@@ -463,11 +477,13 @@ struct Sampling {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                     output_ptr[0] = global_best_index;
                     if constexpr (CTArgs::socket_mode != 0) {
+                        DPRINT << "ARGMAX_N WRITE TOKEN TO SOCKET CB" << ENDL();
                         cb_reserve_back(CTArgs::socket_cb_id, 1);
                         auto d2h_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                         d2h_ptr[0] = global_best_index;
                         cb_push_back(CTArgs::socket_cb_id, 1);
+                        DPRINT << "ARGMAX_N WRITE TOKEN TO SOCKET CB DONE" << ENDL();
                     }
                 } else {
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
@@ -510,12 +526,15 @@ struct Sampling {
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
                         DPRINT << "ARGMAX_N P3_S2_DONE idx=" << stage2_best_index << ENDL();
+                        DPRINT << "ARGMAX_N SOCKET MODE " << ENDL();
                         if constexpr (CTArgs::socket_mode != 0) {
+                            DPRINT << "ARGMAX_N WRITE TOKEN TO SOCKET CB" << ENDL();
                             cb_reserve_back(CTArgs::socket_cb_id, 1);
                             auto d2h_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                             d2h_ptr[0] = stage2_best_index;
                             cb_push_back(CTArgs::socket_cb_id, 1);
+                            DPRINT << "ARGMAX_N WRITE TOKEN TO SOCKET CB DONE" << ENDL();
                         }
                     }
                 }
@@ -528,14 +547,16 @@ struct Sampling {
             if constexpr (IsFinalCore) {
                 DPRINT << "ARGMAX_B START sm=" << CTArgs::socket_mode << ENDL();
             }
-            if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
-                DPRINT << "ARGMAX_B D2H_SEND" << ENDL();
-                send_d2h_token_from_cb_brisc(args);
-                DPRINT << "ARGMAX_B D2H_DONE" << ENDL();
-            } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
-                DPRINT << "ARGMAX_B D2D_SEND" << ENDL();
-                send_d2d_token_from_cb_brisc(args);
-                DPRINT << "ARGMAX_B D2D_DONE" << ENDL();
+            if constexpr (!CTArgs::defer_socket_output) {
+                if constexpr (IsFinalCore && CTArgs::socket_mode == 1) {
+                    DPRINT << "ARGMAX_B D2H_SEND" << ENDL();
+                    send_d2h_token_from_cb_brisc(args);
+                    DPRINT << "ARGMAX_B D2H_DONE" << ENDL();
+                } else if constexpr (IsFinalCore && CTArgs::socket_mode == 2) {
+                    DPRINT << "ARGMAX_B D2D_SEND" << ENDL();
+                    send_d2d_token_from_cb_brisc(args);
+                    DPRINT << "ARGMAX_B D2D_DONE" << ENDL();
+                }
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
                 DPRINT << "ARGMAX_B MESH_WAIT" << ENDL();
