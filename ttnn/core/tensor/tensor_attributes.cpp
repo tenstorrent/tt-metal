@@ -8,15 +8,55 @@
 
 namespace tt::tt_metal {
 
-TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+static const HostTensor& get_host_tensor(const Storage& storage) {
+    if (const auto* host_storage = std::get_if<HostStorage>(&storage)) {
+        return host_storage->host_tensor();
+    }
+    return std::get<HostStorage>(storage).host_tensor();
+}
+
+TensorAttributes::TensorAttributes(HostStorage storage) :
+    storage_(std::move(storage)),
+    tensor_spec_(get_host_tensor(storage_).tensor_spec()),
+    tensor_topology_(get_host_tensor(storage_).tensor_topology()) {}
+
+// Transitional: assumes a HostStorage constructed without proper TensorSpec and TensorTopology.
+// Overrides the existing spec and topology in the HostStorage.
+TensorAttributes::TensorAttributes(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
+    storage_(HostStorage(std::move(storage), tensor_spec, tensor_topology)),
+    tensor_spec_(std::move(tensor_spec)),
+    tensor_topology_(std::move(tensor_topology)) {}
+
+TensorAttributes::TensorAttributes(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     storage_(std::move(storage)), tensor_spec_(std::move(tensor_spec)), tensor_topology_(std::move(tensor_topology)) {}
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
-const TensorSpec& TensorAttributes::get_tensor_spec() const { return tensor_spec_; }
-const TensorTopology& TensorAttributes::get_tensor_topology() const { return tensor_topology_; }
+
+const TensorSpec& TensorAttributes::get_tensor_spec() const {
+    // Prefer spec from HostStorage
+    // TODO(#40348): TensorAttributes should not store spec and topology.
+    if (const auto* host_storage = std::get_if<HostStorage>(&storage_)) {
+        return host_storage->host_tensor().tensor_spec();
+    }
+    return tensor_spec_;
+}
+
+const TensorTopology& TensorAttributes::get_tensor_topology() const {
+    // Prefer spec from HostStorage
+    // TODO(#40348): TensorAttributes should not store spec and topology.
+    if (const auto* host_storage = std::get_if<HostStorage>(&storage_)) {
+        return host_storage->host_tensor().tensor_topology();
+    }
+    return tensor_topology_;
+}
 
 TensorAttributes TensorAttributes::with_tensor_topology(TensorTopology tensor_topology) const {
+    // This needs to be moved to HostTensor after TODO(#39485)
+    if (const auto* host_storage = std::get_if<HostStorage>(&storage_)) {
+        HostStorage new_storage(*host_storage, tensor_spec_, tensor_topology);
+        return TensorAttributes(std::move(new_storage));
+    }
     TensorAttributes result = *this;
     result.tensor_topology_ = std::move(tensor_topology);
     return result;
