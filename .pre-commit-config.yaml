@@ -96,3 +96,10 @@ repos:
       language: system
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: check-spdx-headers
+      name: Check SPDX license headers
+      entry: python3 scripts/check_spdx_headers.py
+      language: system
+      pass_filenames: true
