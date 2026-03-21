@@ -52,6 +52,24 @@ concept HasCreateAt = requires {
 template <typename T>
 concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
+// A factory that implements ONLY create_descriptor (not create + override_runtime_arguments).
+// The framework builds the Program from the descriptor on cache miss, and auto-patches
+// buffer addresses on cache hits.
+//
+// create_descriptor must return tt::tt_metal::ProgramDescriptor.  There is no
+// MeshWorkloadDescriptor — mesh coordination is handled by the adapter layer.
+//
+// Seed handling is automatic: if operation_attributes_t has a uint32_t seed field,
+// the framework excludes it from hashing and patches compute kernel runtime_args[0]
+// with (seed + core_index) on every cache hit.
+//
+// Note: some existing factories (e.g. LayerNorm) have create_descriptor alongside the
+// traditional create/override_runtime_arguments.  Those still satisfy ProgramFactoryConcept.
+// ProgramDescriptorFactoryConcept matches only "pure" descriptor factories.
+template <typename T>
+concept ProgramDescriptorFactoryConcept =
+    requires { &T::create_descriptor; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
+
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
     device_operation_t op,
@@ -83,13 +101,14 @@ concept HasSelectProgramFactory = requires(
 };
 
 // Validate that all variant alternatives in a program_factory_t satisfy exactly one of
-// ProgramFactoryConcept or MeshWorkloadFactoryConcept.
+// ProgramFactoryConcept, MeshWorkloadFactoryConcept, or ProgramDescriptorFactoryConcept.
 namespace detail {
 template <typename Variant, std::size_t... Is>
 consteval bool all_factories_valid(std::index_sequence<Is...>) {
     return (
-        (ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> !=
-         MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>>) &&
+        ((ProgramFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          MeshWorkloadFactoryConcept<std::variant_alternative_t<Is, Variant>> +
+          ProgramDescriptorFactoryConcept<std::variant_alternative_t<Is, Variant>>) == 1) &&
         ...);
 }
 }  // namespace detail
@@ -98,6 +117,13 @@ template <typename Variant>
 concept AllFactoriesValid =
     detail::all_factories_valid<Variant>(std::make_index_sequence<std::variant_size_v<Variant>>{});
 
+// All program factories in `program_factory_t` must implement exactly one of
+// `ProgramFactoryConcept`, `MeshWorkloadFactoryConcept`, or `ProgramDescriptorFactoryConcept`.
+// This is enforced at compile time by the `AllFactoriesValid` constraint below.
+//
+// Note: `select_program_factory` is NOT required here. For single-variant `program_factory_t`,
+// the `MeshDeviceOperationAdapter` auto-selects the sole factory. Multi-variant operations
+// must provide `select_program_factory` (enforced by `MeshDeviceOperationAdapter::static_assert`).
 template <typename device_operation_t>
 concept DeviceOperationConcept = requires {
     typename device_operation_t::program_factory_t;
