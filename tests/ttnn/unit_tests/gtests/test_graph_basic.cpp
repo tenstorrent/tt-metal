@@ -39,10 +39,6 @@
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
-namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
 namespace ttnn::graph::test {
 
 struct BufferTestParam {
@@ -59,7 +55,7 @@ TEST_P(BufferTestFixture, BufferTest) {
     auto params = std::get<0>(param_combination);
     auto run_mode = std::get<1>(param_combination);
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
     {
         ttnn::graph::GraphProcessor::begin_graph_capture(run_mode);
         {
@@ -156,7 +152,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     auto operation = [&device](tt::tt_metal::DataType datatype) {
         const auto input_a = ttnn::TensorSpec(
@@ -236,7 +232,7 @@ TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
 }
 
 TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -311,7 +307,7 @@ TEST_F(TestScopedGraphCapture, OrderOfArgsTest) {
 }
 
 TEST_F(TestScopedGraphCapture, SameTensorMultipleTimesTest) {
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -360,7 +356,7 @@ TEST_F(TestScopedGraphCapture, TernaryOpDifferentOrderTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -435,7 +431,7 @@ TEST_F(TestScopedGraphCapture, TernaryOpRepeatedTensorsTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{32, 64}),
@@ -504,7 +500,7 @@ TEST_F(TestScopedGraphCapture, MatmulDifferentOrdersTest) {
     GTEST_SKIP()
         << "High-level function tracing was removed - argument order testing at function level is no longer available";
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     const auto tensor_spec = ttnn::TensorSpec(
         ttnn::Shape(tt::tt_metal::Array2D{64, 64}),
@@ -583,7 +579,7 @@ TEST_F(TestScopedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) {
     // the graph correctly tracks the argument order for non-commutative operations like subtract.
     // We test subtract(a, b) vs subtract(b, a) to ensure the order is preserved.
 
-    tt::tt_metal::IDevice* device = device_;
+    tt::tt_metal::distributed::MeshDevice* device = device_;
 
     auto operation = [&device]() {
         // Create tensors INSIDE the capture
