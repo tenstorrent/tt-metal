@@ -1,0 +1,352 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+/**
+ * Shared piecewise rational P(x)/Q(x) evaluator for LUT-based SFPU activations.
+ *
+ * Used by ckernel_sfpu_<activation>.h drop-in headers.
+ *
+ * ALL optimization variants included:
+ *   - Interleaved Horner: back-to-back SFPMAD on numer/denom hides pipeline latency
+ *   - Parity x²-Horner: halves FMA count for odd-num/even-den (atanh, erfinv, erf)
+ *   - Deferred reciprocal: ONE sfpu_reciprocal for all segments
+ *   - Recursive template unrolling: ALWI prevents spills
+ *   - Range reduction: Cody-Waite for exp/trig, mantissa/exponent for log
+ *
+ * Usage:
+ *   #include "ckernel_sfpu_piecewise_rational.h"
+ *   constexpr std::array<float, N> MY_LUT = {{ ... }};
+ *   sfpi::vFloat result = ckernel::sfpu::piecewise_rational_eval<
+ *       NUM_DEG, DEN_DEG, NUM_SEGS, LUT_SIZE>(MY_LUT, x);
+ *
+ * Parity: #define RATIONAL_NUM_PARITY_ODD + RATIONAL_DEN_PARITY_EVEN before including,
+ *         or use USE_PARITY=true template parameter on piecewise_rational_eval.
+ * Range reduction: #define RANGE_REDUCTION_EXP/TRIG/LOG before including, then use
+ *   piecewise_rational_eval_full<>() which handles reduce/expand.
+ */
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_sfpu_recip.h"
+#include "sfpu/ckernel_sfpu_converter.h"
+
+namespace ckernel::sfpu {
+
+// ============================================================================
+// Range reduction helpers (Cody-Waite for exp/trig, IEEE754 for log)
+// ============================================================================
+
+#ifdef RANGE_REDUCTION_EXP
+inline void piecewise_exp_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& k_int) {
+    constexpr float INV_LN2 = 1.4426950408889634f;
+    constexpr float NEG_LN2_HI = -0.6931152343750000f;
+    constexpr float NEG_LN2_LO = -3.19461832987e-05f;
+    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
+    sfpi::vFloat tmp = x * INV_LN2 + c231;
+    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    s = (tmp - c231) * NEG_LN2_LO + ((tmp - c231) * NEG_LN2_HI + x);
+}
+
+inline sfpi::vFloat piecewise_exp_expand(sfpi::vFloat poly_result, sfpi::vInt k_int) {
+    return sfpi::setexp(poly_result, sfpi::exexp_nodebias(poly_result) + k_int);
+}
+#endif
+
+#ifdef RANGE_REDUCTION_TRIG
+inline void piecewise_trig_reduce(sfpi::vFloat x, sfpi::vFloat& s, sfpi::vInt& q_int) {
+    constexpr float FRAC_1_PI = 0.31830988618379067f;
+    const sfpi::vFloat c231 = Converter::as_float(0x4B400000U);
+    // Compute x / pi and round-to-nearest integer value (c.f. Hacker's Delight)
+    sfpi::vFloat tmp = x * FRAC_1_PI + c231;
+    sfpi::vFloat q = tmp - c231;
+    q_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    constexpr float NEG_PI_HI = -3.140625f;
+    constexpr float NEG_PI_LO = -0.00096765358979323846f;
+    s = q * NEG_PI_LO + (q * NEG_PI_HI + x);
+}
+
+inline sfpi::vFloat piecewise_trig_expand(sfpi::vFloat poly_result, sfpi::vInt q_int) {
+    // Sign flip via bitwise XOR: (q_int << 31) ^ result
+    poly_result = sfpi::reinterpret<sfpi::vFloat>(
+        (sfpi::reinterpret<sfpi::vUInt>(q_int) << 31) ^ sfpi::reinterpret<sfpi::vUInt>(poly_result));
+    return poly_result;
+}
+#endif
+
+#ifdef RANGE_REDUCTION_LOG
+inline void piecewise_log_reduce(sfpi::vFloat x, sfpi::vFloat& m, sfpi::vInt& e_int) {
+    e_int = sfpi::exexp(x);
+    m = sfpi::setexp(x, 127);
+}
+
+inline sfpi::vFloat piecewise_log_expand(sfpi::vFloat poly_result, sfpi::vInt e_int) {
+#ifdef LOG_EXPAND_CONSTANT
+    constexpr float EXPAND_C = LOG_EXPAND_CONSTANT;
+#else
+    constexpr float EXPAND_C = 0.6931471805599453f;  // ln(2)
+#endif
+    v_if(e_int < 0) { e_int = sfpi::setsgn(~e_int + 1, 1); }
+    v_endif;
+    return sfpi::int32_to_float(e_int, 0) * EXPAND_C + poly_result;
+}
+#endif
+
+// ============================================================================
+// Interleaved Horner: evaluate P(x) and Q(x) simultaneously
+// Back-to-back SFPMADs on independent chains hide pipeline latency.
+// ============================================================================
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
+ALWI void piecewise_rational_eval_numer_denom(
+    const float* num_coeffs,
+    const float* den_coeffs,
+    sfpi::vFloat x,
+    sfpi::vFloat& out_numer,
+    sfpi::vFloat& out_denom) {
+    constexpr uint32_t MIN_DEG = (NUM_DEGREE < DEN_DEGREE) ? NUM_DEGREE : DEN_DEGREE;
+
+    sfpi::vFloat numer = num_coeffs[NUM_DEGREE];
+    sfpi::vFloat denom = den_coeffs[DEN_DEGREE];
+
+    if constexpr (NUM_DEGREE > DEN_DEGREE) {
+#pragma unroll
+        for (int i = NUM_DEGREE - 1; i >= static_cast<int>(DEN_DEGREE); i--) {
+            numer = numer * x + num_coeffs[i];
+        }
+    } else if constexpr (DEN_DEGREE > NUM_DEGREE) {
+#pragma unroll
+        for (int i = DEN_DEGREE - 1; i >= static_cast<int>(NUM_DEGREE); i--) {
+            denom = denom * x + den_coeffs[i];
+        }
+    }
+
+#pragma unroll
+    for (int i = MIN_DEG - 1; i >= 0; i--) {
+        numer = numer * x + num_coeffs[i];
+        denom = denom * x + den_coeffs[i];
+    }
+
+    out_numer = numer;
+    out_denom = denom;
+}
+
+// ============================================================================
+// Parity x²-Horner: odd num / even den → evaluate in x² basis
+// Halves FMA count for atanh, erfinv, erf, etc.
+// Always available — called via USE_PARITY template parameter or macro guard.
+// ============================================================================
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
+ALWI void piecewise_rational_eval_parity_numer_denom(
+    const float* num_coeffs,
+    const float* den_coeffs,
+    sfpi::vFloat x,
+    sfpi::vFloat x2,
+    sfpi::vFloat& out_numer,
+    sfpi::vFloat& out_denom) {
+    // NUM_TOP/DEN_TOP: highest odd/even index used in x²-Horner.
+    // If NUM_DEGREE is even, the leading (even-index) coeff must be zero — we skip it.
+    constexpr int NUM_TOP = (NUM_DEGREE % 2 == 1) ? NUM_DEGREE : NUM_DEGREE - 1;
+    constexpr int DEN_TOP = (DEN_DEGREE % 2 == 0) ? DEN_DEGREE : DEN_DEGREE - 1;
+    constexpr int NUM_STEPS = (NUM_TOP - 1) / 2;
+    constexpr int DEN_STEPS = DEN_TOP / 2;
+
+    sfpi::vFloat numer = num_coeffs[NUM_TOP];
+    sfpi::vFloat denom = den_coeffs[DEN_TOP];
+
+    if constexpr (NUM_STEPS > DEN_STEPS) {
+#pragma unroll
+        for (int k = 0; k < NUM_STEPS - DEN_STEPS; k++) {
+            numer = numer * x2 + num_coeffs[NUM_TOP - 2 * (k + 1)];
+        }
+    } else if constexpr (DEN_STEPS > NUM_STEPS) {
+#pragma unroll
+        for (int k = 0; k < DEN_STEPS - NUM_STEPS; k++) {
+            denom = denom * x2 + den_coeffs[DEN_TOP - 2 * (k + 1)];
+        }
+    }
+
+    constexpr int MIN_STEPS = (NUM_STEPS < DEN_STEPS) ? NUM_STEPS : DEN_STEPS;
+    constexpr int NUM_POS = NUM_TOP - 2 * ((NUM_STEPS > DEN_STEPS) ? (NUM_STEPS - DEN_STEPS) : 0);
+    constexpr int DEN_POS = DEN_TOP - 2 * ((DEN_STEPS > NUM_STEPS) ? (DEN_STEPS - NUM_STEPS) : 0);
+
+#pragma unroll
+    for (int k = 1; k <= MIN_STEPS; k++) {
+        numer = numer * x2 + num_coeffs[NUM_POS - 2 * k];
+        denom = denom * x2 + den_coeffs[DEN_POS - 2 * k];
+    }
+
+    out_numer = numer * x;  // odd parity: P(x) = x * Horner_result
+    out_denom = denom;
+}
+
+// ============================================================================
+// Unified numer/denom dispatcher: selects parity or interleaved automatically
+// ============================================================================
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE>
+ALWI void piecewise_rational_dispatch_numer_denom(
+    const float* num_coeffs,
+    const float* den_coeffs,
+    sfpi::vFloat x,
+    sfpi::vFloat& out_numer,
+    sfpi::vFloat& out_denom
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+    ,
+    sfpi::vFloat x2
+#endif
+) {
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+    piecewise_rational_eval_parity_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+        num_coeffs, den_coeffs, x, x2, out_numer, out_denom);
+#else
+    piecewise_rational_eval_numer_denom<NUM_DEGREE, DEN_DEGREE>(num_coeffs, den_coeffs, x, out_numer, out_denom);
+#endif
+}
+
+// ============================================================================
+// Recursive segment unroller with deferred reciprocal
+// ============================================================================
+
+template <uint32_t SEG, uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE>
+ALWI void piecewise_rational_unroll_segment(
+    const std::array<float, LUT_SIZE>& lut,
+    sfpi::vFloat x,
+    sfpi::vFloat& numer,
+    sfpi::vFloat& denom
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+    ,
+    sfpi::vFloat x2
+#endif
+) {
+    if constexpr (SEG < NUM_SEGMENTS) {
+        constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
+        constexpr uint32_t CPS = NUM_COEFFS + DEN_DEGREE + 1;
+        constexpr uint32_t CO = NUM_SEGMENTS + 1;
+        v_if(x >= lut[SEG]) {
+            piecewise_rational_dispatch_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+                &lut[CO + SEG * CPS],
+                &lut[CO + SEG * CPS + NUM_COEFFS],
+                x,
+                numer,
+                denom
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+                ,
+                x2
+#endif
+            );
+        }
+        v_endif;
+        piecewise_rational_unroll_segment<SEG + 1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE>(
+            lut,
+            x,
+            numer,
+            denom
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+            ,
+            x2
+#endif
+        );
+    }
+}
+
+// ============================================================================
+// Public API: evaluate piecewise rational LUT for a single vFloat x
+// Automatically dispatches parity when macros are defined.
+// USE_PARITY template parameter allows per-call parity control without macros.
+// ============================================================================
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE, bool USE_PARITY = false>
+ALWI sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
+    constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
+    constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
+
+    // Parity active if either: template parameter says so, or macros are defined
+    constexpr bool parity_active = USE_PARITY
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+                                   || true
+#endif
+        ;
+
+    sfpi::vFloat x2;
+    if constexpr (parity_active) {
+        x2 = x * x;
+    }
+
+    sfpi::vFloat numer = 0.0f, denom = 0.0f;
+
+    if constexpr (parity_active) {
+        piecewise_rational_eval_parity_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+            &lut[COEFF_OFFSET], &lut[COEFF_OFFSET + NUM_COEFFS], x, x2, numer, denom);
+    } else {
+        piecewise_rational_eval_numer_denom<NUM_DEGREE, DEN_DEGREE>(
+            &lut[COEFF_OFFSET], &lut[COEFF_OFFSET + NUM_COEFFS], x, numer, denom);
+    }
+
+    // Unroll remaining segments (seg 1..N-1)
+    if constexpr (NUM_SEGMENTS > 1) {
+        piecewise_rational_unroll_segment<1, NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE>(
+            lut,
+            x,
+            numer,
+            denom
+#if defined(RATIONAL_NUM_PARITY_ODD) && defined(RATIONAL_DEN_PARITY_EVEN)
+            ,
+            x2
+#endif
+        );
+    }
+
+    return numer * sfpu_reciprocal<false>(denom);
+}
+
+// ============================================================================
+// Full evaluation with range reduction
+// Reads dst_reg, applies reduce → eval → expand, writes back.
+// ============================================================================
+
+template <uint32_t NUM_DEGREE, uint32_t DEN_DEGREE, uint32_t NUM_SEGMENTS, uint32_t LUT_SIZE>
+inline void piecewise_rational_eval_full(const std::array<float, LUT_SIZE>& lut, int d) {
+    sfpi::vFloat x_orig = sfpi::dst_reg[d];
+
+#if defined(RANGE_REDUCTION_EXP)
+    sfpi::vFloat x;
+    sfpi::vInt k_int;
+    piecewise_exp_reduce(x_orig, x, k_int);
+#elif defined(RANGE_REDUCTION_TRIG)
+    sfpi::vFloat x;
+    sfpi::vInt q_int;
+    piecewise_trig_reduce(x_orig, x, q_int);
+#elif defined(RANGE_REDUCTION_LOG)
+    sfpi::vFloat x;
+    sfpi::vInt e_int;
+    piecewise_log_reduce(x_orig, x, e_int);
+#else
+    sfpi::vFloat x = x_orig;
+#endif
+
+    sfpi::vFloat result = piecewise_rational_eval<NUM_DEGREE, DEN_DEGREE, NUM_SEGMENTS, LUT_SIZE>(lut, x);
+
+#if defined(RANGE_REDUCTION_EXP)
+    constexpr float EXP_OVERFLOW = 88.5f;
+    constexpr float EXP_UNDERFLOW = -88.5f;
+    v_if(x_orig > EXP_OVERFLOW) { result = std::numeric_limits<float>::infinity(); }
+    v_elseif(x_orig < EXP_UNDERFLOW) { result = 0.0f; }
+    v_else { result = piecewise_exp_expand(result, k_int); }
+    v_endif;
+#elif defined(RANGE_REDUCTION_TRIG)
+    result = piecewise_trig_expand(result, q_int);
+#elif defined(RANGE_REDUCTION_LOG)
+    v_if(x_orig < 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
+    v_elseif(x_orig == 0.0f) { result = -std::numeric_limits<float>::infinity(); }
+    v_else { result = piecewise_log_expand(result, e_int); }
+    v_endif;
+#endif
+
+    sfpi::dst_reg[d] = result;
+}
+
+}  // namespace ckernel::sfpu
