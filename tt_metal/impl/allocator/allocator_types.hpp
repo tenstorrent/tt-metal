@@ -45,6 +45,10 @@ struct AllocatorConfig {
     CoreRangeSet compute_grid;
     uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
+
+    // Device pointer for SHM tracking (optional, can be null)
+    const class Device* device = nullptr;
+
     void reset();
     ~AllocatorConfig() { reset(); }
 };
