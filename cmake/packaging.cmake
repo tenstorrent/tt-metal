@@ -54,6 +54,9 @@ set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
 set(CPACK_DEBIAN_TTML_PACKAGE_DEPENDS "python3 (>= 3.8)")
 
 include(CMakePackageConfigHelpers)
+if("${PROJECT_VERSION}" STREQUAL "")
+    set(PROJECT_VERSION "0.0.1")
+endif()
 write_basic_package_version_file(
     ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
     VERSION ${PROJECT_VERSION}
