@@ -238,6 +238,11 @@ ttnn::Tensor slice(
         }
     }
 
+    // slice_dim and num_devices must be provided for device-only tensor args slice
+    if (!slice_dim.has_value() || !num_devices.has_value()) {
+        use_device_only_path = false;
+    }
+
     // Validate tensors are on device for both paths
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device for tensor args slice");
@@ -247,10 +252,6 @@ ttnn::Tensor slice(
 
     if (use_device_only_path) {
         // Validate required parameters for device-only path
-        TT_FATAL(
-            slice_dim.has_value() && num_devices.has_value(),
-            "slice_dim and num_devices must be provided for device-only tensor args slice");
-
         TT_FATAL(
             output_tensor_start.storage_type() == StorageType::DEVICE,
             "Start tensor must be on device for tensor args slice");
