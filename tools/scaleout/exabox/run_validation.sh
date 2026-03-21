@@ -142,6 +142,8 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
 fi
 
 run_cluster_validation() {
+    local validation_output_path="$1"
+
     if [[ -n "$FACTORY_DESCRIPTOR_PATH" ]]; then
         local descriptor_args=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
     else
@@ -155,7 +157,8 @@ run_cluster_validation() {
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
             --send-traffic \
-            --num-iterations 10
+            --num-iterations 10 \
+            --output-path "$validation_output_path"
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
@@ -163,7 +166,8 @@ run_cluster_validation() {
             ./build/tools/scaleout/run_cluster_validation \
             "${descriptor_args[@]}" \
             --send-traffic \
-            --num-iterations 10
+            --num-iterations 10 \
+            --output-path "$validation_output_path"
     fi
 }
 
@@ -202,7 +206,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
         echo ""
         echo "Running cluster validation..."
-        run_cluster_validation
+        run_cluster_validation "$OUTPUT_DIR/iteration_${i}"
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
@@ -222,7 +226,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
             echo ""
 
             echo "Re-running cluster validation..."
-            run_cluster_validation
+            run_cluster_validation "$OUTPUT_DIR/iteration_${i}_retry"
             echo "Iteration $i retry completed at $(date)"
             echo "=========================================="
         } 2>&1 | tee "$LOG_FILE_RETRY"
@@ -231,5 +235,37 @@ for ((i=1; i<=ITERATIONS; i++)); do
     echo "Iteration $i logged to $LOG_FILE"
     echo ""
 done
+
+# Aggregate link retrain reports across all iterations
+RETRAIN_SUMMARY="$OUTPUT_DIR/link_retrain_summary.csv"
+retrain_csvs=()
+while IFS= read -r -d '' csv; do
+    retrain_csvs+=("$csv")
+done < <(find "$OUTPUT_DIR" -name "link_retrain_report.csv" -print0 2>/dev/null | sort -z)
+
+if [[ ${#retrain_csvs[@]} -gt 0 ]]; then
+    echo "=========================================="
+    echo "LINK RETRAIN SUMMARY (across all iterations)"
+    echo "=========================================="
+    echo "Iterations with retraining: ${#retrain_csvs[@]}"
+    echo ""
+
+    {
+        echo "Iteration,Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count"
+        for csv in "${retrain_csvs[@]}"; do
+            iter_dir=$(basename "$(dirname "$csv")")
+            tail -n +2 "$csv" | while IFS= read -r line; do
+                echo "${iter_dir},${line}"
+            done
+        done
+    } > "$RETRAIN_SUMMARY"
+
+    column -t -s, "$RETRAIN_SUMMARY"
+    echo ""
+    echo "Full retrain summary written to: $RETRAIN_SUMMARY"
+    echo ""
+else
+    echo "No link retraining events detected across $ITERATIONS iterations."
+fi
 
 echo "All $ITERATIONS iterations completed!"

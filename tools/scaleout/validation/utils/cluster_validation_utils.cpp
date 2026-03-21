@@ -1294,6 +1294,93 @@ void forward_link_reset_metadata_from_controller(
     }
 }
 
+std::vector<EthChannelIdentifier> collect_retrained_link_identifiers(
+    const tt::tt_metal::AsicTopology& missing_topology, const PhysicalSystemDescriptor& physical_system_descriptor) {
+    std::vector<EthChannelIdentifier> retrained_links;
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+
+    for (const auto& [asic_id, asic_connections] : missing_topology) {
+        if (!asic_descriptors.contains(asic_id)) {
+            continue;
+        }
+        const auto& asic_desc = asic_descriptors.at(asic_id);
+
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            for (const auto& eth_connection : eth_connections) {
+                retrained_links.push_back(EthChannelIdentifier{
+                    .host = asic_desc.host_name,
+                    .asic_id = asic_desc.unique_id,
+                    .tray_id = asic_desc.tray_id,
+                    .asic_location = asic_desc.asic_location,
+                    .channel = eth_connection.src_chan,
+                });
+            }
+        }
+    }
+
+    return retrained_links;
+}
+
+void log_link_retrain_summary(
+    const std::unordered_map<EthChannelIdentifier, uint32_t>& link_retrain_counts,
+    uint32_t total_retrain_iterations,
+    const std::filesystem::path& output_path) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() != 0) {
+        return;
+    }
+
+    if (link_retrain_counts.empty()) {
+        return;
+    }
+
+    log_output_rank0(
+        "Link Retraining Summary: " + std::to_string(link_retrain_counts.size()) + " link endpoints retrained over " +
+        std::to_string(total_retrain_iterations) + " iteration(s)");
+
+    std::cout << std::endl;
+    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════╗" << std::endl;
+    std::cout << "║                          LINK RETRAINING REPORT                              ║" << std::endl;
+    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════╝" << std::endl;
+    std::cout << "Total Retrained Link Endpoints: " << link_retrain_counts.size() << std::endl;
+    std::cout << "Total Retrain Iterations: " << total_retrain_iterations << std::endl << std::endl;
+
+    std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
+              << std::setw(5) << "Ch" << std::setw(14) << "Unique ID" << std::setw(16) << "Retrain Count" << std::endl;
+
+    std::cout << std::string(67, '-') << std::endl;
+
+    for (const auto& [channel_id, retrain_count] : link_retrain_counts) {
+        std::stringstream uid_stream;
+        uid_stream << "0x" << std::hex << std::setfill('0') << std::setw(10) << *channel_id.asic_id;
+
+        std::cout << std::left << std::setw(20) << channel_id.host << std::setw(6) << *channel_id.tray_id
+                  << std::setw(6) << *channel_id.asic_location << std::setw(5) << static_cast<int>(channel_id.channel)
+                  << std::setw(14) << uid_stream.str() << std::dec << std::setfill(' ') << std::setw(16)
+                  << retrain_count << std::endl;
+    }
+
+    std::cout << std::string(67, '-') << std::endl << std::endl;
+
+    std::filesystem::create_directories(output_path);
+    std::filesystem::path csv_path = output_path / "link_retrain_report.csv";
+    std::ofstream csv_file(csv_path);
+
+    if (csv_file.is_open()) {
+        csv_file << "Host,Tray,ASIC,Channel,Unique_ID,Retrain_Count" << std::endl;
+        for (const auto& [channel_id, retrain_count] : link_retrain_counts) {
+            csv_file << channel_id.host << "," << *channel_id.tray_id << "," << *channel_id.asic_location << ","
+                     << static_cast<int>(channel_id.channel) << ","
+                     << "0x" << std::hex << *channel_id.asic_id << std::dec << "," << retrain_count << std::endl;
+        }
+        csv_file.close();
+        log_output_rank0("✓ Link retrain report written to: " + csv_path.string());
+    } else {
+        log_output_rank0("✗ Warning: Could not open CSV file for writing: " + csv_path.string());
+    }
+}
+
 void reset_local_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt::tt_metal::AsicTopology& asic_topology) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
