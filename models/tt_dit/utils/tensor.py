@@ -23,6 +23,7 @@ def typed_tensor(
     mesh_axis=None,
     shard_dim=None,
     layout=ttnn.TILE_LAYOUT,
+    on_host=False,
 ) -> ttnn.Tensor:
     """
     Replicates or shards a tensor based on the mesh_axis and shard_dim
@@ -39,15 +40,28 @@ def typed_tensor(
         layout=layout,
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=device,
+        device=None if on_host else device,
         mesh_mapper=mesh_mapper,
     )
 
 
 def bf16_tensor(
-    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+    x: torch.Tensor,
+    device: ttnn.Device | None = None,
+    mesh_axis=None,
+    shard_dim=None,
+    layout=ttnn.TILE_LAYOUT,
+    on_host=False,
 ) -> ttnn.Tensor:
-    return typed_tensor(x, ttnn.bfloat16, device, mesh_axis, shard_dim, layout)
+    return typed_tensor(
+        x,
+        ttnn.bfloat16,
+        device,
+        mesh_axis,
+        shard_dim,
+        layout,
+        on_host=on_host,
+    )
 
 
 def float32_tensor(
@@ -75,7 +89,12 @@ def bf16_tensor_host(
 
 
 def typed_tensor_2dshard(
-    x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    x: torch.Tensor,
+    device: ttnn.Device,
+    shard_mapping: dict[int, int],
+    layout=ttnn.TILE_LAYOUT,
+    dtype=ttnn.bfloat16,
+    on_host=False,
 ) -> ttnn.Tensor:
     assert len(shard_mapping) == 2
     assert all(0 <= k <= 1 and 0 <= v < len(x.shape) for k, v in shard_mapping.items())
@@ -88,7 +107,7 @@ def typed_tensor_2dshard(
         layout=layout,
         dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        device=device,
+        device=None if on_host else device,
         mesh_mapper=mesh_mapper,
     )
 
@@ -98,8 +117,9 @@ def bf16_tensor_2dshard(
     device: ttnn.Device,
     shard_mapping: dict[int, int],
     layout=ttnn.TILE_LAYOUT,
+    on_host: bool = False,
 ) -> ttnn.Tensor:
-    return typed_tensor_2dshard(x, device, shard_mapping, layout, dtype=ttnn.bfloat16)
+    return typed_tensor_2dshard(x, device, shard_mapping, layout, dtype=ttnn.bfloat16, on_host=on_host)
 
 
 def from_torch(
