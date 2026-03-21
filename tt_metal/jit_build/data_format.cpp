@@ -215,7 +215,9 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Fp8_e4m3) {
         pack_src_format = DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
-        if (is_bfp_format(data_format)) {
+        if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
+            pack_src_format = DataFormat::Float32;
+        } else if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
                 pack_src_format = DataFormat::Float32;
             } else {
