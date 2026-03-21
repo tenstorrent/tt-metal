@@ -319,7 +319,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
-    auto trace_inst = mesh_device->get_mesh_trace(tid);
+    auto trace_inst = mesh_device->impl().get_mesh_trace(tid);
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer - using the actual device buffer
