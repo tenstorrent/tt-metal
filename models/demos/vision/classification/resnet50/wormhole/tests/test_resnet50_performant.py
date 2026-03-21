@@ -19,7 +19,10 @@ from models.demos.vision.classification.resnet50.ttnn_resnet.tests.common.resnet
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
-    ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
+    (
+        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (8, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
+    ),
 )
 @pytest.mark.parametrize("skip_compile_run", [True, False])
 def test_run_resnet50_inference(
