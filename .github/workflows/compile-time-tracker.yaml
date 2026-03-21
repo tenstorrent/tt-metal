@@ -14,7 +14,7 @@ on:
 jobs:
   track-compile-time:
     name: "⏱️ Track Compile Time"
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ubuntu-latest-16-core
     timeout-minutes: 120
     container:
       image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
