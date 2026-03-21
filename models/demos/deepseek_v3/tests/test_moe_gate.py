@@ -115,6 +115,7 @@ def test_forward_pass(
 
     weight_config = get_test_weight_config(
         MoEGate,
+        hf_config,
         (state_dict,),
         cache_path,
         mesh_device,
