@@ -245,7 +245,7 @@ public:
 
     // ULFM consensus: all surviving ranks agree on a boolean value.
     // Returns std::nullopt if not supported (e.g. single-host or non-ULFM build).
-    [[nodiscard]] virtual std::optional<bool> agree(bool local_value) const { return std::nullopt; }
+    [[nodiscard]] virtual std::optional<bool> agree(bool /*local_value*/) const { return std::nullopt; }
 
     // Returns ranks detected as failed on the current communicator.
     // Empty if not supported or no failures detected.
