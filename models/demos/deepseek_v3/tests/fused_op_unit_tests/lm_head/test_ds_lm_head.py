@@ -93,15 +93,10 @@ def ds_lm_head_ttnn_decode(
     """
     TTNN implementation for lm_head linear projection (decode mode).
 
-    Args:
-        x: Input tensor
-        cfg: Configuration dictionary containing linear config
-
-    Returns:
-        Output tensor
+    Delegates to LMHead1D._fwd_linear (compute-only, no deallocation)
+    so the input can be reused across perf-measurement iterations.
     """
-    output = ttnn.linear(x, **cfg["linear"])
-    return output
+    return LMHead1D._fwd_linear(x, cfg)
 
 
 def ds_lm_head_ttnn_prefill(
@@ -112,16 +107,10 @@ def ds_lm_head_ttnn_prefill(
     """
     TTNN implementation for lm_head linear projection (prefill mode).
 
-    Args:
-        x: Input tensor
-        cfg: Configuration dictionary containing linear config
-        seq_len: Original sequence length (unused, kept for API compatibility)
-
-    Returns:
-        Output tensor
+    Delegates to LMHead1D._fwd_prefill with deallocate_inputs=False
+    so the input can be reused across perf-measurement iterations.
     """
-    output = ttnn.linear(x, **cfg["linear"])
-    return output
+    return LMHead1D._fwd_prefill(x, cfg, deallocate_inputs=False)
 
 
 def _run_ds_lm_head_test(
