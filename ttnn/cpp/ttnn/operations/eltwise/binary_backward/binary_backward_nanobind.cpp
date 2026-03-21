@@ -833,13 +833,25 @@ void py_module(nb::module_& module) {
         R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`rounding_mode`,  with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_ops<"remainder_bw">(
+    ttnn::bind_function<"remainder_bw">(
         module,
-        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-            &ttnn::remainder_bw),
         R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16)doc",
-        R"doc(Supported only in WHB0. For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+                &ttnn::remainder_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&>(
+                &ttnn::remainder_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor"),
+            nb::arg("scalar"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none()));
 
     ttnn::bind_function<"fmod_bw">(
         module,
