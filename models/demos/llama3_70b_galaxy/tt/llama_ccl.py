@@ -1237,12 +1237,17 @@ class TT_CCL:
             num_workers_per_link = 4
         else:
             num_workers_per_link = 1
+        # Only use barrier_semaphore when persistent buffers are not available.
+        # Barrier sync inside a captured trace causes deadlocks.
+        barrier_semaphore = None
+        if persistent_buffers_list is None:
+            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
-            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            barrier_semaphore=barrier_semaphore,
             num_links=num_links,
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1355,6 +1360,11 @@ class TT_CCL:
         # persistent_buffers = None
 
         num_links = 4
+        # Only use barrier_semaphore when persistent buffers are not available.
+        # Barrier sync inside a captured trace causes deadlocks.
+        barrier_semaphore = None
+        if persistent_buffers is None:
+            barrier_semaphore = self.get_and_cycle_barrier_semaphore_handle(cluster_axis)
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1365,7 +1375,7 @@ class TT_CCL:
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
-            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            barrier_semaphore=barrier_semaphore,
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
