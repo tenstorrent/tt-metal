@@ -49,6 +49,7 @@ struct MeshPartitionDeviceOperation {
             prim::SliceRmShardedProgramFactory::shared_variables_t,
             prim::SliceRmStrideProgramFactory::shared_variables_t,
             prim::SliceTileProgramFactory::shared_variables_t,
+            prim::SliceTileInterleavedProgramFactory::shared_variables_t,
             prim::SliceTileTensorArgsProgramFactory::shared_variables_t>;
 
         struct shared_variables_t {
