@@ -13,8 +13,8 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type, bool use_vc2) {
-    ConnectionKey key = {direction, link_idx, use_vc2};
+    const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type, uint8_t vc_id) {
+    ConnectionKey key = {direction, link_idx, vc_id};
     auto& conn = connections_[key];
 
     // Store worker type for this core (for channel assignment later)
@@ -275,7 +275,7 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
         } else {
             // Generate fabric connection args directly using passed parameters
             const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
-            if (key.use_vc2) {
+            if (key.use_vc2()) {
                 append_fabric_vc2_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
             } else {
@@ -412,7 +412,7 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
         this->test_device_ptr_->connection_manager_,
         outgoing_direction,
         config.link_id,
-        config.use_vc2);
+        config.vc_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
 }
@@ -615,7 +615,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
-    bool use_vc2) {
+    uint8_t vc_id) {
     // Get available link indices for this direction (to validate link_idx)
     std::vector<uint32_t> available_link_indices = get_forwarding_link_indices_in_direction(outgoing_direction);
 
@@ -634,7 +634,7 @@ ConnectionKey TestDevice::register_fabric_connection(
         static_cast<int>(outgoing_direction));
 
     // Check if this core already registered this connection
-    ConnectionKey connection_key{outgoing_direction, link_idx, use_vc2};
+    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
@@ -643,7 +643,7 @@ ConnectionKey TestDevice::register_fabric_connection(
     }
 
     // Register the new connection with the connection manager
-    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, use_vc2);
+    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, vc_id);
 
     log_debug(
         tt::LogTest,
@@ -879,10 +879,9 @@ void TestDevice::create_sender_kernels() {
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
         // Determine VC ID for this sender (all configs on a core use same vc_id)
-        // use_vc2=true on a sender config implies vc_id=2
         uint8_t sender_vc_id = 0;
         for (const auto& [config, _] : sender.configs_) {
-            if (config.use_vc2) {
+            if (config.use_vc2()) {
                 sender_vc_id = 2;
                 break;
             }

@@ -40,14 +40,16 @@ namespace tt::tt_fabric::fabric_tests {
 struct ConnectionKey {
     RoutingDirection direction;
     uint32_t link_idx;
-    bool use_vc2 = false;
+    uint8_t vc_id = 0;  // 0=VC0, 2=VC2
+
+    bool use_vc2() const { return vc_id == 2; }
 
     bool operator==(const ConnectionKey& other) const {
-        return direction == other.direction && link_idx == other.link_idx && use_vc2 == other.use_vc2;
+        return direction == other.direction && link_idx == other.link_idx && vc_id == other.vc_id;
     }
 
     bool operator<(const ConnectionKey& other) const {
-        return std::tie(direction, link_idx, use_vc2) < std::tie(other.direction, other.link_idx, other.use_vc2);
+        return std::tie(direction, link_idx, vc_id) < std::tie(other.direction, other.link_idx, other.vc_id);
     }
 };
 
@@ -55,7 +57,7 @@ struct ConnectionKey {
 struct ConnectionKeyHash {
     std::size_t operator()(const ConnectionKey& key) const {
         return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1) ^
-               (std::hash<bool>()(key.use_vc2) << 2);
+               (std::hash<uint8_t>()(key.vc_id) << 2);
     }
 };
 
@@ -123,7 +125,7 @@ public:
         RoutingDirection direction,
         uint32_t link_idx,
         TestWorkerType worker_type,
-        bool use_vc2 = false);
+        uint8_t vc_id = 0);
 
     // Processing: Call once at start of create_kernels()
     // local_alloc: allocator for on-demand mux core allocation
@@ -403,7 +405,7 @@ private:
         FabricConnectionManager& connection_mgr,
         RoutingDirection outgoing_direction,
         uint32_t link_idx,
-        bool use_vc2 = false);
+        uint8_t vc_id = 0);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
