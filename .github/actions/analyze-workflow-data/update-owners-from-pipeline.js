@@ -13,10 +13,10 @@ function getWorkflowPrefix(filePath) {
   const dirParts = path.dirname(relativePath).split(path.sep).filter(p => p !== '.');
   const fileName = path.basename(relativePath, '.yaml');
 
-  // Convert t3k_* to t3000-*
+  // Convert t3k_* to t3000-* then normalize underscores to hyphens
   let prefix = fileName.replace(/^t3k_/, 't3000-').replace(/_/g, '-');
 
-  // If there's a directory, prepend it
+  // If there's a directory, prepend it with hyphen separator
   if (dirParts.length > 0) {
     prefix = dirParts.join('-') + '-' + prefix;
   }
@@ -51,10 +51,27 @@ function extractOwnerName(comment) {
 }
 
 /**
+ * Extract Slack user ID from an owner_id field value (before any # comment)
+ * Examples:
+ *   "ULMEPM2MA # Sean Nijjar" -> "ULMEPM2MA"
+ *   "U045U3DEKM4" -> "U045U3DEKM4"
+ */
+function extractOwnerId(ownerIdField) {
+  if (!ownerIdField) return null;
+  // The owner_id may contain a comment after '#'; take only the part before it
+  const parts = ownerIdField.split('#');
+  return parts[0].trim() || null;
+}
+
+/**
  * Simple YAML parser for our specific format (array of objects with name and owner_id)
  * Handles the format:
  *   - name: t3k_ttmetal_tests
  *     owner_id: ULMEPM2MA # Sean Nijjar
+ *
+ * WHY custom parser: the pipeline YAML files use only a small subset of YAML
+ * (flat arrays of {name, owner_id} objects). Avoiding a heavy yaml-parse
+ * dependency keeps the action self-contained and fast.
  */
 function parseYamlFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
@@ -67,26 +84,27 @@ function parseYamlFile(filePath) {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // Skip comments and empty lines
+    // Skip pure comment lines and empty lines
     if (trimmed.startsWith('#') || trimmed === '') {
       continue;
     }
 
-    // Check if we're starting an array entry (starts with -)
+    // Check if we're starting an array entry (starts with '-')
     if (trimmed.startsWith('-')) {
-      // Save previous entry if exists
+      // Save previous entry if it has both required fields
       if (currentEntry && currentEntry.name && currentEntry.owner_id) {
         entries.push(currentEntry);
       }
       currentEntry = {};
 
-      // Check if there's inline content after the dash
+      // Check if there's inline content after the dash (e.g., "- name: foo")
       const afterDash = trimmed.substring(1).trim();
       if (afterDash && afterDash.includes(':')) {
         const colonIndex = afterDash.indexOf(':');
         const key = afterDash.substring(0, colonIndex).trim();
+        // Preserve inline comments for owner_id parsing — do NOT strip '#' here
         let value = afterDash.substring(colonIndex + 1).trim();
-        // Remove quotes
+        // Remove surrounding quotes only (not inline comments)
         if ((value.startsWith('"') && value.endsWith('"')) ||
             (value.startsWith("'") && value.endsWith("'"))) {
           value = value.slice(1, -1);
@@ -96,13 +114,15 @@ function parseYamlFile(filePath) {
       continue;
     }
 
-    // Parse key-value pairs (indented with spaces)
+    // Parse indented key-value pairs under the current entry
     if (line.startsWith('  ') && trimmed.includes(':')) {
       const colonIndex = trimmed.indexOf(':');
       const key = trimmed.substring(0, colonIndex).trim();
+      // Preserve full value including inline comments (needed for owner_id + name extraction)
       let value = trimmed.substring(colonIndex + 1).trim();
 
-      // Remove quotes if present
+      // Remove surrounding quotes if present, but only if they wrap the ENTIRE value
+      // (i.e., no inline comment outside the quotes)
       if ((value.startsWith('"') && value.endsWith('"')) ||
           (value.startsWith("'") && value.endsWith("'"))) {
         value = value.slice(1, -1);
@@ -114,7 +134,7 @@ function parseYamlFile(filePath) {
     }
   }
 
-  // Don't forget the last entry
+  // Flush the last entry
   if (currentEntry && currentEntry.name && currentEntry.owner_id) {
     entries.push(currentEntry);
   }
@@ -123,7 +143,12 @@ function parseYamlFile(filePath) {
 }
 
 /**
- * Scan a YAML file and extract job entries with owners
+ * Scan a YAML file and extract job entries with owners.
+ * Returns an array of { jobName, ownerId, ownerName } objects.
+ *
+ * WHY separate ownerId/ownerName extraction here: callers need the Slack ID
+ * (for owners.json keys) separately from the human-readable name. Doing both
+ * in one place avoids duplicating the '#' comment parsing logic.
  */
 function scanPipelineFile(filePath) {
   const jobs = [];
@@ -132,267 +157,29 @@ function scanPipelineFile(filePath) {
 
     for (const entry of entries) {
       if (entry.name && entry.owner_id) {
+        const ownerId = extractOwnerId(entry.owner_id);
         const ownerName = extractOwnerName(entry.owner_id);
-        if (ownerName) {
-          // Extract just the ID part (before #)
-          const ownerId = entry.owner_id.split('#')[0].trim();
+        if (ownerId) {
           jobs.push({
-            name: entry.name,
-            ownerId: ownerId,
-            ownerName: ownerName
+            jobName: normalizeJobName(entry.name),
+            ownerId,
+            ownerName
           });
         }
       }
     }
-  } catch (error) {
-    console.error(`Error reading ${filePath}:`, error.message);
+  } catch (err) {
+    // Log but don't throw — a single bad file should not abort the whole scan
+    console.error(`Warning: failed to parse ${filePath}: ${err.message}`);
   }
-
   return jobs;
 }
 
-/**
- * Recursively scan all YAML files in pipeline_reorg directory
- */
-function scanAllPipelineFiles(pipelineReorgDir) {
-  const jobs = [];
-
-  function scanDir(dir) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-
-      if (entry.isDirectory()) {
-        scanDir(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith('.yaml')) {
-        const fileJobs = scanPipelineFile(fullPath);
-        for (const job of fileJobs) {
-          jobs.push({
-            ...job,
-            workflowPrefix: getWorkflowPrefix(fullPath)
-          });
-        }
-      }
-    }
-  }
-
-  if (fs.existsSync(pipelineReorgDir)) {
-    scanDir(pipelineReorgDir);
-  }
-
-  return jobs;
-}
-
-/**
- * Check if a job name already exists in owners.json
- * We check both the normalized name and the workflow-prefixed version
- * Also check the original name with underscores for backward compatibility
- */
-function jobExistsInOwners(jobName, normalizedJobName, workflowPrefix, ownersData) {
-  if (!ownersData || !ownersData.contains) {
-    return false;
-  }
-
-  const prefixedName = `${workflowPrefix} / ${normalizedJobName}`;
-  const prefixedNameWithUnderscores = `${workflowPrefix} / ${jobName}`;
-
-  for (const entry of ownersData.contains) {
-    const component = entry['job-name-component'];
-    if (!component) continue;
-
-    // Check various formats:
-    // 1. Exact match with normalized name (spaces)
-    // 2. Exact match with workflow prefix and normalized name
-    // 3. Exact match with original name (underscores)
-    // 4. Ends with normalized name (for workflow-prefixed entries)
-    // 5. Contains the job name (for fuzzy matching)
-    if (component === normalizedJobName ||
-        component === jobName ||
-        component === prefixedName ||
-        component === prefixedNameWithUnderscores ||
-        component.endsWith(` / ${normalizedJobName}`) ||
-        component.endsWith(` / ${jobName}`) ||
-        component.includes(normalizedJobName) ||
-        component.includes(jobName)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Update owners.json with new entries
- */
-function updateOwnersJson(ownersPath, pipelineReorgDir) {
-  // Load existing owners.json
-  let ownersData = { contains: [] };
-  if (fs.existsSync(ownersPath)) {
-    try {
-      const content = fs.readFileSync(ownersPath, 'utf8');
-      ownersData = JSON.parse(content);
-      if (!ownersData.contains) {
-        ownersData.contains = [];
-      }
-    } catch (error) {
-      console.error(`Error reading ${ownersPath}:`, error.message);
-      return;
-    }
-  }
-
-  // Scan pipeline files
-  const pipelineJobs = scanAllPipelineFiles(pipelineReorgDir);
-  console.log(`Found ${pipelineJobs.length} jobs in pipeline files`);
-
-  // Find jobs that don't exist in owners.json
-  const newEntries = [];
-  const seenJobs = new Set(); // Track jobs we've already processed
-
-  // Track which job-name-components we've added during this run
-  const addedWithPrefix = new Set();
-  const addedWithoutPrefix = new Set();
-
-  for (const job of pipelineJobs) {
-    const normalizedName = normalizeJobName(job.name);
-    const workflowPrefix = job.workflowPrefix;
-    const jobKey = `${workflowPrefix}:${normalizedName}`;
-
-    // Skip if we've already processed this job (for this prefix/name pair)
-    if (seenJobs.has(jobKey)) {
-      continue;
-    }
-
-    const prefixedComponent = `${workflowPrefix} / ${normalizedName}`;
-    const unprefixedComponent = normalizedName;
-
-    // Check if either version exists in owners.json
-    const existsWithPrefix = jobExistsInOwners(job.name, normalizedName, workflowPrefix, ownersData);
-    const existsWithoutPrefix = jobExistsInOwners(job.name, normalizedName, '', ownersData);
-
-    const alreadyAddedWithPrefix = addedWithPrefix.has(prefixedComponent);
-    const alreadyAddedWithoutPrefix = addedWithoutPrefix.has(unprefixedComponent);
-
-    const shouldAddWithPrefix = !existsWithPrefix && !alreadyAddedWithPrefix;
-    const shouldAddWithoutPrefix = !existsWithoutPrefix && !alreadyAddedWithoutPrefix;
-
-    if (!shouldAddWithPrefix && !shouldAddWithoutPrefix) {
-      continue;
-    }
-
-    seenJobs.add(jobKey);
-
-    if (shouldAddWithPrefix) {
-      // Add entry with workflow prefix
-      newEntries.push({
-        'job-name-component': prefixedComponent,
-        owner: {
-          id: job.ownerId,
-          name: job.ownerName
-        }
-      });
-      addedWithPrefix.add(prefixedComponent);
-    }
-
-    if (shouldAddWithoutPrefix) {
-      // Add entry without workflow prefix
-      newEntries.push({
-        'job-name-component': unprefixedComponent,
-        owner: {
-          id: job.ownerId,
-          name: job.ownerName
-        }
-      });
-      addedWithoutPrefix.add(unprefixedComponent);
-    }
-  }
-
-  if (newEntries.length === 0) {
-    console.log('No new entries to add');
-    return;
-  }
-
-  console.log(`Adding ${newEntries.length} new entries to owners.json`);
-
-  // Read the original file to preserve exact formatting
-  const originalContent = fs.readFileSync(ownersPath, 'utf8');
-
-  // Find the insertion point - we need to insert before the closing ] of the "contains" array
-  // The last entry is:    { "job-name-component": "...", "owner": {...} }
-  // Followed by:  ]
-
-  const lines = originalContent.split('\n');
-
-  // Find the line with the closing bracket of the contains array
-  let closingBracketLineIndex = -1;
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (lines[i].trim() === ']') {
-      closingBracketLineIndex = i;
-      break;
-    }
-  }
-
-  if (closingBracketLineIndex === -1) {
-    console.error('Could not find closing bracket in owners.json');
-    return;
-  }
-
-  // Find the last entry line (the one before the closing bracket)
-  // It should be the last line with a closing brace
-  let lastEntryEndLineIndex = closingBracketLineIndex - 1;
-  for (let i = closingBracketLineIndex - 1; i >= 0; i--) {
-    const trimmed = lines[i].trim();
-    if (trimmed === '}' || trimmed === '},') {
-      lastEntryEndLineIndex = i;
-      break;
-    }
-  }
-
-  // Build new entries with exact formatting matching the existing style
-  // Format:    { "job-name-component": "...", "owner": { "id": "...", "name": "..." } },
-  const newEntriesLines = [];
-  for (let i = 0; i < newEntries.length; i++) {
-    const entry = newEntries[i];
-    const entryLine = `    { "job-name-component": ${JSON.stringify(entry['job-name-component'])}, "owner": { "id": ${JSON.stringify(entry.owner.id)}, "name": ${JSON.stringify(entry.owner.name)} } }`;
-    // Add comma to all entries except the very last one (which will be before the closing bracket)
-    // But since we're adding multiple entries, only the last of our new entries shouldn't have a comma
-    if (i < newEntries.length - 1) {
-      newEntriesLines.push(entryLine + ',');
-    } else {
-      // Check if there are more entries after (in afterInsert) - if the closing bracket is next, no comma
-      newEntriesLines.push(entryLine);
-    }
-  }
-
-  // Insert new entries after the last entry
-  // The last entry is at lastEntryEndLineIndex, and it doesn't have a comma
-  // We need to add a comma to it, then add our new entries
-
-  const beforeInsertLines = lines.slice(0, lastEntryEndLineIndex);
-  const lastEntryLine = lines[lastEntryEndLineIndex];
-  const afterInsert = lines.slice(lastEntryEndLineIndex + 1).join('\n');
-
-  // Add comma to the last existing entry
-  const lastEntryWithComma = lastEntryLine + ',';
-
-  // Build the new content
-  const newContent = beforeInsertLines.join('\n') + '\n' +
-                     lastEntryWithComma + '\n' +
-                     newEntriesLines.join('\n') + '\n' +
-                     afterInsert;
-
-  fs.writeFileSync(ownersPath, newContent, 'utf8');
-
-  // Write back to file
-  console.log(`Successfully updated ${ownersPath} with ${newEntries.length} new entries`);
-}
-
-// Main execution
-if (require.main === module) {
-  const ownersPath = path.join(__dirname, 'owners.json');
-  const pipelineReorgDir = path.join(__dirname, '../../..', 'tests/pipeline_reorg');
-
-  updateOwnersJson(ownersPath, pipelineReorgDir);
-}
-
-module.exports = { updateOwnersJson, scanAllPipelineFiles };
+module.exports = {
+  getWorkflowPrefix,
+  normalizeJobName,
+  extractOwnerName,
+  extractOwnerId,
+  parseYamlFile,
+  scanPipelineFile,
+};
