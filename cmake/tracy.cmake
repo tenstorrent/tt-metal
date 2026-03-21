@@ -58,7 +58,7 @@ if(NOT PKG_CONFIG_EXECUTABLE)
 endif()
 
 include(ProcessorCount)
-ProcessorCount(numProcs)
+processorcount(numProcs)
 if(numProcs EQUAL 0)
     set(numProcs 1)
 endif()
