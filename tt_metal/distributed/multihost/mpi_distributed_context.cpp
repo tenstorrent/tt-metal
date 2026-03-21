@@ -756,17 +756,23 @@ void MPIContext::revoke_and_shrink() {
     MPI_Comm_rank(new_comm, &new_rank);
     MPI_Comm_size(new_comm, &new_size);
 
-    // Free the old communicator *after* shrink completes
-    MPI_Comm old_comm = this->comm_;
+    // Free the old communicator *after* shrink completes.
+    // Hold comm_mutex_ to prevent concurrent reads of comm_/group_/rank_/size_
+    // from racing with this update (e.g. a send/recv on another thread).
+    {
+        std::lock_guard<std::mutex> lock(comm_mutex_);
 
-    if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
-        MPI_Comm_free(&old_comm);
-        MPI_Group_free(&group_);
+        MPI_Comm old_comm = this->comm_;
+        if (old_comm != MPI_COMM_NULL && old_comm != new_comm) {
+            MPI_Comm_free(&old_comm);
+            MPI_Group_free(&group_);
+        }
+        this->comm_ = new_comm;
+        this->group_ = new_group;
+        this->rank_ = new_rank;
+        this->size_ = new_size;
     }
-    this->comm_ = new_comm;
-    this->group_ = new_group;
-    this->rank_ = new_rank;
-    this->size_ = new_size;
+
     revoked_.store(false, std::memory_order_release);  // cleared: new communicator is healthy
 #endif
 }
@@ -785,6 +791,62 @@ void MPIContext::set_failure_policy(FailurePolicy policy) {
     }
 #endif
     failure_policy_ = policy;
+}
+
+std::optional<bool> MPIContext::agree(bool local_value) const {
+#if OMPI_HAS_ULFM
+    int flag = local_value ? 1 : 0;
+    int rc = MPIX_Comm_agree(comm_, &flag);
+    if (rc != MPI_SUCCESS) {
+        mpi_check_ctx(rc, "MPIX_Comm_agree", comm_, rank_, failure_policy_);
+    }
+    return flag != 0;
+#else
+    // Without ULFM, all ranks must be alive to reach this point,
+    // so agreement is trivially the local value.
+    return local_value;
+#endif
+}
+
+std::vector<Rank> MPIContext::failed_ranks() const {
+#if OMPI_HAS_ULFM
+    // Query ULFM for currently-acked failed ranks on this communicator.
+    if (MPIX_Comm_failure_ack(comm_) != MPI_SUCCESS) {
+        return {};
+    }
+    MPI_Group failed_group = MPI_GROUP_NULL;
+    if (MPIX_Comm_failure_get_acked(comm_, &failed_group) != MPI_SUCCESS) {
+        return {};
+    }
+    int failed_size = 0;
+    MPI_Group_size(failed_group, &failed_size);
+    if (failed_size == 0) {
+        MPI_Group_free(&failed_group);
+        return {};
+    }
+    MPI_Group world_group = MPI_GROUP_NULL;
+    MPI_Comm_group(comm_, &world_group);
+    std::vector<int> local_indices(failed_size);
+    std::iota(local_indices.begin(), local_indices.end(), 0);
+    std::vector<int> world_ranks(failed_size, MPI_UNDEFINED);
+    if (world_group != MPI_GROUP_NULL) {
+        MPI_Group_translate_ranks(
+            failed_group, failed_size, local_indices.data(), world_group, world_ranks.data());
+        MPI_Group_free(&world_group);
+    }
+    MPI_Group_free(&failed_group);
+
+    std::vector<Rank> result;
+    result.reserve(failed_size);
+    for (int r : world_ranks) {
+        if (r != MPI_UNDEFINED) {
+            result.push_back(Rank{r});
+        }
+    }
+    return result;
+#else
+    return {};
+#endif
 }
 
 std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
