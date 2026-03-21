@@ -342,7 +342,7 @@ static void mpi_finalize_alarm_handler(int /*sig*/) {
     static const char msg[] =
         "[ULFM] MPI_Finalize watchdog: another rank appears dead or stuck. "
         "Exiting 70 to unblock the job.\n";
-    (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    [[maybe_unused]] auto w = write(STDERR_FILENO, msg, sizeof(msg) - 1);
     // Note: MPIX_Comm_revoke is NOT async-signal-safe; skip it here.
     // _exit skips all atexit handlers (including the MPI_Finalize atexit),
     // avoiding a second hang.
@@ -371,7 +371,7 @@ static void mpi_terminate_handler() {
         "  Cause  : uncaught exception or explicit std::terminate()\n"
         "  Action : revoked MPI_COMM_WORLD (if ULFM available), exiting 70\n"
         "================================================================\n";
-    (void)write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    [[maybe_unused]] auto w = write(STDERR_FILENO, msg, sizeof(msg) - 1);
     _exit(70);
 }
 
