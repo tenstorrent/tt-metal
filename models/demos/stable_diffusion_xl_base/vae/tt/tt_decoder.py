@@ -207,12 +207,28 @@ class TtDecoder(LightweightModule):
 
         # Move output to [1, 1, C, N*H*W]
         compute_grid_size = self.device.compute_with_storage_grid_size()
-        height_sharded_mem_config = ttnn.create_sharded_memory_config(
-            shape=hidden_states.padded_shape,
-            core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
+        if is_blackhole():
+            import math
+
+            total_num_cores = compute_grid_size.x * compute_grid_size.y
+            _, _, height, width = hidden_states.padded_shape
+            height_padded = math.ceil(height / (total_num_cores * 32)) * (total_num_cores * 32)
+            shard_height = height_padded // total_num_cores
+
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=[shard_height, width],
+                core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=hidden_states.padded_shape,
+                core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
 
         hidden_states = ttnn.to_memory_config(hidden_states, height_sharded_mem_config)
         hidden_states = ttnn.experimental.convert_to_chw(hidden_states, dtype=ttnn.bfloat16)

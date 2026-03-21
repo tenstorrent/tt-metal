@@ -117,15 +117,15 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
             return self.conv_configs["ABH_32_ADB_HS"]
         # DECODER CONV OUT
         elif "decoder.conv_out" == conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_HS"]
+            return self.conv_configs["ABH_32_ADB_HS"]
         # ENCODER DOWNSAMPLERS
         elif "downsamplers" in conv_path:
             if "down_blocks.0" in conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_HS"]
+                return self.conv_configs["ABH_128_NO_ADB_HS"]
             elif "down_blocks.1" in conv_path:
-                return self.conv_configs["ABH_1024_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
             elif "down_blocks.2" in conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
         # DOWN BLCOK 0
         elif "down_blocks.0" in conv_path:
             return self.conv_configs["ABH_32_ADB_HS"]
@@ -146,10 +146,10 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
             return self.conv_configs["ABH_512_NO_ADB_BS"]
         # ENCODER CONV IN
         elif "encoder.conv_in" == conv_path:
-            return self.conv_configs["ABH_1024_NO_ADB_HS"]
+            return self.conv_configs["ABH_64_NO_ADB_HS"]
         # ENCODER CONV OUT
         elif "encoder.conv_out" == conv_path:
-            return self.conv_configs["ABH_0_NO_ADB_HS"]
+            return self.conv_configs["ABH_64_NO_ADB_HS"]
         else:
             return self.conv_configs["DEFAULT_DRAM"]
 

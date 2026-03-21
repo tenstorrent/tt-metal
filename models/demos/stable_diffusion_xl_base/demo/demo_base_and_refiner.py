@@ -54,8 +54,8 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
 
     batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
@@ -327,8 +327,6 @@ def test_demo_base_and_refiner(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
