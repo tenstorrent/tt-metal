@@ -122,6 +122,10 @@ DataFormat get_single_unpack_dst_format(
                 (unpack_conditional_dst_format == DataFormat::Float32),
             "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
+    } else if (src_format == DataFormat::UInt8) {
+        // UInt8 is not supported in Src, Dest
+        // Int8 is the only conversion target for Uint8
+        dst_format = DataFormat::Int8;
     }
 
     return dst_format;
