@@ -54,8 +54,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     // Extract compute kernel config early (needed for CB format decisions)
     auto* device = input_tensor.device();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc_, dst_full_sync_en_] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    (void)packer_l1_acc_;
+    (void)dst_full_sync_en_;
 
     /* Shapes/sizes needed in the kernel
         Reader does volume2column to convert some `T_block x H_block x W_block` of activation
@@ -406,7 +408,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_subblock_h,
         out_subblock_w,
         semaphore_id,
-        C_in_num_blocks,
         (uint32_t)use_fp32_partials};
 
     auto compute_kernels_id = CreateKernel(
@@ -441,8 +442,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_row_size_bytes,
         C_out_block_bytes,
         (uint32_t)use_bias,
-        semaphore_id,
-        C_in_num_blocks};
+        semaphore_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
@@ -472,8 +472,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t W_out_blocks = tt::div_up(W_out, config.W_out_block);
 
     // Define parallelization factors for each dimension
-    // When using L1 accumulation, all C_in blocks are handled on a single core.
-    // Otherwise, C_in is the outermost parallelization dimension.
+    // C_in is the outermost parallelization dimension
     uint32_t c_in_parallel_factor = std::min(C_in_num_blocks, (uint32_t)num_cores);
 
     // Remaining cores per output block
@@ -513,8 +512,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // Calculate blocks per core using ceiling division
     const uint32_t c_in_per_core = tt::div_up(C_in_num_blocks, c_in_parallel_factor);
 
-    // When not using L1 accumulation, each core must handle exactly 1 C_in block
-    // Multi-core reduction requires each core to handle exactly 1 C_in block.
+    // When c_in_per_core > 1, a single core processes multiple C_in blocks sequentially.
+    // The writer overwrites (not accumulates) each block's output at the same DRAM address,
+    // and the bias is re-added on each iteration. Until the kernel supports accumulation
+    // across C_in blocks on a single core, restrict to 1 block per core.
     TT_FATAL(
         c_in_per_core == 1,
         "Each core must handle exactly 1 C_in block, but got c_in_per_core={}. "

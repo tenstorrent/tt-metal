@@ -29,7 +29,6 @@ void kernel_main() {
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);  // padded to tile width
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
-    constexpr uint32_t C_in_num_blocks_ct = get_compile_time_arg_val(22);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -66,7 +65,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<22>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
