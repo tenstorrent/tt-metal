@@ -237,9 +237,9 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteEntireL1) {
             GTEST_SKIP() << "No active ethernet cores found";
         }
 
-        std::unordered_set<CoreCoord> active_ethernet_cores = device->get_active_ethernet_cores(true);
+        std::unordered_set<CoreCoord> active_ethernet_cores = device->device_internal().get_active_ethernet_cores(true);
         const CoreCoord eth_core = *active_ethernet_cores.begin();
-        const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+        const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(eth_core);
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         const distributed::DeviceMemoryAddress device_memory_address = {
             device_coord, virtual_core, reinterpret_cast<DeviceAddr>(address)};
@@ -267,9 +267,9 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteMultipleCoresL1) {
             GTEST_SKIP() << "No active ethernet cores found";
         }
 
-        std::unordered_set<CoreCoord> active_ethernet_cores = device->get_active_ethernet_cores(true);
+        std::unordered_set<CoreCoord> active_ethernet_cores = device->device_internal().get_active_ethernet_cores(true);
         for (const CoreCoord& core : active_ethernet_cores) {
-            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
             const distributed::DeviceMemoryAddress device_memory_address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(address)};
@@ -281,7 +281,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteMultipleCoresL1) {
             active_ethernet_cores.size(), std::vector<uint32_t>(num_elements, 0));
         uint32_t i = 0;
         for (const CoreCoord& core : active_ethernet_cores) {
-            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
             const distributed::DeviceMemoryAddress device_memory_address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(address)};
@@ -313,9 +313,9 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteEntireL1) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }
 
-        std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        std::unordered_set<CoreCoord> idle_ethernet_cores = device->device_internal().get_inactive_ethernet_cores();
         const CoreCoord eth_core = *idle_ethernet_cores.begin();
-        const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+        const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(eth_core);
 
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         const distributed::DeviceMemoryAddress device_memory_address = {
@@ -348,9 +348,9 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }
 
-        std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        std::unordered_set<CoreCoord> idle_ethernet_cores = device->device_internal().get_inactive_ethernet_cores();
         const CoreCoord eth_core = *idle_ethernet_cores.begin();
-        const CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+        const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(eth_core);
 
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         const distributed::DeviceMemoryAddress device_memory_address = {
@@ -381,7 +381,7 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
             GTEST_SKIP() << "No idle ethernet cores found";
         }
 
-        std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
+        std::unordered_set<CoreCoord> idle_ethernet_cores = device->device_internal().get_inactive_ethernet_cores();
         dispatch_core_manager& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
         const tt::CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
         if (dispatch_core_type == tt::CoreType::ETH) {
@@ -393,7 +393,7 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
         }
 
         for (const CoreCoord& core : idle_ethernet_cores) {
-            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
             const distributed::DeviceMemoryAddress device_memory_address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(address)};
@@ -405,7 +405,7 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
             idle_ethernet_cores.size(), std::vector<uint32_t>(num_elements, 0));
         uint32_t i = 0;
         for (const CoreCoord& core : idle_ethernet_cores) {
-            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            const CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
             const distributed::DeviceMemoryAddress device_memory_address = {
                 device_coord, virtual_core, reinterpret_cast<DeviceAddr>(address)};

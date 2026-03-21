@@ -27,7 +27,7 @@ void RunFillUpAllBuffers(
     CoreCoord start_core = {0, 0};
     CoreCoord end_core = {compute_with_storage_size.x - 1, compute_with_storage_size.y - 1};
     CoreRange all_cores(start_core, end_core);
-    auto eth_cores = device->get_active_ethernet_cores(true);
+    auto eth_cores = device->device_internal().get_active_ethernet_cores(true);
 
     // Mesh workload + device range span the mesh; program encapsulates kernels
     distributed::MeshWorkload workload;

@@ -133,11 +133,14 @@ int main() {
 
     run_binary_ops();
 
-    TT_FATAL(device->num_program_cache_entries() == 3, "There are {} entries", device->num_program_cache_entries());
+    TT_FATAL(
+        device->device_internal().num_program_cache_entries() == 3,
+        "There are {} entries",
+        device->device_internal().num_program_cache_entries());
 
-    device->disable_and_clear_program_cache();
+    device->device_internal().disable_and_clear_program_cache();
 
-    TT_FATAL(device->num_program_cache_entries() == 0, "Error");
+    TT_FATAL(device->device_internal().num_program_cache_entries() == 0, "Error");
 
     return 0;
 }

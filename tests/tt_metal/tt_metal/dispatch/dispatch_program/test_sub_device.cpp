@@ -57,11 +57,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto mesh_device = devices_[0];
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
     SubDevice sub_device_1(std::array{sharded_cores_1});
-    auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
+    auto sub_device_manager_1 =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1}, k_local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
-    mesh_device->load_sub_device_manager(sub_device_manager_1);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager_1);
     uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 2);
     ShardSpecBuffer global_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
@@ -131,7 +132,8 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 
     std::array sub_device_ids_to_block = {SubDeviceId{0}};
 
-    auto sub_device_manager = device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    auto sub_device_manager =
+        device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
 
     std::vector<CoreCoord> physical_cores_1;
     physical_cores_1.reserve(sharded_cores_1_vec.size());
@@ -139,7 +141,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
         physical_cores_1.push_back(device->worker_core_from_logical_core(core));
     }
 
-    device->load_sub_device_manager(sub_device_manager);
+    device->device_internal().load_sub_device_manager(sub_device_manager);
 
     auto [program, syncer_core, global_semaphore] = create_single_sync_program(device, sub_device_2);
     distributed::MeshWorkload mesh_workload;
@@ -147,7 +149,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     mesh_workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-    device->set_sub_device_stall_group(sub_device_ids_to_block);
+    device->device_internal().set_sub_device_stall_group(sub_device_ids_to_block);
 
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, device);
 
@@ -179,7 +181,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
         device->get_devices()[0]->id(), physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
 
     // Full synchronization
-    device->reset_sub_device_stall_group();
+    device->device_internal().reset_sub_device_stall_group();
     distributed::Finish(device->mesh_command_queue());
 }
 
@@ -196,8 +198,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
     auto mesh_device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
-    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
-    mesh_device->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager);
 
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -211,7 +214,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
         waiter_mesh_workload.add_program(device_range, std::move(waiter_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_mesh_workload, false);
 
-        mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
+        mesh_device->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
 
         // Test blocking on one sub-device
         distributed::MeshWorkload syncer_mesh_workload;
@@ -222,7 +225,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
         incrementer_mesh_workload.add_program(device_range, std::move(incrementer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_mesh_workload, false);
 
-        mesh_device->reset_sub_device_stall_group();
+        mesh_device->device_internal().reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
     ReadMeshDeviceProfilerResults(*mesh_device);
@@ -237,9 +240,11 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     SubDevice sub_device_3(std::array{CoreRangeSet(std::vector{CoreRange({0, 0}, {2, 2}), CoreRange({5, 5}, {5, 5})})});
     SubDevice sub_device_4(std::array{
         CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4}), CoreRange({6, 6}, {6, 6})})});
-    auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
-    auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_4, sub_device_3}, k_local_l1_size);
-    mesh_device->load_sub_device_manager(sub_device_manager_1);
+    auto sub_device_manager_1 =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    auto sub_device_manager_2 =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_4, sub_device_3}, k_local_l1_size);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager_1);
 
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -254,7 +259,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         waiter_mesh_workload.add_program(device_range, std::move(waiter_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_mesh_workload, false);
 
-        mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
+        mesh_device->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
 
         // Test blocking on one sub-device
         distributed::MeshWorkload syncer_mesh_workload;
@@ -265,12 +270,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         incrementer_mesh_workload.add_program(device_range, std::move(incrementer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_mesh_workload, false);
 
-        mesh_device->reset_sub_device_stall_group();
+        mesh_device->device_internal().reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
 
     // Rerun programs on sub-device manager 2
-    mesh_device->load_sub_device_manager(sub_device_manager_2);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager_2);
     for (uint32_t i = 0; i < k_num_iters; i++) {
         // Create fresh programs for each iteration
         auto [waiter_program, syncer_program, incrementer_program, global_sem] =
@@ -280,7 +285,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         waiter_mesh_workload.add_program(device_range, std::move(waiter_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_mesh_workload, false);
 
-        mesh_device->set_sub_device_stall_group({{SubDeviceId{1}}});
+        mesh_device->device_internal().set_sub_device_stall_group({{SubDeviceId{1}}});
 
         // Test blocking on one sub-device
         distributed::MeshWorkload syncer_mesh_workload;
@@ -291,7 +296,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         incrementer_mesh_workload.add_program(device_range, std::move(incrementer_program));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_mesh_workload, false);
 
-        mesh_device->reset_sub_device_stall_group();
+        mesh_device->device_internal().reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
     ReadMeshDeviceProfilerResults(*mesh_device);
@@ -307,8 +312,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {6, 6})})});
 
-    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
-    mesh_device->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager);
 
     const auto sub_device_1_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     const auto sub_device_2_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{1});
@@ -345,7 +351,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_2, false);
 
     distributed::Finish(mesh_device->mesh_command_queue());
-    mesh_device->reset_sub_device_stall_group();
+    mesh_device->device_internal().reset_sub_device_stall_group();
     distributed::Synchronize(
         mesh_device.get(), std::nullopt);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
 
@@ -365,8 +371,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({4, 4}, {6, 6}))});
     SubDevice sub_device_4(std::array{CoreRangeSet(std::vector{CoreRange({2, 2}, {2, 2}), CoreRange({3, 3}, {3, 3})})});
     std::vector<SubDeviceManagerId> sub_device_managers{
-        mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size),
-        mesh_device->create_sub_device_manager({sub_device_3, sub_device_4}, k_local_l1_size),
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size),
+        mesh_device->device_internal().create_sub_device_manager({sub_device_3, sub_device_4}, k_local_l1_size),
     };
 
     uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
@@ -376,7 +382,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     for (int i = 0; i < sub_device_managers.size(); ++i) {
-        mesh_device->load_sub_device_manager(sub_device_managers[i]);
+        mesh_device->device_internal().load_sub_device_manager(sub_device_managers[i]);
         const auto sub_device_cores = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{i});
 
         Program program = tt::tt_metal::CreateProgram();
@@ -394,7 +400,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
         distributed::Finish(mesh_device->mesh_command_queue());
-        mesh_device->reset_sub_device_stall_group();
+        mesh_device->device_internal().reset_sub_device_stall_group();
         distributed::Synchronize(
             mesh_device.get(), 0);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
 
@@ -415,8 +421,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
     // Sub device IDs are swapped between the two sub device managers.
-    auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
-    auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_2, sub_device_1}, k_local_l1_size);
+    auto sub_device_manager_1 =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    auto sub_device_manager_2 =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_2, sub_device_1}, k_local_l1_size);
 
     uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
@@ -429,7 +437,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 
     for (size_t i = 0; i < k_num_iters; i++) {
         for (const auto& sub_device_manager : {sub_device_manager_1, sub_device_manager_2}) {
-            mesh_device->load_sub_device_manager(sub_device_manager);
+            mesh_device->device_internal().load_sub_device_manager(sub_device_manager);
             unique_runtime_args[0] += 1;
             common_runtime_args[0] += 2;
 
@@ -473,8 +481,9 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
     // Sub device IDs are swapped between the two sub device managers.
-    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
-    mesh_device->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager);
 
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);

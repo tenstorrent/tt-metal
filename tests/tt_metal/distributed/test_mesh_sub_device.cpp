@@ -48,8 +48,9 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
     uint32_t num_iters = 5;
-    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
-    mesh_device_->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager);
 
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
@@ -63,10 +64,10 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     incrementer_mesh_workload.add_program(devices, std::move(incrementer_program));
     for (uint32_t i = 0; i < num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
 }
@@ -89,8 +90,9 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto output_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
 
     // Create and Load SubDeviceConfig on the mesh
-    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2, sub_device_3}, 3200);
-    mesh_device_->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_1, sub_device_2, sub_device_3}, 3200);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager);
 
     auto syncer_coord = sub_device_1.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto syncer_core = CoreRangeSet(CoreRange(syncer_coord, syncer_coord));
@@ -134,7 +136,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     datacopy_mesh_workload.add_program(devices, std::move(datacopy_program));
 
     for (int i = 0; i < 50; i++) {
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
 
@@ -149,7 +151,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
             MetalContext::instance().get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 std::vector<uint32_t> dst_vec;
@@ -169,8 +171,10 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({3, 3}, {5, 5}))});
     SubDevice sub_device_4(std::array{CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0}), CoreRange({1, 1}, {1, 1})})});
     // Initialize different SubDeviceManagers
-    auto sub_device_manager_0 = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
-    auto sub_device_manager_1 = mesh_device_->create_sub_device_manager({sub_device_3, sub_device_4}, 3200);
+    auto sub_device_manager_0 =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    auto sub_device_manager_1 =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_3, sub_device_4}, 3200);
 
     // Initialize programs on different SubDevices
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
@@ -199,19 +203,19 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
 
     // Load SubDevice configs, run corresponding workloads, reset ... repeat
     for (uint32_t i = 0; i < num_iters; i++) {
-        mesh_device_->load_sub_device_manager(sub_device_manager_0);
+        mesh_device_->device_internal().load_sub_device_manager(sub_device_manager_0);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
 
-        mesh_device_->load_sub_device_manager(sub_device_manager_1);
+        mesh_device_->device_internal().load_sub_device_manager(sub_device_manager_1);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload_1, false);
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload_1, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload_1, false);
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
 }
@@ -226,9 +230,11 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
     SubDevice sub_device_3(std::array{CoreRangeSet(std::vector{CoreRange({0, 0}, {2, 2}), CoreRange({5, 5}, {5, 5})})});
     SubDevice sub_device_4(std::array{
         CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4}), CoreRange({6, 6}, {6, 6})})});
-    auto sub_device_manager_1 = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
-    auto sub_device_manager_2 = mesh_device_->create_sub_device_manager({sub_device_4, sub_device_3}, k_local_l1_size);
-    mesh_device_->load_sub_device_manager(sub_device_manager_1);
+    auto sub_device_manager_1 =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, k_local_l1_size);
+    auto sub_device_manager_2 =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_4, sub_device_3}, k_local_l1_size);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager_1);
 
     auto [waiter_program, syncer_program, incrementer_program, global_sem] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
@@ -243,21 +249,21 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
     // Run programs on sub-device manager 1
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
 
     // Rerun programs on sub-device manager 2
-    mesh_device_->load_sub_device_manager(sub_device_manager_2);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager_2);
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{1}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{1}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
 }

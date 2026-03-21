@@ -70,8 +70,8 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
         MetalEnvImpl& env_impl =
             MetalEnvAccessor(MetalContext::instance(mesh_device->impl().get_context_id()).get_env()).impl();
-        std::vector<CoreCoord> dispatch_cores =
-            tt::get_logical_dispatch_cores(env_impl, device->id(), device->num_hw_cqs(), dispatch_core_config);
+        std::vector<CoreCoord> dispatch_cores = tt::get_logical_dispatch_cores(
+            env_impl, device->id(), device->device_internal().num_hw_cqs(), dispatch_core_config);
         std::set<CoreRange> dispatch_core_ranges;
         for (CoreCoord core : dispatch_cores) {
             dispatch_core_ranges.emplace(core);

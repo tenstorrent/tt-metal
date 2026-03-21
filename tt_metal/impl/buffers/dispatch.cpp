@@ -422,7 +422,7 @@ int32_t calculate_num_pages_available_in_cq(
     const BufferWriteDispatchParams& dispatch_params,
     const BufferDispatchConstants& dispatch_constants,
     uint32_t byte_offset_in_cq) {
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
     uint32_t space_availableB = std::min(
         dispatch_constants.issue_queue_cmd_limit - sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
         dispatch_constants.max_prefetch_cmd_size);
@@ -616,7 +616,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
         buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
     command_sequence.add_dispatch_write_linear(
         0,
-        buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
+        buffer.device()->device_internal().get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
         dispatch_params.address,
         data_size_bytes);
 
@@ -687,7 +687,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
 
     const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
@@ -699,7 +699,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     std::vector<CQPrefetchRelayLinearPackedSubCmd> relay_sub_cmds;
 
     const CoreCoord virtual_core = buffer.device()->virtual_core_from_logical_core(core, buffer.core_type());
-    const uint32_t noc_xy_addr = buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
+    const uint32_t noc_xy_addr =
+        buffer.device()->device_internal().get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
 
     // Calculate base destination address for this core
     uint32_t dst_base_address = buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
@@ -951,7 +952,7 @@ void issue_buffer_dispatch_command_sequence(
     }
 
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -1053,7 +1054,7 @@ void write_interleaved_buffer_to_device(
             const int32_t num_pages_available_in_cq =
                 calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, byte_offset_in_cq);
             if (num_pages_available_in_cq <= 0) {
-                SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+                SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
                 sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
                 continue;
             }
@@ -1105,7 +1106,7 @@ void write_sharded_buffer_to_core(
             const int32_t num_pages_available_in_cq =
                 calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, data_offset_bytes);
             if (num_pages_available_in_cq <= 0) {
-                SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+                SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
                 sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
                 continue;
             }
@@ -1128,7 +1129,7 @@ bool write_to_device_buffer(
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const std::shared_ptr<experimental::PinnedMemory>& pinned_memory) {
-    SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = buffer.device()->device_internal().sysmem_manager();
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
 
@@ -1389,7 +1390,7 @@ void issue_read_buffer_dispatch_command_sequence(
     ContextId context_id = tt::tt_metal::extract_context_id(buffer.device());
     const auto& hal = tt::tt_metal::MetalContext::instance(context_id).hal();
 
-    SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
+    SystemMemoryManager& sysmem_manager = dispatch_params.device->device_internal().sysmem_manager();
 
     // Mock devices don't have real hardware to read from, skip actual dispatch
     if (tt::tt_metal::MetalContext::instance(sysmem_manager.get_context_id()).get_cluster().get_target_device_type() ==
@@ -1476,7 +1477,7 @@ void issue_read_buffer_dispatch_command_sequence(
         const CoreCoord virtual_core =
             buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
         command_sequence.add_prefetch_relay_linear(
-            dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
+            dispatch_params.device->device_internal().get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
             xfer_bytes,
             dispatch_params.address);
     } else {
@@ -1782,10 +1783,13 @@ void copy_completion_queue_data_into_user_space(
 tt::stl::Span<const SubDeviceId> select_sub_device_ids(
     IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (sub_device_ids.empty()) {
-        return device->get_sub_device_stall_group();
+        return device->device_internal().get_sub_device_stall_group();
     }
     for (const auto& sub_device_id : sub_device_ids) {
-        TT_FATAL(*sub_device_id < device->num_sub_devices(), "Invalid sub-device id specified {}", *sub_device_id);
+        TT_FATAL(
+            *sub_device_id < device->device_internal().num_sub_devices(),
+            "Invalid sub-device id specified {}",
+            *sub_device_id);
     }
     return sub_device_ids;
 }

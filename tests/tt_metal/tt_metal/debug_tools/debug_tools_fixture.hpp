@@ -388,7 +388,7 @@ public:
         int riscv_id = static_cast<std::underlying_type_t<tt::tt_metal::DataMovementProcessor>>(config.processor);
 
         const auto& build_state = tt::tt_metal::BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
+            device->device_internal().build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernel = program_.impl().get_kernel(kernel_handle);
         const std::string full_kernel_name = kernel->get_full_kernel_name();

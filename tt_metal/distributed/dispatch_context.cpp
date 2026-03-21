@@ -52,13 +52,15 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
     const auto& active_devices = device_manager->get_all_active_devices_impl();
 
-    uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
+    uint8_t num_hw_cqs = active_devices[0]->device_internal().num_hw_cqs();
 
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
     MetalContext::instance(context_id).set_fast_dispatch_mode(true);
 
     for (const auto& dev : active_devices) {
-        TT_FATAL(dev->num_hw_cqs() == num_hw_cqs, "All devices must have the same number of command queues.");
+        TT_FATAL(
+            dev->device_internal().num_hw_cqs() == num_hw_cqs,
+            "All devices must have the same number of command queues.");
         dev->init_command_queue_host();
     }
     // Query the number of command queues requested
@@ -98,7 +100,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     const auto& device_manager = MetalContext::instance(context_id).device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
 
-    uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
+    uint8_t num_hw_cqs = active_devices[0]->device_internal().num_hw_cqs();
     auto& mesh_device_impl = mesh_device->impl();
     mesh_device_impl.mesh_command_queues_.clear();
     mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
@@ -111,7 +113,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
             mesh_device_impl.active_distributed_context_));
     }
     for (const auto& dev : active_devices) {
-        for (int cq_id = 0; cq_id < dev->num_hw_cqs(); cq_id++) {
+        for (int cq_id = 0; cq_id < dev->device_internal().num_hw_cqs(); cq_id++) {
             dynamic_cast<tt::tt_metal::Device*>(dev)->command_queues_[cq_id].get()->terminate();
         }
     }

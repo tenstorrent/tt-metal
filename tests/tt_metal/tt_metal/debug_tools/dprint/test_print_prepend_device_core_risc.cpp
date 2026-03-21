@@ -88,7 +88,8 @@ void RunTest(
     }
 
     if (add_active_eth_kernel) {
-        const std::unordered_set<CoreCoord>& active_eth_cores = device->get_active_ethernet_cores(true);
+        const std::unordered_set<CoreCoord>& active_eth_cores =
+            device->device_internal().get_active_ethernet_cores(true);
         CoreRangeSet crs(std::set<CoreRange>(active_eth_cores.begin(), active_eth_cores.end()));
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0};
         eth_test_common::set_arch_specific_eth_config(config);
@@ -130,7 +131,7 @@ TEST_F(DPrintMeshFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->get_devices()[0]->get_active_ethernet_cores(true).empty()) {
+        if (mesh_device->get_devices()[0]->device_internal().get_active_ethernet_cores(true).empty()) {
             log_info(
                 tt::LogTest,
                 "Skipping device {} due to no active ethernet cores...",

@@ -62,10 +62,10 @@ void RunTest(
     std::unordered_set<CoreCoord> test_cores;
     tt_metal::EthernetConfig config = {.noc = static_cast<tt_metal::NOC>(processor), .processor = processor};
     if (active) {
-        test_cores = device->get_active_ethernet_cores(true);
+        test_cores = device->device_internal().get_active_ethernet_cores(true);
         config.eth_mode = Eth::SENDER;
     } else {
-        test_cores = device->get_inactive_ethernet_cores();
+        test_cores = device->device_internal().get_inactive_ethernet_cores();
         config.eth_mode = Eth::IDLE;
     }
     eth_test_common::set_arch_specific_eth_config(config);
@@ -106,7 +106,7 @@ TEST_F(DPrintMeshFixture, ActiveEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
-        if (device->get_active_ethernet_cores(true).empty()) {
+        if (device->device_internal().get_active_ethernet_cores(true).empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }
@@ -132,7 +132,7 @@ TEST_F(DPrintMeshFixture, IdleEthTestPrint) {
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device
-        if (device->get_inactive_ethernet_cores().empty()) {
+        if (device->device_internal().get_inactive_ethernet_cores().empty()) {
             log_info(tt::LogTest, "Skipping device {} due to no ethernet cores...", device->id());
             continue;
         }

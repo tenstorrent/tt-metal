@@ -62,7 +62,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
     // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (match test_assert, test_sanitize)
-    if (fixture->IsSlowDispatch() && !is_quasar && device->get_inactive_ethernet_cores().empty()) {
+    if (fixture->IsSlowDispatch() && !is_quasar && device->device_internal().get_inactive_ethernet_cores().empty()) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
     }
     const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp";
@@ -122,12 +122,13 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
 
     // Create kernels for ethernet cores
-    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    bool has_idle_eth_cores = fixture->IsSlowDispatch() && !device->get_inactive_ethernet_cores().empty();
+    bool has_eth_cores = !device->device_internal().get_active_ethernet_cores(true).empty();
+    bool has_idle_eth_cores =
+        fixture->IsSlowDispatch() && !device->device_internal().get_inactive_ethernet_cores().empty();
 
     if (has_eth_cores) {
         std::set<CoreRange> ranges;
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
+        for (const auto& core : device->device_internal().get_active_ethernet_cores(true)) {
             ranges.insert(CoreRange(core, core));
         }
         // Active ERISC: pass delay_cycles for timed wait (can't block forever due to tunneling)
@@ -138,7 +139,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     if (has_idle_eth_cores) {
         std::set<CoreRange> ranges;
         const std::vector<uint32_t> idle_eth_args = {idle_eth_sync_addr};
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->device_internal().get_inactive_ethernet_cores()) {
             ranges.insert(CoreRange(core, core));
             tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, zero_data, CoreType::ETH);
         }
@@ -166,12 +167,12 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
     if (has_eth_cores) {
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
+        for (const auto& core : device->device_internal().get_active_ethernet_cores(true)) {
             poll_strings.push_back(fmt::format("acteth core(x={:2},y={:2})*: {}", core.x, core.y, waypoint));
         }
     }
     if (has_idle_eth_cores) {
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->device_internal().get_inactive_ethernet_cores()) {
             poll_strings.push_back(fmt::format("idleth core(x={:2},y={:2})*: {}", core.x, core.y, waypoint));
         }
     }
@@ -196,7 +197,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
     if (has_idle_eth_cores) {
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
+        for (const auto& core : device->device_internal().get_inactive_ethernet_cores()) {
             tt::tt_metal::detail::WriteToDeviceL1(device, core, idle_eth_sync_addr, release_data, CoreType::ETH);
         }
     }
@@ -237,14 +238,14 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
     if (has_eth_cores) {
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+        for (const auto& core : device->device_internal().get_active_ethernet_cores(true)) {
+            CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             check_core(core, virtual_core, "acteth", waypoint);
         }
     }
     if (has_idle_eth_cores) {
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+        for (const auto& core : device->device_internal().get_inactive_ethernet_cores()) {
+            CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             check_core(core, virtual_core, "idleth", idle_eth_waypoints);
         }
     }

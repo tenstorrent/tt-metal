@@ -89,7 +89,7 @@ CoreCoord get_core_coord_for_test(const std::shared_ptr<distributed::MeshBuffer>
         return buffer->device()->worker_core_from_logical_core(
             buffer->get_backing_buffer()->allocator()->get_logical_core_from_bank_id(0));
     }
-    auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
+    auto logical_dram_core = buffer->device()->device_internal().logical_core_from_dram_channel(0);
     return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
 }
 
@@ -129,7 +129,7 @@ void RunTestOnCore(
 
     CoreCoord virtual_core;
     if (is_eth_core) {
-        virtual_core = device->ethernet_core_from_logical_core(core);
+        virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
     } else {
         virtual_core = device->worker_core_from_logical_core(core);
     }
@@ -273,8 +273,8 @@ void RunTestOnCore(
             use_multicast_semaphore_inc = true;
 
             // Get actual DRAM NOC coordinates
-            auto dram_logical_0 = device->logical_core_from_dram_channel(0);
-            auto dram_logical_1 = device->logical_core_from_dram_channel(1);
+            auto dram_logical_0 = device->device_internal().logical_core_from_dram_channel(0);
+            auto dram_logical_1 = device->device_internal().logical_core_from_dram_channel(1);
             auto dram_noc_0 = device->virtual_core_from_logical_core(dram_logical_0, CoreType::DRAM);
             auto dram_noc_1 = device->virtual_core_from_logical_core(dram_logical_1, CoreType::DRAM);
 
@@ -331,8 +331,8 @@ void RunTestOnCore(
 
     // We should be able to find the expected watcher error in the log as well.
     std::string expected;
-    CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
-    CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
+    CoreCoord input_core_virtual_coords = device->device_internal().virtual_noc0_coordinate(noc, input_buf_noc_xy);
+    CoreCoord output_core_virtual_coords = device->device_internal().virtual_noc0_coordinate(noc, output_buf_noc_xy);
     // TODO: replace ierisc and erisc with hal.get_processor_class_name() after
     // unifying all tests + watcher_device_reader::get_riscv_name() with same method
     std::string risc_name;
@@ -577,11 +577,11 @@ void RunTestEth(
         GTEST_SKIP();
     }
     // Run on the first ethernet core (if there are any).
-    if (device->get_active_ethernet_cores(true).empty()) {
+    if (device->device_internal().get_active_ethernet_cores(true).empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
-    CoreCoord core = *(device->get_active_ethernet_cores(true).begin());
+    CoreCoord core = *(device->device_internal().get_active_ethernet_cores(true).begin());
     RunTestOnCore(fixture, mesh_device, core, true, feature);
 }
 
@@ -591,11 +591,11 @@ void RunTestIEth(
     watcher_features_t feature) {
     auto* device = mesh_device->get_devices()[0];
     // Run on the first ethernet core (if there are any).
-    if (device->get_inactive_ethernet_cores().empty()) {
+    if (device->device_internal().get_inactive_ethernet_cores().empty()) {
         log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
         GTEST_SKIP();
     }
-    CoreCoord core = *(device->get_inactive_ethernet_cores().begin());
+    CoreCoord core = *(device->device_internal().get_inactive_ethernet_cores().begin());
     RunTestOnCore(fixture, mesh_device, core, true, feature, false /*use_ncrisc*/, true /*is_idle_eth_core*/);
 }
 

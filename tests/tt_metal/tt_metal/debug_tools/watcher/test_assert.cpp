@@ -115,14 +115,14 @@ static void RunTest(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_active = (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
-            auto eth_cores =
-                is_active ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+            auto eth_cores = is_active ? device->device_internal().get_active_ethernet_cores(true)
+                                       : device->device_internal().get_inactive_ethernet_cores();
             if (eth_cores.empty()) {
                 log_info(LogTest, "Skipping: device has no {} ethernet cores.", is_active ? "active" : "inactive");
                 GTEST_SKIP();
             }
             logical_core = *eth_cores.begin();
-            virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            virtual_core = device->device_internal().ethernet_core_from_logical_core(logical_core);
             EthernetConfig eth_config{.noc = tt_metal::NOC::NOC_0};
             if (!is_active) {
                 eth_config.eth_mode = Eth::IDLE;

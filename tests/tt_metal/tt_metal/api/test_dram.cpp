@@ -303,7 +303,7 @@ TEST_F(MeshDispatchFixture, ActiveEthDRAMLoopbackSingleCore) {
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
-        for (auto active_eth_core : device->get_active_ethernet_cores(true)) {
+        for (auto active_eth_core : device->device_internal().get_active_ethernet_cores(true)) {
             log_info(tt::LogTest, "Active Eth Loopback. Logical core {}", active_eth_core.str());
             dram_test_config.core_range = {active_eth_core, active_eth_core};
             const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
@@ -340,7 +340,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
 
     for (const auto& mesh_device : devices_) {
         auto* device = mesh_device->get_devices()[0];
-        for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
+        for (auto idle_eth_core : device->device_internal().get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
             const auto erisc_count =

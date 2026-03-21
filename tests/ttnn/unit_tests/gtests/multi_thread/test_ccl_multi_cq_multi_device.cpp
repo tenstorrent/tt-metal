@@ -248,7 +248,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
     // https://github.com/tenstorrent/tt-metal/issues/24235
     for (auto& device : single_meshes) {
-        device->disable_and_clear_program_cache();
+        device->device_internal().disable_and_clear_program_cache();
     }
 
     const size_t num_devices = devices.size();
@@ -454,7 +454,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
     // https://github.com/tenstorrent/tt-metal/issues/24235
     // Remove when https://github.com/tenstorrent/tt-metal/issues/25418 is fixed.
     for (auto& device : single_meshes) {
-        device->disable_and_clear_program_cache();
+        device->device_internal().disable_and_clear_program_cache();
     }
 
     const size_t num_devices = devices.size();

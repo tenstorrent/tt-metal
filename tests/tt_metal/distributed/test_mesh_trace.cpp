@@ -244,8 +244,9 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
     uint32_t num_iters = 5;
-    auto sub_device_manager = mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
-    mesh_device_->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager =
+        mesh_device_->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, 3200);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager);
 
     // Create three variants of the same program set - will be traced on the Mesh differently
     auto [waiter_program_0, syncer_program_0, incrementer_program_0, global_sem_0] =
@@ -293,24 +294,24 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
 
     // Compile all MeshWorkloads
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
-    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+    mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
-    mesh_device_->reset_sub_device_stall_group();
+    mesh_device_->device_internal().reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_1, false);
-    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+    mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_1, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_1, false);
-    mesh_device_->reset_sub_device_stall_group();
+    mesh_device_->device_internal().reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
-    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
+    mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
-    mesh_device_->reset_sub_device_stall_group();
+    mesh_device_->device_internal().reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     // Capture trace
@@ -346,9 +347,9 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     SubDevice sub_device_4(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});  // Run addition
 
     // Create and Load SubDeviceConfig on the mesh
-    auto sub_device_manager =
-        mesh_device_->create_sub_device_manager({sub_device_1, sub_device_2, sub_device_3, sub_device_4}, 3200);
-    mesh_device_->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager = mesh_device_->device_internal().create_sub_device_manager(
+        {sub_device_1, sub_device_2, sub_device_3, sub_device_4}, 3200);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager);
 
     // Create IO Buffers
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
@@ -453,7 +454,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     add_mesh_workload.add_program(right_col, std::move(add_program_2));
 
     // Compile and load workloads
-    mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
+    mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{2}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
@@ -478,14 +479,14 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
+        mesh_device_->device_internal().set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto* device : mesh_device_->get_devices()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
-        mesh_device_->reset_sub_device_stall_group();
+        mesh_device_->device_internal().reset_sub_device_stall_group();
         for (const auto& device_coord : left_col) {
             std::vector<uint32_t> dst_vec;
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);

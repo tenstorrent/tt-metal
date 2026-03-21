@@ -39,9 +39,9 @@ TEST(DevicePool, DevicePoolOpenClose) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_EQ((int)(dev->allocator_impl()->get_config().l1_small_size), l1_small_size);
-        ASSERT_EQ((int)(dev->num_hw_cqs()), num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_EQ((int)(dev->device_internal().allocator_impl()->get_config().l1_small_size), l1_small_size);
+        ASSERT_EQ((int)(dev->device_internal().num_hw_cqs()), num_hw_cqs);
+        ASSERT_TRUE(dev->device_internal().is_initialized());
     }
 
     CloseDevicesInPool();
@@ -57,11 +57,11 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
     for (const auto& dev : devices) {
-        const auto& config = dev->allocator_impl()->get_config();
-        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
+        const auto& config = dev->device_internal().allocator_impl()->get_config();
+        ASSERT_TRUE((int)(dev->device_internal().allocator_impl()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->device_internal().num_hw_cqs()) == num_hw_cqs);
         EXPECT_NE(config.l1_unreserved_base, config.worker_l1_size);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE(dev->device_internal().is_initialized());
     }
 
     // Close then get devices with different configs
@@ -72,10 +72,10 @@ TEST(DevicePool, DevicePoolReconfigDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config, {}, worker_l1_size);
     devices = MetalContext::instance().device_manager()->get_all_active_devices();
     for (const auto& dev : devices) {
-        const auto& config = dev->allocator_impl()->get_config();
+        const auto& config = dev->device_internal().allocator_impl()->get_config();
         ASSERT_TRUE((int)(config.l1_small_size) == l1_small_size);
         EXPECT_EQ(config.worker_l1_size - config.l1_unreserved_base, worker_l1_size);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE(dev->device_internal().is_initialized());
     }
     CloseDevicesInPool();
 }
@@ -92,9 +92,9 @@ TEST(DevicePool, DevicePoolAddDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE((int)(dev->device_internal().allocator_impl()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->device_internal().num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE(dev->device_internal().is_initialized());
     }
 
     // Close then get more devices
@@ -105,9 +105,9 @@ TEST(DevicePool, DevicePoolAddDevices) {
     devices = MetalContext::instance().device_manager()->get_all_active_devices();
     ASSERT_TRUE(devices.size() >= 4);
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE((int)(dev->device_internal().allocator_impl()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->device_internal().num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE(dev->device_internal().is_initialized());
     }
     CloseDevicesInPool();
 }
@@ -124,9 +124,9 @@ TEST(DevicePool, DevicePoolReduceDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
     for (const auto& dev : devices) {
-        ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
-        ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-        ASSERT_TRUE(dev->is_initialized());
+        ASSERT_TRUE((int)(dev->device_internal().allocator_impl()->get_config().l1_small_size) == l1_small_size);
+        ASSERT_TRUE((int)(dev->device_internal().num_hw_cqs()) == num_hw_cqs);
+        ASSERT_TRUE(dev->device_internal().is_initialized());
     }
 
     // Close then get less devices
@@ -136,9 +136,9 @@ TEST(DevicePool, DevicePoolReduceDevices) {
         device_ids, num_hw_cqs, l1_small_size, DEFAULT_TRACE_REGION_SIZE, dispatch_core_config);
     auto* dev = MetalContext::instance().device_manager()->get_active_device(0);
     ASSERT_TRUE(dev->id() == 0);
-    ASSERT_TRUE((int)(dev->allocator_impl()->get_config().l1_small_size) == l1_small_size);
-    ASSERT_TRUE((int)(dev->num_hw_cqs()) == num_hw_cqs);
-    ASSERT_TRUE(dev->is_initialized());
+    ASSERT_TRUE((int)(dev->device_internal().allocator_impl()->get_config().l1_small_size) == l1_small_size);
+    ASSERT_TRUE((int)(dev->device_internal().num_hw_cqs()) == num_hw_cqs);
+    ASSERT_TRUE(dev->device_internal().is_initialized());
     CloseDevicesInPool();
 }
 

@@ -876,18 +876,18 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
     Tensor golden_1 = ttnn::exp(device_input_tensor_1);
     TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "First run correctness failed");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
+        this->device_->device_internal().num_program_cache_entries() == 2,
         "Expected 2 cache entries, got {}",
-        this->device_->num_program_cache_entries());
+        this->device_->device_internal().num_program_cache_entries());
 
     // Test 2: Program Cache Hit - same tensors
     log_info(tt::LogTest, "Test 2: Program Cache Hit - same tensors");
     ttnn::generic_op(std::vector{device_input_tensor_1, device_output_tensor_1}, program_descriptor);
     TT_FATAL(ttnn::allclose<bfloat16>(golden_1.cpu(), device_output_tensor_1.cpu()), "Second run correctness failed");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
+        this->device_->device_internal().num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit, got {}",
-        this->device_->num_program_cache_entries());
+        this->device_->device_internal().num_program_cache_entries());
 
     // Test 3: Program Cache Hit with different tensors (different addresses)
     log_info(tt::LogTest, "Test 3: Program Cache Hit - different tensor addresses");
@@ -911,9 +911,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpProgramCache) {
         ttnn::allclose<bfloat16>(golden_2.cpu(), device_output_tensor_2.cpu()),
         "Third run with different addresses failed - override_runtime_arguments not working correctly!");
     TT_FATAL(
-        this->device_->num_program_cache_entries() == 2,
+        this->device_->device_internal().num_program_cache_entries() == 2,
         "Expected 2 cache entries after cache hit with new addresses, got {}",
-        this->device_->num_program_cache_entries());
+        this->device_->device_internal().num_program_cache_entries());
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpSemaphoreDescriptorValidId) {

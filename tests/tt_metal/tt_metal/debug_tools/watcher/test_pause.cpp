@@ -95,8 +95,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
 
     // Also run on ethernet cores if they're present
-    bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
-    bool has_ieth_cores = !device->get_inactive_ethernet_cores().empty();
+    bool has_eth_cores = !device->device_internal().get_active_ethernet_cores(true).empty();
+    bool has_ieth_cores = !device->device_internal().get_inactive_ethernet_cores().empty();
 
     // TODO: Enable this when FD-on-idle-eth is supported.
     if (!fixture->IsSlowDispatch()) {
@@ -105,14 +105,15 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     auto create_eth_kernels = [&](bool is_active) {
         std::set<CoreRange> eth_core_ranges;
-        auto eth_cores = is_active ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+        auto eth_cores = is_active ? device->device_internal().get_active_ethernet_cores(true)
+                                   : device->device_internal().get_inactive_ethernet_cores();
         for (const auto& core : eth_cores) {
             log_info(
                 LogTest,
                 "Running on {} eth core {}({})",
                 is_active ? "active" : "inactive",
                 core.str(),
-                device->ethernet_core_from_logical_core(core).str());
+                device->device_internal().ethernet_core_from_logical_core(core).str());
             eth_core_ranges.insert(CoreRange(core, core));
         }
         tt_metal::EthernetConfig eth_config{.noc = tt_metal::NOC::NOC_0};
@@ -154,9 +155,10 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
 
     // Add expected messages for all ETH
     auto create_eth_expected_messages = [&](bool is_active) {
-        auto eth_cores = is_active ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+        auto eth_cores = is_active ? device->device_internal().get_active_ethernet_cores(true)
+                                   : device->device_internal().get_inactive_ethernet_cores();
         for (const auto& core : eth_cores) {
-            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            CoreCoord virtual_core = device->device_internal().ethernet_core_from_logical_core(core);
             // TODO: replace string literals with hal.get_processor_class_name() after
             // unifying all tests + watcher_device_reader::get_riscv_name() with same method
             std::string expected = fmt::format("{}:{}", virtual_core.str(), is_active ? "erisc" : "ierisc");

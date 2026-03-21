@@ -231,7 +231,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
     auto* device = mesh_device->get_devices()[0];
-    auto eth_noc_xy = mesh_device->ethernet_core_from_logical_core(eth_core_coord);
+    auto eth_noc_xy = mesh_device->device_internal().ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
     uint32_t rta_base0 = MetalContext::instance().hal().get_dev_addr(
@@ -810,7 +810,7 @@ bool verify_rt_args(
     // Same idea as ReadFromDeviceL1() but with ETH support.
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto noc_xy = (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH)
-                      ? device->ethernet_core_from_logical_core(logical_core)
+                      ? device->device_internal().ethernet_core_from_logical_core(logical_core)
                       : device->worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
@@ -1318,7 +1318,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
         GTEST_SKIP() << "Skipping test as this test requires 2 active ethernet cores";
     }
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
                     tt::LogTest,
@@ -1345,7 +1345,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        for (const auto& eth_core : mesh_device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : mesh_device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             auto program = tt::tt_metal::CreateProgram();
             auto primary = CreateKernel(
                 program,
@@ -1386,7 +1386,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
 // 0 active eth cores, that's okay.
 TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1416,7 +1416,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1436,7 +1436,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCore
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+        for (const auto& eth_core : device->get_devices()[0]->device_internal().get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -2082,7 +2082,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         }
     }
 
-    for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
+    for (uint8_t cq_id = 0; cq_id < device_->device_internal().num_hw_cqs(); ++cq_id) {
         log_info(tt::LogTest, "Running {} MeshWorkloads on cq {} for cache warmup.", workloads.size(), (uint32_t)cq_id);
         // This loop caches program and runs
         for (distributed::MeshWorkload& wl : workloads) {

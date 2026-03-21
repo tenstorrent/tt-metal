@@ -33,21 +33,21 @@ TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
     auto* device_1 = mesh_device_1->get_devices()[0];
 
     // Check active and inactive core counts
-    const auto& device_0_active_eth_cores = device_0->get_active_ethernet_cores();
-    const auto& device_1_active_eth_cores = device_1->get_active_ethernet_cores();
+    const auto& device_0_active_eth_cores = device_0->device_internal().get_active_ethernet_cores();
+    const auto& device_1_active_eth_cores = device_1->device_internal().get_active_ethernet_cores();
 
     // mmio device (0) has 2 ports (8, 9) reserved for umd non-mmio access which are also active links.
     // mmio device (0) port 15 is reserved for syseng tools and is active without any remote connections.
     ASSERT_TRUE(device_0_active_eth_cores.size() == 3);
     ASSERT_TRUE(device_1_active_eth_cores.size() == 2);
-    ASSERT_TRUE(device_0->get_inactive_ethernet_cores().size() == 13);
-    ASSERT_TRUE(device_1->get_inactive_ethernet_cores().size() == 14);
+    ASSERT_TRUE(device_0->device_internal().get_inactive_ethernet_cores().size() == 13);
+    ASSERT_TRUE(device_1->device_internal().get_inactive_ethernet_cores().size() == 14);
 
     for (const auto& core : device_0_active_eth_cores) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), core)) {
             continue;
         }
-        std::tuple<ChipId, CoreCoord> core_on_chip_1 = device_0->get_connected_ethernet_core(core);
+        std::tuple<ChipId, CoreCoord> core_on_chip_1 = device_0->device_internal().get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_1) == 1);
         ASSERT_TRUE(device_1_active_eth_cores.contains(std::get<1>(core_on_chip_1)));
     }
@@ -55,7 +55,7 @@ TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device_0->id(), core)) {
             continue;
         }
-        std::tuple<ChipId, CoreCoord> core_on_chip_0 = device_1->get_connected_ethernet_core(core);
+        std::tuple<ChipId, CoreCoord> core_on_chip_0 = device_1->device_internal().get_connected_ethernet_core(core);
         ASSERT_TRUE(std::get<0>(core_on_chip_0) == 0);
         ASSERT_TRUE(device_0_active_eth_cores.contains(std::get<1>(core_on_chip_0)));
     }
@@ -69,7 +69,7 @@ TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
         device_0_active_eth_cores.end(),
         std::back_inserter(chip_0_eth_logical_coords));
     std::vector<CoreCoord> chip_0_eth_noc_coords_returned =
-        device_0->ethernet_cores_from_logical_cores(chip_0_eth_logical_coords);
+        device_0->device_internal().ethernet_cores_from_logical_cores(chip_0_eth_logical_coords);
 
     std::sort(chip_0_eth_noc_coords_expected.begin(), chip_0_eth_noc_coords_expected.end());
     std::sort(chip_0_eth_noc_coords_returned.begin(), chip_0_eth_noc_coords_returned.end());
@@ -83,7 +83,7 @@ TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
         device_1_active_eth_cores.end(),
         std::back_inserter(chip_1_eth_logical_coords));
     std::vector<CoreCoord> chip_1_eth_noc_coords_returned =
-        device_1->ethernet_cores_from_logical_cores(chip_1_eth_logical_coords);
+        device_1->device_internal().ethernet_cores_from_logical_cores(chip_1_eth_logical_coords);
 
     std::sort(chip_1_eth_noc_coords_expected.begin(), chip_1_eth_noc_coords_expected.end());
     std::sort(chip_1_eth_noc_coords_returned.begin(), chip_1_eth_noc_coords_returned.end());
@@ -93,8 +93,8 @@ TEST_F(N300MeshDeviceFixture, EthValidateEthernetConnectivity) {
 TEST_F(N300MeshDeviceFixture, EthInvalidLogicalEthernetCore) {
     const auto& mesh_device_0 = this->devices_.at(0);
     auto* device_0 = mesh_device_0->get_devices()[0];
-    EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(1, 0)));
-    EXPECT_ANY_THROW(device_0->ethernet_core_from_logical_core(CoreCoord(0, 16)));
+    EXPECT_ANY_THROW(device_0->device_internal().ethernet_core_from_logical_core(CoreCoord(1, 0)));
+    EXPECT_ANY_THROW(device_0->device_internal().ethernet_core_from_logical_core(CoreCoord(0, 16)));
 }
 
 TEST_F(N300MeshDeviceFixture, EthValidateAllEthernetCoreMapping) {
@@ -118,9 +118,9 @@ TEST_F(N300MeshDeviceFixture, EthValidateAllEthernetCoreMapping) {
     };
     const auto& mesh_device_0 = this->devices_.at(0);
     auto* device_0 = mesh_device_0->get_devices()[0];
-    for (const auto& logical_core : device_0->ethernet_cores()) {
+    for (const auto& logical_core : device_0->device_internal().ethernet_cores()) {
         ASSERT_TRUE(
-            device_0->ethernet_core_from_logical_core(logical_core) ==
+            device_0->device_internal().ethernet_core_from_logical_core(logical_core) ==
             expected_mapping_logical_to_physical.at(logical_core));
     }
 }
@@ -146,7 +146,7 @@ TEST_F(N300MeshDeviceFixture, EthValidatePhysicalCoreConversion) {
     };
     const auto& mesh_device_0 = this->devices_.at(0);
     auto* device_0 = mesh_device_0->get_devices()[0];
-    for (const auto& logical_core : device_0->ethernet_cores()) {
+    for (const auto& logical_core : device_0->device_internal().ethernet_cores()) {
         ASSERT_TRUE(
             device_0->virtual_core_from_logical_core(logical_core, CoreType::ETH) ==
             expected_mapping_logical_to_physical.at(logical_core));
@@ -161,19 +161,19 @@ TEST_F(N300MeshDeviceFixture, ActiveEthValidateEthernetSockets) {
     auto* device_0 = mesh_device_0->get_devices()[0];
     auto* device_1 = mesh_device_1->get_devices()[0];
 
-    std::vector<CoreCoord> device_0_sockets = device_0->get_ethernet_sockets(1);
-    std::vector<CoreCoord> device_1_sockets = device_1->get_ethernet_sockets(0);
+    std::vector<CoreCoord> device_0_sockets = device_0->device_internal().get_ethernet_sockets(1);
+    std::vector<CoreCoord> device_1_sockets = device_1->device_internal().get_ethernet_sockets(0);
 
     // There are 2 in total. But expecting 1 because 1 is used for dispatching to remote device for fast dispatch
     int expected_n300_count = this->IsSlowDispatch() ? 2 : 1;
     ASSERT_EQ(device_0_sockets.size(), expected_n300_count);
     ASSERT_EQ(device_1_sockets.size(), expected_n300_count);
     ASSERT_EQ(
-        device_0->get_connected_ethernet_core(device_0_sockets.at(0)),
+        device_0->device_internal().get_connected_ethernet_core(device_0_sockets.at(0)),
         std::make_tuple(device_1->id(), device_1_sockets.at(0)));
     ASSERT_EQ(
-        device_0->get_connected_ethernet_core(device_0_sockets.at(0)),
+        device_0->device_internal().get_connected_ethernet_core(device_0_sockets.at(0)),
         std::make_tuple(device_1->id(), device_1_sockets.at(0)));
-    EXPECT_ANY_THROW(device_0->get_ethernet_sockets(2));
+    EXPECT_ANY_THROW(device_0->device_internal().get_ethernet_sockets(2));
 }
 }  // namespace tt::tt_metal::unit_tests::multichip::cluster

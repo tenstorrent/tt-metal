@@ -48,7 +48,7 @@ TEST_P(LegacyVsNonLegacyTest, GlobalsAndTLS) {
     }
 
     constexpr CoreCoord core = {0, 0};
-    const uint32_t dram_channel = mesh_device->dram_channel_from_virtual_core(core);
+    const uint32_t dram_channel = mesh_device->device_internal().dram_channel_from_virtual_core(core);
 
     // Initialize L1 signal so hart 0 can proceed (then 1, 2, ... in order)
     std::vector<uint32_t> init_signal = {0};

@@ -197,7 +197,7 @@ void build_and_run_program_ethernet(
     }
 
     // Get active ethernet cores
-    const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->device_internal().get_active_ethernet_cores(true);
     if (active_eth_cores.empty()) {
         GTEST_SKIP() << "Skipping test as this test requires at least 1 active ethernet core, but none are available.";
         return;

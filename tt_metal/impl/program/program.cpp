@@ -96,7 +96,7 @@ using namespace tt::tt_metal;
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator_impl()->get_config().l1_unreserved_base -
+        return device->device_internal().allocator_impl()->get_config().l1_unreserved_base -
                MetalContext::instance().hal().get_dev_addr(
                    HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
@@ -150,7 +150,8 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
     // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
         jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
+            BuildEnvManager::get_instance().get_device_build_env(device->device_internal().build_id()).build_env,
+            build_options);
         kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error& ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
@@ -1256,8 +1257,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(
+                BuildEnvManager::get_instance().get_device_build_env(device->device_internal().build_id()).build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1430,7 +1431,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
             uint32_t num_intersections = 0;
             uint32_t num_cores = 0;
             for (const auto& kg : program_kgs) {
-                for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+                for (size_t i = 0; i < device->device_internal().num_sub_devices(); ++i) {
                     const auto& sub_device_cores =
                         device->worker_cores(core_type, SubDeviceId{static_cast<unsigned char>(i)});
                     auto intersection = sub_device_cores.intersection(kg->core_ranges);
@@ -1475,7 +1476,8 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance().get_device_build_env(device->device_internal().build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1517,7 +1519,8 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance().get_device_build_env(device->device_internal().build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1556,7 +1559,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->device_internal().build_id());
     ContextId context_id = extract_context_id(device);
 
     if (compiled_.contains(build_env.build_key())) {
@@ -1572,7 +1575,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_started(this, device, build_env.build_key());
 
     TT_FATAL(
-        device->is_initialized(),
+        device->device_internal().is_initialized(),
         "Device needs to be initialized before program {} compilation! Generating headers for banking information is "
         "dependent on information that is set during device initialization.",
         this->get_id());
@@ -1673,7 +1676,7 @@ HWCommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
 
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+    HalProgrammableCoreType programmable_core_type = device->device_internal().get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].sem_size;
@@ -1681,7 +1684,7 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
 
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+    HalProgrammableCoreType programmable_core_type = device->device_internal().get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;

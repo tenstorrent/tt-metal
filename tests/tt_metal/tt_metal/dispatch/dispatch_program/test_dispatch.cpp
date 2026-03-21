@@ -73,8 +73,8 @@ static void test_sems_across_core_types(
             log_info(tt::LogTest, "Test {} ethernet DM{}", active_eth ? "active" : "idle", erisc_idx);
             DataMovementProcessor dm_processor = static_cast<DataMovementProcessor>(erisc_idx);
 
-            const auto& eth_cores_unordered =
-                active_eth ? device->get_active_ethernet_cores(true) : device->get_inactive_ethernet_cores();
+            const auto& eth_cores_unordered = active_eth ? device->device_internal().get_active_ethernet_cores(true)
+                                                         : device->device_internal().get_inactive_ethernet_cores();
 
             std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
             if (eth_cores.empty()) {
@@ -155,8 +155,8 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     // TODO: tweak when FD supports idle eth
-    const auto& eth_cores_unordered =
-        this->slow_dispatch_ ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+    const auto& eth_cores_unordered = this->slow_dispatch_ ? device->device_internal().get_inactive_ethernet_cores()
+                                                           : device->device_internal().get_active_ethernet_cores(true);
 
     std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
 
@@ -230,7 +230,8 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
 
     // TODO: tweak when FD supports idle eth
     const bool is_idle_eth = this->slow_dispatch_;
-    const auto& eth_cores = is_idle_eth ? device->get_inactive_ethernet_cores() : device->get_active_ethernet_cores(true);
+    const auto& eth_cores = is_idle_eth ? device->device_internal().get_inactive_ethernet_cores()
+                                        : device->device_internal().get_active_ethernet_cores(true);
 
     if (eth_cores.empty()) {
         log_info(
@@ -294,7 +295,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;
         CoreCoord core_coord;
-        for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->device_internal().get_active_ethernet_cores(true)) {
             if (eth_core.x < worker_grid_size.x && eth_core.y < worker_grid_size.y) {
                 core_coord = eth_core;
                 found_overlapping_core = true;

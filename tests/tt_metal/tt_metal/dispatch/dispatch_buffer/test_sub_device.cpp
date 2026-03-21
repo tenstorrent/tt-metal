@@ -39,8 +39,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     CoreRangeSet sharded_cores_2 = CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})});
 
     auto mesh_device = devices_[0];
-    auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, local_l1_size);
-    auto sub_device_manager_2 = mesh_device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
+    auto sub_device_manager_1 = mesh_device->device_internal().create_sub_device_manager({sub_device_1}, local_l1_size);
+    auto sub_device_manager_2 =
+        mesh_device->device_internal().create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
     DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
 
@@ -102,7 +103,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
         physical_cores_2.push_back(mesh_device->worker_core_from_logical_core(core));
     }
 
-    mesh_device->load_sub_device_manager(sub_device_manager_1);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager_1);
 
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
     EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->get_backing_buffer()->aligned_page_size());
@@ -122,12 +123,12 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     local_config_1.sub_device_id = SubDeviceId{1};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get()), std::exception);
-    EXPECT_THROW(mesh_device->clear_loaded_sub_device_manager(), std::exception);
-    EXPECT_THROW(mesh_device->load_sub_device_manager(sub_device_manager_2), std::exception);
+    EXPECT_THROW(mesh_device->device_internal().clear_loaded_sub_device_manager(), std::exception);
+    EXPECT_THROW(mesh_device->device_internal().load_sub_device_manager(sub_device_manager_2), std::exception);
     buffer_1->deallocate();
     buffer_2->deallocate();
-    mesh_device->clear_loaded_sub_device_manager();
-    mesh_device->load_sub_device_manager(sub_device_manager_2);
+    mesh_device->device_internal().clear_loaded_sub_device_manager();
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager_2);
 
     auto buffer_3 = distributed::MeshBuffer::create(replicated_config_2, local_config_2, mesh_device.get());
     EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->get_backing_buffer()->aligned_page_size());
@@ -156,8 +157,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBankIds) {
         CoreRangeSet(std::array{CoreRange({5, 4}, {5, 4}), CoreRange({3, 2}, {3, 3}), CoreRange({0, 0}, {2, 2})})});
 
     auto mesh_device = devices_[0];
-    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device}, local_l1_size);
-    mesh_device->load_sub_device_manager(sub_device_manager);
+    auto sub_device_manager = mesh_device->device_internal().create_sub_device_manager({sub_device}, local_l1_size);
+    mesh_device->device_internal().load_sub_device_manager(sub_device_manager);
 
     auto cores_vec = corerange_to_cores(mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}));
     for (const auto& core : cores_vec) {

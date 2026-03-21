@@ -399,9 +399,9 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {0, mesh_device_->num_cols() - 1}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(
         CoreRange({mesh_device_->num_rows() - 1, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1}))});
-    auto sub_device_manager = mesh_device_->create_sub_device_manager(
+    auto sub_device_manager = mesh_device_->device_internal().create_sub_device_manager(
         {sub_device_1, sub_device_2}, 3200 /* size of L1 region allocated for the SubDevices */);
-    mesh_device_->load_sub_device_manager(sub_device_manager);
+    mesh_device_->device_internal().load_sub_device_manager(sub_device_manager);
 
     constexpr uint8_t kDataMovementCqID = 1;
     constexpr uint8_t kWorkloadCqId = 0;

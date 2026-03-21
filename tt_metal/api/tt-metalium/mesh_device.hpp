@@ -96,9 +96,10 @@ public:
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
-    ChipId build_id() const override;
-    uint8_t num_hw_cqs() const override;
-    bool is_initialized() const override;
+
+    // Access to internal methods (delegates to pimpl_)
+    IDeviceInternal& device_internal() override;
+    const IDeviceInternal& device_internal() const override;
 
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
@@ -111,42 +112,22 @@ public:
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
     CoreCoord dram_grid_size() const override;
-    CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
-        const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
-    CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
-    CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
-    std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
-    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
-    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
-    bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
-    uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
+
     CoreCoord compute_with_storage_grid_size() const override;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const override;
-    const std::unique_ptr<AllocatorImpl>& allocator_impl() const override;
-    const std::unique_ptr<AllocatorImpl>& allocator_impl(SubDeviceId sub_device_id) const override;
-    CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const override;
     uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const override;
-    uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
-    const std::set<CoreCoord>& ethernet_cores() const override;
     const std::set<CoreCoord>& storage_only_cores() const override;
-    uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
-    uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
-    SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     // If cq_id is not provided, the current command queue is returned from the current thread
@@ -155,45 +136,35 @@ public:
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
-    uint32_t get_trace_buffers_size() const override;
-    void set_trace_buffers_size(uint32_t size) override;
 
-    // Initialization APIs
-    bool initialize(
-        uint8_t num_hw_cqs,
-        size_t l1_small_size,
-        size_t trace_region_size,
-        size_t worker_l1_size,
-        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
     bool close() override;
     void enable_program_cache() override;
-    void clear_program_cache() override;
-    void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
-    std::size_t num_program_cache_entries() override;
-    HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-    HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
-    bool has_noc_mcast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const override;
+
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
+
+    bool is_mmio_capable() const override;
+
+    // Program cache management (public API)
+    void clear_program_cache() override;
+    void disable_and_clear_program_cache() override;
+    std::size_t num_program_cache_entries() override;
+
+    // Sub-device management (public API)
     SubDeviceManagerId create_sub_device_manager(
         ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
-    CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
-    const std::vector<SubDeviceId>& get_sub_device_ids() const override;
-    const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
-    uint32_t num_sub_devices() const override;
-    bool is_mmio_capable() const override;
-    std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+
+    // Ethernet connectivity (public API)
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.

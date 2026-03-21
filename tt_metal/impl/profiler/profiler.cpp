@@ -429,7 +429,7 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
     const auto& dispatch_core_config = get_dispatch_core_config();
     auto& env = MetalEnvAccessor(tt::tt_metal::MetalContext::instance(context_id).get_env()).impl();
     const std::vector<CoreCoord> logical_dispatch_cores =
-        get_logical_dispatch_cores(env, device->id(), device->num_hw_cqs(), dispatch_core_config);
+        get_logical_dispatch_cores(env, device->id(), device->device_internal().num_hw_cqs(), dispatch_core_config);
 
     std::vector<CoreCoord> virtual_dispatch_cores;
     for (const CoreCoord& core : logical_dispatch_cores) {
@@ -2606,7 +2606,7 @@ void DeviceProfiler::pollDebugDumpResults(
         return;
     }
 
-    auto* mesh_device = device->get_mesh_device().get();
+    auto* mesh_device = device->device_internal().get_mesh_device().get();
 
     readControlBuffers(mesh_device, device, virtual_cores, /*force_slow_dispatch=*/true);
 

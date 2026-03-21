@@ -52,7 +52,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
 
     for (const auto& trace_md : mesh_trace_md) {
         const auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
-        auto& sysmem_manager = mesh_device->impl().get_device(sysmem_mgr_coord)->sysmem_manager();
+        auto& sysmem_manager = mesh_device->impl().get_device(sysmem_mgr_coord)->device_internal().sysmem_manager();
         auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
         auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
         auto& bypass_data = sysmem_manager.get_bypass_data();
@@ -160,9 +160,9 @@ void MeshTrace::populate_mesh_buffer(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
     size_t padded_size = round_up(unpadded_size, page_size);
 
-    const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
-    mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
-    auto trace_region_size = mesh_cq.device()->allocator_impl()->get_config().trace_region_size;
+    const auto current_trace_buffers_size = mesh_cq.device()->device_internal().get_trace_buffers_size();
+    mesh_cq.device()->device_internal().set_trace_buffers_size(current_trace_buffers_size + padded_size);
+    auto trace_region_size = mesh_cq.device()->device_internal().allocator_impl()->get_config().trace_region_size;
 
     // When trace_region_size is 0, use dynamic allocation mode (allocate in DRAM, top-down)
     BufferType buffer_type = BufferType::TRACE;
@@ -175,9 +175,9 @@ void MeshTrace::populate_mesh_buffer(
     } else {
         // Traditional mode: use dedicated trace region
         TT_FATAL(
-            mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
+            mesh_cq.device()->device_internal().get_trace_buffers_size() <= trace_region_size,
             "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
-            mesh_cq.device()->get_trace_buffers_size(),
+            mesh_cq.device()->device_internal().get_trace_buffers_size(),
             mesh_cq.device()->id(),
             trace_region_size);
     }
@@ -258,8 +258,9 @@ void MeshTrace::populate_mesh_buffer(
 
 MeshTraceBuffer::~MeshTraceBuffer() {
     if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
-        auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
-        this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
+        auto current_trace_buffers_size = this->mesh_buffer->device()->device_internal().get_trace_buffers_size();
+        this->mesh_buffer->device()->device_internal().set_trace_buffers_size(
+            current_trace_buffers_size - this->mesh_buffer->size());
     }
 }
 

@@ -143,12 +143,13 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
         const auto& second_mesh_device = device_ring[1];
         auto* second_device = second_mesh_device->get_devices()[0];
         uint32_t i = 0;
-        for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
+        for (const auto& first_eth_core : first_device->device_internal().get_active_ethernet_cores(true)) {
             if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                     first_device->id(), first_eth_core)) {
                 continue;
             }
-            auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
+            auto [device_id, second_eth_core] =
+                first_device->device_internal().get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
                 std::shared_ptr<distributed::MeshDevice> sender_mesh_device, receiver_mesh_device;
                 CoreCoord sender_eth_core, receiver_eth_core;
@@ -182,12 +183,13 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
             auto* sender_device = sender_mesh_device->get_devices()[0];
             const auto& receiver_mesh_device = device_ring[i + 1];
             auto* receiver_device = receiver_mesh_device->get_devices()[0];
-            for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+            for (const auto& sender_eth_core : sender_device->device_internal().get_active_ethernet_cores(true)) {
                 if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
                         sender_device->id(), sender_eth_core)) {
                     continue;
                 }
-                auto [device_id, receiver_eth_core] = sender_device->get_connected_ethernet_core(sender_eth_core);
+                auto [device_id, receiver_eth_core] =
+                    sender_device->device_internal().get_connected_ethernet_core(sender_eth_core);
                 if (receiver_device->id() == device_id) {
                     sender_receivers.push_back(
                         {sender_mesh_device, receiver_mesh_device, sender_eth_core, receiver_eth_core});
@@ -256,7 +258,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         CoreCoord sender_receiver_core;
         for (const auto& sender_receiver : sender_receivers) {
             if (std::get<1>(sender_receiver)->get_devices()[0]->id() == sender_device->id()) {
-                sender_receiver_core = sender_device->ethernet_core_from_logical_core(std::get<3>(sender_receiver));
+                sender_receiver_core =
+                    sender_device->device_internal().ethernet_core_from_logical_core(std::get<3>(sender_receiver));
             }
         }
         auto sender_ethernet_config = tt_metal::EthernetConfig{
@@ -287,12 +290,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
-            sender_device->ethernet_core_from_logical_core(eth_sender_core),
+            sender_device->device_internal().ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
             src_eth_l1_byte_address + (i * byte_size_per_device));
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
-            sender_device->ethernet_core_from_logical_core(eth_sender_core),
+            sender_device->device_internal().ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
@@ -303,18 +306,19 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         CoreCoord receiver_sender_core;
         for (const auto& sender_receiver : sender_receivers) {
             if (std::get<0>(sender_receiver)->get_devices()[0]->id() == receiver_device->id()) {
-                receiver_sender_core = receiver_device->ethernet_core_from_logical_core(std::get<2>(sender_receiver));
+                receiver_sender_core =
+                    receiver_device->device_internal().ethernet_core_from_logical_core(std::get<2>(sender_receiver));
             }
         }
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             receiver_device->id(),
-            receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+            receiver_device->device_internal().ethernet_core_from_logical_core(eth_receiver_core),
             all_zeros,
             dst_eth_l1_byte_address);
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             receiver_device->id(),
-            receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
+            receiver_device->device_internal().ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
             sem_l1_byte_address);
         auto receiver_ethernet_config = tt_metal::EthernetConfig{
@@ -357,7 +361,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
         const auto& core = std::get<2>(sender_receivers[i]);
         auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device->get_devices()[0]->id(),
-            device->get_devices()[0]->ethernet_core_from_logical_core(core),
+            device->get_devices()[0]->device_internal().ethernet_core_from_logical_core(core),
             src_eth_l1_byte_address,
             byte_size_per_device * sender_receivers.size());
         auto a = std::mismatch(full_input.begin(), full_input.end(), readback_vec.begin());
@@ -434,8 +438,14 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
                 .compile_args = {
                     uint32_t(num_bytes_per_send),
                     uint32_t(num_bytes_per_send >> 4),
-                    uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).x),
-                    uint32_t(device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core).y),
+                    uint32_t(device->get_devices()[0]
+                                 ->device_internal()
+                                 .ethernet_core_from_logical_core(eth_receiver_core)
+                                 .x),
+                    uint32_t(device->get_devices()[0]
+                                 ->device_internal()
+                                 .ethernet_core_from_logical_core(eth_receiver_core)
+                                 .y),
                     uint32_t(input_buffer->buffer_type() == tt_metal::BufferType::DRAM),
                     uint32_t(output_buffers[i]->buffer_type() == tt_metal::BufferType::DRAM)}});
 
@@ -455,13 +465,13 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)sem_l1_byte_address});
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->get_devices()[0]->id(),
-            device->get_devices()[0]->ethernet_core_from_logical_core(eth_sender_core),
+            device->get_devices()[0]->device_internal().ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->get_devices()[0]->id(),
-            device->get_devices()[0]->ethernet_core_from_logical_core(eth_receiver_core),
+            device->get_devices()[0]->device_internal().ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
@@ -472,8 +482,10 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
             tt_metal::EthernetConfig{
                 .noc = tt_metal::NOC::NOC_1,
                 .compile_args = {
-                    uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).x),
-                    uint32_t(device->ethernet_core_from_logical_core(eth_sender_core).y),
+                    uint32_t(
+                        device->get_devices()[0]->device_internal().ethernet_core_from_logical_core(eth_sender_core).x),
+                    uint32_t(
+                        device->get_devices()[0]->device_internal().ethernet_core_from_logical_core(eth_sender_core).y),
                     uint32_t(
                         output_buffers[i]->buffer_type() ==
                         tt_metal::BufferType::DRAM)}});  // probably want to use NOC_1 here

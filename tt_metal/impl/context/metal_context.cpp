@@ -105,8 +105,8 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 
 ContextId extract_context_id(const IDevice* device) {
     // get_mesh_device is not const
-    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
-        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
+    if (const_cast<IDevice*>(device)->device_internal().get_mesh_device() != nullptr) {
+        const auto& mesh_device = const_cast<IDevice*>(device)->device_internal().get_mesh_device();
         return mesh_device->impl().get_context_id();
     }
     // Must be a Device if not MeshDevice

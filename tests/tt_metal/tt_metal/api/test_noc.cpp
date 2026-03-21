@@ -647,12 +647,12 @@ TEST_F(MeshDeviceFixture, ActiveEthTestNocStreamRegs) {
     auto* device = mesh_device->get_devices()[0];
 
     // Skip if no active ethernet cores on this device
-    if (device->get_active_ethernet_cores(true).empty()) {
+    if (device->device_internal().get_active_ethernet_cores(true).empty()) {
         GTEST_SKIP() << "Skipping device due to no active ethernet cores...";
     }
 
     // Get first active ethernet core
-    CoreCoord eth_core = *(device->get_active_ethernet_cores(true).begin());
+    CoreCoord eth_core = *(device->device_internal().get_active_ethernet_cores(true).begin());
 
     run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::ACTIVE_ETH);
 }
@@ -662,12 +662,12 @@ TEST_F(MeshDeviceFixture, IdleEthTestNocStreamRegs) {
     auto* device = mesh_device->get_devices()[0];
 
     // Skip if no idle ethernet cores on this device
-    if (device->get_inactive_ethernet_cores().empty()) {
+    if (device->device_internal().get_inactive_ethernet_cores().empty()) {
         GTEST_SKIP() << "Skipping device due to no idle ethernet cores...";
     }
 
     // Get first idle ethernet core
-    CoreCoord eth_core = *(device->get_inactive_ethernet_cores().begin());
+    CoreCoord eth_core = *(device->device_internal().get_inactive_ethernet_cores().begin());
 
     run_local_noc_stream_reg_inc(this, mesh_device, eth_core, HalProgrammableCoreType::IDLE_ETH);
 }

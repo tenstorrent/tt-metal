@@ -360,8 +360,8 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(
+                BuildEnvManager::get_instance().get_device_build_env(device->device_internal().build_id()).build_key());
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
             for (uint32_t i = 0; i < num_binaries; i++) {
@@ -694,7 +694,8 @@ BatchedTransfers assemble_runtime_args_commands(
             for (auto& transfer_info :
                  extract_dst_noc_multicast_info(device, kg->core_ranges.ranges(), CoreType::WORKER)) {
                 const auto& core_range = std::get<CoreRange>(transfer_info.cores);
-                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
+                auto noc_xy_addr =
+                    device->device_internal().get_noc_multicast_encoding(constants.noc_index, core_range);
                 size_t size = kernel->common_runtime_args().size() * sizeof(*kernel->common_runtime_args().data());
                 LOG_TRACE_LAZY(
                     tt::LogDispatch,
@@ -760,10 +761,11 @@ BatchedTransfers assemble_runtime_args_commands(
                                 "rta_size={} bytes",
                                 core_coord,
                                 virtual_core,
-                                device->get_noc_unicast_encoding(constants.noc_index, virtual_core),
+                                device->device_internal().get_noc_unicast_encoding(constants.noc_index, virtual_core),
                                 kg->total_rta_size);
                             unique_sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                .noc_xy_addr = device->get_noc_unicast_encoding(constants.noc_index, virtual_core)});
+                                .noc_xy_addr = device->device_internal().get_noc_unicast_encoding(
+                                    constants.noc_index, virtual_core)});
                         }
                     }
                 }
@@ -844,10 +846,11 @@ BatchedTransfers assemble_runtime_args_commands(
                                     "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
                                     core_coord,
                                     virtual_core_coords,
-                                    device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords));
+                                    device->device_internal().get_noc_unicast_encoding(
+                                        constants.noc_index, virtual_core_coords));
                                 unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
-                                    .noc_xy_addr =
-                                        device->get_noc_unicast_encoding(constants.noc_index, virtual_core_coords)});
+                                    .noc_xy_addr = device->device_internal().get_noc_unicast_encoding(
+                                        constants.noc_index, virtual_core_coords)});
                             }
                         }
                     }
@@ -932,7 +935,8 @@ public:
                     extract_dst_noc_multicast_info(device, semaphore.core_range_set().ranges(), CoreType::WORKER);
                 for (const auto& dst_noc_info : dst_noc_multicast_info) {
                     const auto& core_range = std::get<CoreRange>(dst_noc_info.cores);
-                    auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, core_range);
+                    auto noc_xy_addr =
+                        device->device_internal().get_noc_multicast_encoding(constants.noc_index, core_range);
                     uint32_t start_addr = semaphore.offset() + program.get_program_config(index).sem_offset;
                     LOG_TRACE_LAZY(
                         tt::LogDispatch,
@@ -964,7 +968,7 @@ public:
                     semaphore_data.back());
                 for (const auto& dst_noc_info : dst_noc_unicast_info) {
                     const auto& virtual_core = std::get<CoreCoord>(dst_noc_info.first);
-                    auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_core);
+                    auto noc_xy = device->device_internal().get_noc_unicast_encoding(constants.noc_index, virtual_core);
                     LOG_TRACE_LAZY(tt::LogDispatch, "  virtual_core={}, noc_xy=0x{:x}", virtual_core, noc_xy);
                     unicast_cmds.sub_cmds.emplace_back(CQDispatchWritePackedUnicastSubCmd{.noc_xy_addr = noc_xy});
                     unicast_cmds.data.emplace_back(&semaphore_data.back(), sizeof(uint32_t));
@@ -1075,7 +1079,8 @@ public:
                     }
                 }
                 CoreRange virtual_range(virtual_start, virtual_end);
-                auto noc_xy_addr = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                auto noc_xy_addr =
+                    device->device_internal().get_noc_multicast_encoding(constants.noc_index, virtual_range);
                 uint32_t start_addr = program.get_program_config(index).cb_offset;
                 LOG_TRACE_LAZY(
                     tt::LogDispatch,
@@ -1136,10 +1141,12 @@ public:
             const auto [noc_encoding, write_linear] = std::visit(
                 ttsl::overloaded{
                     [&](const CoreRange& cores) {
-                        return std::make_pair(device->get_noc_multicast_encoding(constants.noc_index, cores), false);
+                        return std::make_pair(
+                            device->device_internal().get_noc_multicast_encoding(constants.noc_index, cores), false);
                     },
                     [&](const CoreCoord& cores) {
-                        return std::make_pair(device->get_noc_unicast_encoding(constants.noc_index, cores), true);
+                        return std::make_pair(
+                            device->device_internal().get_noc_unicast_encoding(constants.noc_index, cores), true);
                     },
                 },
                 cores);
@@ -1203,8 +1210,8 @@ public:
                         uint16_t length_adjust = uint16_t(relayed_bytes - kg_transfer_info.lengths[kernel_idx]);
                         uint32_t base_address, page_offset;
                         if (kg_transfer_info.page_offsets[kernel_idx] > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
-                            const uint32_t num_banks =
-                                device->allocator_impl()->get_num_banks(kernels_buffer->buffer_type());
+                            const uint32_t num_banks = device->device_internal().allocator_impl()->get_num_banks(
+                                kernels_buffer->buffer_type());
                             page_offset = kg_transfer_info.page_offsets[kernel_idx] % num_banks;
                             uint32_t num_full_pages_written_per_bank =
                                 kg_transfer_info.page_offsets[kernel_idx] / num_banks;
@@ -1627,7 +1634,8 @@ public:
                             device->virtual_core_from_logical_core(core_range.end_coord, kernel_group->get_core_type());
 
                         CoreRange virtual_range(virtual_start, virtual_end);
-                        auto noc_xy = device->get_noc_multicast_encoding(constants.noc_index, virtual_range);
+                        auto noc_xy =
+                            device->device_internal().get_noc_multicast_encoding(constants.noc_index, virtual_range);
                         LOG_TRACE_LAZY(
                             tt::LogDispatch,
                             "Launch Message (MCAST): logical_range={}, "
@@ -1656,7 +1664,8 @@ public:
                                 CoreCoord logical_coord({x, y});
                                 CoreCoord virtual_coord = device->virtual_core_from_logical_core(
                                     logical_coord, kernel_group->get_core_type());
-                                auto noc_xy = device->get_noc_unicast_encoding(constants.noc_index, virtual_coord);
+                                auto noc_xy = device->device_internal().get_noc_unicast_encoding(
+                                    constants.noc_index, virtual_coord);
                                 LOG_TRACE_LAZY(
                                     tt::LogDispatch,
                                     "  logical_core={}, virtual_core={}, noc_xy=0x{:x}",
@@ -1830,8 +1839,10 @@ public:
         const ProgramTransferInfo& program_transfer_info,
         bool has_multicast_launch_cmds,
         bool has_unicast_launch_cmds) {
-        const auto& noc_data_start_idx = device->noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
-        const auto& num_noc_unicast_txns = has_unicast_launch_cmds ? device->num_noc_unicast_txns(sub_device_id) : 0;
+        const auto& noc_data_start_idx =
+            device->device_internal().noc_data_start_index(sub_device_id, has_unicast_launch_cmds);
+        const auto& num_noc_unicast_txns =
+            has_unicast_launch_cmds ? device->device_internal().num_noc_unicast_txns(sub_device_id) : 0;
         DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
         auto sub_device_index = *sub_device_id;
         if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
@@ -2702,7 +2713,7 @@ void reset_worker_dispatch_state_on_device(
     CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state) {
-    auto num_sub_devices = device->num_sub_devices();
+    auto num_sub_devices = device->device_internal().num_sub_devices();
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if (reset_launch_msg_state) {
@@ -2745,9 +2756,10 @@ void reset_worker_dispatch_state_on_device(
                     dispatch_core.y,
                     MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(i)),
                 MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(i),
-                device->has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-                device->num_noc_unicast_txns(sub_device_id),
-                device->noc_data_start_index(sub_device_id),
+                device->device_internal().has_noc_mcast_txns(sub_device_id) ? i
+                                                                            : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                device->device_internal().num_noc_unicast_txns(sub_device_id),
+                device->device_internal().noc_data_start_index(sub_device_id),
                 dispatcher_for_go_signal);
         }
     }
@@ -2831,7 +2843,7 @@ void reset_expected_num_workers_completed_on_device(
     }
     calculator.add_dispatch_wait();
 
-    auto& manager = device->sysmem_manager();
+    auto& manager = device->device_internal().sysmem_manager();
     const auto cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
@@ -2904,7 +2916,7 @@ void set_core_go_message_mapping_on_device(
             CoreCoord virtual_end = device->virtual_core_from_logical_core(core_range.end_coord, CoreType::WORKER);
             CoreRange core_range_virtual{virtual_start, virtual_end};
             sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                .noc_xy_addr = device->get_noc_multicast_encoding(noc_index, core_range_virtual),
+                .noc_xy_addr = device->device_internal().get_noc_multicast_encoding(noc_index, core_range_virtual),
                 .num_mcast_dests = (uint32_t)core_range.size()});
             data.emplace_back(&go_msg_offset, sizeof(uint32_t));
         }
@@ -2937,7 +2949,7 @@ void set_core_go_message_mapping_on_device(
         0);
     command_sequence.add_dispatch_write_linear<true, true>(
         all_core_range_logical.size(),
-        device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
+        device->device_internal().get_noc_multicast_encoding(noc_index, all_core_range_virtual),
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG),
         go_msg_size,
         go_data.data());

@@ -151,7 +151,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
     std::vector<int64_t> writeTimes(sampleCount);
 
     const auto& hal = MetalContext::instance(context_id).hal();
-    HalProgrammableCoreType core_type = device->get_programmable_core_type(core);
+    HalProgrammableCoreType core_type = device->device_internal().get_programmable_core_type(core);
     auto dev_msgs_factory = hal.get_dev_msgs_factory(core_type);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr control_vector_addr = profiler_msg_addr + dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(
@@ -368,7 +368,7 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
-        const auto& active_eth_cores = device_sender->get_active_ethernet_cores(false);
+        const auto& active_eth_cores = device_sender->device_internal().get_active_ethernet_cores(false);
         auto eth_sender_core_iter = active_eth_cores.begin();
         tt_xy_pair eth_receiver_core;
         tt_xy_pair eth_sender_core;
@@ -381,7 +381,7 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
                 continue;
             }
             std::tie(device_id_receiver_curr, eth_receiver_core) =
-                device_sender->get_connected_ethernet_core(eth_sender_core);
+                device_sender->device_internal().get_connected_ethernet_core(eth_sender_core);
             eth_sender_core_iter++;
         }
 
@@ -438,8 +438,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         distributed::MeshDevice* mesh_device_sender = nullptr;
         distributed::MeshDevice* mesh_device_receiver = nullptr;
         try {
-            mesh_device_sender = device_sender->get_mesh_device().get();
-            mesh_device_receiver = device_receiver->get_mesh_device().get();
+            mesh_device_sender = device_sender->device_internal().get_mesh_device().get();
+            mesh_device_receiver = device_receiver->device_internal().get_mesh_device().get();
         } catch (const std::exception&) {
             log_info(
                 tt::LogMetal,
@@ -640,7 +640,7 @@ void ProfilerSync(ProfilerSyncState state) {
                     continue;
                 }
                 auto* sender_device = MetalContext::instance().device_manager()->get_active_device(sender_device_id);
-                const auto& active_eth_cores = sender_device->get_active_ethernet_cores(false);
+                const auto& active_eth_cores = sender_device->device_internal().get_active_ethernet_cores(false);
 
                 ChipId receiver_device_id;
                 tt_xy_pair receiver_eth_core;
@@ -651,7 +651,7 @@ void ProfilerSync(ProfilerSyncState state) {
                     }
 
                     std::tie(receiver_device_id, receiver_eth_core) =
-                        sender_device->get_connected_ethernet_core(sender_eth_core);
+                        sender_device->device_internal().get_connected_ethernet_core(sender_eth_core);
 
                     if (visited.contains(receiver_device_id) && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
@@ -678,7 +678,7 @@ void ProfilerSync(ProfilerSyncState state) {
             auto* root_device = MetalContext::instance().device_manager()->get_active_device(root_device_id);
             distributed::MeshDevice* mesh_device = nullptr;
             try {
-                mesh_device = root_device->get_mesh_device().get();
+                mesh_device = root_device->device_internal().get_mesh_device().get();
             } catch (const std::exception&) {
                 log_info(
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
@@ -696,7 +696,7 @@ void ProfilerSync(ProfilerSyncState state) {
             auto* root_device = MetalContext::instance().device_manager()->get_active_device(root_device_id);
             distributed::MeshDevice* mesh_device = nullptr;
             try {
-                mesh_device = root_device->get_mesh_device().get();
+                mesh_device = root_device->device_internal().get_mesh_device().get();
             } catch (const std::exception&) {
                 log_info(
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
@@ -781,7 +781,7 @@ void InitDeviceProfiler(IDevice* device) {
 
 bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const ChipId device_id = device->id();
-    const uint8_t device_num_hw_cqs = device->num_hw_cqs();
+    const uint8_t device_num_hw_cqs = device->device_internal().num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(
@@ -994,7 +994,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     std::vector<CoreCoord> virtual_cores;
 
     const ChipId device_id = device->id();
-    const uint8_t device_num_hw_cqs = device->num_hw_cqs();
+    const uint8_t device_num_hw_cqs = device->device_internal().num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
 
     auto& env = MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl();
@@ -1005,7 +1005,7 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
             const CoreCoord curr_core = device->worker_core_from_logical_core(core);
             virtual_cores.push_back(curr_core);
         }
-        for (const CoreCoord& core : device->get_active_ethernet_cores(true)) {
+        for (const CoreCoord& core : device->device_internal().get_active_ethernet_cores(true)) {
             const CoreCoord curr_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
             virtual_cores.push_back(curr_core);
         }
@@ -1039,7 +1039,7 @@ void ReadDeviceProfilerResults(
         return;
     }
 
-    TT_ASSERT(device->is_initialized());
+    TT_ASSERT(device->device_internal().is_initialized());
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance(context_id).profiler_state_manager();
@@ -1049,7 +1049,7 @@ void ReadDeviceProfilerResults(
 
     distributed::MeshDevice* mesh_device = nullptr;
     try {
-        mesh_device = device->get_mesh_device().get();
+        mesh_device = device->device_internal().get_mesh_device().get();
     } catch (const std::exception&) {
         log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
@@ -1135,7 +1135,7 @@ void ReadMeshDeviceProfilerResults(
         return;
     }
 
-    TT_ASSERT(mesh_device.is_initialized());
+    TT_ASSERT(mesh_device.device_internal().is_initialized());
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance(context_id).profiler_state_manager();
@@ -1155,7 +1155,7 @@ void ReadMeshDeviceProfilerResults(
             }
         }
 
-        for (uint8_t cq_id = 0; cq_id < mesh_device.num_hw_cqs(); ++cq_id) {
+        for (uint8_t cq_id = 0; cq_id < mesh_device.device_internal().num_hw_cqs(); ++cq_id) {
             mesh_device.mesh_command_queue(cq_id).finish();
         }
     }

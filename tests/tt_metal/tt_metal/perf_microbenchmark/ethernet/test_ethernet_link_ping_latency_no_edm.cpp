@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
     std::cout << "done setting up test fixture" << std::endl;
 
     const auto& device_0 = test_fixture.devices_.at(0);
-    const auto& active_eth_cores = device_0->get_devices()[0]->get_active_ethernet_cores(true);
+    const auto& active_eth_cores = device_0->get_devices()[0]->device_internal().get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
     auto eth_sender_core_iter_end = active_eth_cores.end();
     ChipId device_id = std::numeric_limits<ChipId>::max();
@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "No active ethernet core found for device 0");
         if (cluster.is_ethernet_link_up(device_0->get_devices()[0]->id(), *eth_sender_core_iter)) {
             std::tie(device_id, eth_receiver_core) =
-                device_0->get_devices()[0]->get_connected_ethernet_core(*eth_sender_core_iter);
+                device_0->get_devices()[0]->device_internal().get_connected_ethernet_core(*eth_sender_core_iter);
             eth_sender_core = *eth_sender_core_iter;
         }
         eth_sender_core_iter++;

@@ -12,6 +12,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/device_internal.hpp>
 #include <tt-metalium/allocator.hpp>
 
 #include "tt_metal.hpp"
@@ -164,8 +165,8 @@ inline DeviceData::DeviceData(
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (int bank_id = 0; bank_id < num_banks; bank_id++) {
-        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-        CoreCoord phys_core = device->logical_core_from_dram_channel(dram_channel);
+        auto dram_channel = device->device_internal().allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+        CoreCoord phys_core = device->device_internal().logical_core_from_dram_channel(dram_channel);
         int32_t bank_offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
         this->all_data[phys_core][bank_id] = one_core_data_t();
         this->all_data[phys_core][bank_id].logical_core = phys_core;
@@ -213,8 +214,8 @@ inline void DeviceData::prepopulate_dram(distributed::MeshDevice::IDevice* devic
 
     for (int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
         [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, bank_id);
-        auto dram_channel = device->allocator_impl()->get_dram_channel_from_bank_id(bank_id);
-        auto bank_core = device->logical_core_from_dram_channel(dram_channel);
+        auto dram_channel = device->device_internal().allocator_impl()->get_dram_channel_from_bank_id(bank_id);
+        auto bank_core = device->device_internal().logical_core_from_dram_channel(dram_channel);
         one_core_data_t& data = this->all_data[bank_core][bank_id];
 
         // Generate random or coherent data per bank of specific size.
@@ -875,7 +876,7 @@ inline std::vector<CQDispatchWritePackedUnicastSubCmd> build_sub_cmds(
     for (const auto& core : worker_cores) {
         const CoreCoord virtual_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
         CQDispatchWritePackedUnicastSubCmd sub_cmd{};
-        sub_cmd.noc_xy_addr = device->get_noc_unicast_encoding(downstream_noc, virtual_core);
+        sub_cmd.noc_xy_addr = device->device_internal().get_noc_unicast_encoding(downstream_noc, virtual_core);
         sub_cmds.push_back(sub_cmd);
     }
     return sub_cmds;
@@ -982,7 +983,7 @@ protected:
         fdcq_ = &dynamic_cast<distributed::FDMeshCommandQueue&>(mcq);
         // mgr_ = &FDMeshCQTestAccessor::sysmem(*fdcq_);
         device_ = mesh_device_->get_devices()[0];
-        mgr_ = &device_->sysmem_manager();  // Use Chip 0's SystemMemoryManager
+        mgr_ = &device_->device_internal().sysmem_manager();  // Use Chip 0's SystemMemoryManager
 
         // Initialize common HW properties
         host_alignment_ = tt_metal::MetalContext::instance().hal().get_alignment(tt_metal::HalMemType::HOST);

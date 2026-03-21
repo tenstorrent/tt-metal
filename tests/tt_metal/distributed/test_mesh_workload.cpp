@@ -260,7 +260,10 @@ TEST_F(MeshWorkloadTestSuite, TestMeshWorkloadOnActiveEth) {
             if (mesh_device_->impl().is_local(device_coord)) {
                 IDevice* device = mesh_device_->impl().get_device(device_coord);
                 auto programs = utils::create_random_programs(
-                    1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+                    1,
+                    mesh_device_->compute_with_storage_grid_size(),
+                    seed,
+                    device->device_internal().get_active_ethernet_cores(true));
                 workload->add_program(MeshCoordinateRange(device_coord, device_coord), std::move(*programs[0]));
             }
         }
