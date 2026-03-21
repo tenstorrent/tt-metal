@@ -74,7 +74,7 @@ registry:
     tt_metal_sha: null
     config_count: 318
     loaded_at: '2026-03-14'
-    notes: 'Migrated from ttnn_configuration_model'
+    notes: 'Consolidated p150 trace — whisper blackhole (v2.5 migration)'
 
   - trace_id: 35
     status: active
@@ -83,7 +83,7 @@ registry:
     tt_metal_sha: null
     config_count: 323
     loaded_at: '2026-03-14'
-    notes: 'Migrated from ttnn_configuration_model'
+    notes: 'Consolidated lead_models traces (v2.5 migration)'
 
   - trace_id: 538
     status: active

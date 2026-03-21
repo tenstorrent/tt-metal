@@ -287,7 +287,6 @@ def get_or_create_mesh_config(cur, mesh_config_cache, mesh_shape, device_count):
     if not mesh_shape:
         return None, None
 
-    # V2 schema only uses mesh_shape and device_count
     mesh_key = (tuple(mesh_shape), device_count)
 
     if mesh_key not in mesh_config_cache:
@@ -1903,17 +1902,6 @@ if __name__ == "__main__":
             schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v5"
             model_filter = sys.argv[4].split(",") if len(sys.argv) > 4 else None
             reconstruct_from_db(output, schema, model_filter)
-        elif cmd == "reconstruct-lead":
-            from tests.sweep_framework.framework.constants import LEAD_MODELS
-
-            output = (
-                sys.argv[2]
-                if len(sys.argv) > 2
-                else "model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json"
-            )
-            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v5"
-            print(f"Using lead model patterns: {LEAD_MODELS}")
-            reconstruct_from_db(output, schema, model_filter=LEAD_MODELS)
         elif cmd == "reconstruct-trace":
             if len(sys.argv) < 3:
                 print("Usage: python load_ttnn_ops_data_v2.py reconstruct-trace <trace_run_id> [output.json]")
@@ -1992,9 +1980,6 @@ if __name__ == "__main__":
             )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] [models]      # Reconstruct JSON from DB"
-            )
-            print(
-                "  python load_ttnn_ops_data_v2.py reconstruct-lead [output] [schema]           # Reconstruct lead models only"
             )
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct-trace <id> [output.json]         # Reconstruct from trace_run"
