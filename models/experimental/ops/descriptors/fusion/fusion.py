@@ -11,6 +11,9 @@ only tensor-address slots on repeat launches.
 **Fusion build cache** (``_BUILD_CACHE``): single stable integer key per
 ``(container kind, tree shape, branch program_cache_key / descriptor hash)``.
 Cache lookup never accesses :attr:`DeferredOpDescriptor.descriptor`.
+On a hit, cached device tensors are checked for deallocated mesh storage; stale
+entries are dropped so a new mesh after ``close_mesh_device`` never reuses dead
+buffers.
 
 **Steady state:** reuse branch descriptor objects, update their IO lists in place,
 then ``fused.launch()`` (no args) — it refreshes merged IO from the branch refs
@@ -116,6 +119,45 @@ def _fusion_cache_id_and_ops(items, container_prefix: str) -> Tuple[int, List]:
     ops = _flatten_ops(items)
     cache_id = _fusion_hash_from_ops(items, container_prefix, ops)
     return cache_id, ops
+
+
+def _tensor_device_storage_ok(tensor) -> bool:
+    """False if *tensor* is a device tensor whose buffer was deallocated (e.g. mesh closed)."""
+    if tensor is None:
+        return True
+    try:
+        if not ttnn.is_tensor_storage_on_device(tensor):
+            return True
+        if not tensor.is_allocated():
+            return False
+        _ = tensor.device()
+        return True
+    except RuntimeError:
+        return False
+
+
+def _fusion_cache_entry_still_live(entry: _CacheEntry) -> bool:
+    """Whether cached branch IO still references live device storage.
+
+    Hidden rebind keeps output tensors from the cold build; after ``close_mesh_device``
+    those ``MeshBuffer``\ s are deallocated while the Python cache entry remains.
+    """
+    if entry.cached_ops is not None:
+        for op in entry.cached_ops:
+            for t in op.input_tensors:
+                if not _tensor_device_storage_ok(t):
+                    return False
+            for t in op.output_tensors:
+                if not _tensor_device_storage_ok(t):
+                    return False
+    elif entry.fused_op is not None:
+        for t in entry.fused_op.input_tensors:
+            if not _tensor_device_storage_ok(t):
+                return False
+        for t in entry.fused_op.output_tensors:
+            if not _tensor_device_storage_ok(t):
+                return False
+    return True
 
 
 def _item_sort_key(item):
@@ -494,6 +536,9 @@ class Sequential:
         """
         cache_id, ops = _fusion_cache_id_and_ops(self._items, "S")
         entry = _BUILD_CACHE.get(cache_id)
+        if entry is not None and not _fusion_cache_entry_still_live(entry):
+            del _BUILD_CACHE[cache_id]
+            entry = None
         if entry is not None:
             if entry.fused_op is not None and entry.cached_ops is not None:
                 result = _hidden_rebind_from_cache(entry, ops)
@@ -579,6 +624,9 @@ class Parallel:
         """
         cache_id, ops = _fusion_cache_id_and_ops(self._items, "P")
         entry = _BUILD_CACHE.get(cache_id)
+        if entry is not None and not _fusion_cache_entry_still_live(entry):
+            del _BUILD_CACHE[cache_id]
+            entry = None
         if entry is not None:
             if entry.fused_op is not None and entry.cached_ops is not None:
                 result = _hidden_rebind_from_cache(entry, ops)
