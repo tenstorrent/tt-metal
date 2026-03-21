@@ -220,6 +220,7 @@ def test_to_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout
 @pytest.mark.parametrize(
     "shape,ttnn_dtype,torch_dtype,ttnn_layout,convert_with_device,value_ranges,pcc_override,memory_config",
     [
+        ((0, 0), ttnn.bfloat16, torch.bfloat16, ttnn.TILE_LAYOUT, True, (0, 100), None, None),
         ((4, 4), ttnn.float32, torch.float64, ttnn.TILE_LAYOUT, True, (0, 100), None, None),
         ((32, 32), ttnn.bfloat16, torch.int64, ttnn.ROW_MAJOR_LAYOUT, False, (0, 255), None, None),
         ((32, 32, 64, 64), ttnn.bfloat8_b, torch.float16, ttnn.TILE_LAYOUT, True, (0, 127), None, None),
@@ -572,7 +573,7 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
     assert ttnn_tensor.memory_config().memory_layout == shard_strategy
 
 
-@pytest.mark.parametrize("fast_approx", [True, False])
+@pytest.mark.parametrize("enable_bfloat_opt", [True, False])
 @pytest.mark.parametrize("use_mesh_mapper", [True, False])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
@@ -581,13 +582,13 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
         (torch.float32, ttnn.bfloat16),
     ],
 )
-def test_from_torch_fast_approx_preserves_sharded_memory_config(
-    device, fast_approx, use_mesh_mapper, torch_dtype, ttnn_dtype
+def test_from_torch_enable_bfloat_opt_preserves_sharded_memory_config(
+    device, enable_bfloat_opt, use_mesh_mapper, torch_dtype, ttnn_dtype
 ):
     """
-    Validate that fast_approx=True preserves DRAM-sharded memory config.
+    Validate that enable_bfloat_opt=True preserves DRAM-sharded memory config.
 
-    When fast_approx is used with a mesh_mapper, the tensor is initially created
+    When enable_bfloat_opt is used with a mesh_mapper, the tensor is initially created
     on the device with a default (interleaved) memory config and then converted
     in-place. This test ensures the final tensor has the requested sharded config.
     """
@@ -626,7 +627,7 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
         device=device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        fast_approx=fast_approx,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
     assert (
@@ -636,9 +637,124 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
     assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
 
 
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype,shape",
+    [
+        (torch.float32, ttnn.bfloat16, (8, 384, 4096)),
+        (torch.float32, ttnn.bfloat16, (4, 384, 4096)),
+    ],
+)
+def test_from_torch_large_tensor_type_conversion_l1(device, torch_dtype, ttnn_dtype, shape):
+    """
+    Regression test: from_torch with a type conversion (e.g. float32 → bfloat16),
+    TILE_LAYOUT, and L1_MEMORY_CONFIG must not OOM for tensors whose source
+    representation is too large to tilize on device.
+
+    The borrow path sends the raw source buffer to L1 in ROW_MAJOR and tilizes
+    on device, requiring both input and output to coexist in per-bank memory.
+    For float32 (8, 384, 4096) the peak is ~1.5 MB/bank which exceeds the
+    ~1.4 MB bank size on Wormhole B0. The memory check in has_sufficient_device_memory
+    falls back to host-side conversion (float32 → bfloat16 + tilize) which only
+    needs 1x bfloat16 size on device.
+    """
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(shape, dtype=torch_dtype) * 0.2 - 0.1
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    assert ttnn_tensor.dtype == ttnn_dtype
+    assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
+
+    result = ttnn.to_torch(ttnn_tensor)
+    assert_with_pcc(torch_tensor, result, 0.999)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
+@pytest.mark.parametrize("enable_bfloat_opt", [True, False])
+@pytest.mark.parametrize(
+    "mapper_type",
+    ["shard_1d_width", "shard_2d_width"],
+)
+def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, mapper_type, enable_bfloat_opt):
+    """
+    Regression test: from_torch with a DRAM-sharded memory_config and a mesh
+    mapper that shards along the width dimension must not crash.
+
+    Root cause: TensorSpec(full_shape, ROW_MAJOR_layout + sharded_memcfg) was
+    constructed with the full pre-mesh-sharded tensor width (e.g., 24576) but
+    the shard spec was configured for per-device dimensions (shard_width = 256,
+    12 DRAM cores).  validate_shard_spec_with_tensor_shape computed
+    div_up(full_width, shard_width) > num_cores, triggering a fatal assertion.
+
+    Fix: Short-circuit with !memory_config.is_sharded() before constructing
+    the TensorSpec, so sharded configs skip the on-device fast path entirely.
+    """
+    torch.manual_seed(42)
+    mesh_shape = tuple(mesh_device.shape)
+    num_devices = mesh_shape[0] * mesh_shape[1]
+
+    dram_cores = mesh_device.dram_grid_size().x
+    per_device_width = dram_cores * ttnn.TILE_SIZE
+    per_device_height = 32
+
+    if mapper_type == "shard_1d_width":
+        full_width = per_device_width * num_devices
+        shape = (1, 1, per_device_height, full_width)
+        mesh_mapper = ShardTensorToMesh(mesh_device, dim=3)
+    elif mapper_type == "shard_2d_width":
+        full_width = per_device_width * mesh_shape[1]
+        shape = (mesh_shape[0], 1, per_device_height, full_width)
+        mesh_mapper = ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(0, 3))
+    else:
+        raise ValueError(f"Unsupported mapper_type: {mapper_type!r}")
+
+    dram_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(dram_cores - 1, 0),
+            )
+        }
+    )
+    shard_spec = ttnn.ShardSpec(
+        dram_grid,
+        (per_device_height, per_device_width // dram_cores),
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+        enable_bfloat_opt=enable_bfloat_opt,
+    )
+
+    assert (
+        ttnn_tensor.memory_config() == memory_config
+    ), f"Memory config mismatch: expected {memory_config}, got {ttnn_tensor.memory_config()}"
+    assert ttnn_tensor.dtype == ttnn.bfloat16
+    assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
+
+
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 @pytest.mark.parametrize(
-    "mapper_type,ttnn_dtype,memory_config_type,fast_approx",
+    "mapper_type,ttnn_dtype,memory_config_type,enable_bfloat_opt",
     [
         ("replicate", ttnn.bfloat16, "DRAM", True),
         ("replicate", ttnn.bfloat16, "DRAM", False),
@@ -657,7 +773,7 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
     ],
 )
 def test_from_torch_mesh_mapper_preserves_memory_config(
-    mesh_device, mapper_type, ttnn_dtype, memory_config_type, fast_approx
+    mesh_device, mapper_type, ttnn_dtype, memory_config_type, enable_bfloat_opt
 ):
     """
     Verify that from_torch with mesh_mapper on a mesh device preserves the
@@ -666,7 +782,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
     Reproduces a regression where the memory_config on the output tensor
     does not match what was passed in, observed in deepseek_v3 weight
     loading with ShardTensor2dMesh + DRAM-sharded memory config +
-    fast_approx=True.
+    enable_bfloat_opt=True.
     """
     torch.manual_seed(42)
     mesh_shape = tuple(mesh_device.shape)
@@ -725,7 +841,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
         device=mesh_device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        fast_approx=fast_approx,
+        enable_bfloat_opt=enable_bfloat_opt,
     )
 
     assert (
