@@ -16,6 +16,7 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler_serialize.hpp"  // lightweight; heavy JSON lives in op_profiler_json.cpp
+#include "tools/profiler/host_dispatch_microbench.hpp"
 #include <tt_stl/concepts.hpp>
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
@@ -269,16 +270,23 @@ void handle_mesh_adapter_cache_hit(
             using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
             auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
-            WorkloadFactory::override_runtime_arguments(
-                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-
-            enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes,
-                tensor_args,
-                tensor_return_value,
-                mesh_device,
-                cached_mesh_workload.workload,
-                true);
+            {
+                tt::tt_metal::host_dispatch_microbench::ScopedTimer _override_timer(
+                    tt::tt_metal::host_dispatch_microbench::Slot::MeshCacheHitOverrideRuntimeArgs);
+                WorkloadFactory::override_runtime_arguments(
+                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
+            }
+            {
+                tt::tt_metal::host_dispatch_microbench::ScopedTimer _enqueue_timer(
+                    tt::tt_metal::host_dispatch_microbench::Slot::MeshCacheHitEnqueueWorkload);
+                enqueue_mesh_workload<mesh_device_operation_t>(
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    cached_mesh_workload.workload,
+                    true);
+            }
         });
 }
 
@@ -374,9 +382,17 @@ void launch_operation_with_adapter(
     auto is_program_cache_enabled = program_cache.is_enabled();
     if (is_program_cache_enabled) {
         // Use device_operation's compute_program_hash if available
-        program_hash =
-            mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
-        program_cache_hit = program_cache.contains(program_hash);
+        {
+            tt::tt_metal::host_dispatch_microbench::ScopedTimer _hash_timer(
+                tt::tt_metal::host_dispatch_microbench::Slot::MeshComputeWorkloadHash);
+            program_hash =
+                mesh_device_operation_t::compute_mesh_workload_hash(mesh_device, operation_attributes, tensor_args);
+        }
+        {
+            tt::tt_metal::host_dispatch_microbench::ScopedTimer _contains_timer(
+                tt::tt_metal::host_dispatch_microbench::Slot::MeshProgramCacheContains);
+            program_cache_hit = program_cache.contains(program_hash);
+        }
         if (!program_cache_hit && !program_cache.cache_misses_allowed()) {
             auto op_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
             TT_THROW("Device operation \"{}\": program cache miss occurred, but cache misses are forbidden", op_name);
@@ -392,6 +408,8 @@ void launch_operation_with_adapter(
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     } else {
+        tt::tt_metal::host_dispatch_microbench::ScopedTimer _miss_timer(
+            tt::tt_metal::host_dispatch_microbench::Slot::MeshCacheMissCreateAndCacheWorkload);
         create_and_cache_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
     }

@@ -140,6 +140,11 @@ full = Sequential(stem, op2).build()  # equivalent to op0 -> op1 -> op2
 Groups items that run concurrently on disjoint core subsets. Requires at least
 2 items. Items can be `OpDescriptor`, `Sequential`, or `Parallel`.
 
+Branch order is the order you list in `Parallel(...)`; `fused.output_tensors`
+after `build()` follows that same order. The fusion build cache key includes
+per-op hashes in that order, so swapping branch order is a different cache
+entry (and may produce a different merged program).
+
 ```python
 # Branching tree: stem runs first, then two branches in parallel
 fused = Sequential(stem_op, Parallel(branch_a, branch_b)).build()
@@ -2536,6 +2541,13 @@ Two builds with the same key have identical fused kernel source, CB layout,
 barrier configuration, and semaphore addresses.  Only **runtime args** (which
 encode tensor buffer addresses) and **CB buffer pointers** (for sharded
 tensors) change between calls.
+
+**Branch op factories are not part of the cache hit.**  `_update_cached_descriptor`
+does not invoke `rms_norm.rms_norm` (or any per-branch builder).  It only reads
+the **tensor lists** on the `OpDescriptor` objects you already placed in
+`Sequential` / `Parallel`.  If you allocate **new** branch ops every forward,
+that cost is **caller-side**, before `build()` — not something the fusion cache
+requires for a hit.
 
 ### Cache Hit: Fast Path
 

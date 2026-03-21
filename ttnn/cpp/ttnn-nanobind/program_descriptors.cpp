@@ -912,7 +912,11 @@ void py_module_types(nb::module_& mod) {
             )pbdoc")
         .def_rw("kernels", &tt::tt_metal::ProgramDescriptor::kernels, "Collection of kernel descriptors")
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
-        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
+        .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors")
+        .def_rw(
+            "custom_program_hash",
+            &tt::tt_metal::ProgramDescriptor::custom_program_hash,
+            "Optional memoized program hash (skips full descriptor walk when set)");
 
     mod.def(
         "merge_program_descriptors",

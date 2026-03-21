@@ -15,6 +15,7 @@ from models.experimental.ops.descriptors.fusion.fusion import (
     Sequential,
     clear_build_cache,
 )
+from models.experimental.ops.descriptors.op_descriptor import DeferredOpDescriptor, OpDescriptor
 from models.experimental.ops.descriptors.fusion.graph import (
     CoreGroup,
     OpGraphBuilder,
@@ -44,6 +45,8 @@ __all__ = [
     "Sequential",
     "Parallel",
     "FusedOp",
+    "OpDescriptor",
+    "DeferredOpDescriptor",
     # Graph API
     "OpNode",
     "CoreGroup",
