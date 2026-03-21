@@ -19,7 +19,7 @@ namespace handshake {
  */
 
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
-__attribute__((optimize("Os"))) FORCE_INLINE void fabric_sender_side_handshake(
+FORCE_INLINE void fabric_sender_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
@@ -47,7 +47,7 @@ __attribute__((optimize("Os"))) FORCE_INLINE void fabric_sender_side_handshake(
 }
 
 template <bool RISC_CPU_DATA_CACHE_ENABLED>
-__attribute__((optimize("Os"))) FORCE_INLINE void fabric_receiver_side_handshake(
+FORCE_INLINE void fabric_receiver_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,

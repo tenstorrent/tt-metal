@@ -1379,7 +1379,7 @@ FORCE_INLINE
 #endif
 
 template <typename EdmChannelWorkerIFs>
-__attribute__((optimize("Os"))) FORCE_INLINE void establish_edm_connection(
+FORCE_INLINE void establish_edm_connection(
     EdmChannelWorkerIFs& local_sender_channel_worker_interface, uint32_t stream_id) {
     local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
@@ -2021,10 +2021,8 @@ FORCE_INLINE bool run_receiver_channel_step(
     return false;
 }
 
-template<
-    typename OutboundReceiverChannelPointers,
-    typename RemoteEthReceiverChannels>
-__attribute__((optimize("Os"))) FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
+template <typename OutboundReceiverChannelPointers, typename RemoteEthReceiverChannels>
+FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
     OutboundReceiverChannelPointers& outbound_to_receiver_channel_pointers,
     RemoteEthReceiverChannels& remote_receiver_channels) {
     static_assert(OutboundReceiverChannelPointers::N == RemoteEthReceiverChannels::num_channels);
@@ -2669,7 +2667,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
-__attribute__((optimize("Os")))
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
@@ -2733,7 +2730,7 @@ constexpr size_t get_credits_init_val() {
 // SFINAE helper to initialize a single sender channel worker interface
 // Only enabled when I < NUM_SENDER_CHANNELS
 template <size_t I, size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
-__attribute__((optimize("Os"))) FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init_sender_channel_worker_interface(
+FORCE_INLINE typename std::enable_if<(I < NUM_SENDER_CHANNELS), void>::type init_sender_channel_worker_interface(
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
     std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces) {
@@ -2802,7 +2799,7 @@ void
 
 // copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
 template <size_t NUM_SENDER_CHANNELS>
-__attribute__((optimize("Os"))) void populate_local_sender_channel_free_slots_stream_id_ordered_map(
+void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
@@ -2934,7 +2931,7 @@ __attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sende
 
 // Initialize fabric telemetry structure in L1
 // This must be called early in kernel_main to ensure telemetry is properly initialized
-__attribute__((optimize("Os"))) void initialize_fabric_telemetry() {
+void initialize_fabric_telemetry() {
     // Get pointer to telemetry structure in L1
     volatile tt_l1_ptr FabricTelemetry* fabric_telemetry =
         reinterpret_cast<volatile tt_l1_ptr FabricTelemetry*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
