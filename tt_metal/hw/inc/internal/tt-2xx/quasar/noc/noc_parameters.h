@@ -27,7 +27,7 @@
 #define NUM_NOCS 1
 #define NOC_ID_WIDTH 6
 
-#define NOC_MAX_TRANSACTION_ID 0xF
+#define NOC_MAX_TRANSACTION_ID 0x1F
 #define NOC_MAX_TRANSACTION_ID_COUNT 0xFFFF
 
 // FLEX Port defnes
