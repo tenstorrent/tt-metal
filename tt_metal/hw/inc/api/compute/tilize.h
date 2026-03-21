@@ -112,7 +112,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
           true /*tilize en*/>(new_icb)));
     // This reconfig call checks if old operand has different data format to
     // new operand idx, otherwise no reconfig call occurs
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
@@ -233,7 +233,7 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 // clang-format on
 ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb) {
     UNPACK((llk_unpack_tilize_uninit(old_icb)));
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init(ocb)));
@@ -253,7 +253,7 @@ ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32
 }
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(icb, icb)));
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
     MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
 
     fast_tilize_init(icb, full_dim, ocb);
