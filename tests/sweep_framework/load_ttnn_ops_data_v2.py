@@ -62,13 +62,6 @@ def _load_manifest(manifest_path=None):
     return data, path
 
 
-def _save_manifest(data, path):
-    """Write manifest YAML back to disk (full rewrite — loses comments)."""
-    _require_yaml()
-    with open(path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-
-
 def _append_registry_entries(entries, path):
     """Append new registry entries to the manifest without rewriting the file.
 
@@ -285,13 +278,11 @@ def get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_
     return hardware_cache.get(hw_key), hw_key
 
 
-def get_or_create_mesh_config(
-    cur, mesh_config_cache, mesh_shape, device_count, placement_type, shard_dim, distribution_shape
-):
+def get_or_create_mesh_config(cur, mesh_config_cache, mesh_shape, device_count):
     """Get or create a mesh config entry, return the ID.
 
-    Note: In V2 schema, ttnn_mesh_config only stores mesh_shape and device_count.
-    Placement info (placement_type, shard_dim) is per-tensor and stored in arguments.
+    ttnn_mesh_config only stores mesh_shape and device_count.
+    Placement info is per-tensor and stored in the argument JSON.
     """
     if not mesh_shape:
         return None, None
@@ -324,10 +315,7 @@ def get_or_create_mesh_config(
             if result:
                 mesh_config_cache[mesh_key] = result[0]
 
-    # Return mesh_info with placement for config_hash computation
-    # Even though placement isn't stored in the DB, it's used for hash
-    mesh_info = {"mesh_shape": mesh_shape, "placement_type": placement_type, "shard_dim": shard_dim}
-    return mesh_config_cache.get(mesh_key), mesh_info
+    return mesh_config_cache.get(mesh_key)
 
 
 def get_or_create_model(cur, model_cache, source_file, hf_model):
@@ -501,8 +489,9 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
             if result.returncode == 0:
                 tt_metal_sha = result.stdout.strip()
                 print(f"  Detected tt-metal SHA: {tt_metal_sha[:12]}")
-        except Exception:
-            pass
+        except Exception as e:
+            # Best-effort SHA auto-detection: ignore failures but surface for debugging.
+            print(f"  Warning: failed to auto-detect tt-metal SHA via git: {e}")
 
     new_configs = 0  # configs inserted for the first time this load
     total_model_links = 0
@@ -580,19 +569,14 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False):
                 device_series = machine_info.get("device_series")
                 card_count = machine_info.get("card_count", 1)
 
-                hardware_id, hw_key = get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_count)
+                hardware_id, _ = get_or_create_hardware(cur, hardware_cache, board_type, device_series, card_count)
 
                 # Parse mesh config
-                mesh_shape, device_count, placement_type, shard_dim, distribution_shape = parse_mesh_from_machine_info(
-                    machine_info, arguments
-                )
+                mesh_shape, device_count, _, _, _ = parse_mesh_from_machine_info(machine_info, arguments)
 
                 mesh_config_id = None
-                mesh_info = None
                 if mesh_shape:
-                    mesh_config_id, mesh_info = get_or_create_mesh_config(
-                        cur, mesh_config_cache, mesh_shape, device_count, placement_type, shard_dim, distribution_shape
-                    )
+                    mesh_config_id = get_or_create_mesh_config(cur, mesh_config_cache, mesh_shape, device_count)
 
                 # Check if we've already created this config
                 if config_hash in config_cache:
@@ -760,7 +744,7 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
         conn = psycopg2.connect(NEON_URL)
         cur = conn.cursor()
         hw_map = {}
-        for (hardware_id, _sha), tr_id in trace_run_cache.items():
+        for (hardware_id, _sha), _tr_id in trace_run_cache.items():
             if hardware_id and hardware_id not in hw_map:
                 cur.execute(
                     "SELECT board_type, device_series, card_count FROM ttnn_ops_v5.ttnn_hardware WHERE ttnn_hardware_id = %s",
@@ -815,8 +799,9 @@ def _append_manifest_drafts(trace_run_cache, model_cache):
                     )
                     entry["config_count"] = cur.fetchone()[0]
             conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Non-fatal: config_count will remain None in the manifest entry.
+            print(f"  Warning: could not populate config_count for new manifest entries: {e}")
 
         _append_registry_entries(new_entries, path)
         print(f"  Appended {added} draft entries to manifest registry ({path})")
@@ -913,9 +898,6 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=Non
         model_filter_params = [f"%{pattern}%" for pattern in model_filter]
 
     for op_id, op_name in operations:
-        # Get all configurations for this operation
-        # V2 schema doesn't have placement_type, shard_dim, distribution_shape in mesh_config
-        # (placement is per-tensor in V2)
         cur.execute(
             f"""
             SELECT
@@ -950,8 +932,8 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v5", model_filter=Non
                 config_id,
                 config_hash,
                 full_config_json,
-                hardware_id,
-                mesh_config_id,
+                _hardware_id,
+                _mesh_config_id,
                 board_type,
                 device_series,
                 card_count,
@@ -1072,7 +1054,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema="ttnn_ops_
         conn.close()
         return None
 
-    (_, board_type, device_series, card_count, tt_metal_sha, traced_at, config_count, notes) = tr_row
+    (_, board_type, device_series, card_count, tt_metal_sha, traced_at, _, _) = tr_row
 
     # Fetch all models for this trace; then apply model_names filter if specified.
     cur.execute(
@@ -1256,7 +1238,7 @@ def list_trace_runs(model_filter=None):
     print(f"\n{'ID':>4}  {'Hardware':20}  {'SHA':12}  {'Configs':>7}  {'Traced At':20}  Models")
     print("-" * 120)
 
-    for tr_id, device_series, card_count, sha, traced_at, cfg_count, notes, models in rows:
+    for tr_id, device_series, card_count, sha, traced_at, cfg_count, _, models in rows:
         hw = f"{device_series} ({card_count}x)"
         sha_short = sha[:12] if sha else "-"
         traced = str(traced_at)[:19] if traced_at else "-"

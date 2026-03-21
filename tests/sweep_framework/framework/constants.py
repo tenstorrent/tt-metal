@@ -9,9 +9,12 @@ This module contains constants that are used across multiple modules
 in the sweep framework to ensure consistency and avoid duplication.
 """
 
+import logging
 import re
 import os
 from typing import Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 # Lead models are models that are prioritized for sweep testing.
 # These patterns are matched against the source path in traced operations
@@ -38,14 +41,15 @@ def _load_lead_models_from_manifest():
             if os.path.exists(candidate):
                 with open(candidate) as f:
                     data = yaml.safe_load(f) or {}
-                patterns = [
-                    t["model"] for t in data.get("targets", []) if t.get("scope") == "lead_models" and "model" in t
-                ]
+                # targets is a dict: {lead_models: [...], model_traced: [...]}
+                lead_entries = data.get("targets", {}).get("lead_models", [])
+                patterns = [t["model"] for t in lead_entries if "model" in t]
                 if patterns:
                     return patterns
             here = os.path.dirname(here)
-    except Exception:
-        pass
+    except Exception as e:
+        # Manifest load is best-effort; fall back to hardcoded list.
+        logger.debug("Could not load LEAD_MODELS from manifest: %s", e)
     # Fallback
     return ["deepseek_v3"]
 
