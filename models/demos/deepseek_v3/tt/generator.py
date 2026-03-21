@@ -20,7 +20,14 @@ from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, make_deepseek_sampling_args
+from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SAMPLING_TOP_K,
+    DEFAULT_SAMPLING_TOP_P,
+    USERS_PER_ROW,
+    even_int_div,
+    make_deepseek_sampling_args,
+)
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
@@ -158,11 +165,11 @@ class DeepseekGenerator(WarmupForwardMixin):
         profile_decode: bool = False,
         sample_on_device: bool = False,
         enable_mtp: bool = False,
+        sampling_params: SamplingParams | None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
-        self.sample_on_device = sample_on_device
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -208,6 +215,21 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
+        # sampling values of all users are assumed to be the same default values if not provided in constructor.
+        self.sample_on_device = sample_on_device
+        self.sampling_params = (
+            sampling_params
+            if sampling_params is not None
+            else SamplingParams(
+                temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
+                top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
+                top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
+            )
+        )
+        if self._get_sampling_value(self.sampling_params.top_k, 0) == 0 and self.sample_on_device:
+            raise SystemExit(
+                "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
+            )
         if self.sample_on_device:
             enable_internal_trace_sampling = enable_trace and self.sample_on_device
             self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
@@ -217,16 +239,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                 tt_ccl=self.ccl,
                 enable_internal_trace=enable_internal_trace_sampling,
             )
-            # Use default sampling params (top-k=1, top-p=0.0, temperature=1.0) i.e. argmax sampling for device sampling
-            self.sampling_params = SamplingParams(
-                temperature=[1.0] * self.batch_size,
-                top_k=[1] * self.batch_size,
-                top_p=[0.0] * self.batch_size,
-                seed=[42] * self.batch_size,
-            )
+
             self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
 
         logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
+        logger.info(
+            f"Sampling parameters for first user (other users may have different values): "
+            + f"temperature={self._get_sampling_value(self.sampling_params.temperature, 0)}, "
+            + f"top_p={self._get_sampling_value(self.sampling_params.top_p, 0)}, "
+            + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
+        )
+
+        if enable_mtp and sample_on_device:
+            raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
@@ -485,6 +511,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Clean up sampling trace state
         try:
             if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+                ttnn.synchronize_device(self.mesh_device)
                 self.sampling_generator.reset_trace()
         except Exception as e:
             logger.warning(f"Failed to reset sampling trace state: {e}")
@@ -650,9 +677,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         self.sampling_generator.reset_sampling_params(sampling_params)
         seed = getattr(sampling_params, "seed", None)
-        if seed is not None:
-            user_ids = list(range(batch_size))
-            self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
+        user_ids = list(range(batch_size))
+        self.sampling_generator.seed_manager.reset_seed(seed, user_ids)
         self.sampling_generator.reset_prompt_tokens(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
         self.sampling_generator.reset_output_state(torch.zeros((batch_size_per_row, 1), dtype=torch.int64))
 
@@ -997,6 +1023,16 @@ class DeepseekGenerator(WarmupForwardMixin):
         while logits.dim() > 2 and logits.shape[0] == 1:
             logits = logits.squeeze(0)
         return torch.argmax(logits, dim=-1)  # [B]
+
+    @staticmethod
+    def _get_sampling_value(value, index: int):
+        if isinstance(value, list):
+            if not value:
+                return None
+            if index < len(value):
+                return value[index]
+            return value[-1]
+        return value
 
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
         return self._sample_greedy(logits)
@@ -1485,11 +1521,75 @@ class DeepseekGenerator(WarmupForwardMixin):
             decode_step_user_tokens=decode_step_user_tokens,
         )
 
+    def _sample_on_host(self, logits: torch.Tensor, start_user_idx: int = 0) -> torch.Tensor | int:
+        """Sample on host using top-k/top-p/temperature from sampling_params."""
+        if self.sampling_params is None:
+            return torch.argmax(logits, dim=-1)
+
+        if logits.ndim == 1:
+            logits = logits.unsqueeze(0)
+        elif logits.ndim > 2:
+            # Normalize to [batch, vocab] so each sampled row maps to one user lane.
+            logits = logits.reshape(-1, logits.shape[-1])
+
+        sampled_tokens = torch.argmax(logits, dim=-1)
+        batch_size = logits.shape[0]
+
+        for row_idx in range(batch_size):
+            user_idx = start_user_idx + row_idx
+            temperature = self._get_sampling_value(self.sampling_params.temperature, user_idx)
+            top_k = self._get_sampling_value(self.sampling_params.top_k, user_idx)
+            top_p = self._get_sampling_value(self.sampling_params.top_p, user_idx)
+            seed = self._get_sampling_value(getattr(self.sampling_params, "seed", None), user_idx)
+
+            temperature = float(temperature) if temperature is not None else 1.0
+            top_k = int(top_k) if top_k is not None else 0
+            top_p = float(top_p) if top_p is not None else 1.0
+
+            if temperature <= 0:
+                continue
+
+            scores = logits[row_idx : row_idx + 1] / temperature
+
+            if top_k > 0:
+                top_k = min(top_k, scores.shape[-1])
+                kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
+                scores = scores.masked_fill(scores < kth_values, float("-inf"))
+
+            if 0.0 < top_p < 1.0:
+                sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
+                sorted_probs = torch.softmax(sorted_scores, dim=-1)
+                cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+                remove_mask = cumulative_probs > top_p
+                remove_mask[..., 1:] = remove_mask[..., :-1].clone()
+                remove_mask[..., 0] = False
+                sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
+
+                filtered_scores = torch.full_like(scores, float("-inf"))
+                filtered_scores.scatter_(dim=-1, index=sorted_indices, src=sorted_scores)
+                scores = filtered_scores
+
+            probs = torch.softmax(scores, dim=-1)
+            row_sum = probs.sum(dim=-1)
+            valid_row = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sum) & (row_sum > 0)
+            if not bool(valid_row.all().item()):
+                continue
+
+            generator: torch.Generator | None = None
+            if seed is not None:
+                generator = torch.Generator(device=probs.device).manual_seed(int(seed))
+
+            if generator is None:
+                sampled_tokens[row_idx] = torch.multinomial(probs, num_samples=1).squeeze(-1)
+            else:
+                sampled_tokens[row_idx] = torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
+
+        return sampled_tokens
+
     def generate(
         self,
         prompts: Iterable[str],
         max_new_tokens: int = 32,
-        sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
@@ -1513,6 +1613,8 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
+        if teacher_forcing is not None and self.sample_on_device:
+            raise ValueError("teacher_forcing is not supported when sample_on_device is True")
         # Initialize profiler
         profiler = BenchmarkProfiler()
         profiler.start("run")
@@ -1572,6 +1674,19 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Run one or more prefill+decode batches
         stop_token_ids = self._get_stop_token_ids() if stop_at_eos and teacher_forcing is None else set()
         for batch_idx in range(repeat_batches):
+            if self.sample_on_device:
+                # reset sampling state for each repeat batch, o/p tokens will be different for each repeat batch
+                assert self.sampling_params is not None, "sampling_params must be set when sampling on device"
+                if self.enable_trace and batch_idx > 0:
+                    # Previous batch deallocates trace-owned sampling output tensors.
+                    # Reset trace so the next batch captures fresh outputs.
+                    ttnn.synchronize_device(self.mesh_device)
+                    self.sampling_generator.reset_trace()
+                self._reset_sampling_state(
+                    self.sampling_params,
+                    self.batch_size,
+                    self.batch_size_per_row,
+                )
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
                 teacher_forcing.reset()
@@ -1647,7 +1762,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                             prefill_logits_sampled_host = self._tokens_from_device(
                                 prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
                             )
-                            pred_token = prefill_logits_sampled_host[0]
+                            pred_token = int(prefill_logits_sampled_host[0].item())
                             ttnn.deallocate(prefill_logits)
                             ttnn.deallocate(prefill_logits_sampled_device)
                         else:
@@ -1655,7 +1770,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 prefill_logits, torch.Tensor
                             ), "prefill_logits should be a torch.Tensor on host"
                             last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
-                            pred_token = self._sample_greedy_on_host(last_token_logits)
+                            pred_token = int(
+                                self._sample_on_host(last_token_logits.unsqueeze(0), start_user_idx=user_id).item()
+                            )
                         prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
                     self.ccl.reset_sem_counters()
                 if use_mtp_path:
@@ -1792,7 +1909,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                             break
                         logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                         profiler.start(f"decode_time_{gen_idx}")
-                        logits = self.decode_forward(
+                        decode_logits = self.decode_forward(
                             tokens=next_tokens,
                             start_pos=positions,
                             batch_size_per_row=self.batch_size_per_row,
@@ -1806,15 +1923,17 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_forward_passes += 1
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
-                            pred_tokens_device = self._sample_tokens_device(logits, enable_trace=self.enable_trace)
+                            pred_tokens_device = self._sample_tokens_device(
+                                decode_logits, enable_trace=self.enable_trace
+                            )
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                             )
                             if not self.enable_trace:
-                                ttnn.deallocate(logits)
+                                ttnn.deallocate(decode_logits)
                                 ttnn.deallocate(pred_tokens_device)
                         else:
-                            pred_tokens = self._sample_greedy_on_host(logits)
+                            pred_tokens = self._sample_on_host(decode_logits)
                         if teacher_forcing is not None:
                             # Record user-0 prediction for accuracy, then force teacher token.
                             forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -1943,10 +2062,27 @@ class DeepseekGenerator(WarmupForwardMixin):
         if mtp_verifies is not None:
             statistics["mtp_verifies"] = mtp_verifies
 
+        model_params = {
+            "mesh_device": f"{self.mesh_device.shape[0]}x{self.mesh_device.shape[1]}",
+            "model_path": str(self.model_path),
+            "cache_dir": str(self.cache_dir),
+            "batch_size": self.batch_size,
+            "repeat_batches": repeat_batches,
+            "enable_trace": self.enable_trace,
+            "sample_on_device": self.sample_on_device,
+            "num_hidden_layers": self.hf_config.num_hidden_layers,
+            "random_weights": self.random_weights,
+            "sampling": {
+                "temperature": self.sampling_params.temperature,
+                "top_k": self.sampling_params.top_k,
+                "top_p": self.sampling_params.top_p,
+            },
+        }
+
         for page_tables in temp_decode_page_tables:
             self._release_page_table_tuple(page_tables)
 
-        return generations, statistics
+        return generations, statistics, model_params
 
     def _encode_prompt(self, prompt: str) -> List[int]:
         # Use HF chat template if a tokenizer is provided; otherwise synthesize simple token ids
