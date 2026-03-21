@@ -12,8 +12,11 @@ only tensor-address slots on repeat launches.
 ``(container kind, tree shape, branch program_cache_key / descriptor hash)``.
 Cache lookup never accesses :attr:`DeferredOpDescriptor.descriptor`.
 On a hit, cached device tensors are checked for deallocated mesh storage; stale
-entries are dropped so a new mesh after ``close_mesh_device`` never reuses dead
-buffers.
+entries for **that** key are dropped so a new mesh after ``close_mesh_device``
+never reuses dead buffers. There is no full-cache sweep (hot-path cost); keys
+that are never queried again may leave inactive rows until
+:func:`clear_build_cache` or process exit. The map is bounded by how many
+distinct fusion shapes you build in one process.
 
 **Steady state:** reuse branch descriptor objects, update their IO lists in place,
 then ``fused.launch()`` (no args) — it refreshes merged IO from the branch refs
