@@ -196,19 +196,9 @@ Tensor Tensor::from_vector(
     return res;
 }
 
-template <>
-std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
-    return tensor_impl::host_tensor::to_vector<float>(cpu_tensor.host_tensor());
-}
-
 template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) const {
-    TT_FATAL(
-        this->dtype() == convert_to_data_type<T>(),
-        "Unsupported data type for to_vector: got {}, expected: {}",
-        this->dtype(),
-        convert_to_data_type<T>());
+    // Type support is checked by HostTensor::to_vector
     auto cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     return tensor_impl::host_tensor::to_vector<T>(cpu_tensor.host_tensor());
 }
