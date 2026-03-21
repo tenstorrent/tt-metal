@@ -18,6 +18,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 
 #include <tt_stl/span.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include <algorithm>
 
