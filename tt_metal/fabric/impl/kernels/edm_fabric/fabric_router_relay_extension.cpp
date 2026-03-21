@@ -176,7 +176,7 @@ __attribute__((optimize("Os"))) FORCE_INLINE void wait_for_mux_endpoint_ready(
 }
 
 template <uint8_t NUM_BUFFERS>
-__attribute__((optimize("Os"))) void setup_channel(
+void setup_channel(
     tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
