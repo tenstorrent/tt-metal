@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
@@ -65,6 +66,13 @@ public:
     const std::vector<NodeId>& get_neighbors(const NodeId& node) const;
 
     /**
+     * @brief Get read-only access to the adjacency map
+     *
+     * @return const AdjacencyMap& Read-only reference to the internal adjacency map
+     */
+    const AdjacencyMap& get_adjacency_map() const;
+
+    /**
      * @brief Print adjacency map for debugging
      *
      * Prints the graph structure showing each node and its neighbors.
@@ -72,7 +80,7 @@ public:
      *
      * @param graph_name Name to identify this graph in the output
      */
-    void print_adjacency_map(const std::string& graph_name = "Graph") const;
+    void print_adjacency_map(const std::string& graph_name = "Graph", bool quiet_mode = false) const;
 
 private:
     AdjacencyMap adj_map_;
@@ -80,6 +88,7 @@ private:
 };
 
 std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraph& mesh_graph);
+std::map<MeshId, AdjacencyGraph<FabricNodeId>> build_adjacency_graph_logical(const MeshGraphDescriptor& mgd);
 
 std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> build_adjacency_graph_physical(
     tt::tt_metal::ClusterType cluster_type,
@@ -354,6 +363,32 @@ public:
         const;
 
     /**
+     * @brief Set same-group constraint (for UNSET host rank binding)
+     *
+     * Ensures that targets in the same target group can only map to globals in one global group.
+     * The solver picks the assignment; no pre-assignment. Apply required constraints (e.g. rank
+     * must map to specific host) after this for explicit bindings.
+     *
+     * @param target_groups Vector of sets; each set is target nodes (e.g. fabric nodes per rank)
+     * @param global_groups Vector of sets; each set is global nodes (e.g. ASICs per host)
+     */
+    void set_same_rank_groups_constraint(
+        const std::vector<std::set<TargetNode>>& target_groups, const std::vector<std::set<GlobalNode>>& global_groups);
+
+    const std::vector<std::set<TargetNode>>& get_same_rank_target_groups() const { return same_rank_target_groups_; }
+    const std::vector<std::set<GlobalNode>>& get_same_rank_global_groups() const { return same_rank_global_groups_; }
+
+    /**
+     * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
+     *
+     * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
+     * These pairs are stored separately and exclude specific mappings without requiring seeding.
+     *
+     * @return const std::set<std::pair<TargetNode, GlobalNode>>& Set of forbidden pairs
+     */
+    const std::set<std::pair<TargetNode, GlobalNode>>& get_forbidden_pairs() const;
+
+    /**
      * @brief Validate constraints - returns false if invalid
      *
      * If saved_state is provided and validation fails, restores the saved state before returning false
@@ -363,18 +398,39 @@ public:
      */
     bool validate(const std::map<TargetNode, std::set<GlobalNode>>* saved_state = nullptr);
 
+    /**
+     * @brief Set quiet mode for constraint validation messages
+     *
+     * When quiet mode is enabled, overconstrained validation messages are logged at debug level
+     * instead of info level to reduce verbosity.
+     *
+     * @param quiet_mode If true, suppress info-level constraint validation messages
+     */
+    void set_quiet_mode(bool quiet_mode) const;
+
 private:
     // Internal representation: intersection of all constraints
     std::map<TargetNode, std::set<GlobalNode>> valid_mappings_;      // Required constraints
     std::map<TargetNode, std::set<GlobalNode>> preferred_mappings_;  // Preferred constraints
 
+    // Forbidden (target, global) pairs - used when target has no valid_mappings_ entry.
+    // Allows add_forbidden_constraint to work without seeding valid_mappings_.
+    std::set<std::pair<TargetNode, GlobalNode>> forbidden_pairs_;
+
     // Cardinality constraints: vector of (mapping_pairs, min_count) tuples
     // Each constraint requires that at least min_count of the mapping_pairs must be satisfied
     std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>> cardinality_constraints_;
 
+    // Same-group constraint: targets in a target group map to at most one global group
+    std::vector<std::set<TargetNode>> same_rank_target_groups_;
+    std::vector<std::set<GlobalNode>> same_rank_global_groups_;
+
     // Track which global nodes are exclusively reserved by many-to-many constraints
     // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
     std::map<GlobalNode, std::set<TargetNode>> reserved_global_nodes_;
+
+    // Quiet mode flag - mutable so it can be set even on const objects
+    mutable bool quiet_mode_ = false;
 
     // Helper to intersect two sets
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
@@ -549,6 +605,10 @@ struct ConstraintIndexData {
     // If empty for a target_idx, that target can map to any global node
     std::vector<std::vector<size_t>> restricted_global_indices;
 
+    // Forbidden mappings: target_idx -> sorted vector of forbidden global_indices
+    // Pairs from add_forbidden_constraint when target had no valid_mappings_ entry
+    std::vector<std::vector<size_t>> forbidden_global_indices;
+
     // Preferred mappings: target_idx -> vector of preferred global_indices
     // Used for optimization, doesn't restrict valid mappings
     std::vector<std::vector<size_t>> preferred_global_indices;
@@ -556,6 +616,11 @@ struct ConstraintIndexData {
     // Cardinality constraints: vector of (mapping_pairs_as_indices, min_count) tuples
     // Each constraint requires that at least min_count of the (target_idx, global_idx) pairs must be satisfied
     std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>> cardinality_constraints;
+
+    // Same-group: target_idx/global_idx -> group_id (-1 or SIZE_MAX if not in any group)
+    std::vector<int> global_to_same_rank_group;
+    std::vector<std::set<size_t>> same_rank_groups;
+    std::vector<size_t> target_to_group;
 
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
@@ -602,6 +667,16 @@ struct ConstraintIndexData {
 
     // Helper: check if mapping is valid
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const;
+
+    /**
+     * @brief Check if assigning (target_idx, global_idx) satisfies same-rank groups constraint
+     *
+     * Ensures no target-group boundary splitting: all other targets in target_idx's group
+     * that are already assigned must map to globals in the same global group as global_idx.
+     * Multiple target groups may share a global group.
+     */
+    bool check_same_rank_constraint(
+        size_t target_idx, size_t global_idx, const std::vector<int>& mapping, const std::vector<bool>& used) const;
 
     // Helper: get candidates for target node
     // Returns restricted candidates if available, otherwise returns empty vector (meaning all are valid)
@@ -853,6 +928,7 @@ public:
 
 private:
     SearchState state_;  // Internal state for the search
+    bool quiet_mode_ = false;  // Quiet mode flag to suppress verbose debug messages
     /**
      * @brief Hash state for memoization (FNV-1a hash)
      *

@@ -8,9 +8,9 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor RotaryEmbeddingOperation::invoke(
+ttnn::Tensor rotary_embedding(
     const Tensor& input_tensor,
     const Tensor& cos_cache,
     const Tensor& sin_cache,
@@ -91,4 +91,4 @@ ttnn::Tensor RotaryEmbeddingOperation::invoke(
         kernel_config_val);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

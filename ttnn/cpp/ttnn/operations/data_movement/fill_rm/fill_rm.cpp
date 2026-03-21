@@ -7,9 +7,9 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 
-ttnn::Tensor FillRMOperation::invoke(
+ttnn::Tensor fill_rm(
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -24,7 +24,7 @@ ttnn::Tensor FillRMOperation::invoke(
     return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, val_hi, val_lo, output_memory_config);
 }
 
-ttnn::Tensor FillOnesRMOperation::invoke(
+ttnn::Tensor fill_ones_rm(
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -37,4 +37,4 @@ ttnn::Tensor FillOnesRMOperation::invoke(
     return ttnn::prim::fill_rm(N, C, H, W, hFill, wFill, any, 1.0f, 0.0f, output_memory_config);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

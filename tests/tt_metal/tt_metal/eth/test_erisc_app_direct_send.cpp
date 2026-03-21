@@ -14,9 +14,7 @@
 #include <enchantum/enchantum.hpp>
 #include <map>
 #include <string>
-#include <thread>
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -24,15 +22,13 @@
 #include <tt_stl/assert.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "jit_build/build.hpp"
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "mesh_device.hpp"
 #include "multi_device_fixture.hpp"
@@ -250,7 +246,7 @@ bool send_over_eth(
             receiver_device->id(), eth_core, zero, app_sync_info_base_addr);
     }
 
-    // TODO: is it possible that receiver core app is stil running when we push inputs here???
+    // TODO: is it possible that receiver core app is still running when we push inputs here???
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         sender_device->id(), sender_core, inputs, erisc_unreserved_base_addr);
@@ -270,12 +266,10 @@ bool send_over_eth(
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance()
-                                    .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
-                                    .get_target_out_path("");
-    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance()
-                                      .get_firmware_build_state(receiver_device->build_id(), active_eth_index, 0, 0)
-                                      .get_target_out_path("");
+    auto sender_firmware_path = tt_metal::BuildEnvManager::get_instance().get_firmware_binary_path(
+        sender_device->build_id(), active_eth_index, 0, 0);
+    auto receiver_firmware_path = tt_metal::BuildEnvManager::get_instance().get_firmware_binary_path(
+        receiver_device->build_id(), active_eth_index, 0, 0);
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);
 

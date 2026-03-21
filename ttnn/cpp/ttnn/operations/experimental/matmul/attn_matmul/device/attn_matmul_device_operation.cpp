@@ -6,6 +6,7 @@
 #include "attn_matmul_program_factory.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
@@ -44,7 +45,7 @@ void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             (args.num_tokens.has_value() and args.transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(args.num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL(args.num_tokens.value() % 32 == 0, "Number of tokens must be divisible by 32!");
         read_from_kv_cache = true;
     }
 
@@ -102,16 +103,16 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
     return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(tensor_args.input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(tensor_args.input_tensor_b.storage()));
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_a),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_a.storage_type());
+    TT_FATAL(
+        is_device_tensor(tensor_args.input_tensor_b),
+        "Unexpected Tensor type {}",
+        tensor_args.input_tensor_b.storage_type());
     return operation::hash_operation<AttnMatmulDeviceOperation>(
         args,
         args.transpose_hw,

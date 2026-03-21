@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "mesh_command_queue_base.hpp"
 
 #include <mesh_device.hpp>
@@ -22,6 +23,12 @@
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed {
+
+tt::TargetDevice MeshCommandQueueBase::get_target_device_type() const {
+    return tt::tt_metal::MetalContext::instance(this->device()->impl().get_context_id())
+        .get_cluster()
+        .get_target_device_type();
+}
 
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
@@ -214,7 +221,8 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
         this->read_sharded_buffer(*buffer, host_data);
     } else {
         std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
-            distributed::ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_data)};
+            distributed::ShardDataTransfer{MeshCoordinate::zero_coordinate(buffer->device()->shape().dims())}.host_data(
+                host_data)};
         // enqueue_read_shards will call lock_api_function_(), no need to call it here
         this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
     }

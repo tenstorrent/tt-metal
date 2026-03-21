@@ -6,7 +6,6 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "api/debug/assert.h"
-
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
@@ -40,7 +39,10 @@ void kernel_main() {
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(25);
     constexpr uint32_t num_tree_reduction_rounds = get_compile_time_arg_val(26);
-    constexpr auto out_args = TensorAccessorArgs<27>();
+    constexpr uint32_t original_block_size = get_compile_time_arg_val(27);
+    constexpr bool has_block_padding = original_block_size > 0 && original_block_size < 32;
+
+    constexpr auto out_args = TensorAccessorArgs<28>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -106,6 +108,12 @@ void kernel_main() {
             // cur_pos of -1 indicates that the user should be skipped
             return;
         }
+    }
+
+    // When block_size < TILE_HEIGHT, convert cur_pos to padded tile space.
+    // Only for causal mode; non-causal cur_pos is already in padded space.
+    if constexpr (has_block_padding && is_causal) {
+        cur_pos = (cur_pos / original_block_size) * 32 + (cur_pos % original_block_size);
     }
 
     auto Sk_chunk_t_dynamic = get_dynamic_Sk_chunk_t<Sk_chunk_t, max_dynamic_chunk_size>(cur_pos);
@@ -181,6 +189,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
+    constexpr uint32_t cb_block_pad_mask = tt::CBIndex::c_14;          // Block padding mask (block_size < TILE_HEIGHT)
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
@@ -200,6 +209,12 @@ void kernel_main() {
         // If this core processes the first chunk and we need to apply sliding window mask, generate it here
         generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
             k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
+    }
+
+    // Generate block padding mask: rows [0, block_size) = 0, rows [block_size, 32) = -inf.
+    // Pushed once and reused (not popped) by compute for every K chunk.
+    if constexpr (has_block_padding) {
+        generate_block_padding_mask<cb_block_pad_mask, PNHt>(Sk_chunk_t_dynamic, original_block_size);
     }
 
     // generate and send mask to compute if causal (only if we have local data to process)
@@ -241,7 +256,6 @@ void kernel_main() {
 
             for (uint32_t round = 0; round < num_active_rounds; ++round) {
                 uint32_t child_id = active_children_per_round[round];
-
                 if (child_id != UINT32_MAX) {
                     // Wait for this specific child to send its results
                     // Poll until round-specific nibble is >= 1

@@ -6,6 +6,7 @@ add_library(unit_tests_sfpi_lib OBJECT)
 add_library(TT::Metalium::Test::SFPI ALIAS unit_tests_sfpi_lib)
 
 target_sources(unit_tests_sfpi_lib PRIVATE ${UNIT_TESTS_SFPI_SOURCES})
+target_precompile_headers(unit_tests_sfpi_lib REUSE_FROM metal_common_pch)
 target_include_directories(
     unit_tests_sfpi_lib
     BEFORE

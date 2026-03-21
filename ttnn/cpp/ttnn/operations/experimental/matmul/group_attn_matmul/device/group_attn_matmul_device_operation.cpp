@@ -135,7 +135,7 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             (operation_attributes.num_tokens.has_value() and operation_attributes.transpose_hw.has_value()),
             "Must provide num_tokens and transpose_hw flag if we are reading from cache for in1!");
-        TT_FATAL(operation_attributes.num_tokens.value() % 32 == 0, "Number of tokens must be divisble by 32!");
+        TT_FATAL(operation_attributes.num_tokens.value() % 32 == 0, "Number of tokens must be divisible by 32!");
         read_from_kv_cache = true;
     }
 
@@ -204,19 +204,13 @@ GroupAttnMatmulDeviceOperation::tensor_return_value_t GroupAttnMatmulDeviceOpera
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t GroupAttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_b.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_b.storage()));
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
+    TT_FATAL(is_device_tensor(input_tensor_b), "Unexpected Tensor type {}", input_tensor_b.storage_type());
     return operation::hash_operation<GroupAttnMatmulDeviceOperation>(
         operation_attributes.transpose_hw,
         operation_attributes.out_subblock_w,

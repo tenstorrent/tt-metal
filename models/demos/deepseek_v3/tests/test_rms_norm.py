@@ -12,7 +12,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNo
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -27,13 +27,13 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": get_fabric_config()}],
     indirect=True,
 )
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
-        ("decode", 32),
+        ("decode", USERS_PER_ROW),
         ("prefill", _prefill_seq_len),
     ],
 )
@@ -103,6 +103,9 @@ def test_forward_pass(
         cache_path,
         mesh_device,
         force_recalculate_weight_config,
+        test_name="test_rms_norm",
+        real_weights=reference_layernorm_path is not None,
+        layer_id=reference_layernorm_path if reference_layernorm_path is not None else hf_config_size_attr,
     )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     model_state = RMSNormClass.create_state(

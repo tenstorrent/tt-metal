@@ -39,7 +39,11 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 def test_indexed_slice(seed, B, b, tt_dtype, device):
     torch.manual_seed(seed)
 
-    dtype = tt_dtype_to_torch_dtype[tt_dtype]
+    if tt_dtype == ttnn.uint32:
+        dtype = torch.int32
+    else:
+        dtype = tt_dtype_to_torch_dtype[tt_dtype]
+
     zero_tensor = torch.zeros(1, 1, 1, b, dtype=dtype)
     if tt_dtype == ttnn.uint32:
         non_zero_tensor = torch.randint(1, 100, (1, 1, 1, B - b), dtype=dtype)
@@ -65,6 +69,7 @@ def test_indexed_slice(seed, B, b, tt_dtype, device):
         .cpu()
         .to(ttnn.ROW_MAJOR_LAYOUT)
         .to_torch()
+        .to(torch.int32)
     )
 
     golden_output = torch.arange(start=b, end=B, step=1, dtype=torch.int32)

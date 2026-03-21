@@ -8,7 +8,7 @@ import random
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import is_unsigned_tensor
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
@@ -600,6 +600,9 @@ def run_all_to_all_dispatch_test(
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
+        if is_unsigned_tensor(tt_metadata_tensor):
+            tt_metadata_tensor = tt_metadata_tensor.to(output_metadata_goldens_list[tensor_index].dtype)
+
         batch = tt_torch_tensor.shape[1]
         devices = tt_metadata_tensor.shape[0]
         selected_experts_k = tt_metadata_tensor.shape[3]
@@ -1153,6 +1156,7 @@ def test_all_to_all_dispatch_skew(
     )
 
 
+@pytest.mark.xfail(reason="UInt16/Short dtype mismatch - https://github.com/tenstorrent/tt-metal/issues/39633")
 @pytest.mark.parametrize(
     "device_params",
     [

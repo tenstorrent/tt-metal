@@ -4,9 +4,11 @@
 
 #include "profiler_initializer.hpp"
 
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <device.hpp>
+#include "context/context_types.hpp"
 #include "device/device_impl.hpp"
 #include "impl/context/context_descriptor.hpp"
 
@@ -30,38 +32,43 @@ void ProfilerInitializer::init(
 #if defined(TRACY_ENABLE)
     devices_ = devices;
 
-    if (!getDeviceProfilerState()) {
-        return;
+    for (auto* dev : devices) {
+        TT_ASSERT(
+            dev->get_context_id() == descriptor_->metal_context().get_context_id(),
+            "All devices must belong to the same MetalEnv / context ID");
     }
 
-    for (auto* dev : devices_) {
-        // For Galaxy init, we only need to loop over mmio devices
-        if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
-            continue;
-        }
-        auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
-        detail::InitDeviceProfiler(dev);
-        log_info(tt::LogMetal, "Profiler started on device {}", dev->id());
-        if (!skip_remote_devices_) {
-            for (const auto& tunnel : tunnels_from_mmio) {
-                // Need to create devices from farthest to the closest.
-                for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
-                    uint32_t mmio_controlled_device_id = tunnel[ts];
-                    auto it = std::find_if(devices_.begin(), devices_.end(), [&](Device* d) {
-                        return d->id() == mmio_controlled_device_id;
-                    });
-                    if (it != devices_.end()) {
-                        detail::InitDeviceProfiler(*it);
-                        log_info(tt::LogMetal, "Profiler started on remote device {}", (*it)->id());
+    if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
+        for (auto* dev : devices_) {
+            // For Galaxy init, we only need to loop over mmio devices
+            if (cluster_.get_associated_mmio_device(dev->id()) != dev->id()) {
+                continue;
+            }
+            auto tunnels_from_mmio = cluster_.get_tunnels_from_mmio_device(dev->id());
+            detail::InitDeviceProfiler(dev);
+            log_info(tt::LogMetal, "Profiler started on device {}", dev->id());
+            if (!skip_remote_devices_) {
+                for (const auto& tunnel : tunnels_from_mmio) {
+                    // Need to create devices from farthest to the closest.
+                    for (uint32_t ts = tunnel.size() - 1; ts > 0; ts--) {
+                        uint32_t mmio_controlled_device_id = tunnel[ts];
+                        auto it = std::find_if(devices_.begin(), devices_.end(), [&](Device* d) {
+                            return d->id() == mmio_controlled_device_id;
+                        });
+                        if (it != devices_.end()) {
+                            detail::InitDeviceProfiler(*it);
+                            log_info(tt::LogMetal, "Profiler started on remote device {}", (*it)->id());
+                        }
                     }
                 }
             }
         }
-    }
-    detail::ProfilerSync(ProfilerSyncState::INIT);
+        detail::ProfilerSync(ProfilerSyncState::INIT);
 
-    if (profiler_state_manager_ && rtoptions_.get_experimental_noc_debug_dump_enabled()) {
-        tt::tt_metal::LaunchIntervalBasedProfilerReadThread(std::vector<IDevice*>(devices_.begin(), devices_.end()));
+        if (profiler_state_manager_ && rtoptions_.get_experimental_noc_debug_dump_enabled()) {
+            tt::tt_metal::LaunchIntervalBasedProfilerReadThread(
+                std::vector<IDevice*>(devices_.begin(), devices_.end()));
+        }
     }
 #endif
 
@@ -70,19 +77,30 @@ void ProfilerInitializer::init(
 
 void ProfilerInitializer::configure() {}
 
-void ProfilerInitializer::teardown() {
-    // Read profiler results from dispatch cores
-    for (auto* dev : devices_) {
-        detail::ReadDeviceProfilerResults(static_cast<IDevice*>(dev), ProfilerReadState::ONLY_DISPATCH_CORES);
+void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Dispatch),
+        "ProfilerInitializer must be torn down after DispatchKernelInitializer");
+    TT_FATAL(
+        !init_done.contains(InitializerKey::Fabric),
+        "ProfilerInitializer must be torn down after FabricFirmwareInitializer");
+    if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
+        // Read profiler results from dispatch cores
+        for (auto* dev : devices_) {
+            TT_ASSERT(dev != nullptr, "Device is nullptr");
+            detail::ReadDeviceProfilerResults(static_cast<IDevice*>(dev), ProfilerReadState::ONLY_DISPATCH_CORES);
+        }
+
+        detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     }
-    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
 
     devices_.clear();
     initialized_ = false;
+    init_done.erase(key);
 }
 
 void ProfilerInitializer::post_teardown() {
-    if (getDeviceProfilerState()) {
+    if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
         // Device profiling data is dumped here instead of MetalContext::teardown() because MetalContext::teardown() is
         // called as a std::atexit() function, and ProfilerStateManager::cleanup_device_profilers() cannot be safely
         // called from a std::atexit() function because it creates new threads, which is unsafe during program

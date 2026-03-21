@@ -6,9 +6,11 @@
 #include "device/prod_op_all.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
@@ -74,13 +76,36 @@ Tensor prod_impl(
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
-    const int size = static_cast<int>(input_a.logical_shape().rank());
+    std::size_t rank_st = input_a.logical_shape().rank();
+    TT_FATAL(rank_st <= std::numeric_limits<int>::max(), "Rank is too large to convert to int");
+    const int old_rank = static_cast<int>(rank_st);
 
-    const auto old_rank = input_a.logical_shape().rank();
+    TT_FATAL(
+        !dim.has_value() || (*dim >= -old_rank && *dim <= old_rank - 1) || (old_rank == 0 && (*dim == 0 || *dim == -1)),
+        "Dimension for prod is out of range (expected to be in range of [{}, {}])",
+        (old_rank == 0) ? -1 : -old_rank,
+        (old_rank == 0) ? 0 : (old_rank - 1));
+
     const ttnn::Shape& input_shape = input_a.logical_shape();
 
-    // If no dim is provided, compute the prod across all dimensions
-    if (!dim.has_value()) {
+    // If the input is a rank 0 tensor (scalar), return a copy of it
+    if (old_rank == 0) {
+        return ttnn::clone(input_a, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
+    }
+
+    // For a zero volume tensor, return a zero volume tensor with the shape adjusted for keepdim.
+    if (input_a.logical_volume() == 0) {
+        ttnn::SmallVector<int> dim_vector = reduction_common::generate_reduce_dim(input_a, dim);
+        return reduction_common::zero_volume_reduce<reduction_common::ReduceType::Prod>(
+            input_a, dim_vector, keepdim, output_mem_config);
+    }
+
+    // If no dim is provided, compute the prod across all dimensions.
+    // Similarly, if the tensor has only one dimension, compute the prod across all dimensions
+    // (which is just the one dimension).
+    // Note that validation of the dim parameter above guarantees that, when dim is provided,
+    // it is the single valid dimension (0 or -1 for rank 1).
+    if (!dim.has_value() || old_rank == 1) {
         Tensor result = compute_prod_all(input_a, output_mem_config);
         if (keepdim) {
             // Reshape to have all dimensions (as many as the input rank) set to 1.
@@ -90,17 +115,10 @@ Tensor prod_impl(
         return result;
     }
 
-    TT_FATAL(size > 0, "Tensor has no dimensions");
-    TT_FATAL(
-        *dim >= -size && *dim <= size - 1,
-        "Dimension for prod is out of range (expected to be in range of [{}, {}]",
-        -size,
-        size - 1);
-
     // For higher dimension Tensors, we need to squeeze to 4D to perform the reduction
     if (old_rank > 4) {
-        // Bring dim into range [0, size - 1]
-        const int64_t positive_dim = *dim < 0 ? *dim + size : *dim;
+        // Bring dim into range [0, old_rank - 1]
+        const int64_t positive_dim = *dim < 0 ? *dim + old_rank : *dim;
 
         // Prod only can do reduction on dim0 or dim1.
         // After squeezing the ND tensor to 4D, the third last dimension will become the second (i.e, [1]) dimension

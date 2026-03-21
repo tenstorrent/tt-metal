@@ -13,8 +13,8 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>
 
-#include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/types.hpp"
 
@@ -22,75 +22,7 @@ namespace ttnn::operations::ternary {
 
 namespace {
 
-template <typename ternary_operation_t>
-void bind_ternary_composite_float(
-    nb::module_& mod,
-    const ternary_operation_t& operation,
-    const std::string& description,
-    const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16, FLOAT32") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        .. math::
-            {3}
-
-        Args:
-            input_tensor_a (ttnn.Tensor): the input tensor to be added.
-            input_tensor_b (ttnn.Tensor): the input numerator tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input denominator tensor.
-
-
-        Keyword Args:
-            value (float, optional): scalar value to be multiplied with input_tensor_b.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {4}
-                 - TILE
-
-            bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        math,
-        supported_dtype);
-
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const Tensor& input_tensor_c,
-               float value,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, input_tensor_c, value, memory_config);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg("input_tensor_c"),
-            nb::kw_only(),
-            nb::arg("value"),
-            nb::arg("memory_config") = nb::none()});
-}
-
-template <typename ternary_operation_t>
-void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, const std::string& description) {
+void bind_ternary_where(nb::module_& mod, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -120,71 +52,51 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        "where",
+        "ttnn.where",
         description);
 
-    bind_registered_operation(
+    ttnn::bind_function<"where">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& predicate,
-               const TensorScalarVariant& true_value,
-               const TensorScalarVariant& false_value,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            // using static cast to disambiguate the template `where` and
+            // `where` with the fixed argument types.
+            static_cast<Tensor (*)(
+                const Tensor&,
+                const TensorScalarVariant&,
+                const TensorScalarVariant&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&)>(&ttnn::where),
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& predicate,
-               const int32_t& true_value,
-               const int32_t& false_value,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            &ttnn::where<int32_t>,
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& predicate,
-               const uint32_t& true_value,
-               const uint32_t& false_value,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            &ttnn::where<uint32_t>,
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename ternary_operation_t>
-void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, const std::string& description) {
+void bind_ternary_lerp(nb::module_& mod, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -220,51 +132,43 @@ void bind_ternary_lerp(nb::module_& mod, const ternary_operation_t& operation, c
 
             output_tensor dtype must match input dtype, or be FLOAT32 when inputs are BFLOAT16, or be BFLOAT16 when inputs are FLOAT32
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        "lerp",
+        "ttnn.lerp",
         description);
 
-    bind_registered_operation(
+    ttnn::bind_function<"lerp">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input,
-               const Tensor& end,
-               const Tensor& weight,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input, end, weight, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                const Tensor&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::lerp),
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input,
-               const Tensor& end,
-               float weight,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input, end, weight, memory_config, output_tensor);
-            },
+            nb::arg("output_tensor") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                float,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::lerp),
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
-template <typename ternary_operation_t>
-void bind_ternary_addc_operation(
+void bind_ternary_addcmul(
     nb::module_& mod,
-    const ternary_operation_t& operation,
     const std::string& description,
     const std::string& math,
     const std::string& supported_dtype = "BFLOAT16") {
@@ -301,37 +205,83 @@ void bind_ternary_addc_operation(
 
             Only TTT (tensor-tensor-tensor) variant is supported.
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        "addcmul",
+        "ttnn.addcmul",
         description,
         math,
         supported_dtype);
 
-    bind_registered_operation(
+    ttnn::bind_function<"addcmul">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_a,
-               const Tensor& input_b,
-               const Tensor& input_c,
-               float value,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) {
-                return self(input_a, input_b, input_c, value, memory_config, output_tensor);
-            },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
-            nb::arg("input_c"),
-            nb::kw_only(),
-            nb::arg("value") = 1.0f,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        &ttnn::addcmul,
+        nb::arg("input_a"),
+        nb::arg("input_b"),
+        nb::arg("input_c"),
+        nb::kw_only(),
+        nb::arg("value") = 1.0f,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename ternary_operation_t>
-void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, const std::string& description) {
+void bind_ternary_addcdiv(
+    nb::module_& mod,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16") {
+    auto doc = fmt::format(
+        R"doc(
+            {2}
+
+        .. math::
+            {3}
+
+        Args:
+            input_a (ttnn.Tensor): the first input tensor.
+            input_b (ttnn.Tensor): the second input tensor.
+            input_c (ttnn.Tensor): the third input tensor.
+
+        Keyword Args:
+            value (float, optional): scalar value used in the operation. Defaults to 1.0.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - FLOAT32, BFLOAT16, BFLOAT8_B
+                 - TILE
+
+            Only TTT (tensor-tensor-tensor) variant is supported.
+        )doc",
+        "addcdiv",
+        "ttnn.addcdiv",
+        description,
+        math,
+        supported_dtype);
+
+    ttnn::bind_function<"addcdiv">(
+        mod,
+        doc.c_str(),
+        &ttnn::addcdiv,
+        nb::arg("input_a"),
+        nb::arg("input_b"),
+        nb::arg("input_c"),
+        nb::kw_only(),
+        nb::arg("value") = 1.0f,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
+}
+
+void bind_ternary_mac(nb::module_& mod, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
             {2}
@@ -360,50 +310,36 @@ void bind_ternary_mac(nb::module_& mod, const ternary_operation_t& operation, co
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        "mac",
+        "ttnn.mac",
         description);
 
-    bind_registered_operation(
+    ttnn::bind_function<"mac">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const Tensor& input_tensor_c,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, input_tensor_c, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+                &ttnn::mac),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::arg("input_tensor_c"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value1,
-               float value2,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, value1, value2, memory_config);
-            },
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const Tensor&, float, float, const std::optional<MemoryConfig>&>(&ttnn::mac),
             nb::arg("input_tensor_a"),
             nb::arg("value1"),
             nb::arg("value2"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace
 
 void py_module(nb::module_& mod) {
     // new imported
-    bind_ternary_addc_operation(
+    bind_ternary_addcmul(
         mod,
-        ttnn::addcmul,
         R"doc(Multiplies :attr:`input_tensor_b` by a scalar, multiplies the result
             element-wise by :attr:`input_tensor_c`, and adds it to
             :attr:`input_tensor_a`.
@@ -411,9 +347,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + (value * \mathrm{input\_tensor\_b}_i * \mathrm{input\_tensor\_c}_i))doc",
         "FLOAT32, BFLOAT16, BFLOAT8_B, INT32");
 
-    bind_ternary_addc_operation(
+    bind_ternary_addcdiv(
         mod,
-        ttnn::addcdiv,
         R"doc(Multiplies :attr:`input_tensor_b` by a scalar, divides the result
             element-wise by :attr:`input_tensor_c`, and adds it to
             :attr:`input_tensor_a`.
@@ -422,17 +357,14 @@ void py_module(nb::module_& mod) {
         "FLOAT32, BFLOAT16, BFLOAT8_B");
     bind_ternary_where(
         mod,
-        ttnn::where,
         R"doc(Selects elements from :attr:`true_value` or :attr:`false_value` depending on the corresponding value in :attr:`condition`. For each element, if the corresponding entry in :attr:`condition` is 1, the output element is taken from :attr:`true_value`; otherwise, it is taken from :attr:`false_value`.)doc");
 
     bind_ternary_lerp(
         mod,
-        ttnn::lerp,
         R"doc(Computes Lerp on :attr:`input`, :attr:`end` and :attr:`weight` and returns the tensor with the same layout as :attr:`input`)doc");
 
     bind_ternary_mac(
         mod,
-        ttnn::mac,
         R"doc(Computes Mac on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 }
 

@@ -139,6 +139,10 @@ def main() -> None:
             print(f"⚠️ Failed to convert {notebook}, continuing.")
             continue
 
+        if not tmp_file.exists():
+            print(f"⚠️ nbconvert did not produce {tmp_file}, skipping.")
+            continue
+
         if not output_file.exists():
             shutil.move(str(tmp_file), str(output_file))
             new_files.append(output_file)

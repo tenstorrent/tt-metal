@@ -4,12 +4,11 @@
 
 #include "dram_prefetcher.hpp"
 #include <optional>
-#include <tt-metalium/global_circular_buffer.hpp>
 #include "device/dram_prefetcher_device_operation.hpp"
 
-namespace ttnn::operations::dram_prefetcher {
+namespace ttnn {
 
-Tensor ExecuteDramPrefetcher::invoke(
+Tensor dram_prefetcher(
     std::vector<ttnn::Tensor>& tensors,
     const uint32_t num_layers,
     const std::optional<const GlobalCircularBuffer>& global_cb,
@@ -17,4 +16,4 @@ Tensor ExecuteDramPrefetcher::invoke(
     return ttnn::prim::dram_prefetcher(tensors, num_layers, global_cb, enable_performance_mode);
 }
 
-}  // namespace ttnn::operations::dram_prefetcher
+}  // namespace ttnn

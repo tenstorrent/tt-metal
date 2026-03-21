@@ -5,10 +5,11 @@
 #include "layernorm_fw_program_factory.hpp"
 
 #include <cstdint>
-#include <metal/ttnn_all_includes.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "tt-metalium/device.hpp"
+#include "tt-metalium/host_api.hpp"
 
 namespace {
 
@@ -118,10 +119,10 @@ bool fits_in_l1_check(
 namespace ttml::metal::ops::layernorm_fw::device {
 
 struct LayerNormForwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
+    tt::tt_metal::KernelHandle reader{};
+    tt::tt_metal::KernelHandle writer{};
+    tt::tt_metal::KernelHandle compute_group_1{};
+    tt::tt_metal::KernelHandle compute_group_2{};
 };
 
 void assign_per_core_runtime_args(

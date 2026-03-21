@@ -8,8 +8,6 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt_stl/reflection.hpp>
-
 namespace ttnn::prim {
 
 struct BroadcastParams {
@@ -39,7 +37,7 @@ struct BroadcastParams {
 
     // Add attributes method for reflection
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("sender_coord", sender_coord);
         attrs.emplace_back("num_links", num_links);

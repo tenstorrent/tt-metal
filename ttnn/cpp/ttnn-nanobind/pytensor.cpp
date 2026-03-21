@@ -45,7 +45,7 @@
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
@@ -155,6 +155,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 
+    TT_FATAL(converted_tensor_handle != nullptr, "parse_py_tensor: ndarray_import failed.");
     return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
 }
 
@@ -162,7 +163,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 // `shape` and `data_type` information.
 struct RowMajorHostBuffer {
     static RowMajorHostBuffer create_padded(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
-        tt::stl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
+        ttsl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
             .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
@@ -171,7 +172,7 @@ struct RowMajorHostBuffer {
     }
 
     static RowMajorHostBuffer create_logical(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
-        tt::stl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
+        ttsl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
             .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
@@ -191,7 +192,7 @@ struct RowMajorHostBuffer {
 RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, const bool padded_output) {
     // conversion to Host storage after
     // issue #31136: to_torch with mesh_composer=None on device-sharded tensor
-    if (std::holds_alternative<DeviceStorage>(tt_tensor.storage())) {
+    if (is_device_tensor(tt_tensor)) {
         return convert_to_row_major_host_buffer(tt_tensor.cpu(), padded_output);
     }
 
@@ -228,7 +229,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
                 const auto& tile = tensor_spec.tile();
-                tt::stl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
+                ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
                 auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
                                                ? unpack_bfp8_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
@@ -242,26 +243,17 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
         TT_THROW("Unreachable");
     };
 
-    return convert_to_logical(std::visit(
-        tt::stl::overloaded{
-            [](const HostStorage& storage) {
-                std::vector<HostBuffer> buffers;
-                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-                TT_FATAL(
-                    buffers.size() == 1,
-                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
-                    "composer "
-                    "to concatenate multi-device shards.",
-                    storage.buffer().shape());
-                return buffers.front();
-            },
-            [&tt_tensor](auto&&) -> HostBuffer {
-                TT_THROW(
-                    "Tensor with {} cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.storage()));
-            },
-        },
-        tt_tensor.storage()));
+    TT_FATAL(is_cpu_tensor(tt_tensor), "Tensor with {} cannot be converted to torch", tt_tensor.storage_type());
+    const auto& storage = tt_tensor.host_storage();
+    std::vector<HostBuffer> buffers;
+    storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+    TT_FATAL(
+        buffers.size() == 1,
+        "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh "
+        "composer "
+        "to concatenate multi-device shards.",
+        storage.buffer().shape());
+    return convert_to_logical(buffers.front());
 }
 
 // Overload that converts a distributed tensor to a RowMajorHostBuffer.
@@ -269,10 +261,9 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 // The returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(
     const Tensor& tt_tensor, const ttnn::distributed::MeshToTensor& mesh_composer) {
-    //
     auto dispatch_to_concrete = [&mesh_composer]<typename T>(const Tensor& tt_tensor) {
         auto [data, shape] = mesh_composer.compose<T>(tt_tensor);
-        tt::stl::Span<const uint32_t> shape_view = shape.view();
+        ttsl::Span<const uint32_t> shape_view = shape.view();
         return RowMajorHostBuffer{
             .buffer = HostBuffer(std::move(data)),
             .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
@@ -309,11 +300,7 @@ nb::ndarray<Framework> convert_tt_tensor_to_framework_tensor(RowMajorHostBuffer&
 
     nb::capsule owner(buffer, [](void* p) noexcept { delete static_cast<HostBuffer*>(p); });
 
-    // Fiddling with sign bit to match previous behavior
     nb::dlpack::dtype dt = get_dtype_from_ttnn_datatype(row_major_host_buffer.data_type);
-    if (dt.code == static_cast<std::uint8_t>(nb::dlpack::dtype_code::UInt) && dt.bits > 8) {
-        dt.code = static_cast<std::uint8_t>(nb::dlpack::dtype_code::Int);
-    }
 
     // ndarray constructor will make a deep copy of shape/stride, so no need to worry about ownership
     // with shape/stride pointers
@@ -344,7 +331,7 @@ auto parse_external_operation(
 
     // original impl had a bunch of no-ops. Reduce to minimum functionality.
     std::vector<Tensor> input_tensors;
-    tt::stl::reflection::Attributes attributes;
+    ttsl::reflection::Attributes attributes;
 
     auto operation = tt::tt_metal::operation::ExternalOperation{function_name, attributes};
     return std::make_tuple(operation, input_tensors);
@@ -359,7 +346,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
         // while holding GIL.
         tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<nb::array_api>>(contiguous_py_tensor));
         T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
-        return HostBuffer(tt::stl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
+        return HostBuffer(ttsl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
     };
 
     auto to_host_buffer = [&to_host_buffer_impl,
@@ -650,7 +637,10 @@ void pytensor_module(nb::module_& mod) {
                const std::optional<Tile>& tile,
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
-               const distributed::TensorToMesh* mesh_mapper) {
+               const distributed::TensorToMesh* mesh_mapper,
+               bool preserve_nan_values,
+               bool col_tilize,
+               bool fast_approx) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -681,7 +671,10 @@ void pytensor_module(nb::module_& mod) {
                     device,
                     cq_id,
                     mesh_mapper,
-                    pad_value));
+                    pad_value,
+                    preserve_nan_values,
+                    col_tilize,
+                    fast_approx));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -692,6 +685,10 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
+            nb::arg("preserve_nan_values") = false,  // TODO: Remove preserve_nan_values argument after
+                                                     // https://github.com/tenstorrent/tt-metal/issues/31406
+            nb::arg("col_tilize") = false,
+            nb::arg("fast_approx") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -716,6 +713,8 @@ void pytensor_module(nb::module_& mod) {
                 +--------------+--------------------------------+
                 | mesh_mapper  | TT-NN Mesh Mapper (optional)    |
                 +--------------+--------------------------------+
+                | col_tilize   | Column-wise BFP tilize (false)  |
+                +--------------+--------------------------------+
 
                 Example of creating a TT Tensor from numpy tensor:
 
@@ -736,7 +735,7 @@ void pytensor_module(nb::module_& mod) {
             [](Tensor& self, bool force) { self.deallocate(force); },
             nb::arg("force") = false,
             R"doc(
-                Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
+                Deallocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
             )doc")
         .def(
             "to",
@@ -1252,7 +1251,6 @@ void pytensor_module(nb::module_& mod) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::pytorch> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
@@ -1310,19 +1308,10 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
-                return std::visit(
-                    tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t {
-                            TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
-                            return s.mesh_buffer->address();
-                        },
-                        [&](auto&&) -> uint32_t {
-                            TT_THROW(
-                                "{} doesn't support buffer_address method",
-                                tt::stl::get_active_type_name_in_variant(self.storage()));
-                        },
-                    },
-                    self.storage());
+                TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
+                const auto& storage = self.device_storage();
+                TT_FATAL(storage.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return storage.mesh_buffer->address();
             },
             R"doc(
             Get the address of the underlying buffer.

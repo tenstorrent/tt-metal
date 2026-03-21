@@ -22,6 +22,11 @@ on:
         required: false
         default: ""
         type: string
+      tests-yaml-gist-url:
+        description: "URL to GitHub gist/raw containing release_tests.yaml (optional). Must be from gist.githubusercontent.com or raw.githubusercontent.com. For trusted sources only - manual dispatch required."
+        required: false
+        default: ""
+        type: string
 
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
@@ -111,6 +116,13 @@ jobs:
       - name: Get should-create-release
         id: get-should-create-release
         run: |
+          # Skip this check for manual dispatches
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "Manual dispatch detected, skipping should-create-release check"
+            echo "should-create-release is assumed true for manual dispatch, proceeding with release workflow."
+            exit 0
+          fi
+
           # Run once to check for errors
           ./scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }}
           shouldCreateRelease=$(scripts/build_scripts/get_should_create_release.sh ${{ fromJSON(steps.get-is-release-candidate-and-tag-type.outputs.is-release-candidate) && '--release-candidate' || '' }})
@@ -147,6 +159,7 @@ jobs:
       dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
       is-release-candidate: ${{ needs.release-precheck.outputs.is-release-candidate }}
+      tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
 
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
@@ -180,7 +193,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
 
 
 
@@ -387,7 +400,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ !cancelled() &&
             needs.check-existing-release.result == 'success' &&
-            needs.check-existing-release.outputs.should-skip-release != 'true'
+            needs.check-existing-release.outputs.should-skip-release != 'true' &&
+            github.run_attempt == '1'
         }}
     steps:
       - name: Checkout
@@ -470,7 +484,7 @@ jobs:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run }}
+    if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -607,7 +621,8 @@ jobs:
           inputs: |
             {
               "release-type": "rc",
-              "dry-run": "${{ inputs.dry-run || 'false' }}"
+              "dry-run": "${{ inputs.dry-run || 'false' }}",
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
             }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
@@ -634,5 +649,6 @@ jobs:
           inputs: |
             {
               "release-type": "prod",
-              "dry-run": "${{ inputs.dry-run || 'false' }}"
+              "dry-run": "${{ inputs.dry-run || 'false' }}",
+              "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
             }

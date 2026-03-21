@@ -6,14 +6,17 @@
 // #include "risc_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/debug/watcher_common.h"
+#include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
 #include "internal/dataflow_buffer_interface.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/kernel_thread_globals.h"
 
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
@@ -38,9 +41,12 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
+// temporary for things to build
+thread_local CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
 thread_local uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 thread_local uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+thread_local uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
 thread_local uint32_t rta_count __attribute__((used));
@@ -95,9 +101,11 @@ void deassert_trisc() {
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
-// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+
+volatile experimental::TxnDFBDescriptor experimental::g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -113,8 +121,7 @@ void device_setup() {
 }
 
 inline __attribute__((always_inline)) void signal_subordinate_completion() {
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
 }
 
@@ -133,7 +140,28 @@ inline void run_triscs(uint32_t enables) {
         subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc1 = RUN_SYNC_MSG_GO;
         subordinate_sync->neo0_trisc2 = RUN_SYNC_MSG_GO;
-        // subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo0_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E1_MATH0))) {
+        subordinate_sync->neo1_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo1_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E2_MATH0))) {
+        subordinate_sync->neo2_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo2_trisc3 = RUN_SYNC_MSG_GO;
+    }
+    if (enables &
+        (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::E3_MATH0))) {
+        subordinate_sync->neo3_trisc0 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc1 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc2 = RUN_SYNC_MSG_GO;
+        subordinate_sync->neo3_trisc3 = RUN_SYNC_MSG_GO;
     }
 }
 
@@ -151,8 +179,7 @@ inline void wait_subordinates() {
            subordinate_sync->allNeo0 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo1 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
            subordinate_sync->allNeo2 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE ||
-           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE)
-        ;
+           subordinate_sync->allNeo3 != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("NTD");
 }
 
@@ -160,8 +187,7 @@ inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_S
 
 extern "C" uint32_t _start1() {
     configure_csr();
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    uint32_t hartid = internal_::get_hw_thread_idx();
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
@@ -177,11 +203,12 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    // risc_init();
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();
@@ -189,7 +216,7 @@ extern "C" uint32_t _start1() {
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
-        // trigger_sync_register_init();
+        trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
@@ -281,6 +308,9 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
+                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -320,30 +350,8 @@ extern "C" uint32_t _start1() {
 
                 wait_subordinates();
 
-                // trigger_sync_register_init();
+                trigger_sync_register_init();
 
-                if constexpr (ASSERT_ENABLED) {
-                    if (noc_mode == DM_DYNAMIC_NOC) {
-                        WAYPOINT("NKFW");
-                        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
-                        // landed and the NOC interface is in a known idle state for the next kernel.
-                        for (int noc = 0; noc < NUM_NOCS; noc++) {
-                            ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
-                        }
-                        WAYPOINT("NKFD");
-                    }
-                }
-
-#if defined(PROFILE_KERNEL)
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    // re-init for profiler to able to run barrier in dedicated noc mode
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Need to ensure that Remapper state is cleared for next kernel launch
                 if (g_remapper_configurator.is_remapper_enabled()) {
                     g_remapper_configurator.clear_all_pairs();
@@ -407,6 +415,7 @@ extern "C" uint32_t _start1() {
 
         record_stack_usage(stack_free);
         WAYPOINT("D1");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }

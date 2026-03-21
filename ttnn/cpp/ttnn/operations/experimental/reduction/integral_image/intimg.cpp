@@ -4,11 +4,10 @@
 
 #include "device/intimg_device_operation.hpp"
 
-#include <tt_stl/assert.hpp>
 #include "intimg.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental {
 
-Tensor IntImgOperation::invoke(const Tensor& input_tensor) { return ttnn::prim::intimg(input_tensor); }
+Tensor intimg(const Tensor& input_tensor) { return ttnn::prim::intimg(input_tensor); }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental

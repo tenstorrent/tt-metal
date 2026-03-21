@@ -63,7 +63,9 @@ void validate_pool2d(
     }
 }
 
-void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+// Validation is the same for both cache hit and miss
+static void validate_pool2d_operation(
+    const Pool2D::operation_attributes_t& op_attr, const Pool2D::tensor_args_t& tensor) {
     validate_pool2d(
         tensor.input_tensor_,
         op_attr.pool_type_,
@@ -74,15 +76,12 @@ void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_att
         op_attr.output_layout_);
 }
 
+void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+    validate_pool2d_operation(op_attr, tensor);
+}
+
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
-    validate_pool2d(
-        tensor.input_tensor_,
-        op_attr.pool_type_,
-        op_attr.sliding_window_config_,
-        op_attr.memory_config_,
-        op_attr.divisor_override_,
-        op_attr.return_indices_,
-        op_attr.output_layout_);
+    validate_pool2d_operation(op_attr, tensor);
 }
 
 Pool2D::spec_return_value_t Pool2D::compute_output_specs(
@@ -151,7 +150,7 @@ Pool2D::tensor_return_value_t Pool2D::create_output_tensors(
     return {create_device_tensor(output_spec_data, tensor.input_tensor_.device())};
 }
 
-tt::stl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
+ttsl::hash::hash_t Pool2D::compute_program_hash(const operation_attributes_t& op_attr, const tensor_args_t& tensor) {
     auto input_mem_config = tensor.input_tensor_.memory_config();
     auto in_dtype = tensor.input_tensor_.dtype();
     auto out_dtype = op_attr.output_dtype_;

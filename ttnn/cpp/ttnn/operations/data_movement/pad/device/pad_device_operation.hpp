@@ -15,7 +15,7 @@
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation_types.hpp"
 
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp"
-#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_reader_writer_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_height_only_program_factory.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_rm_sharded_width_only_program_factory.hpp"
@@ -30,7 +30,7 @@ struct PadDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         PadRmReaderWriterMultiCoreProgramFactory,
-        PadRmReaderWriterMultiCoreV2ProgramFactory,
+        PadRmReaderWriterMultiCoreDefaultProgramFactory,
         PadRmReaderWriterProgramFactory,
         PadRmShardedHeightOnlyProgramFactory,
         PadRmShardedWidthOnlyProgramFactory,
@@ -62,5 +62,6 @@ PadDeviceOperation::tensor_return_value_t pad(
     float pad_value,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool use_multicore,
-    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn::prim

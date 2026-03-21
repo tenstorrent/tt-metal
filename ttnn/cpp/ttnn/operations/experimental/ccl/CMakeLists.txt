@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_ccl ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::CCL ALIAS ttnn_op_experimental_ccl)
 
-target_precompile_headers(ttnn_op_experimental_ccl REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_ccl TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 
 set_target_properties(
@@ -31,6 +31,9 @@ file(
     slice_reshard_async/device/kernels/*
     strided_all_gather_async/device/kernels/*
     deepseek_moe_reduce_scatter/device/kernels/*
+    deepseek_b1_reduce_to_one/device/kernels/*
+    moe_compute/device/kernels/*
+    moe/selective_reduce_combine/device/kernels/*
 )
 
 target_sources(
@@ -45,6 +48,7 @@ target_sources(
             all_gather_async/device/all_gather_async_device_operation.hpp
             all_gather_async/device/all_gather_async_default_program_factory.hpp
             all_gather_async/device/all_gather_async_llama_sharded_program_factory.hpp
+            all_gather_async/device/all_gather_via_broadcast_factory.hpp
             all_gather_async/device/all_gather_async_device_operation_types.hpp
             composite_common.hpp
             reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.hpp
@@ -77,6 +81,7 @@ target_sources(
         all_gather_async/device/all_gather_async_device_operation.cpp
         all_gather_async/device/all_gather_async_default_program_factory.cpp
         all_gather_async/device/all_gather_async_llama_sharded_program_factory.cpp
+        all_gather_async/device/all_gather_via_broadcast_factory.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_device_operation.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_program_factory.cpp
@@ -124,6 +129,11 @@ target_sources(
         all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
         all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
+        moe_compute/moe_compute.cpp
+        moe_compute/device/moe_compute_device_operation.cpp
+        moe_compute/device/moe_compute_program_factory.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
+        moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})

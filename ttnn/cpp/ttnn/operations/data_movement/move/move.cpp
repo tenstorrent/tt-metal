@@ -5,10 +5,10 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -18,19 +18,13 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 bool can_deallocate(const Tensor& input_tensor) {
-    return std::visit(
-        [&input_tensor](auto&& storage) {
-            using T = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return storage.mesh_buffer.use_count() == 1;
-            } else {
-                return false;
-            }
-        },
-        input_tensor.storage());
+    if (is_cpu_tensor(input_tensor)) {
+        return false;
+    }
+    return input_tensor.device_storage().mesh_buffer.use_count() == 1;
 }
 
-static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
@@ -112,7 +106,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
     return ttnn::prim::move(input_tensor, output_tensor, output_mem_config, move_op_parallelization_strategy);
 }
 
-static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
@@ -155,11 +149,15 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         input_tensor, output_tensor, output_tensor.memory_config(), move_op_parallelization_strategy);
 }
 
-ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+}  // namespace ttnn::operations::data_movement
+
+namespace ttnn {
+
+Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_tensor.memory_config().is_sharded()) {
-        return move_sharded(input_tensor, output_mem_config);
+        return operations::data_movement::move_sharded(input_tensor, output_mem_config);
     }
-    return move_impl(input_tensor, output_mem_config);
+    return operations::data_movement::move_impl(input_tensor, output_mem_config);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

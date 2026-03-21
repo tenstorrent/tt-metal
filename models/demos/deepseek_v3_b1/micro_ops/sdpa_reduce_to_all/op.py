@@ -11,6 +11,11 @@ Torus/Ring topology only. Single-run correctness (no trace replay).
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
+    PerCoreRuntimeArgsDescriptor,
+    UnifiedCompileTimeCoreDescriptor,
+    UnifiedKernelDescriptor,
+)
 from models.demos.deepseek_v3_b1.utils import float_to_uint32
 
 
@@ -42,8 +47,8 @@ class SdpaReduceToAll:
         m_data_per_device,
         num_cores=8,
         scale_value=1.0,
-        position_mask=None,
-        final_reduction=True,
+        position_id=0,
+        per_device_chunk_size=0,
     ):
         """
         PyTorch reference implementation for SDPA reduce-to-all.
@@ -52,15 +57,12 @@ class SdpaReduceToAll:
             l_data_per_device: list of L tensors [batch, l_width * num_cores]
             s_data_per_device: list of S tensors [batch, num_cores]
             m_data_per_device: list of M tensors [batch, num_cores]
-            position_mask: optional tensor [num_devices] with 1.0 for valid devices, 0.0 for masked devices
+            position_id: scalar position id for validity computation
+            per_device_chunk_size: chunk size per device; when > 0, device d is valid iff position_id >= d * per_device_chunk_size
         """
 
         def compute_reduction(l1, s1, m1, l2, s2, m2, scale, valid1, valid2):
-            """Conditional reduction based on validity flags.
-
-            Args:
-                normalize: If True, normalize the output L by dividing by S
-            """
+            """Conditional reduction based on validity flags."""
             if not valid1 and not valid2:
                 l_out = l1
                 s_out = s1
@@ -85,8 +87,19 @@ class SdpaReduceToAll:
 
         num_devices = len(l_data_per_device)
 
-        # Default mask: all devices valid
-        if position_mask is None:
+        # Compute position mask from position_id and per_device_chunk_size
+        position_enabled = per_device_chunk_size > 0
+        # TODO: Only the reduction can currently perform untilize, so final_reduction
+        # (normalize / divide by s) is always enabled. When untilize is decoupled from
+        # normalization, this can revert to:
+        #   final_reduction = not position_enabled or (position_id >= per_device_chunk_size)
+        final_reduction = True
+        if position_enabled:
+            position_mask = torch.tensor(
+                [1.0 if position_id >= d * per_device_chunk_size else 0.0 for d in range(num_devices)],
+                dtype=torch.float32,
+            )
+        else:
             position_mask = torch.ones(num_devices, dtype=torch.float32)
 
         def split_by_cores(tensor_list, num_cores):
@@ -158,8 +171,7 @@ class SdpaReduceToAll:
         input_tensor_l_mesh,
         input_tensor_ms_mesh,
         output_tensor_l_mesh,
-        r1_recv_tensor_mesh,
-        r2_recv_tensor_mesh,
+        interm_recv_tensor_mesh,
         forwarder_scratch_mesh,
         semaphores,
         scale_fp32=1.0,
@@ -167,8 +179,8 @@ class SdpaReduceToAll:
         input_forwarder_cores=None,
         scatter_dest_tensor_mesh=None,
         scatter_dest_grid=None,
-        position_tensor_mesh=None,
-        final_reduction=True,
+        position_id_tensor_mesh=None,
+        per_device_chunk_size=0,
     ):
         mesh_device = input_tensor_l_mesh.device()
         mesh_shape = mesh_device.shape
@@ -182,18 +194,16 @@ class SdpaReduceToAll:
         forwarder_cores = input_forwarder_cores
         forwarder_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in forwarder_cores])
 
-        position_enabled = position_tensor_mesh is not None
+        position_enabled = position_id_tensor_mesh is not None and per_device_chunk_size > 0
 
         input_l_per_device = ttnn.get_device_tensors(input_tensor_l_mesh)
         input_ms_per_device = ttnn.get_device_tensors(input_tensor_ms_mesh)
         output_l_per_device = ttnn.get_device_tensors(output_tensor_l_mesh)
-        r1_recv_per_device = ttnn.get_device_tensors(r1_recv_tensor_mesh)
-        r2_recv_per_device = ttnn.get_device_tensors(r2_recv_tensor_mesh)
+        interm_recv_per_device = ttnn.get_device_tensors(interm_recv_tensor_mesh)
         fwd_scratch_per_device = ttnn.get_device_tensors(forwarder_scratch_mesh)
         position_per_device = None
-
         if position_enabled:
-            position_per_device = ttnn.get_device_tensors(position_tensor_mesh)
+            position_per_device = ttnn.get_device_tensors(position_id_tensor_mesh)
 
         # Scatter destination setup (optional)
         scatter_enabled = scatter_dest_tensor_mesh is not None and scatter_dest_grid is not None
@@ -225,13 +235,12 @@ class SdpaReduceToAll:
                 input_l_device = input_l_per_device[device_idx]
                 input_ms_device = input_ms_per_device[device_idx]
                 output_l_device = output_l_per_device[device_idx]
-                r1_recv_device = r1_recv_per_device[device_idx]
-                r2_recv_device = r2_recv_per_device[device_idx]
+                interm_recv_device = interm_recv_per_device[device_idx]
                 fwd_scratch_device = fwd_scratch_per_device[device_idx]
-
-                position_device = None
+                pos_addr = 0
                 if position_enabled:
                     position_device = position_per_device[device_idx]
+                    pos_addr = position_device.buffer_address()
 
                 device = input_l_device.device()
 
@@ -295,32 +304,11 @@ class SdpaReduceToAll:
                 # CB indices
                 cb_local_l = 0
                 cb_local_ms = 1
-                cb_r1_neighbor_l = 2
-                cb_r1_neighbor_ms = 3
+                cb_neighbor_l = 2
+                cb_neighbor_ms = 3
                 cb_r1_result_l = 4
                 cb_r1_result_ms = 5
-                cb_r2_neighbor_l = 6
-                cb_r2_neighbor_ms = 7
-                cb_l_out = 8
-                cb_ms_out = 9
-                cb_packet_slot = 10
-                cb_position = 11
-
-                # Kernel compile-time args
-                reader_ct_args = [
-                    cb_local_l,
-                    cb_local_ms,
-                    cb_r1_neighbor_l,
-                    cb_r1_neighbor_ms,
-                    cb_r2_neighbor_l,
-                    cb_r2_neighbor_ms,
-                    ms_tile_size_bytes,
-                    l_chunk_size_bytes,
-                    num_l_chunks,
-                    tiles_per_l_chunk,
-                    cb_position,  # Position CB index
-                    1 if position_enabled else 0,  # Enable/disable position
-                ]
+                cb_l_out = 6
 
                 # Scatter compile-time parameters
                 if scatter_enabled:
@@ -342,129 +330,82 @@ class SdpaReduceToAll:
                     scatter_ct_face_size = 0
                     scatter_ct_row_face_size = 0
 
-                writer_ct_args = [
-                    cb_local_l,
-                    cb_local_ms,
-                    cb_r1_result_l,
-                    cb_r1_result_ms,
-                    cb_packet_slot,
-                    l1_alignment,
-                    input_page_size_bytes,
-                    slot_size,
-                    ms_tile_size_bytes,
-                    l_chunk_size_bytes,
-                    num_l_chunks,
-                    tiles_per_l_chunk,
-                    # Scatter phase args (indices 12-18)
-                    cb_l_out,
-                    scatter_ct_num_tiles,
-                    scatter_ct_src_tile_size,
-                    scatter_ct_dst_tile_size,
-                    scatter_ct_face_size,
-                    scatter_ct_row_face_size,
-                    scatter_ct_num_rows,
+                # Named compile-time args for each RISC
+                reader_named_ct_args = [
+                    ("cb_local_l", cb_local_l),
+                    ("cb_local_ms", cb_local_ms),
+                    ("cb_neighbor_l", cb_neighbor_l),
+                    ("cb_neighbor_ms", cb_neighbor_ms),
+                    ("ms_tile_size_bytes", ms_tile_size_bytes),
+                    ("l_chunk_size_bytes", l_chunk_size_bytes),
+                    ("num_l_chunks", num_l_chunks),
+                    ("tiles_per_l_chunk", tiles_per_l_chunk),
+                    ("position_enabled", 1 if position_enabled else 0),
+                    ("per_device_chunk_size", per_device_chunk_size),
                 ]
 
-                compute_ct_args = [
-                    cb_local_l,
-                    cb_local_ms,
-                    cb_r1_neighbor_l,
-                    cb_r1_neighbor_ms,
-                    cb_r1_result_l,
-                    cb_r1_result_ms,
-                    cb_r2_neighbor_l,
-                    cb_r2_neighbor_ms,
-                    cb_l_out,
-                    cb_ms_out,
-                    scale_val,
-                    tiles_per_l_chunk,
-                    num_l_chunks,
-                    cb_position,  # Position CB index
-                    1 if position_enabled else 0,
-                    final_reduction,
+                writer_named_ct_args = [
+                    ("cb_local_l", cb_local_l),
+                    ("cb_local_ms", cb_local_ms),
+                    ("cb_r1_result_l", cb_r1_result_l),
+                    ("cb_r1_result_ms", cb_r1_result_ms),
+                    ("l1_alignment", l1_alignment),
+                    ("page_size_bytes", input_page_size_bytes),
+                    ("slot_size", slot_size),
+                    ("ms_tile_size_bytes", ms_tile_size_bytes),
+                    ("l_chunk_size_bytes", l_chunk_size_bytes),
+                    ("num_l_chunks", num_l_chunks),
+                    ("tiles_per_l_chunk", tiles_per_l_chunk),
+                    ("cb_l_out", cb_l_out),
+                    ("scatter_num_tiles", scatter_ct_num_tiles),
+                    ("scatter_src_tile_size", scatter_ct_src_tile_size),
+                    ("scatter_dst_tile_size", scatter_ct_dst_tile_size),
+                    ("scatter_face_size", scatter_ct_face_size),
+                    ("scatter_row_face_size", scatter_ct_row_face_size),
+                    ("scatter_num_rows", scatter_ct_num_rows),
                 ]
 
-                forwarder_ct_args = [slots_per_round, slot_size, r2_buffer_offset]
+                compute_named_ct_args = [
+                    ("cb_local_l", cb_local_l),
+                    ("cb_local_ms", cb_local_ms),
+                    ("cb_neighbor_l", cb_neighbor_l),
+                    ("cb_neighbor_ms", cb_neighbor_ms),
+                    ("cb_r1_result_l", cb_r1_result_l),
+                    ("cb_r1_result_ms", cb_r1_result_ms),
+                    ("cb_l_out", cb_l_out),
+                    ("scale_fp32", scale_val),
+                    ("tiles_per_l_chunk", tiles_per_l_chunk),
+                    ("num_l_chunks", num_l_chunks),
+                    ("position_enabled", 1 if position_enabled else 0),
+                    ("per_device_chunk_size", per_device_chunk_size),
+                    # When position_enabled, final_reduction is decided at runtime from the
+                    # position tensor; compile-time value is unused. Always pass 1 (normalize).
+                    ("final_reduction", 1),
+                ]
 
-                reader_kernel = ttnn.KernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/reader.cpp",
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=shard_grid,
-                    compile_time_args=reader_ct_args,
-                    config=ttnn.ReaderConfigDescriptor(),
-                )
+                forwarder_named_ct_args = [
+                    ("fwd_slots_per_round", slots_per_round),
+                    ("fwd_slot_size", slot_size),
+                    ("fwd_r2_buffer_offset", r2_buffer_offset),
+                ]
 
-                writer_kernel = ttnn.KernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/writer.cpp",
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=shard_grid,
-                    compile_time_args=writer_ct_args,
-                    config=ttnn.WriterConfigDescriptor(),
-                )
-
-                compute_kernel = ttnn.KernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/compute.cpp",
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=shard_grid,
-                    compile_time_args=compute_ct_args,
-                    config=ttnn.ComputeConfigDescriptor(
-                        math_fidelity=ttnn.MathFidelity.HiFi4,
-                        fp32_dest_acc_en=False,
-                        dst_full_sync_en=False,
-                        math_approx_mode=False,
-                    ),
-                )
-
-                forwarder_brisc_kernel = ttnn.KernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/forwarder.cpp",
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=forwarder_core_range_set,
-                    compile_time_args=forwarder_ct_args,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_0,
-                        noc=ttnn.NOC.RISCV_0_default,
-                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
-                    ),
-                )
-
-                forwarder_ncrisc_kernel = ttnn.KernelDescriptor(
-                    kernel_source="models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/forwarder.cpp",
-                    source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                    core_ranges=forwarder_core_range_set,
-                    compile_time_args=forwarder_ct_args,
-                    config=ttnn.DataMovementConfigDescriptor(
-                        processor=ttnn.DataMovementProcessor.RISCV_1,
-                        noc=ttnn.NOC.RISCV_0_default,
-                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
-                    ),
-                )
+                tile_desc = ttnn.TileDescriptor(tile_height, tile_width)
+                input_dtype = input_l_device.dtype
 
                 # CB descriptors
                 cb_local_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_local_l, input_l_device)
                 cb_local_ms_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_local_ms, input_ms_device)
                 cb_l_out_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_l_out, output_l_device)
+                cb_l_out_desc.format_descriptors[0].tile = tile_desc
+                cb_l_out_desc.format_descriptors[0].page_size = aligned_page_size
 
-                cb_r1_neighbor_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_r1_neighbor_l, r1_recv_device)
-                cb_r1_neighbor_l_desc.total_size = out_tiles * aligned_page_size
+                # r1_recv_device is used for both R1 and R2
+                # CBs are manually offset into the recv buffer
+                cb_neighbor_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_neighbor_l, interm_recv_device)
+                cb_neighbor_l_desc.total_size = 2 * out_tiles * aligned_page_size
 
-                cb_r2_neighbor_l_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_r2_neighbor_l, r2_recv_device)
-                cb_r2_neighbor_l_desc.total_size = out_tiles * aligned_page_size
-
-                tile_desc = ttnn.TileDescriptor(tile_height, tile_width)
-                input_dtype = input_l_device.dtype
-
-                cb_r1_neighbor_ms_desc = ttnn.CBDescriptor(
-                    total_size=aligned_page_size,
-                    core_ranges=shard_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=cb_r1_neighbor_ms,
-                            data_format=input_dtype,
-                            page_size=aligned_page_size,
-                            tile=tile_desc,
-                        )
-                    ],
-                )
+                cb_neighbor_ms_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_neighbor_ms, interm_recv_device)
+                cb_neighbor_ms_desc.total_size = 2 * aligned_page_size
 
                 cb_r1_result_l_desc = ttnn.CBDescriptor(
                     total_size=out_tiles * aligned_page_size,
@@ -492,63 +433,6 @@ class SdpaReduceToAll:
                     ],
                 )
 
-                cb_r2_neighbor_ms_desc = ttnn.CBDescriptor(
-                    total_size=aligned_page_size,
-                    core_ranges=shard_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=cb_r2_neighbor_ms,
-                            data_format=input_dtype,
-                            page_size=aligned_page_size,
-                            tile=tile_desc,
-                        )
-                    ],
-                )
-
-                cb_ms_out_desc = ttnn.CBDescriptor(
-                    total_size=aligned_page_size,
-                    core_ranges=shard_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=cb_ms_out,
-                            data_format=input_dtype,
-                            page_size=aligned_page_size,
-                            tile=tile_desc,
-                        )
-                    ],
-                )
-
-                cb_packet_slot_desc = ttnn.CBDescriptor(
-                    total_size=2 * header_cb_size,
-                    core_ranges=shard_grid,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=cb_packet_slot,
-                            data_format=ttnn.uint32,
-                            page_size=header_cb_size,
-                            tile=tile_desc,
-                        )
-                    ],
-                )
-
-                # Position CB (aliased from position tensor)
-                if position_enabled:
-                    cb_position_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_position, position_device)
-                else:
-                    # Dummy CB when position is disabled
-                    cb_position_desc = ttnn.CBDescriptor(
-                        total_size=aligned_page_size,
-                        core_ranges=shard_grid,
-                        format_descriptors=[
-                            ttnn.CBFormatDescriptor(
-                                buffer_index=cb_position,
-                                data_format=input_dtype,
-                                page_size=aligned_page_size,
-                                tile=tile_desc,
-                            )
-                        ],
-                    )
-
                 # Semaphores
                 forwarder_semaphores = [
                     ttnn.SemaphoreDescriptor(id=fwd_r1_sem_id, core_ranges=forwarder_core_range_set, initial_value=0),
@@ -557,40 +441,15 @@ class SdpaReduceToAll:
                     ttnn.SemaphoreDescriptor(id=bwd_r2_sem_id, core_ranges=forwarder_core_range_set, initial_value=0),
                 ]
 
-                program = ttnn.ProgramDescriptor(
-                    kernels=[
-                        reader_kernel,
-                        writer_kernel,
-                        compute_kernel,
-                        forwarder_brisc_kernel,
-                        forwarder_ncrisc_kernel,
-                    ],
-                    semaphores=forwarder_semaphores,
-                    cbs=[
-                        cb_local_l_desc,
-                        cb_local_ms_desc,
-                        cb_r1_neighbor_l_desc,
-                        cb_r1_neighbor_ms_desc,
-                        cb_r1_result_l_desc,
-                        cb_r1_result_ms_desc,
-                        cb_r2_neighbor_l_desc,
-                        cb_r2_neighbor_ms_desc,
-                        cb_l_out_desc,
-                        cb_ms_out_desc,
-                        cb_packet_slot_desc,
-                        cb_position_desc,
-                    ],
-                )
+                # =====================================================================
+                # Build per-core runtime args for unified kernel
+                # =====================================================================
+                ncrisc_core_args = []  # List of (CoreCoord, args_list)
+                brisc_core_args = []
+                trisc_core_args = []
 
-                # Runtime args
-                reader_rt_args = ttnn.RuntimeArgs()
-                writer_rt_args = ttnn.RuntimeArgs()
-                compute_rt_args = ttnn.RuntimeArgs()
-                forwarder_brisc_rt_args = ttnn.RuntimeArgs()
-                forwarder_ncrisc_rt_args = ttnn.RuntimeArgs()
-
-                r1_recv_buffer_addr = r1_recv_device.buffer_address()
-                r2_recv_buffer_addr = r2_recv_device.buffer_address()
+                r1_recv_buffer_addr = interm_recv_device.buffer_address()
+                r2_recv_buffer_addr = r1_recv_buffer_addr + (out_tiles + 1) * aligned_page_size
 
                 # Neighbor coords (torus/ring only)
                 fwd_row, fwd_col = _get_neighbor_coord(mesh_shape, row, col, +1, cluster_axis)
@@ -621,14 +480,19 @@ class SdpaReduceToAll:
                         self.r1_worker_count = 0
                         self.r2_worker_count = 0
 
-                # Reader args are identical for all worker cores.
+                # Reader base args (same for all worker cores)
                 for core in shard_cores:
-                    reader_rt_args[core.x][core.y] = [
-                        r1_recv_sem_addr,
-                        r2_recv_sem_addr,
-                        r1_recv_buffer_addr,
-                        r2_recv_buffer_addr,
-                    ]
+                    ncrisc_core_args.append(
+                        (
+                            core,
+                            [
+                                r1_recv_sem_addr,
+                                r2_recv_sem_addr,
+                                r1_recv_buffer_addr,
+                                r2_recv_buffer_addr,
+                            ],
+                        )
+                    )
 
                 for link_idx in range(num_links):
                     cores_for_link = cores_link_1 if link_idx == 0 else cores_link_2
@@ -659,30 +523,35 @@ class SdpaReduceToAll:
 
                         core_noc = device.worker_core_from_logical_core(core)
 
-                        writer_rt_args[core.x][core.y] = [
-                            int(r1_cfg.dst_node_id.mesh_id),
-                            r1_cfg.dst_node_id.chip_id,
-                            r1_recv_buffer_addr,
-                            r1_recv_sem_addr,
-                            int(r2_cfg.dst_node_id.mesh_id),
-                            r2_cfg.dst_node_id.chip_id,
-                            r2_recv_buffer_addr,
-                            r2_recv_sem_addr,
-                            core_noc.x,
-                            core_noc.y,
-                            fwd_core_noc.x,
-                            fwd_core_noc.y,
-                            r1_slot_addr,
-                            r1_cfg.r1_sem,
-                            r1_slot_idx,
-                            r2_slot_addr,
-                            r2_cfg.r2_sem,
-                            r2_slot_idx,
-                        ]
+                        # Writer (BRISC) per-core args
+                        brisc_core_args.append(
+                            (
+                                core,
+                                [
+                                    int(r1_cfg.dst_node_id.mesh_id),
+                                    r1_cfg.dst_node_id.chip_id,
+                                    r1_recv_buffer_addr,
+                                    r1_recv_sem_addr,
+                                    int(r2_cfg.dst_node_id.mesh_id),
+                                    r2_cfg.dst_node_id.chip_id,
+                                    r2_recv_buffer_addr,
+                                    r2_recv_sem_addr,
+                                    core_noc.x,
+                                    core_noc.y,
+                                    fwd_core_noc.x,
+                                    fwd_core_noc.y,
+                                    r1_slot_addr,
+                                    r1_cfg.r1_sem,
+                                    r1_slot_idx,
+                                    r2_slot_addr,
+                                    r2_cfg.r2_sem,
+                                    r2_slot_idx,
+                                ],
+                            )
+                        )
 
-                        # Compute runtime args: device indices for position lookup
+                        # Compute (TRISC) and reader position args
                         if position_enabled:
-                            # Determine this core's neighbor device IDs based on direction
                             # Type A: R1=forward, R2=backward
                             # Type B: R1=backward, R2=forward
                             if is_type_a:
@@ -692,37 +561,52 @@ class SdpaReduceToAll:
                                 r1_neighbor_device_idx = bwd_device_idx
                                 r2_neighbor_device_idx = fwd_device_idx
 
-                            # Compute R2 neighbor's R1 neighbor based on R2 neighbor's type
-                            # R2 neighbor's worker_idx at the same core position
-                            r2_neighbor_worker_idx = worker_idx  # Same relative position in the link
+                            r2_neighbor_worker_idx = worker_idx
                             r2_neighbor_row = r2_neighbor_device_idx // mesh_cols
                             r2_neighbor_is_type_a = ((r2_neighbor_row + r2_neighbor_worker_idx) % 2) == 0
 
-                            # R2 neighbor's R1 direction
                             if r2_neighbor_is_type_a:
-                                # R2 neighbor is Type A → its R1 is forward
                                 r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx + 1) % num_devices
                             else:
-                                # R2 neighbor is Type B → its R1 is backward
                                 r2_neighbor_r1_neighbor_idx = (r2_neighbor_device_idx - 1 + num_devices) % num_devices
 
-                            # Pass device indices - kernel will read position values from CB
-                            compute_rt_args[core.x][core.y] = [
-                                device_idx,
-                                r1_neighbor_device_idx,
-                                r2_neighbor_device_idx,
-                                r2_neighbor_r1_neighbor_idx,
-                            ]
+                            # Deterministic reduction order based on device indices so all devices produce identical results.
+                            # R1: swap so lower device index is always arg1 ("worker")
+                            swap_r1_reduction_order = 1 if device_idx < r1_neighbor_device_idx else 0
+                            # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                            r1_pair_min = min(device_idx, r1_neighbor_device_idx)
+                            r2_pair_min = min(r2_neighbor_device_idx, r2_neighbor_r1_neighbor_idx)
+                            swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
 
-                            reader_rt_args[core.x][core.y].extend(
-                                [
-                                    r1_neighbor_device_idx,
-                                    r2_neighbor_device_idx,
-                                    r2_neighbor_r1_neighbor_idx,
-                                ]
+                            trisc_core_args.append(
+                                (
+                                    core,
+                                    [
+                                        pos_addr,
+                                        device_idx,
+                                        r1_neighbor_device_idx,
+                                        r2_neighbor_device_idx,
+                                        r2_neighbor_r1_neighbor_idx,
+                                        swap_r1_reduction_order,
+                                        swap_r2_reduction_order,
+                                    ],
+                                )
                             )
 
-                        # Append scatter runtime args (only when scatter is enabled)
+                            # Extend reader args with position info
+                            ncrisc_core_args.append(
+                                (
+                                    core,
+                                    [
+                                        pos_addr,
+                                        r1_neighbor_device_idx,
+                                        r2_neighbor_device_idx,
+                                        r2_neighbor_r1_neighbor_idx,
+                                    ],
+                                )
+                            )
+
+                        # Scatter runtime args (appended to writer/BRISC args)
                         if scatter_enabled:
                             global_worker_idx = link_idx * cores_per_link + worker_idx
                             scatter_dest_l1_addr = scatter_dest_per_device[device_idx].buffer_address()
@@ -731,14 +615,98 @@ class SdpaReduceToAll:
                                 dest_core = scatter_dest_cores_list[row_j * num_shard_cores + global_worker_idx]
                                 dest_core_noc = device.worker_core_from_logical_core(dest_core)
                                 scatter_rt.extend([dest_core_noc.x, dest_core_noc.y])
-                            writer_rt_args[core.x][core.y].extend(scatter_rt)
+                            brisc_core_args.append((core, scatter_rt))
+                        else:
+                            brisc_core_args.append((core, [0, 0]))
 
-                    forwarder_brisc_rt_args[fwd_core.x][fwd_core.y] = [
-                        forwarder_buffer_base,
-                        0,
-                        fwd_r1_sem_id,
-                        fwd_r2_sem_id,
-                    ]
+                    # Forwarder per-core args (base args only, fabric args added later)
+                    # BRISC forwarder (FWD direction)
+                    brisc_core_args.append(
+                        (
+                            fwd_core,
+                            [
+                                forwarder_buffer_base,
+                                0,
+                                fwd_r1_sem_id,
+                                fwd_r2_sem_id,
+                            ],
+                        )
+                    )
+                    # NCRISC forwarder (BWD direction)
+                    ncrisc_core_args.append(
+                        (
+                            fwd_core,
+                            [
+                                forwarder_buffer_base,
+                                ncrisc_buffer_offset,
+                                bwd_r1_sem_id,
+                                bwd_r2_sem_id,
+                            ],
+                        )
+                    )
+
+                # =====================================================================
+                # Create unified kernel descriptor
+                # =====================================================================
+                kernel_path = "models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/sdpa_reduce_kernel.cpp"
+
+                # Combined core set: worker cores + forwarder cores
+                shard_core_ranges = [ttnn.CoreRange(core, core) for core in shard_cores]
+                forwarder_core_ranges = [ttnn.CoreRange(core, core) for core in forwarder_cores]
+                combined_core_set = ttnn.CoreRangeSet(shard_core_ranges + forwarder_core_ranges)
+
+                unified_kernel = UnifiedKernelDescriptor(
+                    kernel_source=kernel_path,
+                    core_ranges=combined_core_set,
+                    ncrisc_named_compile_time_args=reader_named_ct_args + forwarder_named_ct_args,
+                    brisc_named_compile_time_args=writer_named_ct_args + forwarder_named_ct_args,
+                    trisc_named_compile_time_args=compute_named_ct_args,
+                    trisc_compute_config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        fp32_dest_acc_en=False,
+                        dst_full_sync_en=False,
+                        math_approx_mode=False,
+                    ),
+                    unified_compile_time_core_descriptors=[
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_worker",
+                            core_range=shard_grid,
+                            value=1,
+                            other_value=0,
+                        ),
+                    ],
+                    per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
+                        ncrisc_args=ncrisc_core_args,
+                        brisc_args=brisc_core_args,
+                        trisc_args=trisc_core_args,
+                    ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                )
+
+                kernel_result = unified_kernel.get_kernel_descriptors()
+
+                program = ttnn.ProgramDescriptor(
+                    kernels=kernel_result.kernels,
+                    semaphores=forwarder_semaphores,
+                    cbs=[
+                        cb_local_l_desc,
+                        cb_local_ms_desc,
+                        cb_neighbor_l_desc,
+                        cb_neighbor_ms_desc,
+                        cb_r1_result_l_desc,
+                        cb_r1_result_ms_desc,
+                        cb_l_out_desc,
+                    ],
+                )
+
+                # Append fabric connection args to forwarder kernels (post-program)
+                forwarder_group = kernel_result.get_group_by_arg("is_worker", 0)
+
+                for link_idx in range(num_links):
+                    fwd_core = forwarder_cores[link_idx]
+
+                    # BRISC forwarder fabric connection (FWD direction)
+                    fwd_brisc_idx = forwarder_group.brisc_kernel_index
                     brisc_fabric_args = ttnn.setup_fabric_connection(
                         src_fabric_node_id=fabric_node_id,
                         dst_fabric_node_id=fwd_fabric_node_id,
@@ -746,14 +714,10 @@ class SdpaReduceToAll:
                         program_descriptor=program,
                         worker_core=fwd_core,
                     )
-                    forwarder_brisc_rt_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
+                    program.kernels[fwd_brisc_idx].runtime_args[fwd_core.x][fwd_core.y].extend(brisc_fabric_args)
 
-                    forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y] = [
-                        forwarder_buffer_base,
-                        ncrisc_buffer_offset,
-                        bwd_r1_sem_id,
-                        bwd_r2_sem_id,
-                    ]
+                    # NCRISC forwarder fabric connection (BWD direction)
+                    fwd_ncrisc_idx = forwarder_group.ncrisc_kernel_index
                     ncrisc_fabric_args = ttnn.setup_fabric_connection(
                         src_fabric_node_id=fabric_node_id,
                         dst_fabric_node_id=bwd_fabric_node_id,
@@ -761,13 +725,7 @@ class SdpaReduceToAll:
                         program_descriptor=program,
                         worker_core=fwd_core,
                     )
-                    forwarder_ncrisc_rt_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
-
-                program.kernels[0].runtime_args = reader_rt_args
-                program.kernels[1].runtime_args = writer_rt_args
-                program.kernels[2].runtime_args = compute_rt_args
-                program.kernels[3].runtime_args = forwarder_brisc_rt_args
-                program.kernels[4].runtime_args = forwarder_ncrisc_rt_args
+                    program.kernels[fwd_ncrisc_idx].runtime_args[fwd_core.x][fwd_core.y].extend(ncrisc_fabric_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
@@ -775,14 +733,13 @@ class SdpaReduceToAll:
             input_tensor_l_mesh,
             input_tensor_ms_mesh,
             output_tensor_l_mesh,
-            r1_recv_tensor_mesh,
-            r2_recv_tensor_mesh,
+            interm_recv_tensor_mesh,
             forwarder_scratch_mesh,
         ]
         if scatter_enabled:
             io_tensors.append(scatter_dest_tensor_mesh)
         if position_enabled:
-            io_tensors.append(position_tensor_mesh)
+            io_tensors.append(position_id_tensor_mesh)
         ttnn.generic_op(io_tensors, mesh_program_descriptor)
 
         return output_tensor_l_mesh

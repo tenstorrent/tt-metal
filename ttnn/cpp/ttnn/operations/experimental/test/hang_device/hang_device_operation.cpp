@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "hang_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -36,3 +35,11 @@ ExecuteTestHangDeviceOperation::invoke(const Tensor& input_tensor) {
     return {operation_attributes_t{}, tensor_args_t{input_tensor}};
 }
 }  // namespace ttnn::prim
+
+namespace ttnn::operations::experimental::test {
+
+Tensor test_hang_device_operation(const Tensor& input_tensor) {
+    return device_operation::launch<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input_tensor});
+}
+
+}  // namespace ttnn::operations::experimental::test

@@ -3,6 +3,7 @@
 
 #include "gtest/gtest.h"
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -135,7 +136,7 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     std::vector<uint16_t> empty_data(volume);
     auto tensor = Tensor::from_vector(empty_data, tensor_spec, device_);
 
-    auto& storage = std::get<DeviceStorage>(tensor.storage());
+    const auto& storage = tensor.device_storage();
     auto buffer = storage.get_mesh_buffer();
 
     size_t region_size = buffer->page_size();
@@ -207,6 +208,36 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     ASSERT_EQ(shard_spec_2d.has_value(), params.shard_shape_2d.has_value());
     if (shard_spec_2d.has_value()) {
         ASSERT_EQ(shard_spec_2d->shape, params.shard_shape_2d.value());
+    }
+}
+
+class BufferDistributionSpecCreationTests
+    : public ttnn::TTNNFixtureWithSuiteDevice<BufferDistributionSpecCreationTests> {};
+
+TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDistributionSpec) {
+    const Shape shape({3, 64, 64});
+    const CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{1, 5}));
+    const std::vector<uint16_t> data(shape.volume(), 1);
+
+    {
+        MemoryConfig memory_config{
+            TensorMemoryLayout::BLOCK_SHARDED,
+            BufferType::L1,
+            ShardSpec{cores, Shape2D{32, 32}, ShardOrientation::ROW_MAJOR}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(shape, tensor_layout);
+
+        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+        EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
+    }
+
+    {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{Shape({2, 32, 32}), cores, ShardOrientation::ROW_MAJOR}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(shape, tensor_layout);
+
+        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+        EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
     }
 }
 
@@ -742,7 +773,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({1, 32, 32}),
             .layout = Layout::TILE,
             .grid_size = CoreCoord{3, 4},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d = std::nullopt,  // Can't convert, different shard distribution
         },
         NdToLegacyShardingParams{
@@ -863,7 +894,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({2 * 32, 32, 32}),  // sharding along the batch
             .layout = Layout::TILE,
             .grid_size = CoreCoord{2, 2},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d = std::nullopt,
         },
         NdToLegacyShardingParams{
@@ -871,7 +902,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({2, 1, 1}),  // sharding along the batch
             .layout = Layout::ROW_MAJOR,
             .grid_size = CoreCoord{2, 2},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d = std::nullopt,
         },
         NdToLegacyShardingParams{
@@ -879,7 +910,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({20 * 32, 10 * 32}),
             .layout = Layout::TILE,
             .grid_size = CoreCoord{7, 7},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d = std::nullopt,  // not enough cores, requires 2 x 8, but only 7 x 7 are present
         },
         NdToLegacyShardingParams{
@@ -895,7 +926,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({30 * 32, 10 * 32}),
             .layout = Layout::TILE,
             .grid_size = CoreCoord{7, 7},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d =
                 std::nullopt,  // not enough cores, tries to linearize to 50 cores, but only 49 are present
         },
@@ -904,7 +935,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({2, 1}),
             .layout = Layout::ROW_MAJOR,
             .grid_size = CoreCoord{7, 7},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d = std::nullopt,  // not enough cores, requires 2 x 8, but only 7 x 7 are present
         },
         NdToLegacyShardingParams{
@@ -920,7 +951,7 @@ INSTANTIATE_TEST_SUITE_P(
             .shard_shape_nd = Shape({3, 1}),
             .layout = Layout::ROW_MAJOR,
             .grid_size = CoreCoord{7, 7},
-            .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+            .memory_layout = TensorMemoryLayout::ND_SHARDED,
             .shard_shape_2d =
                 std::nullopt,  // not enough cores, tries to linearize to 50 cores, but only 49 are present
         }));

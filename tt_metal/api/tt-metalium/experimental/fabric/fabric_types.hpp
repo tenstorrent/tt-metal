@@ -9,7 +9,6 @@
 #include <ostream>
 #include <optional>
 #include <tt_stl/strong_type.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <fmt/format.h>
 
@@ -96,6 +95,9 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
+// Sentinel value indicating that TT_MESH_HOST_RANK environment variable is unset
+constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
+
 /**
  * @brief Represents a fabric node identifier combining mesh ID and chip ID
  */
@@ -130,6 +132,14 @@ struct fmt::formatter<tt::tt_fabric::FabricNodeId> {
 
     auto format(const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator;
 };
+
+template <>
+struct fmt::formatter<tt::tt_fabric::MeshId> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_fabric::MeshId& mesh_id, format_context& ctx) const -> format_context::iterator;
+};
+
 namespace tt::tt_metal {
 
 using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
@@ -141,4 +151,16 @@ using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
 using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
 using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
 
+// Stream operators for StrongType types
+std::ostream& operator<<(std::ostream& os, const AsicID& asic_id);
+std::ostream& operator<<(std::ostream& os, const TrayID& tray_id);
+std::ostream& operator<<(std::ostream& os, const ASICLocation& asic_location);
+
 }  // namespace tt::tt_metal
+
+template <>
+struct fmt::formatter<tt::tt_metal::AsicID> {
+    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const tt::tt_metal::AsicID& asic_id, format_context& ctx) const -> format_context::iterator;
+};

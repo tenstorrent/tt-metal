@@ -8,6 +8,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -327,22 +328,16 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
     auto program_factory = select_program_factory(attributes, tensor_args);
-    TT_ASSERT(
-        std::holds_alternative<DeviceStorage>(input_tensor_a.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input_tensor_a.storage()));
+    TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
+        TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
         return operation::hash_operation<BinaryDeviceOperation>(
             attributes,
@@ -367,7 +362,7 @@ BinaryDeviceOperation::create_op_performance_model(
     const auto& output_tensor = tensor_return_value;
     // GS specific parameters
     // 80 B/cycle unpacker BW shared
-    // 128 datums per cycle math, but unpacker cant keep up
+    // 128 datums per cycle math, but unpacker can't keep up
     constexpr uint32_t num_cores = 9 * 12;
 
     uint32_t total_bytes = 0;

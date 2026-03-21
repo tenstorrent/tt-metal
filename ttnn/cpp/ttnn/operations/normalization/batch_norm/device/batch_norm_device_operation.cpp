@@ -4,6 +4,7 @@
 
 #include "batch_norm_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -117,14 +118,11 @@ BatchNormOperation::tensor_return_value_t BatchNormOperation::create_output_tens
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
+ttsl::hash::hash_t BatchNormOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
-    TT_FATAL(
-        std::holds_alternative<DeviceStorage>(input.storage()),
-        "Unexpected type {}",
-        tt::stl::get_active_type_name_in_variant(input.storage()));
+    TT_FATAL(is_device_tensor(input), "Unexpected type {}", input.storage_type());
 
     // For input tensor
     auto base_tuple = std::make_tuple(attributes, input.dtype(), input.memory_config());
@@ -155,8 +153,8 @@ tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
         std::move(args_tuple));
 }
 
-tt::stl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
-    return tt::stl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
+ttsl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
+    return ttsl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::normalization
