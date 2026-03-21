@@ -41,15 +41,18 @@ from models.common.models.llama3_8b.model import Llama3Transformer1D
 # Expected metrics
 # =============================================================================
 
+# Expected accuracy metrics from PERF.md for Llama-3.1-8B (top1, top5 only)
+# Performance metrics (tok_s_u, ttft_ms) are collected dynamically by running
+# simple_text_demo.py with the corresponding test case to get real baseline values.
 EXPECTED_METRICS = {
     "performance": {
-        "N150": {"top1": 90, "top5": 97, "tok_s_u": 28.3, "ttft_ms": 110},
-        "N300": {"top1": 90, "top5": 97, "tok_s_u": 44.2, "ttft_ms": 70},
-        "T3K": {"top1": 90, "top5": 98, "tok_s_u": 64.3, "ttft_ms": 55},
+        "N150": {"top1": 90, "top5": 97, "tok_s_u": 28.3, "ttft_ms": 104},
+        "N300": {"top1": 90, "top5": 97, "tok_s_u": 44.2, "ttft_ms": 67},
+        "T3K": {"top1": 90, "top5": 98, "tok_s_u": 64.3, "ttft_ms": 53},
     },
     "accuracy": {
-        "N150": {"top1": 96, "top5": 100, "tok_s_u": 25.2, "ttft_ms": 140},
-        "N300": {"top1": 96, "top5": 100, "tok_s_u": 38.8, "ttft_ms": 80},
+        "N150": {"top1": 96, "top5": 100, "tok_s_u": 25.2, "ttft_ms": 138},
+        "N300": {"top1": 96, "top5": 100, "tok_s_u": 38.8, "ttft_ms": 79},
         "T3K": {"top1": 97, "top5": 100, "tok_s_u": 60.8, "ttft_ms": 81},
     },
 }
@@ -306,7 +309,11 @@ def _run_perf_benchmark(model, model_args, mesh_device, expected, batch_size):
                 logger.warning(
                     f"{metric} did not meet target: got {getattr(result, metric)}, expected {expected[metric]}"
                 )
-        if "tok_s_u" in expected:
-            assert targets["tok_s_u"], f"tok/s/u {result.tok_s_u:.1f} below target {expected['tok_s_u']}"
+        failures = []
+        if "tok_s_u" in expected and not targets["tok_s_u"]:
+            failures.append(f"tok/s/u {result.tok_s_u:.1f} below target {expected['tok_s_u']}")
+        if "ttft_ms" in expected and not targets["ttft_ms"]:
+            failures.append(f"ttft_ms {result.ttft_ms:.1f} above target {expected['ttft_ms']}")
+        assert not failures, "; ".join(failures)
 
     traced_executor.cleanup()
