@@ -7,11 +7,11 @@
 #include <map>
 #include <vector>
 #include "csv_reader.hpp"
-#include "../common/types.hpp"
+#include <tt-metalium/experimental/noc_estimator/types.hpp>
 
-namespace tt::tt_metal::noc_estimator::offline {
+namespace tt::tt_metal::experimental::noc_estimator::offline {
 
 // Group data points by all parameters except transaction_size
-std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std::vector<DataPoint>& data_points);
+std::map<GroupKey, std::vector<DataPoint>> group_by_parameters(const std::vector<DataPoint>& data_points);
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline

@@ -4,12 +4,13 @@
 
 #include "data_processor.hpp"
 
-namespace tt::tt_metal::noc_estimator::offline {
-std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std::vector<DataPoint>& data_points) {
-    std::map<common::GroupKey, std::vector<DataPoint>> groups;
+namespace tt::tt_metal::experimental::noc_estimator::offline {
+
+std::map<GroupKey, std::vector<DataPoint>> group_by_parameters(const std::vector<DataPoint>& data_points) {
+    std::map<GroupKey, std::vector<DataPoint>> groups;
 
     for (const auto& point : data_points) {
-        common::GroupKey key{
+        GroupKey key{
             .mechanism = point.mechanism,
             .pattern = point.pattern,
             .memory = point.memory,
@@ -28,4 +29,4 @@ std::map<common::GroupKey, std::vector<DataPoint>> group_by_parameters(const std
     return groups;
 }
 
-}  // namespace tt::tt_metal::noc_estimator::offline
+}  // namespace tt::tt_metal::experimental::noc_estimator::offline

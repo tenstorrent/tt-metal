@@ -5,15 +5,9 @@
 #pragma once
 
 #include <cstdint>
-#include "common/types.hpp"
+#include <tt-metalium/experimental/noc_estimator/types.hpp>
 
-namespace tt::tt_metal::noc_estimator {
-
-// Use common enums to avoid duplication
-using Architecture = common::Architecture;
-using NocMechanism = common::NocMechanism;
-using MemoryType = common::MemoryType;
-using NocPattern = common::NocPattern;
+namespace tt::tt_metal::experimental::noc_estimator {
 
 struct NocEstimatorParams {
     NocMechanism mechanism = NocMechanism::UNICAST;
@@ -43,4 +37,4 @@ NocEstimate estimate_noc_performance(const NocEstimatorParams& params);
 double estimate_noc_bandwidth(const NocEstimatorParams& params);
 double estimate_noc_latency(const NocEstimatorParams& params);
 
-}  // namespace tt::tt_metal::noc_estimator
+}  // namespace tt::tt_metal::experimental::noc_estimator
