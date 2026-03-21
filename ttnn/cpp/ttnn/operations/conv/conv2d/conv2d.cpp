@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+// CI: trivial touch to exercise change-aware merge-gate routing for conv ops.
 
 #include <array>
 #include <cstdint>

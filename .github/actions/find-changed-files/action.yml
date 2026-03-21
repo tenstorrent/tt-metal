@@ -32,6 +32,9 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.models-changed }}
   build-workflows-changed:
     value: ${{ steps.find-changed-files.outputs.build-workflows-changed }}
+  ttnn-changed-ops:
+    description: "Comma-separated list of changed TTNN operation families (e.g. eltwise,conv,matmul), or 'all' if core deps changed"
+    value: ${{ steps.find-changed-files.outputs.ttnn-changed-ops }}
 
 runs:
   using: "composite"
