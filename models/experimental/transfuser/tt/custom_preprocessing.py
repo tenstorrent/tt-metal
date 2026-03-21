@@ -5,9 +5,7 @@
 import warnings
 import torch
 import ttnn
-
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
-
 from models.experimental.transfuser.reference.transfuser_backbone import TransfuserBackbone
 from models.experimental.transfuser.reference.bottleneck import Bottleneck
 from models.experimental.transfuser.reference.stage import Stage
@@ -123,7 +121,9 @@ def _handle_bottleneck(dst: dict, block: Bottleneck, *, mesh_mapper):
     fc1 = _get_or_create(se, "fc1")
     fc2 = _get_or_create(se, "fc2")
     fc1["weight"] = _pack_weight_only(block.se.fc1.weight, mesh_mapper=mesh_mapper)
+    fc1["bias"] = _pack_bias_only(block.se.fc1.bias, mesh_mapper=mesh_mapper)
     fc2["weight"] = _pack_weight_only(block.se.fc2.weight, mesh_mapper=mesh_mapper)
+    fc2["bias"] = _pack_bias_only(block.se.fc2.bias, mesh_mapper=mesh_mapper)
 
     # Downsample (if present and not Identity)
     if hasattr(block, "downsample") and block.downsample is not None:
@@ -159,13 +159,11 @@ def _handle_1x1_downsample_conv(conv_module, *, mesh_mapper, who: str):
     - If a BN exists (common patterns: .bn, .norm), fold it.
     - Warn (but still pack) if out_channels != 512.
     """
-    # Try to find attached BN on common attributes
     bn_module = None
     if hasattr(conv_module, "bn"):
         bn_module = conv_module.bn
     elif hasattr(conv_module, "norm"):
         bn_module = conv_module.norm
-
     # Validate out channels
     try:
         out_ch = conv_module.out_channels
@@ -173,7 +171,6 @@ def _handle_1x1_downsample_conv(conv_module, *, mesh_mapper, who: str):
             warnings.warn(f"[{who}] expected out_channels=512, got {out_ch}. Packing anyway.", RuntimeWarning)
     except Exception:
         pass
-
     if bn_module is not None:
         w_t, b_t = _fold_and_pack_conv(conv_module, bn_module, mesh_mapper=mesh_mapper)
     else:
@@ -186,12 +183,10 @@ def _handle_1x1_downsample_conv(conv_module, *, mesh_mapper, who: str):
             dtype = conv_module.weight.dtype
             zeros = torch.zeros(conv_module.out_channels, device=device, dtype=dtype)
             b_t = preprocess_conv_bias(zeros, dtype=TT_DTYPE, mesh_mapper=mesh_mapper)
-
     return {"weight": w_t, "bias": b_t}
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
-    # Kept for API compatibility (your original helper)
     parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
     return parameter
 
@@ -212,7 +207,6 @@ def custom_preprocessor(
     if isinstance(model, Conv2d):
         _handle_conv2d(parameters, model, mesh_mapper=mesh_mapper)
         return parameters
-
     # 2) TransfuserBackbone (conv1s + stages for image/lidar encoders)
     if isinstance(model, TransfuserBackbone):
         # Image conv1
@@ -222,7 +216,6 @@ def custom_preprocessor(
                 img_conv1 = _get_or_create(parameters, "image_encoder", "features", "conv1")
                 w, b = _fold_and_pack_conv(img_features.conv1, img_features.bn1, mesh_mapper=mesh_mapper)
                 img_conv1["weight"], img_conv1["bias"] = w, b
-
         # Lidar conv1
         if hasattr(model, "lidar_encoder") and hasattr(model.lidar_encoder, "_model"):
             lidar = model.lidar_encoder._model
@@ -230,7 +223,6 @@ def custom_preprocessor(
                 lid_conv1 = _get_or_create(parameters, "lidar_encoder", "_model", "conv1")
                 w, b = _fold_and_pack_conv(lidar.conv1, lidar.bn1, mesh_mapper=mesh_mapper)
                 lid_conv1["weight"], lid_conv1["bias"] = w, b
-
         # ==== Channel downsampling to 512 (1×1) ====
         # Image path
         if hasattr(model, "change_channel_conv_image"):
@@ -239,7 +231,6 @@ def custom_preprocessor(
                 mesh_mapper=mesh_mapper,
                 who="change_channel_conv_image",
             )
-
         # Lidar path
         if hasattr(model, "change_channel_conv_lidar"):
             parameters["change_channel_conv_lidar"] = _handle_1x1_downsample_conv(
@@ -275,7 +266,6 @@ def custom_preprocessor(
                 if hasattr(lidar, stage_name):
                     lid_dst = _get_or_create(parameters, "lidar_encoder", "_model")
                     _handle_stage(lid_dst, getattr(lidar, stage_name), stage_name, mesh_mapper=mesh_mapper)
-
         return parameters
 
     # 3) Standalone Bottleneck
@@ -287,16 +277,12 @@ def custom_preprocessor(
     if isinstance(model, Stage):
         stage_name = getattr(model, "stage_name", None)
         if stage_name is None:
-            return parameters  # nothing to do
-
-        # Choose a source to read from; original code pulled from image_encoder.features.<stage_name>
+            return parameters
         if hasattr(model, "image_encoder") and hasattr(model.image_encoder, "features"):
             src_stage = getattr(model.image_encoder.features, stage_name, None)
             if src_stage is not None:
                 _handle_stage(parameters, src_stage, stage_name, mesh_mapper=mesh_mapper)
         return parameters
-
-    # Fallback (unknown module): return empty to let caller decide next steps
     return parameters
 
 

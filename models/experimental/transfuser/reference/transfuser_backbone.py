@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -71,7 +72,6 @@ class LidarEncoder(nn.Module):
         self._model.head = nn.Sequential()
 
         # Change the first conv layer so that it matches the amount of channels in the LiDAR
-        # Timm might be able to do this automatically
         _tmp = self._model.conv1
         use_bias = _tmp.bias != None
         self._model.conv1 = nn.Conv2d(
@@ -223,38 +223,6 @@ class TransfuserBackbone(nn.Module):
 
         return p2, p3, p4, p5
 
-    def fallback(self, image, block_name=None, stage_name=None):
-        """
-        Fallback method for SE module that dynamically accesses the correct stage and block.
-
-        Args:
-            image: Input tensor for SE module
-            block_name: Name of the block (e.g., "b1", "b2", etc.). Defaults to "b1" if None.
-            stage_name: Name of the stage (e.g., "layer1", "layer2", etc.). Must be provided.
-
-        Returns:
-            Output tensor after SE fc1, relu, fc2, and sigmoid operations
-        """
-        if stage_name is None:
-            raise ValueError("stage_name must be provided for fallback method")
-
-        # Use block_name if provided, otherwise default to b1 for backwards compatibility
-        if block_name is None:
-            block_name = "b1"
-
-        # Dynamically access the stage layer based on stage_name
-        stage_layer = getattr(self.image_encoder.features, stage_name)
-        # Dynamically access the block based on block_name
-        block = getattr(stage_layer, block_name)
-
-        # Run SE operations: fc1 -> relu -> fc2 -> sigmoid
-        x = block.se.fc1(image)
-        x = x.relu()
-        x = block.se.fc2(x)
-        x = x.sigmoid()
-
-        return x
-
     def forward(self, image, lidar, velocity, return_intermediates=False):
         """
         Image + LiDAR feature fusion using transformers
@@ -323,9 +291,6 @@ class TransfuserBackbone(nn.Module):
         )
         image_features = image_features + image_features_layer2
         lidar_features = lidar_features + lidar_features_layer2
-        # print(f"{self.image_encoder.features.layer3=}")
-        # print("............................................")
-        # print(f"{self.lidar_encoder._model.layer3=}")
 
         image_features = self.image_encoder.features.layer3(image_features)
         lidar_features = self.lidar_encoder._model.layer3(lidar_features)
