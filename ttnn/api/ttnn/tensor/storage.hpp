@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tuple>
+#include <vector>
 
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -130,6 +132,14 @@ struct DeviceStorage {
     // They will be replaced with a new initiative as described in: #38093
     DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
     // End internal functions.
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Aggregate DeviceStorages
+    //
+    // Combines a vector of DeviceStorages that shares the same device storage but spread across difference coordinates
+    // into a single DeviceStorage.
+    static DeviceStorage combine_device_storages(
+        const std::vector<std::reference_wrapper<const DeviceStorage>>& storages);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Serialization

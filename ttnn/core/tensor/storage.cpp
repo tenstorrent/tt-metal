@@ -144,4 +144,31 @@ std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
     return coords_;
 }
 
+DeviceStorage DeviceStorage::combine_device_storages(
+    const std::vector<std::reference_wrapper<const DeviceStorage>>& storages) {
+    TT_FATAL(!storages.empty(), "Cannot aggregate empty vector of DeviceStorages");
+
+    const auto& model_storage = storages.front().get();
+    TT_FATAL(
+        std::all_of(
+            storages.begin(),
+            storages.end(),
+            [&](const auto& storage) { return storage.get().mesh_buffer == model_storage.mesh_buffer; }),
+        "All DeviceStorages must be allocated");
+
+    auto num_coords = std::accumulate(storages.begin(), storages.end(), 0, [](size_t sum, const auto& storage) {
+        return sum + storage.get().get_coords().size();
+    });
+
+    std::unordered_set<distributed::MeshCoordinate> joint_coords;
+    joint_coords.reserve(num_coords);
+    for (const auto& storage : storages) {
+        auto other_coords = storage.get().get_coords();
+        joint_coords.insert(other_coords.begin(), other_coords.end());
+    }
+
+    return DeviceStorage(
+        model_storage, std::vector<distributed::MeshCoordinate>(joint_coords.begin(), joint_coords.end()));
+}
+
 }  // namespace tt::tt_metal
