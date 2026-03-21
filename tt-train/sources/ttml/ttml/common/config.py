@@ -6,7 +6,7 @@
 import os
 import yaml
 from typing import Union
-from ttml.common.utils import get_tt_metal_home
+from ttml.common.utils import get_tt_metal_runtime_root
 
 
 class DeviceConfig:
@@ -31,9 +31,6 @@ class DeviceConfig:
 
         # Based on current configs, DDP and TP cannot be both enabled
         assert not (self.enable_ddp and self.enable_tp), "DDP and TP cannot be both enabled."
-
-        # we currently support only [1, N] mesh shapes
-        assert self.mesh_shape[0] == 1, f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -207,22 +204,34 @@ def load_config(path: str, configs_root: str = None) -> dict:
     """
 
     if configs_root is None:
-        configs_root = f"{get_tt_metal_home()}/tt-train/configs/"
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/"
 
-    # if the path is relative, make it absolute
-    if not (os.path.isabs(path)):
-        path = os.path.join(configs_root, path)
+    # Expand env vars (e.g. ${TT_METAL_RUNTIME_ROOT}) before absolute-path check.
+    expanded_path = os.path.expandvars(path)
+    if "${TT_METAL_RUNTIME_ROOT}" in expanded_path or "$TT_METAL_RUNTIME_ROOT" in expanded_path:
+        raise RuntimeError(
+            f"Unresolved TT_METAL_RUNTIME_ROOT in config path: {path}. "
+            "Please export TT_METAL_RUNTIME_ROOT to the tt-metal repository root."
+        )
 
-    with open(path, "r") as f:
-        config = yaml.safe_load(f)
+    # If path is relative and doesn't already point to a real file, make it absolute
+    # using configs_root.
+    if not os.path.isabs(expanded_path) and not os.path.exists(expanded_path):
+        expanded_path = os.path.join(configs_root, expanded_path)
+
+    with open(expanded_path, "r") as f:
+        raw = os.path.expandvars(f.read())
+    config = yaml.safe_load(raw)
     return config
 
 
 def get_training_config(
     training_config_src: str,
-    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/training_configs",
+    configs_root: str = None,
 ) -> TrainingConfig:
     """Load training configuration given its filename."""
+    if configs_root is None:
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs"
 
     training_config = load_config(training_config_src, configs_root)
     training_config = TrainingConfig(training_config)
@@ -232,9 +241,11 @@ def get_training_config(
 
 def get_device_config(
     device_config_src: str,
-    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/training_configs/",
+    configs_root: str = None,
 ) -> DeviceConfig:
     """Load device configuration given its filename."""
+    if configs_root is None:
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs/"
 
     device_config = load_config(device_config_src, configs_root)
     device_config = DeviceConfig(device_config)
@@ -244,9 +255,11 @@ def get_device_config(
 
 def get_model_config(
     model_config_src: str,
-    configs_root: str = f"{get_tt_metal_home()}/tt-train/",
+    configs_root: str = None,
 ) -> TransformerConfig:
     """Load model configuration given its filename."""
+    if configs_root is None:
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/"
 
     model_config = load_config(model_config_src, configs_root)
     model_config = TransformerConfig(model_config)
@@ -256,9 +269,11 @@ def get_model_config(
 
 def get_multihost_config(
     multihost_config_src: str,
-    configs_root: str = f"{get_tt_metal_home()}/tt-train/configs/multihost_configs/",
+    configs_root: str = None,
 ) -> MultiHostConfig:
     """Load multihost configuration given its filename."""
+    if configs_root is None:
+        configs_root = f"{get_tt_metal_runtime_root()}/tt-train/configs/multihost_configs/"
 
     multihost_config = load_config(multihost_config_src, configs_root)
     multihost_config = MultiHostConfig(multihost_config)

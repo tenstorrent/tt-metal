@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import comparison_funcs, gene
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import run_single_pytorch_test
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.tt_eager.python_api_testing.sweep_tests.pytorch_ops import (
     tilize_with_val_padding as pytorch_tilize_with_val_padding,
 )
@@ -879,3 +879,80 @@ def test_tilize_with_val_padding_fp32_truncation(device, use_multicore):
     tt_output = ttnn.untilize(tt_tiled)
     torch_output = ttnn.to_torch(tt_output)
     assert torch.equal(torch_input, torch_output[..., :50, :50])
+
+
+@pytest.mark.parametrize(
+    "hw, kernel, stride, pad",
+    [
+        ((64, 64), (2, 2), (2, 2), 0),
+        ((32, 32), (3, 3), (2, 2), 1),
+    ],
+)
+def test_tilize_with_val_padding_tilize_after_avg_pool2d_sum_input_interleaved_rm_tensor_has_larger_padded_width_than_logical_width(
+    device, hw, kernel, stride, pad
+):
+    """
+    Tests avg_pool2d followed by to_layout(TILE) on the avg_pool2d output.
+    This isolates and validates the to_layout(TILE) step on the avg_pool2d result against a PyTorch avg_pool2d reference.
+
+    The key for this test is that the output from avg_pool2d, which is the input to to_layout, is a row-major interleaved tensor with a larger padded_shape width than logical_shape width.
+    This test aims to test such a scenario where there is a mismatch between the padded_shape width and the logical_shape width for interleaved row major tensors.
+    """
+    h, w = hw
+    kh, kw = kernel
+    sh, sw = stride
+
+    torch_input = torch.randn(1, 1, h, w, dtype=torch.bfloat16)
+    ref = torch.nn.functional.avg_pool2d(
+        torch_input, kernel_size=(kh, kw), stride=(sh, sw), padding=pad, count_include_pad=True
+    )
+
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    x_tt = ttnn.from_torch(
+        torch_input.reshape(h, w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_cfg,
+    )
+    x_flat = ttnn.reshape(x_tt, [1, 1, h * w, 1], memory_config=mem_cfg)
+    x_rm = ttnn.to_layout(x_flat, ttnn.ROW_MAJOR_LAYOUT, None, memory_config=None)
+
+    y = ttnn.avg_pool2d(
+        x_rm,
+        1,
+        h,
+        w,
+        1,
+        [kh, kw],
+        [sh, sw],
+        [pad, pad],
+        False,
+        True,
+        None,
+        memory_config=mem_cfg,
+        applied_shard_scheme=None,
+        compute_kernel_config=None,
+        reallocate_halo_output=False,
+        config_tensor_in_dram=True,
+    )
+
+    # At this point, for the testcase with "(hw, kernel, stride, pad)" == "((64, 64), (2, 2), (2, 2), 0)", y is a row-major interleaved tensor with logical_shape [1, 1, 1024, 1] and padded_shape [1, 1, 1024, 16].
+    # Make this precondition explicit to ensure the test remains valid if upstream behavior changes.
+    assert y.padded_shape[-1] > y.shape[-1]
+
+    y_torch_before_tile = ttnn.to_torch(y)
+
+    y_tiled = ttnn.to_layout(
+        y, ttnn.TILE_LAYOUT, None, memory_config=None
+    )  # This should call tilize_with_val_padding internally
+
+    y_torch_after_tile = ttnn.to_torch(y_tiled)
+
+    assert_with_pcc(y_torch_before_tile, y_torch_after_tile, pcc=0.999)
+
+    ref_flat = ref.reshape(-1)
+    result_flat = y_torch_after_tile.reshape(-1)[: ref_flat.numel()]
+
+    assert_with_pcc(ref_flat, result_flat, pcc=0.999)

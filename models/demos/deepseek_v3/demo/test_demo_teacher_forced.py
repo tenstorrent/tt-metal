@@ -165,6 +165,7 @@ def test_demo_teacher_forcing_accuracy(
         enable_trace=True,
         force_recalculate=force_recalculate_weight_config,
         stop_at_eos=False,
+        sample_on_device=False,
     )
 
     # Check results
