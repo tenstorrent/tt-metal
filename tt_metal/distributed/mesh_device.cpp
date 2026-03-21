@@ -1379,7 +1379,7 @@ void MeshDeviceImpl::quiesce_internal() {
         "Cannot quiesce when non-default sub-device manager is active");
     for (const auto& submesh : submeshes_) {
         if (auto submesh_ptr = submesh.lock()) {
-            submesh_ptr->quiesce_devices();
+            submesh_ptr->impl().quiesce_devices();
         }
     }
     bool have_reset_launch_msg_state = false;
@@ -1549,9 +1549,6 @@ void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, b
     pimpl_->replay_mesh_trace(cq_id, trace_id, blocking);
 }
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { pimpl_->release_mesh_trace(trace_id); }
-std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
-    return pimpl_->get_mesh_trace(trace_id);
-}
 uint32_t MeshDevice::get_trace_buffers_size() const { return pimpl_->get_trace_buffers_size(); }
 void MeshDevice::set_trace_buffers_size(uint32_t size) { pimpl_->set_trace_buffers_size(size); }
 bool MeshDevice::initialize(
@@ -1637,10 +1634,8 @@ void MeshDevice::reshape(const MeshShape& new_shape) { pimpl_->reshape(new_shape
 const MeshDeviceView& MeshDevice::get_view() const { return pimpl_->get_view(); }
 uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().mesh_id(); }
 std::string MeshDevice::to_string() const { return pimpl_->to_string(); }
-bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { return pimpl_->get_submeshes(); }
-void MeshDevice::quiesce_devices() { pimpl_->quiesce_devices(); }
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
     return pimpl_->create_submesh(shared_from_this(), submesh_shape, offset);
@@ -1651,8 +1646,6 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::optional<uint8_t> cq_id) const {
     return pimpl_->mesh_command_queue(cq_id);
 }
-void MeshDevice::enqueue_to_thread_pool(std::function<void()>&& f) { pimpl_->enqueue_to_thread_pool(std::move(f)); }
-void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "distributed/mesh_device_impl.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -319,7 +320,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     mesh_device->end_mesh_trace(mesh_command_queue.id(), tid);
 
     // Instantiate a trace on a device bound command queue
-    auto trace_inst = mesh_device->get_mesh_trace(tid);
+    auto trace_inst = mesh_device->impl().get_mesh_trace(tid);
     vector<uint32_t> data_fd, data_bd;
 
     // Backdoor read the trace buffer - using the actual device buffer
